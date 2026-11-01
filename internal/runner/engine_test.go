@@ -135,12 +135,22 @@ func kinds(c *controlFake) string {
 
 func testEngine(t *testing.T, f *runtimeFake, c *controlFake, j *Journal) *Engine {
 	t.Helper()
-	if f.done && f.result.Info.Role == "" {
-		f.result.Info.Role = "assistant"
-		f.result.Info.Time.Completed = 1
-		f.result.Info.Finish = "stop"
-	}
 	return &Engine{Control: c, Runtime: f, Journal: j, Routes: map[string]Route{"profile": {ProfileID: "profile", Harness: "opencode", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Model: "model"}}, PollInterval: time.Millisecond}
+}
+
+func completingRuntimeFake() *runtimeFake {
+	f := &runtimeFake{events: make(chan opencode.Event), done: true}
+	f.result.Info.Role = "assistant"
+	f.result.Info.Time.Completed = 1
+	f.result.Info.Finish = "stop"
+	return f
+}
+
+func testContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	return ctx
 }
 
 func seedRuntimePhase(t *testing.T, j *Journal, phase string) contracts.JobClaim {
@@ -163,13 +173,13 @@ func seedRuntimePhase(t *testing.T, j *Journal, phase string) contracts.JobClaim
 
 // Catches the old missing-Prompt path: a successful dispatch must prompt before monitoring.
 func TestRuntimeProcessPromptsBeforeMonitoring(t *testing.T) {
-	f := &runtimeFake{events: make(chan opencode.Event), done: true}
+	f := completingRuntimeFake()
 	c := &controlFake{}
 	j := openTestJournal(t)
 	e := testEngine(t, f, c, j)
 	claim := testClaim()
 	claim.Goal = "do not log this prompt"
-	if err := e.Process(context.Background(), claim); err != nil {
+	if err := e.Process(testContext(t), claim); err != nil {
 		t.Fatal(err)
 	}
 	wantPrompt := buildPrompt(claim)
@@ -184,7 +194,7 @@ func TestRuntimePromptErrorIsUnknownAndNotMonitored(t *testing.T) {
 	c := &controlFake{}
 	j := openTestJournal(t)
 	e := testEngine(t, f, c, j)
-	if err := e.Process(context.Background(), testClaim()); !errors.Is(err, ErrOutcomePending) {
+	if err := e.Process(testContext(t), testClaim()); !errors.Is(err, ErrOutcomePending) {
 		t.Fatalf("error=%v, want ErrOutcomePending", err)
 	}
 	if f.prompts != 1 || f.eventCalls != 0 || kinds(c) != "dispatch_started,dispatch_bound,effect_unknown" {
@@ -194,11 +204,11 @@ func TestRuntimePromptErrorIsUnknownAndNotMonitored(t *testing.T) {
 
 // Catches restart after binding but before the prompt-attempt journal write.
 func TestRuntimeRecoveryFromBoundSendsPrompt(t *testing.T) {
-	f := &runtimeFake{events: make(chan opencode.Event), done: true}
+	f := completingRuntimeFake()
 	c := &controlFake{}
 	j := openTestJournal(t)
 	e := testEngine(t, f, c, j)
-	if err := e.Process(context.Background(), seedRuntimePhase(t, j, "bound")); err != nil {
+	if err := e.Process(testContext(t), seedRuntimePhase(t, j, "bound")); err != nil {
 		t.Fatal(err)
 	}
 	if f.prompts != 1 || f.eventCalls != 1 || strings.Join(f.calls, ",") != "Prompt,Events" {
@@ -212,7 +222,7 @@ func TestRuntimeRecoveryFromPromptAttemptedDoesNotResend(t *testing.T) {
 	c := &controlFake{}
 	j := openTestJournal(t)
 	e := testEngine(t, f, c, j)
-	if err := e.Process(context.Background(), seedRuntimePhase(t, j, "prompt_attempted")); !errors.Is(err, ErrOutcomePending) {
+	if err := e.Process(testContext(t), seedRuntimePhase(t, j, "prompt_attempted")); !errors.Is(err, ErrOutcomePending) {
 		t.Fatalf("error=%v, want ErrOutcomePending", err)
 	}
 	if f.prompts != 0 || f.eventCalls != 0 {
@@ -222,11 +232,11 @@ func TestRuntimeRecoveryFromPromptAttemptedDoesNotResend(t *testing.T) {
 
 // Catches unnecessary replay after the prompt was durably acknowledged as sent.
 func TestRuntimeRecoveryFromPromptSentOnlyMonitors(t *testing.T) {
-	f := &runtimeFake{events: make(chan opencode.Event), done: true}
+	f := completingRuntimeFake()
 	c := &controlFake{}
 	j := openTestJournal(t)
 	e := testEngine(t, f, c, j)
-	if err := e.Process(context.Background(), seedRuntimePhase(t, j, "prompt_sent")); err != nil {
+	if err := e.Process(testContext(t), seedRuntimePhase(t, j, "prompt_sent")); err != nil {
 		t.Fatal(err)
 	}
 	if f.prompts != 0 || f.eventCalls != 1 || strings.Join(f.calls, ",") != "Events" {
