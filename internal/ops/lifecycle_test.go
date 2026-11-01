@@ -467,6 +467,122 @@ func TestPrepareHostRequiresRoot(t *testing.T) {
 	}
 }
 
+func TestPrepareLifecycleFilesFreshTokensSetOwnersAndModes(t *testing.T) {
+	root := t.TempDir()
+	oldChown, oldLookup := hostPrepChown, hostPrepLookupZoeRunnerIDs
+	t.Cleanup(func() { hostPrepChown, hostPrepLookupZoeRunnerIDs = oldChown, oldLookup })
+	var owners []struct {
+		path     string
+		uid, gid int
+	}
+	hostPrepChown = func(path string, uid, gid int) error {
+		owners = append(owners, struct {
+			path     string
+			uid, gid int
+		}{path, uid, gid})
+		return nil
+	}
+	hostPrepLookupZoeRunnerIDs = func() (int, int, error) { return 4242, 4343, nil }
+
+	if err := prepareLifecycleFiles(LifecycleOptions{Root: root, OptRoot: filepath.Join(root, "opt"), DataRoot: filepath.Join(root, "data")}); err != nil {
+		t.Fatal(err)
+	}
+	wantOwners := map[string][2]int{
+		filepath.Join(root, "secrets", "runner-token"):        {65532, 65532},
+		filepath.Join(root, "secrets", "memory-runner-token"): {65532, 65532},
+		filepath.Join(root, "runner-secrets", "runner-token"): {4242, 4343},
+	}
+	if len(owners) != len(wantOwners) {
+		t.Fatalf("chown calls = %d, want %d: %v", len(owners), len(wantOwners), owners)
+	}
+	for _, owner := range owners {
+		if want, ok := wantOwners[owner.path]; !ok || [2]int{owner.uid, owner.gid} != want {
+			t.Fatalf("unexpected owner call: %+v", owner)
+		}
+	}
+	for path := range wantOwners {
+		if mode := dataMode(t, path); mode != 0400 {
+			t.Errorf("%s mode = %04o, want 0400", path, mode)
+		}
+	}
+	stackToken, err := os.ReadFile(filepath.Join(root, "secrets", "runner-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runnerToken, err := os.ReadFile(filepath.Join(root, "runner-secrets", "runner-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stackToken, runnerToken) {
+		t.Fatal("runner token copy differs from stack token")
+	}
+}
+
+func TestPrepareLifecycleFilesConvergesExistingRootOwnedTokens(t *testing.T) {
+	root := t.TempDir()
+	secrets := filepath.Join(root, "secrets")
+	runnerSecrets := filepath.Join(root, "runner-secrets")
+	if err := os.MkdirAll(secrets, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(runnerSecrets, 0750); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]byte{
+		filepath.Join(secrets, "runner-token"):        []byte("existing-runner-token"),
+		filepath.Join(secrets, "memory-runner-token"): []byte("existing-memory-token"),
+		filepath.Join(runnerSecrets, "runner-token"):  []byte("existing-runner-token"),
+	}
+	for path, data := range want {
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldChown, oldLookup := hostPrepChown, hostPrepLookupZoeRunnerIDs
+	t.Cleanup(func() { hostPrepChown, hostPrepLookupZoeRunnerIDs = oldChown, oldLookup })
+	var owners []struct {
+		path     string
+		uid, gid int
+	}
+	hostPrepChown = func(path string, uid, gid int) error {
+		owners = append(owners, struct {
+			path     string
+			uid, gid int
+		}{path, uid, gid})
+		return nil
+	}
+	hostPrepLookupZoeRunnerIDs = func() (int, int, error) { return 4242, 4343, nil }
+
+	if err := prepareLifecycleFiles(LifecycleOptions{Root: root, OptRoot: filepath.Join(root, "opt"), DataRoot: filepath.Join(root, "data")}); err != nil {
+		t.Fatal(err)
+	}
+	for path, original := range want {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(data, original) {
+			t.Errorf("%s content changed", path)
+		}
+		if mode := dataMode(t, path); mode != 0400 {
+			t.Errorf("%s mode = %04o, want 0400", path, mode)
+		}
+	}
+	wantOwners := map[string][2]int{
+		filepath.Join(secrets, "runner-token"):        {65532, 65532},
+		filepath.Join(secrets, "memory-runner-token"): {65532, 65532},
+		filepath.Join(runnerSecrets, "runner-token"):  {4242, 4343},
+	}
+	if len(owners) != len(wantOwners) {
+		t.Fatalf("chown calls = %d, want %d: %v", len(owners), len(wantOwners), owners)
+	}
+	for _, owner := range owners {
+		if want, ok := wantOwners[owner.path]; !ok || [2]int{owner.uid, owner.gid} != want {
+			t.Fatalf("unexpected owner call: %+v", owner)
+		}
+	}
+}
+
 func TestWaitHealthUsesConfiguredServerPort(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
 	defer server.Close()

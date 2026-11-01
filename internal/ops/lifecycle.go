@@ -678,6 +678,9 @@ func prepareLifecycleFiles(o LifecycleOptions) error {
 				return e
 			}
 		}
+		if err := prepareLifecycleSecret(p, 65532, 65532); err != nil {
+			return err
+		}
 	}
 	runnerSecret := filepath.Join(o.Root, "runner-secrets", "runner-token")
 	if _, err := os.Stat(runnerSecret); os.IsNotExist(err) {
@@ -688,6 +691,24 @@ func prepareLifecycleFiles(o LifecycleOptions) error {
 		if err := os.WriteFile(runnerSecret, data, 0400); err != nil {
 			return err
 		}
+	}
+	stackToken, err := os.ReadFile(filepath.Join(o.Root, "secrets", "runner-token"))
+	if err != nil {
+		return err
+	}
+	runnerToken, err := os.ReadFile(runnerSecret)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(stackToken, runnerToken) {
+		return errors.New("runner token copies must match")
+	}
+	zoeRunner, zoeGroup, err := hostPrepLookupZoeRunnerIDs()
+	if err != nil {
+		return err
+	}
+	if err := prepareLifecycleSecret(runnerSecret, zoeRunner, zoeGroup); err != nil {
+		return err
 	}
 	opencode := filepath.Join(o.DataRoot, "opencode")
 	for _, p := range []string{opencode, filepath.Join(opencode, "xdg-config", "opencode"), filepath.Join(opencode, "xdg-data"), filepath.Join(opencode, "xdg-state"), filepath.Join(opencode, "xdg-cache"), filepath.Join(o.DataRoot, "runner", "workspaces")} {
@@ -707,6 +728,39 @@ func prepareLifecycleFiles(o LifecycleOptions) error {
 	}
 	return nil
 }
+
+func prepareLifecycleSecret(path string, uid, gid int) error {
+	if err := os.Chmod(path, 0400); err != nil {
+		return err
+	}
+	if err := hostPrepChown(path, uid, gid); err != nil {
+		return err
+	}
+	return nil
+}
+
+var hostPrepLookupZoeRunnerIDs = func() (int, int, error) {
+	u, err := user.Lookup("zoe-runner")
+	if err != nil {
+		return 0, 0, err
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return 0, 0, err
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return 0, 0, err
+	}
+	if g, err := user.LookupGroup("zoe-runner"); err == nil {
+		gid, err = strconv.Atoi(g.Gid)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	return uid, gid, nil
+}
+
 func (m Manager) stageRelease(o LifecycleOptions, manifest ReleaseManifest) error {
 	target := filepath.Join(o.OptRoot, "releases", manifest.SourceRevision)
 	if _, e := os.Stat(target); os.IsNotExist(e) {
