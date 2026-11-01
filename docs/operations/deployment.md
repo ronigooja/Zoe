@@ -13,7 +13,7 @@ SQLite inspection, and voice pool isolation checks, see the
 - `/opt/zoe/releases/current` selects the immutable server/runner release.
 - `zoe-compose.service` supervises the server, memory worker, and Qdrant.
 - `zoe-runner.service` runs the trusted execution runner.
-- `zoe-opencode.service` runs the operator-installed OpenCode server as root,
+- `zoe-opencode.service` runs the Zoe-managed OpenCode server as root,
   bound to `127.0.0.1:4096`, with private state under `/var/lib/zoe/opencode`.
 - `zoe-macair-tunnel.service` maintains private SSH forwarding to the Mac.
 - `/etc/zoe` contains deployment configuration and secret references.
@@ -71,8 +71,7 @@ single bootstrap entry point:
 
 ```sh
 sudo bash deploy-linux/install-cli.sh /path/to/zoe-linux-<arch>.tar.gz
-sudo zoe install [--start] --release /path/to/release \
-  --opencode-binary /root/.opencode/bin/opencode
+sudo zoe install [--start] --release /path/to/release
 ```
 
    The bootstrap verifies `SHA256SUMS`, installs the CLI atomically, and keeps one
@@ -83,7 +82,7 @@ sudo zoe install [--start] --release /path/to/release \
    key or a model gateway key. It leaves services stopped by default; `--start`
     enables OpenCode, waits for authenticated `GET /api/info`, then starts the runner and waits for the health probe. It prints the next steps in
    order: `zoe key init`, `zoe memory configure`, then `zoe provider configure` for
-   systemd/runner deployments. Until key init, `zoe status` shows
+     systemd/runner deployments. Unless overridden with `--opencode-binary` or `ZOE_OPENCODE_BINARY`, install and update download and checksum-verify the pinned OpenCode asset into `/opt/zoe/opencode/<tag>/opencode`. Until key init, `zoe status` shows
    `Instance key: pending (run zoe key init)`. Provider and memory keys come from
    the model gateway and are entered through `zoe`; they are never generated here.
 
@@ -122,7 +121,7 @@ references and paths derived from the configured roots, while preserving
 operator-owned keys and unknown lines. A failed update restores the prior
 selector and environment files byte-for-byte and reports the failing command's
 bounded output; data and secrets are not touched.
-Plain server/runner upgrades do not restart `zoe-opencode.service`. It is
+The managed OpenCode path is versioned; updates retain the current and immediately previous versions and prune older ones. Plain server/runner upgrades do not restart `zoe-opencode.service`. It is
 restarted only when its unit, generated configuration, or discovered binary
 version changes and no active OpenCode sessions exist; otherwise the restart is
 skipped and reported.

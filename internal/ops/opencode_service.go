@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-var regexpVersion = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
+var regexpVersion = regexp.MustCompile(`^opencode v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
 var regexpUser = regexp.MustCompile(`^[a-z_][a-z0-9_-]*[$]?$`)
 
 func providerOpenCodeOptions(d Deployment) (LifecycleOptions, bool) {

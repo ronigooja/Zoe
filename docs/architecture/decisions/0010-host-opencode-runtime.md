@@ -14,12 +14,18 @@ Unresolved create failures become `effect_unknown` and are never replayed automa
 
 The runner requires `ZOE_OPENCODE_BASE_URL` (absolute HTTP(S) URL), `ZOE_OPENCODE_PASSWORD_FILE` (absolute private Basic Auth password file), `ZOE_OPENCODE_MODEL` (server/provider model route), and `ZOE_OPENCODE_WORKSPACE_ROOT` (absolute private parent for per-run directories). The separate service owns its data directory, port, password, provider configuration, and permission configuration. Provider credentials are service-only secrets and never enter runner logs.
 
-The accepted host lifecycle keeps the operator-installed OpenCode binary outside
-the Zoe release, discovers or explicitly validates its path during install and
-update, and renders the service's `permissions` configuration as an ordered
+The accepted host lifecycle keeps the pinned Zoe-managed OpenCode binary in its
+versioned host path, or explicitly validates an operator override during install
+and update, and renders the service's `permissions` configuration as an ordered
 allow-all baseline. The service is intentionally not systemd-filesystem-hardened;
 its configured user must be able to write the authorized host workspaces and
 OpenCode state.
+
+The accepted implementation pins the operator fork release in the Zoe Linux
+release artifact. Install and update download and checksum-verify the matching
+Linux asset into `/opt/zoe/opencode/<tag>/opencode`, unless the operator supplies
+`--opencode-binary` or `ZOE_OPENCODE_BINARY`; the managed path is recorded in the
+runner environment and rendered into the systemd unit.
 
 ## Version caveat
 

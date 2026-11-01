@@ -4,6 +4,9 @@ package ops
 // does not create application credentials: those belong to key/provider/memory
 // commands and are kept outside the release selector.
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -31,6 +34,15 @@ type ReleaseManifest struct {
 	Architecture   string                  `json:"architecture"`
 	Artifacts      []ReleaseArtifact       `json:"artifacts"`
 	Images         map[string]ReleaseImage `json:"images"`
+}
+type OpenCodeAsset struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+}
+type OpenCodeRelease struct {
+	Repository string                   `json:"repository"`
+	Tag        string                   `json:"tag"`
+	Assets     map[string]OpenCodeAsset `json:"assets"`
 }
 type ReleaseArtifact struct {
 	Name   string `json:"name"`
@@ -401,30 +413,179 @@ func validateArch(m ReleaseManifest) error {
 	return nil
 }
 func (m Manager) openCodeBinary(ctx context.Context, o LifecycleOptions) (string, error) {
-	if o.OpenCodeBinary == "" {
-		o.OpenCodeBinary = readEnvValue(filepath.Join(o.Root, "zoe-runner.env"), "ZOE_OPENCODE_BINARY")
-	}
-	if o.OpenCodeBinary == "" {
-		o.OpenCodeBinary = os.Getenv("ZOE_OPENCODE_BINARY")
-	}
 	if o.OpenCodeBinary != "" {
 		if st, err := os.Stat(o.OpenCodeBinary); err == nil && st.Mode().IsRegular() && st.Mode()&0111 != 0 {
 			return o.OpenCodeBinary, nil
 		}
 		return "", fmt.Errorf("OpenCode binary %q is missing or not executable", o.OpenCodeBinary)
 	}
-	if out, err := m.Run(ctx, "sh", "-c", "command -v opencode"); err == nil {
-		p := strings.TrimSpace(string(out))
-		if p != "" {
-			if st, e := os.Stat(p); e == nil && st.Mode().IsRegular() && st.Mode()&0111 != 0 {
-				return p, nil
+	if o.OpenCodeBinary == "" {
+		o.OpenCodeBinary = readEnvValue(filepath.Join(o.Root, "zoe-runner.env"), "ZOE_OPENCODE_BINARY")
+	}
+	if o.OpenCodeBinary == "" {
+		o.OpenCodeBinary = os.Getenv("ZOE_OPENCODE_BINARY")
+	}
+	if o.OpenCodeBinary != "" && !strings.HasPrefix(filepath.Clean(o.OpenCodeBinary), filepath.Join(filepath.Clean(o.OptRoot), "opencode")+string(os.PathSeparator)) {
+		if st, err := os.Stat(o.OpenCodeBinary); err == nil && st.Mode().IsRegular() && st.Mode()&0111 != 0 {
+			return o.OpenCodeBinary, nil
+		}
+		return "", fmt.Errorf("OpenCode binary %q is missing or not executable", o.OpenCodeBinary)
+	}
+	release, err := readOpenCodeRelease(o.Release)
+	if err != nil {
+		return "", err
+	}
+	managedDir := filepath.Join(o.OptRoot, "opencode", release.Tag)
+	managed := filepath.Join(managedDir, "opencode")
+	if version, e := os.ReadFile(filepath.Join(managedDir, "version")); e == nil && strings.TrimSpace(string(version)) == release.Tag {
+		if st, e := os.Stat(managed); e == nil && st.Mode().IsRegular() && st.Mode()&0111 != 0 {
+			return managed, nil
+		}
+	}
+	asset, ok := release.Assets[runtime.GOARCH]
+	if !ok {
+		return "", fmt.Errorf("no pinned OpenCode asset for host architecture %s", runtime.GOARCH)
+	}
+	if err := installOpenCode(ctx, o.OptRoot, release, asset); err != nil {
+		return "", err
+	}
+	if err := pruneOpenCodeVersions(filepath.Join(o.OptRoot, "opencode"), release.Tag); err != nil {
+		return "", err
+	}
+	return managed, nil
+}
+
+func pruneOpenCodeVersions(root, current string) error {
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var versions []string
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() != current {
+			versions = append(versions, entry.Name())
+		}
+	}
+	sort.Strings(versions)
+	for len(versions) > 1 {
+		if err := os.RemoveAll(filepath.Join(root, versions[0])); err != nil {
+			return err
+		}
+		versions = versions[1:]
+	}
+	return nil
+}
+
+var openCodeDownloadBaseURL = "https://github.com"
+
+func readOpenCodeRelease(dir string) (OpenCodeRelease, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "opencode-release.json"))
+	if err != nil {
+		return OpenCodeRelease{}, fmt.Errorf("read pinned OpenCode release: %w", err)
+	}
+	var r OpenCodeRelease
+	if json.Unmarshal(b, &r) != nil || r.Repository == "" || r.Tag == "" {
+		return r, errors.New("invalid pinned OpenCode release")
+	}
+	return r, nil
+}
+
+func installOpenCode(ctx context.Context, optRoot string, release OpenCodeRelease, asset OpenCodeAsset) error {
+	dir := filepath.Join(optRoot, "opencode", release.Tag)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	base := fmt.Sprintf("%s/%s/releases/download/%s", openCodeDownloadBaseURL, release.Repository, release.Tag)
+	client := &http.Client{}
+	fetch := func(name string) ([]byte, error) {
+		req, e := http.NewRequestWithContext(ctx, http.MethodGet, base+"/"+name, nil)
+		if e != nil {
+			return nil, e
+		}
+		resp, e := client.Do(req)
+		if e != nil {
+			return nil, e
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+		return io.ReadAll(resp.Body)
+	}
+	sums, err := fetch("SHA256SUMS")
+	if err != nil {
+		return fmt.Errorf("download OpenCode SHA256SUMS for %s: %w", release.Tag, err)
+	}
+	var expected string
+	for _, line := range strings.Split(string(sums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == asset.Name {
+			expected = fields[0]
+		}
+	}
+	if expected == "" || expected != asset.SHA256 {
+		return fmt.Errorf("OpenCode asset %s has an unexpected checksum for %s", asset.Name, release.Tag)
+	}
+	data, err := fetch(asset.Name)
+	if err != nil {
+		return fmt.Errorf("download OpenCode asset %s for %s: %w", asset.Name, release.Tag, err)
+	}
+	h := sha256.Sum256(data)
+	if hex.EncodeToString(h[:]) != expected {
+		return fmt.Errorf("OpenCode asset %s checksum verification failed for %s", asset.Name, release.Tag)
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("invalid OpenCode asset %s for %s", asset.Name, release.Tag)
+	}
+	defer gz.Close()
+	tarReader := tar.NewReader(gz)
+	var binary []byte
+	entries := 0
+	for {
+		header, e := tarReader.Next()
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			return fmt.Errorf("invalid OpenCode asset %s for %s", asset.Name, release.Tag)
+		}
+		entries++
+		if header.Name == "opencode" && header.Typeflag == tar.TypeReg {
+			binary, e = io.ReadAll(tarReader)
+			if e != nil {
+				return e
 			}
 		}
 	}
-	if st, err := os.Stat("/root/.opencode/bin/opencode"); err == nil && st.Mode().IsRegular() && st.Mode()&0111 != 0 {
-		return "/root/.opencode/bin/opencode", nil
+	if entries != 1 {
+		return fmt.Errorf("OpenCode asset %s for %s must contain exactly one file", asset.Name, release.Tag)
 	}
-	return "", errors.New("OpenCode binary was not found; install an executable opencode and retry (set --opencode-binary to specify its path)")
+	if len(binary) == 0 {
+		return fmt.Errorf("OpenCode asset %s for %s did not contain opencode", asset.Name, release.Tag)
+	}
+	tmp, err := os.CreateTemp(dir, ".opencode-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err = tmp.Chmod(0755); err == nil {
+		_, err = tmp.Write(binary)
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("install OpenCode asset %s for %s: %w", asset.Name, release.Tag, err)
+	}
+	if err = os.Rename(tmpName, filepath.Join(dir, "opencode")); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "version"), []byte(release.Tag+"\n"), 0644)
 }
 func ensureDirs(o LifecycleOptions) error {
 	for _, p := range []string{o.Root, filepath.Join(o.Root, "secrets"), filepath.Join(o.Root, "runner-secrets"), filepath.Join(o.OptRoot, "releases"), o.DataRoot} {

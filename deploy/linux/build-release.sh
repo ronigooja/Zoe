@@ -53,6 +53,7 @@ build_dir="$(mktemp -d "$build_root/.${tag}.build.XXXXXX")"
 release_stage="$(mktemp -d "$release_root/.${tag}.staging.XXXXXX")"
 chmod 0700 "$build_dir"
 mkdir -p "$build_dir/bin" "$release_stage/bin"
+cp "$repo_root/deploy/linux/opencode-release.json" "$release_stage/opencode-release.json"
 chmod 0755 "$release_stage"
 
 export CGO_ENABLED=0 GOOS=linux GOARCH="$build_goarch"
@@ -74,7 +75,7 @@ cp -a "$repo_root/deploy/linux" "$release_stage/deploy-linux"
 source_revision="$(git rev-parse HEAD)"
 (
   cd "$release_stage"
-  sha256sum bin/* > SHA256SUMS
+  sha256sum bin/* opencode-release.json > SHA256SUMS
   RELEASE_TAG="$tag" SOURCE_REVISION="$source_revision" BUILD_PLATFORM="$build_platform" DOCKER_BIN="$docker_bin" python3 - <<'PY'
 import hashlib, json, os, pathlib, subprocess
 root = pathlib.Path('.')
