@@ -1088,13 +1088,9 @@ func (m Manager) prepareHost(ctx context.Context, o LifecycleOptions) error {
 			return step("Docker network", err)
 		}
 	}
-	zoeRunner, zoeGroup := 0, 0
-	if u, err := user.Lookup("zoe-runner"); err == nil {
-		zoeRunner, _ = strconv.Atoi(u.Uid)
-		zoeGroup, _ = strconv.Atoi(u.Gid)
-	}
-	if g, err := user.LookupGroup("zoe-runner"); err == nil {
-		zoeGroup, _ = strconv.Atoi(g.Gid)
+	zoeRunner, zoeGroup, err := hostPrepLookupZoeRunnerIDs()
+	if err != nil {
+		return step("zoe-runner account", err)
 	}
 	dirs := []struct {
 		path     string
@@ -1102,7 +1098,8 @@ func (m Manager) prepareHost(ctx context.Context, o LifecycleOptions) error {
 		uid, gid int
 	}{
 		{o.OptRoot + "/releases", 0755, 0, 0},
-		{o.DataRoot, 0750, 0, zoeGroup}, {filepath.Join(o.DataRoot, "server/data"), 0700, 65532, 65532},
+		{o.Root, 0750, 0, zoeGroup}, {o.DataRoot, 0750, 0, zoeGroup},
+		{filepath.Join(o.DataRoot, "server"), 0700, 65532, 65532}, {filepath.Join(o.DataRoot, "server/data"), 0700, 65532, 65532},
 		{filepath.Join(o.DataRoot, "memory"), 0700, 65532, 65532}, {filepath.Join(o.DataRoot, "runner"), 0700, zoeRunner, zoeGroup},
 		{filepath.Join(o.DataRoot, "runner-authority"), 0700, zoeRunner, zoeGroup}, {filepath.Join(o.Root, "secrets"), 0700, 0, 0},
 		{filepath.Join(o.Root, "runner-secrets"), 0750, 0, zoeGroup}, {filepath.Join(o.DataRoot, "opencode"), 0700, 0, 0},

@@ -397,10 +397,23 @@ func newUpdateFixture(t *testing.T) updateFixture {
 
 func TestPrepareHostCreatesFreshLayoutAndIsIdempotent(t *testing.T) {
 	root, opt, data := t.TempDir(), filepath.Join(t.TempDir(), "opt"), filepath.Join(t.TempDir(), "data")
-	oldEUID, oldChown := hostPrepEUID, hostPrepChown
-	t.Cleanup(func() { hostPrepEUID, hostPrepChown = oldEUID, oldChown })
+	oldEUID, oldChown, oldLookup := hostPrepEUID, hostPrepChown, hostPrepLookupZoeRunnerIDs
+	t.Cleanup(func() { hostPrepEUID, hostPrepChown, hostPrepLookupZoeRunnerIDs = oldEUID, oldChown, oldLookup })
 	hostPrepEUID = func() int { return 0 }
-	hostPrepChown = func(string, int, int) error { return nil }
+	hostPrepLookupZoeRunnerIDs = func() (int, int, error) { return 4242, 4343, nil }
+	var owners []struct {
+		path     string
+		mode     os.FileMode
+		uid, gid int
+	}
+	hostPrepChown = func(path string, uid, gid int) error {
+		owners = append(owners, struct {
+			path     string
+			mode     os.FileMode
+			uid, gid int
+		}{path, dataMode(t, path), uid, gid})
+		return nil
+	}
 	var commands []string
 	groupExists, userExists, networkExists := false, false, false
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -436,13 +449,53 @@ func TestPrepareHostCreatesFreshLayoutAndIsIdempotent(t *testing.T) {
 	if err := m.prepareHost(context.Background(), o); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{filepath.Join(opt, "releases"), filepath.Join(data, "server/data"), filepath.Join(data, "memory"), filepath.Join(data, "runner"), filepath.Join(root, "secrets"), filepath.Join(root, "runner-secrets"), filepath.Join(data, "runner-authority")} {
+	for _, path := range []string{filepath.Join(opt, "releases"), filepath.Join(data, "server"), filepath.Join(data, "server/data"), filepath.Join(data, "memory"), filepath.Join(data, "runner"), filepath.Join(root, "secrets"), filepath.Join(root, "runner-secrets"), filepath.Join(data, "runner-authority")} {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("missing %s: %v", path, err)
 		}
 	}
 	if mode := dataMode(t, filepath.Join(data, "runner-authority/runner-deployment-authority.db")); mode != 0600 {
 		t.Errorf("authority mode=%04o", mode)
+	}
+	want := map[string]struct {
+		mode     os.FileMode
+		uid, gid int
+	}{
+		root:                          {0750, 0, 4343},
+		filepath.Join(data, "server"): {0700, 65532, 65532},
+	}
+	for _, owner := range owners {
+		if expected, ok := want[owner.path]; ok && (owner.mode != expected.mode || owner.uid != expected.uid || owner.gid != expected.gid) {
+			t.Errorf("%s prepared as mode %04o uid %d gid %d, want mode %04o uid %d gid %d", owner.path, owner.mode, owner.uid, owner.gid, expected.mode, expected.uid, expected.gid)
+		}
+	}
+	rootIndex, serverIndex := -1, -1
+	for i, owner := range owners {
+		if owner.path == root {
+			rootIndex = i
+		}
+		if owner.path == filepath.Join(data, "server") {
+			serverIndex = i
+		}
+	}
+	if rootIndex < 0 || serverIndex < 0 || rootIndex > serverIndex {
+		t.Fatalf("managed parents were not prepared before children: root=%d server=%d owners=%v", rootIndex, serverIndex, owners)
+	}
+	managed := make(map[string]bool, len(owners))
+	for _, owner := range owners {
+		managed[owner.path] = true
+	}
+	for _, path := range []string{
+		filepath.Join(root, "secrets"), filepath.Join(root, "runner-secrets"),
+		filepath.Join(data, "server"), filepath.Join(data, "server/data"),
+		filepath.Join(data, "memory"), filepath.Join(data, "runner"),
+		filepath.Join(data, "runner-authority"), filepath.Join(data, "opencode"),
+	} {
+		parent := filepath.Dir(path)
+		if parent == root || parent == data || managed[parent] {
+			continue
+		}
+		t.Errorf("%s has unmanaged intermediate parent %s", path, parent)
 	}
 	first := len(commands)
 	if err := m.prepareHost(context.Background(), o); err != nil {
