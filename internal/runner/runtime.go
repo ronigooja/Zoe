@@ -35,7 +35,9 @@ type RuntimeBinding struct{ SessionID string }
 type RuntimeCreateRejectedError struct{ Code string }
 
 func (e RuntimeCreateRejectedError) Error() string { return "runtime create rejected: " + e.Code }
-func (e RuntimeCreateRejectedError) Valid() bool   { return e.Code == "invalid_request" }
+func (e RuntimeCreateRejectedError) Valid() bool {
+	return e.Code == "invalid_request" || e.Code == "session_create_rejected"
+}
 
 type Runtime interface {
 	Create(context.Context, RuntimeSpec) (RuntimeBinding, error)
@@ -75,6 +77,10 @@ func (r OpenCodeRuntime) Create(ctx context.Context, s RuntimeSpec) (RuntimeBind
 	permissions := []map[string]string{{"action": "*", "resource": "*", "effect": "allow"}}
 	session, err := c.CreateSession(ctx, "zoe-run-"+s.RunID, dir, permissions)
 	if err != nil {
+		var httpErr *opencode.HTTPError
+		if errors.As(err, &httpErr) && httpErr.Status >= 400 && httpErr.Status < 500 {
+			return RuntimeBinding{}, RuntimeCreateRejectedError{Code: "session_create_rejected"}
+		}
 		return RuntimeBinding{}, err
 	}
 	return RuntimeBinding{SessionID: session.ID}, nil

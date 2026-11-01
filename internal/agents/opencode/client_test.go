@@ -43,46 +43,24 @@ func TestClientBasicAuthAndSessionTitleIsNotIdempotency(t *testing.T) {
 }
 
 func TestPrompt204IsNotCompletionAndCompletionNeedsMessage(t *testing.T) {
-	busy := false
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/session/s/prompt_async":
-			busy = true
+		case "/api/session/s/prompt":
 			w.WriteHeader(http.StatusNoContent)
-		case "/session/status":
-			if busy {
-				_ = json.NewEncoder(w).Encode(map[string]Status{"s": {Type: "busy"}})
-			} else {
-				_ = json.NewEncoder(w).Encode(map[string]Status{"s": {Type: "idle"}})
-			}
-		case "/session/s/message":
-			_ = json.NewEncoder(w).Encode([]Message{{Info: struct {
-				ID   string `json:"id"`
-				Role string `json:"role"`
-				Time struct {
-					Created   int64 `json:"created"`
-					Completed int64 `json:"completed"`
-				} `json:"time"`
-				Finish string `json:"finish"`
-				Error  any    `json:"error,omitempty"`
-			}{Role: "assistant"}}})
+		case "/api/session/s/message":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []Message{{Type: "idle"}}})
 		}
 	}))
 	defer s.Close()
 	c, _ := New(Config{BaseURL: s.URL, Password: "p"})
-	if err := c.PromptAsync(context.Background(), "s", map[string]string{"parts": "x"}); err != nil {
+	if err := c.Prompt(context.Background(), "s", "x"); err != nil {
 		t.Fatal(err)
 	}
-	status, _ := c.Status(context.Background())
-	if _, done, _ := Completion(status["s"], nil); done {
-		t.Fatal("204 was treated as completion")
-	}
-	busy = false
 	messages, err := c.Messages(context.Background(), "s")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, done, _ := Completion(status["s"], messages); done {
+	if _, done, _ := Completion(messages); done {
 		t.Fatal("missing completion marker was terminal")
 	}
 }

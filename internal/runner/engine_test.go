@@ -144,7 +144,7 @@ func TestUnknownCreateOutcomeIsFencedAndNeverReplayed(t *testing.T) {
 }
 
 func TestAllowlistedCreateRejectionIsReportedAndNotReplayed(t *testing.T) {
-	f := &failingCreateRuntime{err: RuntimeCreateRejectedError{Code: "image_missing"}}
+	f := &failingCreateRuntime{err: RuntimeCreateRejectedError{Code: "session_create_rejected"}}
 	c := &controlFake{}
 	j := openTestJournal(t)
 	e := &Engine{Control: c, Runtime: f, Journal: j, Routes: map[string]Route{"profile": {ProfileID: "profile", Harness: "opencode", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Model: "model"}}, PollInterval: time.Millisecond}
@@ -152,7 +152,7 @@ func TestAllowlistedCreateRejectionIsReportedAndNotReplayed(t *testing.T) {
 	if got := kinds(c); got != "dispatch_started,create_rejected" {
 		t.Fatalf("observation kinds=%s", got)
 	}
-	if rej := c.observations[len(c.observations)-1].CreateRejection; rej == nil || rej.Code != "image_missing" {
+	if rej := c.observations[len(c.observations)-1].CreateRejection; rej == nil || rej.Code != "session_create_rejected" {
 		t.Fatalf("create rejection=%+v", rej)
 	}
 	_ = e.Process(context.Background(), testClaim())

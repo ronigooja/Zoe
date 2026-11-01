@@ -529,7 +529,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			writeError(w, apiError(409, "create_rejection_unproven", "runtime create rejection requires an active unbound run and sanitized rejection proof", nil))
 			return
 		}
-		if proof.Code != "invalid_request" && proof.Code != "image_missing" && proof.Code != "container_create_rejected" {
+		if proof.Code != "invalid_request" && proof.Code != "session_create_rejected" {
 			writeError(w, apiError(409, "create_rejection_unproven", "runtime create rejection code is not allowlisted", nil))
 			return
 		}

@@ -2,6 +2,7 @@
 package opencode
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -165,11 +166,54 @@ func (c *Client) Interrupt(ctx context.Context, id string) error {
 	return nil
 }
 func (c *Client) Abort(ctx context.Context, id string) error { return c.Interrupt(ctx, id) }
-func (c *Client) Events(context.Context) (<-chan Event, <-chan error) {
+func (c *Client) Events(ctx context.Context) (<-chan Event, <-chan error) {
 	out := make(chan Event)
-	errs := make(chan error)
-	close(out)
-	close(errs)
+	errs := make(chan error, 1)
+	go func() {
+		defer close(out)
+		defer close(errs)
+		req, err := c.request(ctx, http.MethodGet, "/api/event", nil)
+		if err != nil {
+			errs <- err
+			return
+		}
+		resp, err := c.client.Do(req)
+		if err != nil {
+			errs <- err
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			errs <- &HTTPError{Status: resp.StatusCode}
+			return
+		}
+		scanner := bufio.NewScanner(resp.Body)
+		var data strings.Builder
+		flush := func() {
+			if data.Len() == 0 {
+				return
+			}
+			var event Event
+			if json.Unmarshal([]byte(data.String()), &event) == nil {
+				out <- event
+			}
+			data.Reset()
+		}
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				flush()
+				continue
+			}
+			if strings.HasPrefix(line, "data:") {
+				data.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+			}
+		}
+		flush()
+		if err := scanner.Err(); err != nil {
+			errs <- err
+		}
+	}()
 	return out, errs
 }
 

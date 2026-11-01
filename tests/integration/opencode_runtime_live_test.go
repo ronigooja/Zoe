@@ -22,14 +22,11 @@ func TestOpenCodeDirectRuntimeOptIn(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := c.Health(ctx); err != nil {
-		t.Fatal(err)
-	}
 	s, err := c.CreateSession(ctx, "zoe-integration-"+time.Now().UTC().Format("20060102T150405.000000000Z"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.PromptAsync(ctx, s.ID, map[string]string{"parts": "Reply with exactly opencode-integration-ok"}); err != nil {
+	if err := c.Prompt(ctx, s.ID, "Reply with exactly opencode-integration-ok"); err != nil {
 		t.Fatal(err)
 	}
 }

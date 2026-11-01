@@ -23,7 +23,7 @@ func TestUnknownRuntimeCreateRemainsFencedWithoutReplay(t *testing.T) {
 	}
 }
 func TestRuntimeRejectionCodesAreContractShaped(t *testing.T) {
-	for _, code := range []string{"invalid_request", "image_missing", "container_create_rejected"} {
+	for _, code := range []string{"invalid_request", "session_create_rejected"} {
 		p := contracts.CreateRejectionProof{Code: code}
 		if p.Code == "" {
 			t.Fatal(code)
