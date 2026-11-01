@@ -1,14 +1,14 @@
 {
   "repository": "ronigooja/opencode",
-  "tag": "v2.2.5-ronigooja.2",
+  "tag": "v2.2.5-ronigooja.3",
   "assets": {
     "amd64": {
       "name": "opencode-linux-x64.tar.gz",
-      "sha256": "6dcca03444886e04feb9c8bc954d9582f8591129594c3e014c42a6676e99c4a6"
+      "sha256": "6fa9c8cf592dd429e816079d818a9b048378cd5f1b40cf4b120246323c69fb1b"
     },
     "arm64": {
       "name": "opencode-linux-arm64.tar.gz",
-      "sha256": "cf2bfc12e6cdf77ebad6ebc139f7a79aac21a72d9ef53af4e177a38b1f42e6e8"
+      "sha256": "50a4ed2ab972d9c0c7017a2a60f2e935539f5efe65a5981fe8d88efcb3b59554"
     }
   }
 }
