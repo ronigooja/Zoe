@@ -68,9 +68,9 @@ func renderOpenCodeConfig(o LifecycleOptions) error {
 		if err := ValidateProviderBaseURL(baseURL); err != nil {
 			return err
 		}
-		providers[provider] = map[string]any{"name": provider, "env": []string{"ZOE_PROVIDER_KEY"}, "package": "@opencode/ai/providers/openai-compatible", "settings": map[string]string{"baseURL": baseURL}, "models": map[string]any{modelID: map[string]string{"name": modelID}}}
+		providers[provider] = map[string]any{"name": provider, "env": []string{"ZOE_PROVIDER_KEY"}, "package": "@opencode/ai/providers/openai-compatible", "settings": map[string]string{"baseURL": baseURL}, "models": mergeProviderModels(o, provider, modelID)}
 	}
-	config := map[string]any{"$schema": "https://opencode.ai/config.json", "model": model, "providers": providers, "permissions": []map[string]string{{"action": "*", "resource": "*", "effect": "allow"}}}
+	config := map[string]any{"$schema": "https://opencode.ai/config.json", "model": model, "update": "disable", "providers": providers, "permissions": []map[string]string{{"action": "*", "resource": "*", "effect": "allow"}}}
 	b, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return err
@@ -79,7 +79,7 @@ func renderOpenCodeConfig(o LifecycleOptions) error {
 }
 
 func snapshotOpenCode(o LifecycleOptions) ([]fileSnapshot, error) {
-	paths := []string{openCodeConfigPath(o), filepath.Join(openCodeRoot(o), "applied-fingerprint"), filepath.Join(openCodeRoot(o), "binary-version"), filepath.Join(o.Root, "zoe-opencode.env")}
+	paths := []string{openCodeConfigPath(o), modelMetadataPath(o), filepath.Join(openCodeRoot(o), "applied-fingerprint"), filepath.Join(openCodeRoot(o), "binary-version"), filepath.Join(o.Root, "zoe-opencode.env")}
 	for _, n := range []string{"zoe-opencode.service", "zoe-compose.service", "zoe-runner.service"} {
 		paths = append(paths, filepath.Join(openCodeUnitDir(o), n))
 	}

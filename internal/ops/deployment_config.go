@@ -278,8 +278,11 @@ func (m Manager) ConfigureProvider(ctx context.Context, d Deployment, c Provider
 		_ = saveProviderCheck(d, result)
 		return result, probeError("provider", result)
 	}
-	paths := []string{d.RunnerEnv, c.SecretPath, filepath.Join(d.Root, "provider-deployment.json")}
 	serviceOptions, managedOpenCode := providerOpenCodeOptions(d)
+	if managedOpenCode {
+		enrichProviderModels(ctx, &result)
+	}
+	paths := []string{d.RunnerEnv, c.SecretPath, filepath.Join(d.Root, "provider-deployment.json")}
 	if managedOpenCode {
 		serviceFiles, e := snapshotOpenCode(serviceOptions)
 		if e != nil {
@@ -335,6 +338,15 @@ func (m Manager) ConfigureProvider(ctx context.Context, d Deployment, c Provider
 			errs = append(errs, fmt.Errorf("reload restored configuration: %w", e))
 		}
 		return errors.Join(errs...)
+	}
+	if managedOpenCode {
+		providerID, _, _ := strings.Cut(c.Model, "/")
+		if providerID == "" {
+			providerID = "cliproxyapi"
+		}
+		if err := persistProviderModels(serviceOptions, providerID, result.Models); err != nil {
+			return result, rollback(err)
+		}
 	}
 	if d.Mode == ModeSystemd {
 		canonicalSecretDir := filepath.Clean(c.SecretPath) == filepath.Join("/etc/zoe", "runner-secrets", filepath.Base(c.SecretPath)) && filepath.Dir(filepath.Clean(c.SecretPath)) == "/etc/zoe/runner-secrets"

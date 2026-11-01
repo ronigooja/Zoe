@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -253,6 +255,42 @@ type ProbeResult struct {
 	ModelAvailable bool
 	ErrorCategory  string
 	ErrorReason    string
+	Models         []ProviderModelMetadata
+}
+
+type ModelLimit struct {
+	Context int64 `json:"context,omitempty"`
+	Input   int64 `json:"input,omitempty"`
+	Output  int64 `json:"output,omitempty"`
+}
+type ProviderModelMetadata struct {
+	ID    string     `json:"id"`
+	Name  string     `json:"name,omitempty"`
+	Limit ModelLimit `json:"limit,omitempty"`
+}
+
+var modelIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+
+func positiveLimit(v any) int64 {
+	f, ok := v.(float64)
+	if !ok || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 || f > float64(^uint64(0)>>1) {
+		return 0
+	}
+	return int64(f)
+}
+
+func modelLimit(raw map[string]any) ModelLimit {
+	get := func(names ...string) int64 {
+		for _, n := range names {
+			if v, ok := raw[n]; ok {
+				if x := positiveLimit(v); x > 0 {
+					return x
+				}
+			}
+		}
+		return 0
+	}
+	return ModelLimit{Context: get("context_length", "context_window", "max_context_length", "context"), Input: get("input_length", "max_input_length", "max_prompt_tokens", "input_token_limit", "input"), Output: get("max_output_length", "max_tokens", "output_token_limit", "output")}
 }
 
 // Probe checks the provider's models endpoint and reports coarse outcomes.
@@ -302,22 +340,44 @@ func Probe(ctx context.Context, c ProviderConfig, client *http.Client) ProbeResu
 		result.ErrorCategory = "provider_http_error"
 		return result
 	}
-	var catalog struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+	var raw struct {
+		Data   []map[string]any `json:"data"`
+		Models []map[string]any `json:"models"`
 	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&catalog); err != nil {
+	if err := json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(&raw); err != nil {
 		result.ErrorCategory = "invalid_response"
 		return result
 	}
-	for _, model := range catalog.Data {
-		if modelIDMatches(model.ID, normalized.Model) {
+	for _, model := range raw.Data {
+		id, _ := model["id"].(string)
+		if modelIDRE.MatchString(id) && !strings.HasPrefix(id, "gpt-image") && !strings.HasPrefix(id, "codex-auto-review") {
+			result.Models = append(result.Models, ProviderModelMetadata{ID: id, Name: id, Limit: modelLimit(model)})
+		}
+		if modelIDMatches(id, normalized.Model) {
 			result.ModelAvailable = true
-			return result
 		}
 	}
-	result.ErrorCategory = "model_unavailable"
+	for _, model := range raw.Models {
+		id, _ := model["id"].(string)
+		if modelIDRE.MatchString(id) {
+			result.Models = append(result.Models, ProviderModelMetadata{ID: id, Name: id, Limit: modelLimit(model)})
+		}
+	}
+	if len(result.Models) > 500 {
+		result.Models = result.Models[:500]
+	}
+	if !result.ModelAvailable {
+		for _, model := range raw.Models {
+			id, _ := model["id"].(string)
+			if modelIDMatches(id, normalized.Model) {
+				result.ModelAvailable = true
+				break
+			}
+		}
+	}
+	if !result.ModelAvailable {
+		result.ErrorCategory = "model_unavailable"
+	}
 	return result
 }
 
