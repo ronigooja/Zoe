@@ -162,7 +162,7 @@ func (m Manager) Install(ctx context.Context, o LifecycleOptions) (ReleaseManife
 	if err = formatPreflightProblems(m.preflight(ctx, o, manifest)); err != nil {
 		return manifest, err
 	}
-	if err = ensureDirs(o); err != nil {
+	if err = prepareLifecycleFiles(o); err != nil {
 		return manifest, err
 	}
 	if err = m.stageRelease(o, manifest); err != nil {
@@ -264,6 +264,28 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if err = m.ensureNetwork(ctx); err != nil {
 		return err
 	}
+	prepPaths := []string{
+		filepath.Join(o.Root, "secrets", "runner-token"),
+		filepath.Join(o.Root, "secrets", "memory-runner-token"),
+		filepath.Join(o.Root, "runner-secrets", "runner-token"),
+	}
+	var prepSnapshots []fileSnapshot
+	for _, path := range prepPaths {
+		s, snapshotErr := snapshot(path)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		prepSnapshots = append(prepSnapshots, s)
+	}
+	if err = prepareLifecycleFiles(o); err != nil {
+		errs := []error{err}
+		for _, s := range prepSnapshots {
+			if restoreErr := s.restore(); restoreErr != nil {
+				errs = append(errs, restoreErr)
+			}
+		}
+		return errors.Join(errs...)
+	}
 	stackSnapshot, stackErr := snapshot(filepath.Join(o.Root, "zoe-stack.env"))
 	if stackErr != nil {
 		return stackErr
@@ -278,16 +300,25 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	}
 	restarted := false
 	if err = m.writeDeploymentFiles(o, manifest); err != nil {
-		args := make([]any, 0, len(saved)+1)
+		args := make([]any, 0, len(saved)+len(prepSnapshots)+1)
 		args = append(args, err)
+		for _, s := range prepSnapshots {
+			args = append(args, s)
+		}
 		for _, s := range saved {
 			args = append(args, s)
 		}
 		return restoreUpdate(ctx, m, o, current, previous, stackSnapshot, runnerSnapshot, args...)
 	}
+	if err = removeEnvKeys(filepath.Join(o.Root, "zoe-runner.env"), "ZOE_OPENCODE_IMAGE", "ZOE_OPENCODE_PROVIDER_SOCKET"); err != nil {
+		return rollbackUpdateBeforeClosure(ctx, m, o, current, previous, stackSnapshot, runnerSnapshot, prepSnapshots, saved, err)
+	}
 	rollback := func(cause error) error {
-		args := make([]any, 0, len(saved)+1)
+		args := make([]any, 0, len(saved)+len(prepSnapshots)+1)
 		args = append(args, cause)
+		for _, s := range prepSnapshots {
+			args = append(args, s)
+		}
 		for _, s := range saved {
 			args = append(args, s)
 		}
@@ -310,10 +341,30 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 		return rollback(err)
 	}
 	if changed {
-		active, e := openCodeActive(ctx, o, m)
-		if e != nil || active {
+		serviceActive, serviceErr := serviceIsActive(ctx, m, "zoe-opencode.service")
+		if serviceErr != nil || !serviceActive {
+			restarted = true
+			if err = m.startOpenCode(ctx, o); err != nil {
+				return rollback(err)
+			}
+			if err = waitOpenCode(ctx, o, m, o.HealthTimeout); err != nil {
+				return rollback(err)
+			}
+		} else if active, e := openCodeActive(ctx, o, m); e != nil {
 			if o.Out != nil {
-				fmt.Fprintln(o.Out, "OpenCode restart skipped: active runs or session state unavailable")
+				fmt.Fprintln(o.Out, "OpenCode restart skipped: active session state unavailable; health will be verified")
+			}
+			// Leave the last applied fingerprint in place so a later update retries.
+			for _, s := range saved {
+				if filepath.Base(s.path) == "applied-fingerprint" {
+					if e := s.restore(); e != nil {
+						return rollback(e)
+					}
+				}
+			}
+		} else if active {
+			if o.Out != nil {
+				fmt.Fprintln(o.Out, "OpenCode restart skipped: active sessions")
 			}
 			// Leave the last applied fingerprint in place so a later update retries.
 			for _, s := range saved {
@@ -336,13 +387,25 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if err = m.start(ctx); err != nil {
 		return rollback(err)
 	}
-	if err = waitHealth(ctx, m, o.HealthURL, o.HealthTimeout); err != nil {
+	if err = waitAllHealth(ctx, o, m, o.HealthURL, o.HealthTimeout); err != nil {
 		return rollback(err)
 	}
 	if err = pruneReleases(filepath.Join(o.OptRoot, "releases"), previous, manifest.SourceRevision); err != nil {
 		return rollback(err)
 	}
 	return nil
+}
+
+func rollbackUpdateBeforeClosure(ctx context.Context, m Manager, o LifecycleOptions, selector, previous string, stack, runner fileSnapshot, prep, saved []fileSnapshot, cause error) error {
+	args := make([]any, 0, len(prep)+len(saved)+1)
+	args = append(args, cause)
+	for _, s := range prep {
+		args = append(args, s)
+	}
+	for _, s := range saved {
+		args = append(args, s)
+	}
+	return restoreUpdate(ctx, m, o, selector, previous, stack, runner, args...)
 }
 
 func restoreUpdate(ctx context.Context, m Manager, o LifecycleOptions, selector, previous string, stack, runner fileSnapshot, args ...any) error {
@@ -587,7 +650,7 @@ func installOpenCode(ctx context.Context, optRoot string, release OpenCodeReleas
 	}
 	return os.WriteFile(filepath.Join(dir, "version"), []byte(release.Tag+"\n"), 0644)
 }
-func ensureDirs(o LifecycleOptions) error {
+func prepareLifecycleFiles(o LifecycleOptions) error {
 	for _, p := range []string{o.Root, filepath.Join(o.Root, "secrets"), filepath.Join(o.Root, "runner-secrets"), filepath.Join(o.OptRoot, "releases"), o.DataRoot} {
 		if !filepath.IsAbs(p) {
 			return errors.New("lifecycle paths must be absolute")
@@ -606,6 +669,16 @@ func ensureDirs(o LifecycleOptions) error {
 			if e = os.WriteFile(p, []byte(base64.RawURLEncoding.EncodeToString(b)), 0400); e != nil {
 				return e
 			}
+		}
+	}
+	runnerSecret := filepath.Join(o.Root, "runner-secrets", "runner-token")
+	if _, err := os.Stat(runnerSecret); os.IsNotExist(err) {
+		data, err := os.ReadFile(filepath.Join(o.Root, "secrets", "runner-token"))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(runnerSecret, data, 0400); err != nil {
+			return err
 		}
 	}
 	opencode := filepath.Join(o.DataRoot, "opencode")
@@ -882,6 +955,29 @@ func validOperatorEnvValue(key, value string) bool {
 		return false
 	}
 }
+
+func removeEnvKeys(path string, keys ...string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	remove := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		remove[key] = true
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		content := strings.TrimSuffix(line, "\n")
+		key, _, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(content, "export ")), "=")
+		if ok && remove[strings.TrimSpace(key)] {
+			continue
+		}
+		result = append(result, line)
+	}
+	return writeFileAtomic(path, []byte(strings.Join(result, "")), 0600)
+}
+
 func (m Manager) ensureNetwork(ctx context.Context) error {
 	if _, err := m.Run(ctx, "docker", "network", "inspect", "zoe"); err == nil {
 		return nil
@@ -1019,6 +1115,92 @@ func (m Manager) start(ctx context.Context) error {
 		return fmt.Errorf("start zoe-runner.service: %w", e)
 	}
 	return nil
+}
+
+func serviceIsActive(ctx context.Context, m Manager, unit string) (bool, error) {
+	out, err := m.Run(ctx, "systemctl", "is-active", unit)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) == "active", nil
+}
+
+func waitAllHealth(ctx context.Context, o LifecycleOptions, m Manager, url string, timeout time.Duration) error {
+	if url == "" {
+		url = "http://127.0.0.1:8787/healthz"
+	}
+	deadline := time.Now().Add(timeout)
+	lastFailure := "zoe-compose.service"
+	for time.Now().Before(deadline) {
+		compose, composeErr := serviceIsActive(ctx, m, "zoe-compose.service")
+		runner, runnerErr := serviceIsActive(ctx, m, "zoe-runner.service")
+		opencode, opencodeErr := serviceIsActive(ctx, m, "zoe-opencode.service")
+		controlOK := false
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if r, err := http.DefaultClient.Do(req); err == nil {
+			r.Body.Close()
+			controlOK = r.StatusCode >= 200 && r.StatusCode < 300
+		}
+		if compose && runner && opencode && controlOK && opencodeInfoHealthy(ctx, o) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(3 * time.Second):
+			}
+			runner, runnerErr = serviceIsActive(ctx, m, "zoe-runner.service")
+			opencode, opencodeErr = serviceIsActive(ctx, m, "zoe-opencode.service")
+			if runner && opencode && opencodeInfoHealthy(ctx, o) {
+				return nil
+			}
+			if !runner {
+				lastFailure = "zoe-runner.service"
+			} else if !opencode {
+				lastFailure = "zoe-opencode.service"
+			} else {
+				lastFailure = "zoe-opencode.service health endpoint"
+			}
+		} else if !compose {
+			lastFailure = "zoe-compose.service"
+		} else if !opencode || !opencodeInfoHealthy(ctx, o) {
+			lastFailure = "zoe-opencode.service"
+		} else if !runner {
+			lastFailure = "zoe-runner.service"
+		} else if !controlOK {
+			lastFailure = "zoe-compose.service health endpoint"
+		}
+		_ = composeErr
+		_ = runnerErr
+		_ = opencodeErr
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("required service health check timed out: %s", lastFailure)
+}
+
+func opencodeInfoHealthy(ctx context.Context, o LifecycleOptions) bool {
+	password, err := os.ReadFile(filepath.Join(o.DataRoot, "opencode", "password"))
+	if err != nil {
+		return false
+	}
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:4096/api/info", nil)
+	if err != nil {
+		return false
+	}
+	req.SetBasicAuth("opencode", strings.TrimSpace(string(password)))
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer r.Body.Close()
+	return r.StatusCode == http.StatusOK
 }
 func waitHealth(ctx context.Context, m Manager, url string, timeout time.Duration) error {
 	if url == "" {

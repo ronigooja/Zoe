@@ -116,13 +116,14 @@ model-backed task execution.
 
 Use `zoe update --release /path/to/release` to stage and pull
 the new release, switch `current`, restart Compose and the runner, and verify
-health. Update refreshes release-owned environment keys, including image
+health; it also prepares missing OpenCode state and credentials before rendering
+the units. Update refreshes release-owned environment keys, including image
 references and paths derived from the configured roots, while preserving
 operator-owned keys and unknown lines. A failed update restores the prior
 selector and environment files byte-for-byte and reports the failing command's
 bounded output; data and secrets are not touched.
 The managed OpenCode path is versioned; updates retain the current and immediately previous versions and prune older ones. Plain server/runner upgrades do not restart `zoe-opencode.service`. It is
-restarted only when its unit, generated configuration, or discovered binary
+restarted or started when its unit, generated configuration, or discovered binary
 version changes and no active OpenCode sessions exist; otherwise the restart is
 skipped and reported.
 Use `zoe uninstall` for reviewed removal. It
