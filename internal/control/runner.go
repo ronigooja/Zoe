@@ -436,12 +436,10 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		if boundHarness == "" {
 			boundHarness = "opencode"
 		}
-		expectedMethod := "container_removed"
-		if boundHarness != "opencode" {
-			expectedMethod = ""
-		}
-		if expectedMethod == "" || proof == nil || proof.Source != "runner_container_removal" || proof.Method != expectedMethod || proof.RuntimeSessionID != boundSession || !proof.CleanupComplete || proof.VerifiedAt.IsZero() || offset != 0 || proof.VerifiedAt.After(time.Now().UTC().Add(5*time.Minute)) {
-			writeError(w, apiError(409, "termination_unproven", "termination requires verified runner container removal for the bound session", nil))
+		hostProof := proof != nil && proof.Source == "runner_host_session" && proof.Method == "session_interrupted" && proof.RuntimeContainerID == ""
+		legacyProof := proof != nil && proof.Source == "runner_container_removal" && proof.Method == "container_removed" && proof.RuntimeContainerID != ""
+		if boundHarness != "opencode" || proof == nil || (!hostProof && !legacyProof) || proof.RuntimeSessionID != boundSession || !proof.CleanupComplete || proof.VerifiedAt.IsZero() || offset != 0 || proof.VerifiedAt.After(time.Now().UTC().Add(5*time.Minute)) {
+			writeError(w, apiError(409, "termination_unproven", "termination requires verified host-session interruption for the bound session", nil))
 			return
 		}
 	}

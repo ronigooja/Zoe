@@ -16,13 +16,13 @@ func TestClientBasicAuthAndSessionTitleIsNotIdempotency(t *testing.T) {
 		if !ok || user != "u" || pass != "p" {
 			t.Fatalf("auth = %q %q %v", user, pass, ok)
 		}
-		if r.URL.Path != "/session" {
+		if r.URL.Path != "/api/session" {
 			t.Fatalf("path %s", r.URL.Path)
 		}
 		var body map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		titles = append(titles, body["title"])
-		_ = json.NewEncoder(w).Encode(Session{ID: "ses-" + string(rune('0'+len(titles))), Title: body["title"]})
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": Session{ID: "ses-" + string(rune('0'+len(titles))), Title: body["title"]}})
 	}))
 	defer s.Close()
 	c, err := New(Config{BaseURL: s.URL, Username: "u", Password: "p"})

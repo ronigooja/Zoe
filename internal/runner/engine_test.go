@@ -19,7 +19,7 @@ type runtimeFake struct {
 
 func (f *runtimeFake) Create(context.Context, RuntimeSpec) (RuntimeBinding, error) {
 	f.creates++
-	return RuntimeBinding{SessionID: "session", ContainerID: "container", Password: "password"}, nil
+	return RuntimeBinding{SessionID: "session"}, nil
 }
 func (f *runtimeFake) Prompt(context.Context, RuntimeBinding, string) error { return nil }
 func (f *runtimeFake) Status(context.Context, RuntimeBinding) (map[string]opencode.Status, error) {
@@ -40,7 +40,7 @@ func (f *runtimeFake) Events(context.Context, RuntimeBinding) (<-chan opencode.E
 func (f *runtimeFake) Abort(context.Context, RuntimeBinding) error { f.aborts++; return nil }
 func (f *runtimeFake) Terminate(context.Context, RuntimeBinding) (string, error) {
 	f.terminates++
-	return "container", nil
+	return "session", nil
 }
 
 type controlFake struct{ observations []contracts.RunnerObservation }
@@ -57,7 +57,7 @@ func (c *controlFake) Observe(_ context.Context, _ string, o contracts.RunnerObs
 func testClaim() contracts.JobClaim {
 	return contracts.JobClaim{RunID: "run", TaskID: "task", AttemptID: "attempt", WorkspaceID: "workspace", ProfileID: "profile", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Role: "worker", Fence: 1, Budget: contracts.RunBudgetSnapshot{MaxToolSteps: 1}}
 }
-func TestRuntimeProcessUsesNeutralBindingAndRemovalProof(t *testing.T) {
+func TestRuntimeProcessUsesHostSessionInterruptionProof(t *testing.T) {
 	f := &runtimeFake{events: make(chan opencode.Event, 1), done: true}
 	m := opencode.Message{}
 	m.Info.Role = "assistant"
@@ -80,10 +80,10 @@ func TestRuntimeProcessUsesNeutralBindingAndRemovalProof(t *testing.T) {
 	}
 	last := c.observations[len(c.observations)-1]
 	bound := c.observations[1]
-	if last.TerminationProof == nil || last.TerminationProof.Method != "container_removed" || last.TerminationProof.Source != "runner_container_removal" || last.TerminationProof.RuntimeSessionID != "session" || last.TerminationProof.RuntimeContainerID != "container" {
+	if last.TerminationProof == nil || last.TerminationProof.Method != "session_interrupted" || last.TerminationProof.Source != "runner_host_session" || last.TerminationProof.RuntimeSessionID != "session" || last.TerminationProof.RuntimeContainerID != "" {
 		t.Fatalf("termination proof=%+v", last.TerminationProof)
 	}
-	if bound.RuntimeSessionID != "session" || bound.RuntimeContainerID != "container" || len(bound.ExternalEffects) != 1 || bound.ExternalEffects[0].Kind != "runtime_create" || bound.ExternalEffects[0].Status != "created" {
+	if bound.RuntimeSessionID != "session" || bound.RuntimeContainerID != "" || len(bound.ExternalEffects) != 1 || bound.ExternalEffects[0].Kind != "runtime_create" || bound.ExternalEffects[0].Status != "created" {
 		t.Fatalf("dispatch_bound=%+v", bound)
 	}
 }

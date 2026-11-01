@@ -144,8 +144,6 @@ func (d Deployment) ProviderConfig() (ProviderConfig, error) {
 	}
 	c.BaseURL = v["ZOE_OPENCODE_PROVIDER_BASE_URL"]
 	c.Model = v["ZOE_OPENCODE_MODEL"]
-	c.Image = v["ZOE_OPENCODE_IMAGE"]
-	c.ProviderSocket = v["ZOE_OPENCODE_PROVIDER_SOCKET"]
 	c.WorkspaceRoot = v["ZOE_OPENCODE_WORKSPACE_ROOT"]
 	if v["ZOE_OPENCODE_PROVIDER_KEY_FILE"] != "" {
 		c.SecretPath = v["ZOE_OPENCODE_PROVIDER_KEY_FILE"]

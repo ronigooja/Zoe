@@ -1,6 +1,6 @@
 # ADR 0007: Zoe-owned OpenCode runtime
 
-Status: accepted architecture baseline; implementation and acceptance evidence are tracked in [the acceptance evidence register](../../acceptance/evidence.md), while delivery status remains in [the master plan](../../master-plan.md). This supersedes [ADR 0002](0002-ao-runtime-ownership.md).
+Status: historical baseline; runtime and isolation are superseded by [ADR 0010](0010-host-opencode-runtime.md). Implementation and acceptance evidence are tracked in [the acceptance evidence register](../../acceptance/evidence.md), while delivery status remains in [the master plan](../../master-plan.md). This supersedes [ADR 0002](0002-ao-runtime-ownership.md).
 
 ## Context
 

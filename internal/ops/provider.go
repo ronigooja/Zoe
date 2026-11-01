@@ -136,7 +136,7 @@ func WriteRunnerEnvAtomic(path string, c ProviderConfig) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	updates := map[string]string{"ZOE_OPENCODE_PROVIDER_BASE_URL": c.BaseURL, "ZOE_OPENCODE_PROVIDER_KEY_FILE": c.SecretPath, "ZOE_OPENCODE_MODEL": c.Model, "ZOE_OPENCODE_IMAGE": c.Image, "ZOE_OPENCODE_PROVIDER_SOCKET": c.ProviderSocket, "ZOE_OPENCODE_WORKSPACE_ROOT": c.WorkspaceRoot}
+	updates := map[string]string{"ZOE_OPENCODE_PROVIDER_BASE_URL": c.BaseURL, "ZOE_OPENCODE_PROVIDER_KEY_FILE": c.SecretPath, "ZOE_OPENCODE_MODEL": c.Model, "ZOE_OPENCODE_WORKSPACE_ROOT": c.WorkspaceRoot}
 	lines := strings.Split(string(old), "\n")
 	kept := make([]string, 0, len(lines)+3)
 	for _, line := range lines {
@@ -150,7 +150,7 @@ func WriteRunnerEnvAtomic(path string, c ProviderConfig) error {
 			kept = append(kept, line)
 		}
 	}
-	for _, key := range []string{"ZOE_OPENCODE_PROVIDER_BASE_URL", "ZOE_OPENCODE_PROVIDER_KEY_FILE", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_IMAGE", "ZOE_OPENCODE_PROVIDER_SOCKET", "ZOE_OPENCODE_WORKSPACE_ROOT"} {
+	for _, key := range []string{"ZOE_OPENCODE_PROVIDER_BASE_URL", "ZOE_OPENCODE_PROVIDER_KEY_FILE", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_WORKSPACE_ROOT"} {
 		if updates[key] != "" {
 			kept = append(kept, key+"="+strconv.Quote(updates[key]))
 		}

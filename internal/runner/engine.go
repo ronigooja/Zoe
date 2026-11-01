@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -85,10 +86,10 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 		case "create_rejected", "no_effect_terminal":
 			return e.flush(ctx, claim.RunID)
 		case "bound":
-			if entry.Session == "" || entry.Container == "" || entry.Password == "" {
+			if entry.Session == "" {
 				return fmt.Errorf("%w: bound runtime recovery identity incomplete", ErrOutcomePending)
 			}
-			return e.monitor(ctx, claim, RuntimeBinding{SessionID: entry.Session, ContainerID: entry.Container, Password: entry.Password})
+			return e.monitor(ctx, claim, RuntimeBinding{SessionID: entry.Session})
 		}
 	}
 	route, exists := e.Routes[claim.ProfileID]
@@ -144,18 +145,13 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 		if errors.As(err, &rejected) && rejected.Valid() {
 			return e.reportRejected(ctx, claim, rejected.Code)
 		}
+		log.Printf("runtime create failed for run %s: %v", safeRuntimeID(claim.RunID), err)
 		return e.markUnknown(ctx, claim)
 	}
-	if binding.SessionID == "" || binding.ContainerID == "" || binding.Password == "" {
+	if binding.SessionID == "" {
 		return e.markUnknown(ctx, claim)
 	}
 	if err = e.Journal.SetSession(ctx, claim.RunID, claim.AttemptID, claim.Fence, binding.SessionID, "bound"); err != nil {
-		return err
-	}
-	if err = e.Journal.SetContainer(ctx, claim.RunID, claim.AttemptID, claim.Fence, binding.ContainerID); err != nil {
-		return err
-	}
-	if err = e.Journal.SetRuntimePassword(ctx, claim.RunID, claim.AttemptID, claim.Fence, binding.Password); err != nil {
 		return err
 	}
 	if err = e.emit(ctx, claim, "dispatch_bound", "runtime", "runtime binding established", nil, []contracts.ExternalEffect{{ID: claim.RunID, Kind: "runtime_create", Status: "created", Reference: binding.SessionID}}); err != nil {
@@ -212,7 +208,8 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			time.Sleep(e.interval())
 			continue
 		}
-		m, done, term := opencode.Completion(status[b.SessionID], msgs)
+		_ = status
+		m, done, term := opencode.Completion(msgs)
 		if !done {
 			time.Sleep(e.interval())
 			continue
@@ -236,12 +233,20 @@ func (e *Engine) terminate(ctx context.Context, c contracts.JobClaim, b RuntimeB
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrOutcomePending, err)
 	}
+	_ = id
 	kind := "runtime_terminated"
 	if stopped {
 		kind = "stop_confirmed"
 	}
-	proof := &contracts.TerminationProof{Source: "runner_container_removal", Method: "container_removed", RuntimeSessionID: b.SessionID, RuntimeContainerID: id, VerifiedAt: time.Now().UTC(), CleanupComplete: true}
+	proof := &contracts.TerminationProof{Source: "runner_host_session", Method: "session_interrupted", RuntimeSessionID: b.SessionID, RuntimeContainerID: "", VerifiedAt: time.Now().UTC(), CleanupComplete: true}
 	return e.emit(ctx, c, kind, "runtime", reason, proof, nil)
+}
+
+func safeRuntimeID(id string) string {
+	if len(id) > 64 {
+		return id[:64]
+	}
+	return id
 }
 func (e *Engine) markUnknown(ctx context.Context, c contracts.JobClaim) error {
 	if bc, ok := e.Control.(runBudgetControl); ok {

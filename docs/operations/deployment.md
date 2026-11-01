@@ -54,7 +54,7 @@ The deployment override `/etc/zoe/control.lan.compose.yaml` adds this binding;
 the service's Compose commands. The source template is
 `deploy/linux/docker-compose.lan.yml`; set `ZOE_SERVER_LAN_ADDRESS` to the
 host LAN address. Update that setting if the host address changes.
-OpenCode runs only in runner-created containers. The provider bridge/socket is the only runtime egress; health/readiness responses do not prove model execution, memory processing, or task completion.
+OpenCode runs in the dedicated host-installed service. The runner uses its authenticated local HTTP API; health/readiness responses do not prove model execution, memory processing, or task completion.
 
 ## Installation and configuration
 
@@ -139,11 +139,11 @@ operator package.
 
 The Linux control server reads deployment settings from its process environment. Follow the repository's [credential handling rule](../../AGENTS.md) for deployment-managed secrets; the server does not print them. Bind to loopback or a private trusted interface and put external TLS termination behind the deployment's authenticated network boundary.
 
-The supported runtime image is the pinned Zoe-owned OpenCode image under `deploy/linux/second-runtime/opencode`. Configure `ZOE_OPENCODE_IMAGE`, `ZOE_OPENCODE_MODEL`, `ZOE_OPENCODE_PROVIDER_BASE_URL`, `ZOE_OPENCODE_PROVIDER_KEY_FILE`, and `ZOE_OPENCODE_PROVIDER_SOCKET` in the runner environment. CLIProxyAPI remains external and unchanged.
+Configure `ZOE_OPENCODE_BASE_URL`, `ZOE_OPENCODE_PASSWORD_FILE`, `ZOE_OPENCODE_MODEL`, and `ZOE_OPENCODE_WORKSPACE_ROOT` in the runner environment. The separate host service owns its OpenCode configuration and provider secret. CLIProxyAPI remains external and unchanged.
 
 ### Configure the OpenCode runtime
 
-The runner creates one OpenCode session per container. Runtime profiles select the OpenCode provider/model route; clients cannot override execution routes or grants.
+The runner creates one OpenCode session per run. Runtime profiles select the OpenCode provider/model route; clients cannot override execution routes or grants.
 
 The workspace path must be absolute, private, and available to the runner-created container.
 

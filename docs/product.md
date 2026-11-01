@@ -350,7 +350,7 @@ Native operating-system processes may not migrate directly, but the system shoul
 
 ## 5. Agent and runtime integration requirements
 
-OpenCode is Zoe's only execution runtime. Zoe's trusted runner creates and owns one isolated OpenCode container and one session per run; the control plane remains the business-state authority. CLIProxyAPI is an external OpenAI-compatible provider and is not part of Zoe's deployment lifecycle. Runtime identity, completion, stop, recovery, and usage must be based on runtime APIs and durable Zoe evidence, never on chat text alone.
+OpenCode is Zoe's only execution runtime. Zoe's trusted runner creates one host OpenCode session per run through the dedicated service; the control plane remains the business-state authority. CLIProxyAPI is an external OpenAI-compatible provider and is not part of Zoe's deployment lifecycle. Runtime identity, completion, stop, recovery, and usage must be based on runtime APIs and durable Zoe evidence, never on chat text alone.
 
 The first release prioritizes automatic Super planning, independent Workers, multiple workspaces, long-running tasks, task recovery, artifacts, and cost records. Native CLI or desktop-tool handoff is not a required runtime path.
 
@@ -362,7 +362,7 @@ The first release prioritizes automatic Super planning, independent Workers, mul
 
 **CY-05-01.** Create and manage OpenCode work with a real workspace, instructions, state/results, task links, supported continuation, and stop.
 
-Zoe must create a deterministic runtime boundary, send instructions through the OpenCode API, record the runtime session and container identities, observe status and assistant completion, collect artifacts and usage, and support abort plus verified container removal. A `prompt_async` acknowledgement is not completion. Unknown creation outcomes must be resolved by run/attempt/fence labels or remain `effect_unknown`; they must never be replayed blindly.
+Zoe must create a deterministic runtime boundary, send instructions through the OpenCode API, record the runtime session identity, observe idle completion outcomes, collect artifacts and usage, and support interrupt plus verified absence from active host sessions. A prompt acknowledgement is not completion. Unknown creation outcomes remain `effect_unknown`; they must never be replayed blindly.
 
 <a id="cy-05-02"></a>
 
@@ -392,7 +392,7 @@ Completion requires a non-busy session and a latest assistant message with a ter
 
 **CY-05-04.** Recover or fail closed after runner, server, or runtime crashes without duplicate execution or concurrent writes.
 
-The runner must use deterministic names and labels, one session per container, durable journal identities, and label lookup for uncertain creation. In-flight crash recovery, session continuity, and exact stop evidence require live acceptance. A session title is not an idempotency key.
+The runner must use deterministic run identity, one session per run, durable journal identities, and fail-closed handling for uncertain creation. In-flight crash recovery, session continuity, and exact stop evidence require live acceptance. A session title is not an idempotency key.
 
 <a id="cy-05-05"></a>
 

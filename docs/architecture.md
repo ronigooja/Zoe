@@ -11,14 +11,14 @@ Zoe is a private, self-hosted Linux Go control server with an independent Linux 
 | Native Apple clients | Conversation, voice/text input, task progress/results, decisions, projects, notices, and local drafts | Render server records and stale/offline state; never establish business completion locally |
 | Go control plane | Projects, commands, permissions, tasks, runs, receipts, events, service definitions, memory versions, and audit | Sole authoritative business-state writer |
 | Independent runner | Claim admitted work, invoke authorized runtime/service operations, observe results, and report evidence | Separate credentials and scoped claims; cannot grant its own authority |
-| Zoe runner and OpenCode | Authorized runtime creation and lifecycle for each run, including one container and one OpenCode session | Zoe admits work and owns runtime/session lifecycle; the runner is the trusted host-side lifecycle authority |
+| Zoe runner and OpenCode | Authorized session creation and lifecycle for each run through the dedicated host OpenCode service | Zoe admits work and owns runtime/session lifecycle; the runner is the trusted host-side lifecycle authority |
 | Existing remote CLIProxyAPI | Account selection, quota handling, and proxying for its configured model routes | External OpenAI-compatible provider reused unchanged; no duplicate account rotation in Zoe |
 | Zoe-compatible `ronigooja/chatgpt-web-voice` fork | ChatGPT web real-time transport and voice account pool | Voice transport and spoken output do not authorize or complete business work |
 | Mem0 | Scoped extraction, memory proposals, and permitted worker operations | Controlled worker, never unrestricted task/permission/configuration/decision authority |
 | Qdrant | Derived retrieval vectors and payloads | Rebuildable index; never the source of truth |
 | SQLite and file storage | Durable authority transactions; artifacts/releases and service data in file storage | Database commit establishes acceptance; large outputs do not become database blobs |
 
-The durable association is `Project → Task → Run → Runtime Session`. Each run records its runtime, model route, execution host, workspace, authorization, artifacts, and result evidence. Role, runtime implementation, and model route are separate choices. The six product responsibilities map onto these components; they do not require six separately deployed services. The runtime baseline is defined by [ADR 0007](architecture/decisions/0007-zoe-owned-opencode-runtime.md).
+The durable association is `Project → Task → Run → Runtime Session`. Each run records its runtime, model route, execution host, workspace, authorization, artifacts, and result evidence. Role, runtime implementation, and model route are separate choices. The six product responsibilities map onto these components; they do not require six separately deployed services. The runtime baseline is defined by [ADR 0010](architecture/decisions/0010-host-opencode-runtime.md).
 
 There is no PWA, CAO implementation, macOS server, or official Codex desktop-app integration. Native CLI handoff is optional and bounded by supported native runtime facilities. See [ADR 0001](architecture/decisions/0001-linux-and-native-apple-clients.md) and the current runtime baseline in [ADR 0007](architecture/decisions/0007-zoe-owned-opencode-runtime.md).
 
@@ -29,7 +29,7 @@ The public API uses REST under `/v1` and SSE for ordered events. Implemented dat
 1. A native client submits a business command with an `Idempotency-Key` and, when applicable, `expected_version`.
 2. The control plane checks the current principal, workspace/resource permissions, command validity, and optimistic version.
 3. One transaction commits the durable command receipt, work record, and outbox event before returning acceptance.
-4. The runner claims admitted work atomically. Zoe checks authority, budget, and the shared run cap before the runner creates the OpenCode container.
+4. The runner claims admitted work atomically. Zoe checks authority, budget, and the shared run cap before the runner creates the OpenCode session.
 5. OpenCode and runner reports return observations/proposals. The control plane validates the current claim, fence, version, and evidence before committing business-state changes.
 6. Event delivery retries from the outbox. Consumers deduplicate stable identities and repair missing history from the authority.
 
@@ -116,6 +116,7 @@ These records capture selected decisions, not new scope or acceptance claims:
 - [0004 — Shared instance-key authentication](architecture/decisions/0004-instance-key-authentication.md)
 - [0005 — Voice turns, tasks, and lease termination](architecture/decisions/0005-voice-task-and-lease-boundaries.md)
 - [0006 — Memory authority and derived stores](architecture/decisions/0006-memory-authority-and-derived-stores.md)
-- [0007 — Zoe-owned OpenCode runtime](architecture/decisions/0007-zoe-owned-opencode-runtime.md)
+- [0007 — Zoe-owned OpenCode runtime (historical)](architecture/decisions/0007-zoe-owned-opencode-runtime.md)
+- [0010 — Host-installed OpenCode runtime](architecture/decisions/0010-host-opencode-runtime.md)
 - [0008 — Ambient macOS screen client](architecture/decisions/0008-ambient-screen-client.md)
 - [0009 — Voice front desk, steward routing, and impact-level authorization](architecture/decisions/0009-voice-steward-impact-policy.md)

@@ -19,6 +19,16 @@ import (
 
 type SessionInventoryReader interface{}
 
+func splitContainerIDs(output string) []string {
+	var ids []string
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.TrimSpace(line) != "" {
+			ids = append(ids, strings.TrimSpace(line))
+		}
+	}
+	return ids
+}
+
 type ReconciliationOptions struct {
 	UnrelatedPreexistingCapabilityContainerIDs []string
 	RetainNeverStartedContainerIDs             []string

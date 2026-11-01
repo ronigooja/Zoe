@@ -57,9 +57,9 @@ func run(args []string) error {
 	}
 	baseURL := requiredEnv("ZOE_CONTROL_URL")
 	controlToken := requiredEnv("ZOE_RUNNER_TOKEN")
-	opencodeImage := requiredEnv("ZOE_OPENCODE_IMAGE")
 	opencodeModel := requiredEnv("ZOE_OPENCODE_MODEL")
-	providerSocket := requiredEnv("ZOE_OPENCODE_PROVIDER_SOCKET")
+	opencodeURL := requiredEnv("ZOE_OPENCODE_BASE_URL")
+	opencodePasswordFile := requiredEnv("ZOE_OPENCODE_PASSWORD_FILE")
 	workspaceRoot := requiredEnv("ZOE_OPENCODE_WORKSPACE_ROOT")
 	journalPath := requiredEnv("ZOE_RUNNER_JOURNAL_PATH")
 	routes, err := loadRoutes(os.Getenv("ZOE_RUNNER_ROUTES"))
@@ -88,20 +88,18 @@ func run(args []string) error {
 	}
 	defer journal.Close()
 	docker := runner.ExecDockerCommand{Binary: optionalEnv("ZOE_DOCKER_BINARY", "docker")}
-	openCodeImage := strings.TrimSpace(opencodeImage)
-	if openCodeImage == "" || opencodeModel == "" || providerSocket == "" || workspaceRoot == "" {
-		return errors.New("ZOE_OPENCODE_IMAGE, ZOE_OPENCODE_MODEL, ZOE_OPENCODE_PROVIDER_SOCKET, and ZOE_OPENCODE_WORKSPACE_ROOT are required")
+	password, err := os.ReadFile(opencodePasswordFile)
+	if opencodeURL == "" || opencodeModel == "" || opencodePasswordFile == "" || workspaceRoot == "" || err != nil || strings.TrimSpace(string(password)) == "" {
+		return errors.New("ZOE_OPENCODE_BASE_URL, ZOE_OPENCODE_PASSWORD_FILE, ZOE_OPENCODE_MODEL, and ZOE_OPENCODE_WORKSPACE_ROOT are required")
 	}
-	openCode := runner.OpenCodeRuntime{BaseURL: "http://127.0.0.1:4096", Username: "opencode", Docker: docker, Supervisor: runner.DockerRuntimeSupervisor{Docker: docker}, Container: runner.RuntimeContainerSpec{Image: openCodeImage, Model: opencodeModel, WorkspaceRoot: workspaceRoot, ProviderSocket: providerSocket, ContainerWorkspace: "/workspace", PidsLimit: 256}}
+	openCode := runner.OpenCodeRuntime{BaseURL: opencodeURL, Username: "opencode", Password: strings.TrimSpace(string(password)), WorkspaceRoot: workspaceRoot, Model: opencodeModel}
 	engine := &runner.Engine{
-		Control:  control,
-		Instance: control,
-		Runtime:  openCode,
-		Journal:  journal,
-		Routes:   routes,
-		Isolation: runner.SupervisedRuntimeIsolation{Docker: docker, Profiles: map[string]runner.SupervisedRuntimeProfile{
-			"opencode": {Harness: "opencode", IsolationPolicy: runner.OpenCodeWorkspaceWritePolicy, Image: openCodeImage},
-		}},
+		Control:        control,
+		Instance:       control,
+		Runtime:        openCode,
+		Journal:        journal,
+		Routes:         routes,
+		Isolation:      nil,
 		PollInterval:   durationEnv("ZOE_RUNNER_POLL_INTERVAL", 2*time.Second),
 		ObserveTimeout: durationEnv("ZOE_RUNNER_OBSERVE_TIMEOUT", 15*time.Second),
 	}
