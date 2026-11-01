@@ -168,6 +168,9 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	return writeFileAtomicOwned(path, data, mode, -1, -1)
 }
 func writeFileAtomicOwned(path string, data []byte, mode os.FileMode, uid, gid int) error {
+	return writeFileAtomicOwnedWithChown(path, data, mode, uid, gid, chownFile, effectiveUID)
+}
+func writeFileAtomicOwnedWithChown(path string, data []byte, mode os.FileMode, uid, gid int, chown func(string, int, int) error, euid func() int) error {
 	if path == "" || !filepath.IsAbs(path) {
 		return errors.New("configuration path must be absolute")
 	}
@@ -190,7 +193,7 @@ func writeFileAtomicOwned(path string, data []byte, mode os.FileMode, uid, gid i
 				return statErr
 			}
 			if !currentOK || currentOwner.Uid != st.Uid || currentOwner.Gid != st.Gid {
-				if err = chownFile(tmpName, int(st.Uid), int(st.Gid)); err != nil {
+				if err = chown(tmpName, int(st.Uid), int(st.Gid)); err != nil {
 					tmp.Close()
 					return err
 				}
@@ -205,8 +208,8 @@ func writeFileAtomicOwned(path string, data []byte, mode os.FileMode, uid, gid i
 		}
 		currentOwner, currentOK := current.Sys().(*syscall.Stat_t)
 		needsChown := !currentOK || int(currentOwner.Uid) != uid || int(currentOwner.Gid) != gid
-		if needsChown && effectiveUID() == 0 {
-			if err = chownFile(tmpName, uid, gid); err != nil {
+		if needsChown && euid() == 0 {
+			if err = chown(tmpName, uid, gid); err != nil {
 				tmp.Close()
 				return err
 			}

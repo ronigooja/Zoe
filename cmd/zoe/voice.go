@@ -44,8 +44,8 @@ func voiceConfigureOperation(args []string, in io.Reader, out, errOut io.Writer)
 	if err != nil {
 		return err
 	}
-	if d.Mode != ops.ModeCompose {
-		return errors.New("voice configure requires the managed Compose deployment; configure its stack environment explicitly for systemd")
+	if d.ComposeFile == "" {
+		return errors.New("voice configure requires a known Compose file; configure ZOE_COMPOSE_FILE in the stack environment")
 	}
 	in = sharedInput(in)
 	if strings.TrimSpace(*base) == "" {
@@ -100,14 +100,13 @@ func voiceConfigureOperation(args []string, in io.Reader, out, errOut io.Writer)
 		return err
 	}
 	fmt.Fprintf(out, "Voice gateway configuration saved. URL: %s\nAPI key file: %s\nAccount media: %t\n", *base, *secretFile, *enableMedia)
-	if d.Mode == ops.ModeCompose {
-		// The Compose service is zoe-server; zoe-runner.service is a systemd
-		// unit and is not a valid Compose target.
-		if err = opsManager().ReloadCompose(ctx, []string{"zoe-server"}, d.ComposeProject, d.ComposeFile, d.StackEnv); err != nil {
-			return fmt.Errorf("voice configuration saved but service reload failed: %w", err)
-		}
-		fmt.Fprintln(out, "Zoe services reloaded.")
+	// The Compose service is zoe-server; zoe-runner.service is a systemd
+	// unit and is not a valid Compose target. Systemd supervises this Compose
+	// stack, so the same reload is required in both deployment modes.
+	if err = opsManager().ReloadCompose(ctx, []string{"zoe-server"}, d.ComposeProject, d.ComposeFile, d.StackEnv); err != nil {
+		return fmt.Errorf("voice configuration saved but service reload failed: %w", err)
 	}
+	fmt.Fprintln(out, "Zoe services reloaded.")
 	return nil
 }
 

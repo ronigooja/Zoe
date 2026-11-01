@@ -142,6 +142,65 @@ func TestVoiceConfigureAndStatus(t *testing.T) {
 		t.Fatalf("status omitted voice settings: %s", out.String())
 	}
 }
+
+func TestVoiceConfigureSystemdModeUsesComposeAndContainerOwnedSecret(t *testing.T) {
+	root := t.TempDir()
+	compose := filepath.Join(root, "compose.yml")
+	stack := filepath.Join(root, "zoe-stack.env")
+	if err := os.WriteFile(compose, []byte("services: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stack, []byte("ZOE_COMPOSE_FILE="+compose+"\nCOMPOSE_PROJECT_NAME=zoe\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "provider-deployment.json"), []byte(`{"Mode":"systemd","Root":"`+root+`","StackEnv":"`+stack+`","ComposeFile":"`+compose+`","ComposeProject":"zoe"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldMode := os.Getenv("ZOE_DEPLOYMENT_MODE")
+	_ = os.Unsetenv("ZOE_DEPLOYMENT_MODE")
+	t.Cleanup(func() { _ = os.Setenv("ZOE_DEPLOYMENT_MODE", oldMode) })
+	calls := fakeServices(t, false)
+	secret := filepath.Join(root, "secrets", "voice-gateway-api-key")
+	var out bytes.Buffer
+	if err := voiceConfigureOperation([]string{"--root", root, "--url", "https://voice.example.test", "--token", "voice-secret", "--secret-file", secret, "--non-interactive"}, strings.NewReader(""), &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(stack)
+	if err != nil || !strings.Contains(string(data), "ZOE_VOICE_GATEWAY_URL") {
+		t.Fatalf("voice env was not written: %v %s", err, data)
+	}
+	secretData, err := os.ReadFile(secret)
+	if err != nil || string(secretData) != "voice-secret\n" {
+		t.Fatalf("voice secret was not written: %v %q", err, secretData)
+	}
+	if !strings.Contains(strings.Join(*calls, "\n"), "docker compose --project-name zoe --file "+compose+" --env-file "+stack+" up -d --no-build --no-deps --force-recreate zoe-server") {
+		t.Fatalf("systemd-mode configure did not reload zoe-server via Compose: %v", *calls)
+	}
+}
+
+func TestVoiceConfigureWithoutComposeFileWritesNothing(t *testing.T) {
+	root := t.TempDir()
+	stack := filepath.Join(root, "zoe-stack.env")
+	if err := os.WriteFile(stack, []byte("COMPOSE_PROJECT_NAME=zoe\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldMode := os.Getenv("ZOE_DEPLOYMENT_MODE")
+	_ = os.Setenv("ZOE_DEPLOYMENT_MODE", "systemd")
+	t.Cleanup(func() { _ = os.Setenv("ZOE_DEPLOYMENT_MODE", oldMode) })
+	fakeServices(t, false)
+	secret := filepath.Join(root, "secrets", "voice-gateway-api-key")
+	err := voiceConfigureOperation([]string{"--root", root, "--url", "https://voice.example.test", "--token", "voice-secret", "--secret-file", secret, "--non-interactive"}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "known Compose file") {
+		t.Fatalf("error=%v, want clear missing Compose file error", err)
+	}
+	if _, statErr := os.Stat(secret); !os.IsNotExist(statErr) {
+		t.Fatalf("secret was written despite missing Compose file: %v", statErr)
+	}
+	data, readErr := os.ReadFile(stack)
+	if readErr != nil || strings.Contains(string(data), "ZOE_VOICE_") {
+		t.Fatalf("stack env changed despite missing Compose file: %v %s", readErr, data)
+	}
+}
 func TestKeyMenuInitializesRotatesAndRestoresService(t *testing.T) {
 	calls := fakeServices(t, false)
 	root := t.TempDir()
