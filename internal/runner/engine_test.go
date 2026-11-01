@@ -20,6 +20,7 @@ type runtimeFake struct {
 	events                      chan opencode.Event
 	done                        bool
 	result                      opencode.Message
+	messages                    []opencode.Message
 }
 
 func (f *runtimeFake) Create(context.Context, RuntimeSpec) (RuntimeBinding, error) {
@@ -41,6 +42,9 @@ func (f *runtimeFake) Status(context.Context, RuntimeBinding) (map[string]openco
 }
 func (f *runtimeFake) Messages(context.Context, RuntimeBinding) ([]opencode.Message, error) {
 	if f.done {
+		if f.messages != nil {
+			return f.messages, nil
+		}
 		return []opencode.Message{f.result}, nil
 	}
 	return nil, nil
@@ -98,6 +102,29 @@ func TestRuntimeProcessUsesHostSessionInterruptionProof(t *testing.T) {
 	}
 	if bound.RuntimeSessionID != "session" || bound.RuntimeContainerID != "" || len(bound.ExternalEffects) != 1 || bound.ExternalEffects[0].Kind != "runtime_create" || bound.ExternalEffects[0].Status != "created" {
 		t.Fatalf("dispatch_bound=%+v", bound)
+	}
+}
+
+// Catches the old newest-first assumption: the terminal idle item is first.
+func TestRuntimeProcessNewestFirstMessagesReachesResultAndTermination(t *testing.T) {
+	f := completingRuntimeFake()
+	f.messages = []opencode.Message{
+		{ID: "msg_002", Type: "idle", Outcome: "succeeded", Time: struct {
+			Created   int64 `json:"created"`
+			Completed int64 `json:"completed"`
+		}{Created: 2}},
+		{ID: "msg_001", Type: "assistant", Time: struct {
+			Created   int64 `json:"created"`
+			Completed int64 `json:"completed"`
+		}{Created: 1}},
+	}
+	c := &controlFake{}
+	e := testEngine(t, f, c, openTestJournal(t))
+	if err := e.Process(testContext(t), testClaim()); err != nil {
+		t.Fatal(err)
+	}
+	if got := kinds(c); got != "dispatch_started,dispatch_bound,result,runtime_terminated" {
+		t.Fatalf("observation kinds=%s", got)
 	}
 }
 func TestRuntimeAbortOnToolStepLimit(t *testing.T) {

@@ -55,10 +55,15 @@ type Status struct {
 	Message string `json:"message,omitempty"`
 }
 type Message struct {
+	ID      string `json:"id,omitempty"`
 	Type    string `json:"type,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
 	Error   any    `json:"error,omitempty"`
-	Info    struct {
+	Time    struct {
+		Created   int64 `json:"created"`
+		Completed int64 `json:"completed"`
+	} `json:"time,omitempty"`
+	Info struct {
 		ID   string `json:"id"`
 		Role string `json:"role"`
 		Time struct {
@@ -228,7 +233,7 @@ func Completion(args ...any) (Message, bool, error) {
 	if len(messages) == 0 {
 		return Message{}, false, nil
 	}
-	m := messages[len(messages)-1]
+	m := latestMessage(messages)
 	if m.Type == "" && m.Info.Time.Completed != 0 {
 		if m.Info.Error != nil {
 			return m, true, fmt.Errorf("OpenCode assistant error: %v", m.Info.Error)
@@ -255,6 +260,30 @@ func Completion(args ...any) (Message, bool, error) {
 		return m, true, fmt.Errorf("OpenCode assistant error")
 	}
 	return m, true, nil
+}
+
+func latestMessage(messages []Message) Message {
+	latest := messages[0]
+	for _, message := range messages[1:] {
+		created, id := messageSortKey(message)
+		latestCreated, latestID := messageSortKey(latest)
+		if created > latestCreated || (created == latestCreated && id > latestID) {
+			latest = message
+		}
+	}
+	return latest
+}
+
+func messageSortKey(message Message) (int64, string) {
+	id := message.ID
+	if id == "" {
+		id = message.Info.ID
+	}
+	created := message.Time.Created
+	if created == 0 {
+		created = message.Info.Time.Created
+	}
+	return created, id
 }
 
 func (c *Client) request(ctx context.Context, method, endpoint string, body []byte) (*http.Request, error) {

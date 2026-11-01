@@ -3,11 +3,95 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func decodedMessage(t *testing.T, raw string) Message {
+	t.Helper()
+	var message Message
+	if err := json.Unmarshal([]byte(raw), &message); err != nil {
+		t.Fatal(err)
+	}
+	return message
+}
+
+func TestCompletionNewestFirstIdleSucceeded(t *testing.T) {
+	messages := []Message{
+		decodedMessage(t, `{"id":"msg_003","time":{"created":817682},"type":"idle","outcome":"succeeded"}`),
+		decodedMessage(t, `{"id":"msg_002","time":{"created":815424},"type":"assistant"}`),
+		decodedMessage(t, `{"id":"msg_001","time":{"created":800421},"type":"user"}`),
+	}
+	if _, done, err := Completion(messages); !done || err != nil {
+		t.Fatalf("newest-first completion = done %v, err %v", done, err)
+	}
+}
+
+func TestCompletionAscendingIdleSucceeded(t *testing.T) {
+	messages := []Message{
+		decodedMessage(t, `{"id":"msg_001","time":{"created":800421},"type":"user"}`),
+		decodedMessage(t, `{"id":"msg_002","time":{"created":815424},"type":"assistant"}`),
+		decodedMessage(t, `{"id":"msg_003","time":{"created":817682},"type":"idle","outcome":"succeeded"}`),
+	}
+	if _, done, err := Completion(messages); !done || err != nil {
+		t.Fatalf("ascending completion = done %v, err %v", done, err)
+	}
+}
+
+func TestCompletionNewestAssistantIsNotDone(t *testing.T) {
+	messages := []Message{
+		decodedMessage(t, `{"id":"msg_003","time":{"created":817682},"type":"assistant"}`),
+		decodedMessage(t, `{"id":"msg_002","time":{"created":815424},"type":"idle","outcome":"succeeded"}`),
+	}
+	if _, done, err := Completion(messages); done || err != nil {
+		t.Fatalf("newest assistant completion = done %v, err %v", done, err)
+	}
+}
+
+func TestCompletionNewestIdleFailed(t *testing.T) {
+	messages := []Message{
+		decodedMessage(t, `{"id":"msg_003","time":{"created":817682},"type":"idle","outcome":"failed","error":"boom"}`),
+		decodedMessage(t, `{"id":"msg_002","time":{"created":815424},"type":"assistant"}`),
+	}
+	if _, done, err := Completion(messages); !done || err == nil || errors.Is(err, context.Canceled) {
+		t.Fatalf("failed completion = done %v, err %v", done, err)
+	}
+}
+
+func TestCompletionNewestIdleInterrupted(t *testing.T) {
+	messages := []Message{
+		decodedMessage(t, `{"id":"msg_003","time":{"created":817682},"type":"idle","outcome":"interrupted"}`),
+		decodedMessage(t, `{"id":"msg_002","time":{"created":815424},"type":"assistant"}`),
+	}
+	if _, done, err := Completion(messages); !done || !errors.Is(err, context.Canceled) {
+		t.Fatalf("interrupted completion = done %v, err %v", done, err)
+	}
+}
+
+func TestCompletionNewestIdleWithoutOutcomeIsNotDone(t *testing.T) {
+	messages := []Message{
+		decodedMessage(t, `{"id":"msg_003","time":{"created":817682},"type":"idle"}`),
+		decodedMessage(t, `{"id":"msg_002","time":{"created":815424},"type":"assistant"}`),
+	}
+	if _, done, err := Completion(messages); done || err != nil {
+		t.Fatalf("empty outcome completion = done %v, err %v", done, err)
+	}
+}
+
+func TestCompletionUnorderedUsesLatestTimeThenID(t *testing.T) {
+	messages := []Message{
+		decodedMessage(t, `{"id":"msg_004","time":{"created":817682},"type":"idle","outcome":"succeeded"}`),
+		decodedMessage(t, `{"id":"msg_003","time":{"created":817682},"type":"assistant"}`),
+		decodedMessage(t, `{"id":"msg_001","time":{"created":800421},"type":"user"}`),
+		decodedMessage(t, `{"id":"msg_002","time":{"created":815424},"type":"assistant"}`),
+	}
+	if _, done, err := Completion(messages); !done || err != nil {
+		t.Fatalf("unordered completion = done %v, err %v", done, err)
+	}
+}
 
 func TestClientBasicAuthAndSessionTitleIsNotIdempotency(t *testing.T) {
 	var titles []string
