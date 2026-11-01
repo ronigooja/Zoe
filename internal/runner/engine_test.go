@@ -12,6 +12,11 @@ import (
 
 type runtimeFake struct {
 	aborts, creates, terminates int
+	prompts, eventCalls         int
+	calls                       []string
+	promptText                  string
+	promptBinding               RuntimeBinding
+	promptErr                   error
 	events                      chan opencode.Event
 	done                        bool
 	result                      opencode.Message
@@ -19,9 +24,15 @@ type runtimeFake struct {
 
 func (f *runtimeFake) Create(context.Context, RuntimeSpec) (RuntimeBinding, error) {
 	f.creates++
+	f.calls = append(f.calls, "Create")
 	return RuntimeBinding{SessionID: "session"}, nil
 }
-func (f *runtimeFake) Prompt(context.Context, RuntimeBinding, string) error { return nil }
+func (f *runtimeFake) Prompt(_ context.Context, b RuntimeBinding, prompt string) error {
+	f.prompts++
+	f.calls = append(f.calls, "Prompt")
+	f.promptBinding, f.promptText = b, prompt
+	return f.promptErr
+}
 func (f *runtimeFake) Status(context.Context, RuntimeBinding) (map[string]opencode.Status, error) {
 	if f.done {
 		return map[string]opencode.Status{"session": {Type: "idle"}}, nil
@@ -35,6 +46,8 @@ func (f *runtimeFake) Messages(context.Context, RuntimeBinding) ([]opencode.Mess
 	return nil, nil
 }
 func (f *runtimeFake) Events(context.Context, RuntimeBinding) (<-chan opencode.Event, <-chan error) {
+	f.eventCalls++
+	f.calls = append(f.calls, "Events")
 	return f.events, make(chan error)
 }
 func (f *runtimeFake) Abort(context.Context, RuntimeBinding) error { f.aborts++; return nil }
@@ -118,6 +131,102 @@ func kinds(c *controlFake) string {
 		out = append(out, o.Kind)
 	}
 	return strings.Join(out, ",")
+}
+
+func testEngine(t *testing.T, f *runtimeFake, c *controlFake, j *Journal) *Engine {
+	t.Helper()
+	return &Engine{Control: c, Runtime: f, Journal: j, Routes: map[string]Route{"profile": {ProfileID: "profile", Harness: "opencode", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Model: "model"}}, PollInterval: time.Millisecond}
+}
+
+func seedRuntimePhase(t *testing.T, j *Journal, phase string) contracts.JobClaim {
+	t.Helper()
+	claim := testClaim()
+	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: "1", Prompt: buildPrompt(claim), Workspace: claim.WorkspaceID}
+	if _, err := j.SaveClaim(context.Background(), claim, spec, "claimed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.SetSession(context.Background(), claim.RunID, claim.AttemptID, claim.Fence, "session", "bound"); err != nil {
+		t.Fatal(err)
+	}
+	if phase != "bound" {
+		if err := j.SetPhase(context.Background(), claim.RunID, claim.AttemptID, claim.Fence, phase); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return claim
+}
+
+// Catches the old missing-Prompt path: a successful dispatch must prompt before monitoring.
+func TestRuntimeProcessPromptsBeforeMonitoring(t *testing.T) {
+	f := &runtimeFake{events: make(chan opencode.Event), done: true}
+	c := &controlFake{}
+	j := openTestJournal(t)
+	e := testEngine(t, f, c, j)
+	claim := testClaim()
+	claim.Goal = "do not log this prompt"
+	if err := e.Process(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	wantPrompt := buildPrompt(claim)
+	if strings.Join(f.calls, ",") != "Create,Prompt,Events" || f.prompts != 1 || f.promptText != wantPrompt || f.promptBinding.SessionID != "session" {
+		t.Fatalf("runtime calls=%v prompts=%d text=%q binding=%+v", f.calls, f.prompts, f.promptText, f.promptBinding)
+	}
+}
+
+// Catches replay of a failed prompt: the session exists but the prompt outcome is fenced unknown.
+func TestRuntimePromptErrorIsUnknownAndNotMonitored(t *testing.T) {
+	f := &runtimeFake{events: make(chan opencode.Event), promptErr: errors.New("request failed")}
+	c := &controlFake{}
+	j := openTestJournal(t)
+	e := testEngine(t, f, c, j)
+	if err := e.Process(context.Background(), testClaim()); !errors.Is(err, ErrOutcomePending) {
+		t.Fatalf("error=%v, want ErrOutcomePending", err)
+	}
+	if f.prompts != 1 || f.eventCalls != 0 || kinds(c) != "dispatch_started,dispatch_bound,effect_unknown" {
+		t.Fatalf("prompts=%d events=%d observations=%s", f.prompts, f.eventCalls, kinds(c))
+	}
+}
+
+// Catches restart after binding but before the prompt-attempt journal write.
+func TestRuntimeRecoveryFromBoundSendsPrompt(t *testing.T) {
+	f := &runtimeFake{events: make(chan opencode.Event), done: true}
+	c := &controlFake{}
+	j := openTestJournal(t)
+	e := testEngine(t, f, c, j)
+	if err := e.Process(context.Background(), seedRuntimePhase(t, j, "bound")); err != nil {
+		t.Fatal(err)
+	}
+	if f.prompts != 1 || f.eventCalls != 1 || strings.Join(f.calls, ",") != "Prompt,Events" {
+		t.Fatalf("runtime calls=%v prompts=%d events=%d", f.calls, f.prompts, f.eventCalls)
+	}
+}
+
+// Catches unsafe replay after a crash with an in-flight prompt request.
+func TestRuntimeRecoveryFromPromptAttemptedDoesNotResend(t *testing.T) {
+	f := &runtimeFake{events: make(chan opencode.Event)}
+	c := &controlFake{}
+	j := openTestJournal(t)
+	e := testEngine(t, f, c, j)
+	if err := e.Process(context.Background(), seedRuntimePhase(t, j, "prompt_attempted")); !errors.Is(err, ErrOutcomePending) {
+		t.Fatalf("error=%v, want ErrOutcomePending", err)
+	}
+	if f.prompts != 0 || f.eventCalls != 0 {
+		t.Fatalf("prompt was replayed or monitoring started: prompts=%d events=%d", f.prompts, f.eventCalls)
+	}
+}
+
+// Catches unnecessary replay after the prompt was durably acknowledged as sent.
+func TestRuntimeRecoveryFromPromptSentOnlyMonitors(t *testing.T) {
+	f := &runtimeFake{events: make(chan opencode.Event), done: true}
+	c := &controlFake{}
+	j := openTestJournal(t)
+	e := testEngine(t, f, c, j)
+	if err := e.Process(context.Background(), seedRuntimePhase(t, j, "prompt_sent")); err != nil {
+		t.Fatal(err)
+	}
+	if f.prompts != 0 || f.eventCalls != 1 || strings.Join(f.calls, ",") != "Events" {
+		t.Fatalf("runtime calls=%v prompts=%d events=%d", f.calls, f.prompts, f.eventCalls)
+	}
 }
 
 func TestUnknownCreateOutcomeIsFencedAndNeverReplayed(t *testing.T) {

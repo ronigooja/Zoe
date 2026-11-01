@@ -89,6 +89,13 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 			if entry.Session == "" {
 				return fmt.Errorf("%w: bound runtime recovery identity incomplete", ErrOutcomePending)
 			}
+			return e.sendPrompt(ctx, claim, entry.Spec, RuntimeBinding{SessionID: entry.Session})
+		case "prompt_attempted":
+			return e.markUnknown(ctx, claim)
+		case "prompt_sent":
+			if entry.Session == "" {
+				return fmt.Errorf("%w: prompt-sent runtime recovery identity incomplete", ErrOutcomePending)
+			}
 			return e.monitor(ctx, claim, RuntimeBinding{SessionID: entry.Session})
 		}
 	}
@@ -155,6 +162,22 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 		return err
 	}
 	if err = e.emit(ctx, claim, "dispatch_bound", "runtime", "runtime binding established", nil, []contracts.ExternalEffect{{ID: claim.RunID, Kind: "runtime_create", Status: "created", Reference: binding.SessionID}}); err != nil {
+		return err
+	}
+	return e.sendPrompt(ctx, claim, spec, binding)
+}
+
+func (e *Engine) sendPrompt(ctx context.Context, claim contracts.JobClaim, spec RuntimeSpec, binding RuntimeBinding) error {
+	if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_attempted"); err != nil {
+		return err
+	}
+	if err := e.Runtime.Prompt(ctx, binding, spec.Prompt); err != nil {
+		// The session exists, but a failed request does not prove whether the
+		// prompt reached it. Fence the run rather than risking a duplicate.
+		log.Printf("runtime prompt failed for run %s (error type %T)", safeRuntimeID(claim.RunID), err)
+		return e.markUnknown(ctx, claim)
+	}
+	if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_sent"); err != nil {
 		return err
 	}
 	return e.monitor(ctx, claim, binding)
