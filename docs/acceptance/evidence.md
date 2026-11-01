@@ -195,3 +195,15 @@ examples and candidate validator now accept GHCR references and validate their
 changed workflow files parsed with the local Ruby YAML parser. No hosted workflow
 run, GHCR push/pull, host installation, service startup, or deployment rollback
 was performed by this source-level check.
+
+## Voice route and gateway probes — 2026-10-31
+
+Environment: the voice gateway host, one-off probes against a copy of the account database, one pool account, one call per run; probe source on branch `codex/probe-session-update` of the gateway repository (built on GitHub-hosted runners, removed from the host afterwards). Results are structural; no tokens, account data, or audio were recorded.
+
+- Gateway relay with idempotent session release (gateway `6b77a36`) deployed with `deploy-host.sh update`; the close-then-rewake loop ended its sessions and left the Zoe voice pool unblocked.
+- The `/v1/voice` data route in use carries only typed-text and stop-speaking events from the client; no verified field exists for instructions, history, or custom tools.
+- Codex-style route `POST /backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas` with a V3 session (`delegation: client`, `initial_items`): HTTP 201, SDP answer, `Location` with an `rtc_` call id, `oai-events` channel open. Sideband `wss://api.openai.com/v1/live/<call_id>`: HTTP 400 without `openai-alpha: quicksilver=v2`, HTTP 101 with it. Sideband carried session, audio-delta, usage, context-appended, transcript, and turn events.
+- Not established: `delegation.created` for ordinary spoken requests (two synthetic utterances produced none), non-empty transcript text, recall of `initial_items`, media through an IPv6-egress account proxy, per-plan entitlement of pool accounts.
+- Limitations: synthetic speech only, one account, no failure injection. No product milestone is accepted by these probes.
+
+Open measurements tied to [ADR 0009](../architecture/decisions/0009-voice-steward-impact-policy.md): steward latency and cost against the run ceiling, metering of OpenCode internal sub-agents, handoff event behavior with real speech, and transcript availability.
