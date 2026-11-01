@@ -238,9 +238,9 @@ availability. The client must report connecting, active, interrupted, reconnecti
 permission-denied, and stopped states truthfully; it must not claim active voice when any required system,
 device, network, account, or server condition is unavailable. Automatic reconnect is appropriate for temporary
  failures; permission or policy failures require a Settings/system-settings recovery path. Text chat remains
-usable whenever voice is unavailable. Continuous voice transports audio and spoken output only; transcript
-review/submission and business-command authorization remain explicit, and voice never silently submits or
-confirms business work. Do not add persistent labels, large waveforms, timers, voice cards, or separate
+usable whenever voice is unavailable. Continuous voice transports audio and spoken output only; authorization
+follows the impact levels in [ADR 0009](architecture/decisions/0009-voice-steward-impact-policy.md), and voice never
+confirms high-impact work. Do not add persistent labels, large waveforms, timers, voice cards, or separate
 persistent control strips. Settings controls and status messages need accessible names/state values, keyboard
 access, and help on demand; color alone must not carry state. Detailed voice, transport, account, and server
 errors are not a client presentation responsibility: the client shows only a concise actionable state and
@@ -267,7 +267,7 @@ The authenticated client synchronizes its server-controlled diagnostic policy an
 ### Client behavior boundaries
 
 - **Truthful state.** Voice reports connecting, active, interrupted, reconnecting, unavailable, permission-denied, and stopped states only when they are true; permission or policy failures need a recovery path, temporary failures may reconnect, and text input remains usable whenever voice is unavailable. Normal connected state has no banner; offline, stale, and failed operations stay visible with an action.
-- **No silent business action.** Voice transports audio and spoken output only. Transcript submission and business-command authorization remain explicit; voice never silently submits or confirms business work. High-impact or irreversible actions require scoped, explicit confirmation tied to the task/run/action, expected version, and expiry; ambiguous words authorize nothing.
+- **Impact-level authorization.** A spoken request is the instruction for low-impact, reversible work; the server sets impact levels from the profile's capabilities and scopes ([ADR 0009](architecture/decisions/0009-voice-steward-impact-policy.md)). Voice never confirms high-impact work. High-impact or irreversible actions require scoped, explicit confirmation tied to the task/run/action, expected version, and expiry; ambiguous words authorize nothing.
 - **Server-authored content.** Clients render persisted server data and never fabricate messages, progress, assistant answers, or inactive actions. Ordinary results are server-authored content with no client Accept/Reject workflow; follow-ups are interpreted by the server in task context. Contracts: [HTTP contract](../contracts/http.go) and [task-entry handlers](../internal/control/task_entries.go).
 - **Submissions.** A submission is accepted, failed, or unknown. Drafts clear only after durable acceptance; unknown submissions reconcile the original journaled receipt instead of issuing a new command, and the draft stays visible with confirmation pending. Drafts are cleared when the server or identity changes.
 - **Concise errors, automatic diagnostics.** Every client error surface shows only a short state and an actionable recovery or retry instruction, never detailed server, infrastructure, runtime, queue-reason, capacity, transport, account, or local exception text, credentials, headers, response bodies, transcripts, audio, or SDP/ICE. Redacted detail is encrypted, queued, and sent best effort to the authenticated diagnostic endpoint without blocking the user or changing command authority or receipt/retry semantics.
@@ -416,7 +416,7 @@ Projects, code, artifacts, task history, runtime session identity, usage records
 
 ## 6. Agent System Requirements
 
-Separate the coordination role, runtime implementation, and model/provider route. The coordination, routing, and collaboration requirements are defined in [§§6.1–6.4](#61-super-agent). The shared ceiling is four active runs, including Super, Workers, and memory curator. Adapter registration alone does not establish support or acceptance.
+Separate the coordination role, runtime implementation, and model/provider route. The coordination, routing, and collaboration requirements are defined in [§§6.1–6.4](#61-super-agent). The shared ceiling is an operator setting, four active runs by default, including Super, Workers, and memory curator. Adapter registration alone does not establish support or acceptance.
 
 <a id="cy-06-01"></a>
 

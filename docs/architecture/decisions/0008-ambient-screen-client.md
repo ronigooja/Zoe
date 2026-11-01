@@ -16,7 +16,7 @@ Implementation: SwiftUI renders content; AppKit owns windows (`NSPanel`/`NSWindo
 
 ## Consequences
 
-The client can remain small, accessible, and adaptable while the server controls authoritative content and business policy. The renderer and component library become versioned compatibility surfaces. High-impact actions still require server-validated scoped confirmation; voice and UI never silently authorize work. The draft contract must be mirrored into `/contracts` before server implementation.
+The client can remain small, accessible, and adaptable while the server controls authoritative content and business policy. The renderer and component library become versioned compatibility surfaces. High-impact actions still require server-validated scoped confirmation ([ADR 0009](0009-voice-steward-impact-policy.md)); the client never decides outcomes. The draft contract must be mirrored into `/contracts` before server implementation.
 
 ## Sources
 
