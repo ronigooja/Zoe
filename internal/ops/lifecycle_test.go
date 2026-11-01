@@ -326,9 +326,11 @@ func newUpdateFixture(t *testing.T) updateFixture {
 	t.Cleanup(func() {
 		hostPrepEUID = os.Geteuid
 		hostPrepChown = func(path string, uid, gid int) error { return os.Chown(path, uid, gid) }
+		hostPrepLookupZoeRunnerIDs = func() (int, int, error) { return 1000, 1000, nil }
 	})
 	hostPrepEUID = func() int { return 0 }
 	hostPrepChown = func(string, int, int) error { return nil }
+	hostPrepLookupZoeRunnerIDs = func() (int, int, error) { return 1000, 1000, nil }
 	f := updateFixture{
 		root: t.TempDir(), opt: filepath.Join(t.TempDir(), "opt"), data: filepath.Join(t.TempDir(), "data"),
 		release: filepath.Join(t.TempDir(), "release"), binary: filepath.Join(t.TempDir(), "opencode"),
