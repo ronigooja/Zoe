@@ -323,6 +323,12 @@ type updateFixture struct {
 
 func newUpdateFixture(t *testing.T) updateFixture {
 	t.Helper()
+	t.Cleanup(func() {
+		hostPrepEUID = os.Geteuid
+		hostPrepChown = func(path string, uid, gid int) error { return os.Chown(path, uid, gid) }
+	})
+	hostPrepEUID = func() int { return 0 }
+	hostPrepChown = func(string, int, int) error { return nil }
 	f := updateFixture{
 		root: t.TempDir(), opt: filepath.Join(t.TempDir(), "opt"), data: filepath.Join(t.TempDir(), "data"),
 		release: filepath.Join(t.TempDir(), "release"), binary: filepath.Join(t.TempDir(), "opencode"),
@@ -385,6 +391,99 @@ func newUpdateFixture(t *testing.T) updateFixture {
 		t.Fatal(err)
 	}
 	return f
+}
+
+func TestPrepareHostCreatesFreshLayoutAndIsIdempotent(t *testing.T) {
+	root, opt, data := t.TempDir(), filepath.Join(t.TempDir(), "opt"), filepath.Join(t.TempDir(), "data")
+	oldEUID, oldChown := hostPrepEUID, hostPrepChown
+	t.Cleanup(func() { hostPrepEUID, hostPrepChown = oldEUID, oldChown })
+	hostPrepEUID = func() int { return 0 }
+	hostPrepChown = func(string, int, int) error { return nil }
+	var commands []string
+	groupExists, userExists, networkExists := false, false, false
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		if name == "getent" && args[1] == "docker" {
+			return nil, nil
+		}
+		if name == "getent" && !groupExists {
+			groupExists = true
+			return nil, errors.New("missing")
+		}
+		if name == "id" && !userExists {
+			userExists = true
+			return nil, errors.New("missing")
+		}
+		if name == "docker" && args[1] == "inspect" && !networkExists {
+			networkExists = true
+			return nil, errors.New("missing")
+		}
+		if name == "groupadd" {
+			groupExists = true
+		}
+		if name == "useradd" {
+			userExists = true
+		}
+		if name == "docker" && args[1] == "create" {
+			networkExists = true
+		}
+		return nil, nil
+	}
+	m := NewManager(run)
+	o := LifecycleOptions{Root: root, OptRoot: opt, DataRoot: data}
+	if err := m.prepareHost(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(opt, "releases"), filepath.Join(data, "server/data"), filepath.Join(data, "memory"), filepath.Join(data, "runner"), filepath.Join(root, "secrets"), filepath.Join(root, "runner-secrets"), filepath.Join(data, "runner-authority")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("missing %s: %v", path, err)
+		}
+	}
+	if mode := dataMode(t, filepath.Join(data, "runner-authority/runner-deployment-authority.db")); mode != 0600 {
+		t.Errorf("authority mode=%04o", mode)
+	}
+	first := len(commands)
+	if err := m.prepareHost(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range commands[first:] {
+		if strings.Contains(command, "groupadd") || strings.Contains(command, "useradd") || strings.Contains(command, "network create") {
+			t.Fatalf("second preparation recreated host state: %v", commands[first:])
+		}
+	}
+	for _, want := range []string{"groupadd --system zoe-runner", "useradd --system --gid", "usermod --append --groups docker zoe-runner", "docker network create zoe"} {
+		if !containsCommand(commands, want) {
+			t.Errorf("missing command %q in %v", want, commands)
+		}
+	}
+}
+
+func TestPrepareHostRequiresRoot(t *testing.T) {
+	old := hostPrepEUID
+	t.Cleanup(func() { hostPrepEUID = old })
+	hostPrepEUID = func() int { return 501 }
+	if err := (Manager{}).prepareHost(context.Background(), LifecycleOptions{}); err == nil || !strings.Contains(err.Error(), "requires root") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestWaitHealthUsesConfiguredServerPort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer server.Close()
+	port := strings.TrimPrefix(server.URL, "http://127.0.0.1:")
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_SERVER_PORT="+port+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "systemctl" {
+			return []byte("active\n"), nil
+		}
+		return nil, nil
+	})
+	if err := waitHealth(context.Background(), m, LifecycleOptions{Root: root}, "", time.Second); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type updateRunner struct {
@@ -637,7 +736,7 @@ func TestUpdateMigratesRunnerOpenCodeEnvironment(t *testing.T) {
 
 func containsCommand(commands []string, want string) bool {
 	for _, command := range commands {
-		if command == want {
+		if command == want || strings.HasPrefix(command, want+" ") {
 			return true
 		}
 	}

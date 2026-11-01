@@ -94,7 +94,7 @@ func DiscoverDeployment(ctx context.Context, m Manager, root string) (Deployment
 	// A Compose stack may be supervised by systemd (zoe-compose.service).
 	// A stale persisted descriptor must not make Compose-only operations use
 	// the systemd provider path.
-	if os.Getenv("ZOE_DEPLOYMENT_MODE") == "" && d.ComposeFile != "" {
+	if os.Getenv("ZOE_DEPLOYMENT_MODE") == "" && d.ComposeFile != "" && d.Mode != ModeSystemd {
 		d.Mode = ModeCompose
 	}
 	return d, nil

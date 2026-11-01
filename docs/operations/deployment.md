@@ -19,11 +19,11 @@ SQLite inspection, and voice pool isolation checks, see the
 - `/etc/zoe` contains deployment configuration and secret references.
 - `/var/lib/zoe` contains authority databases and persistent service data.
 
-The operator classifies a host with an absolute `ZOE_COMPOSE_FILE` (including
-the standard `zoe-compose.service` systemd wrapper) as a managed Compose
-deployment. Systemd supervises the Compose process; it does not select the
-OpenCode runtime path. Keep `provider-deployment.json` consistent with
-this layout or let the operator rediscover the mode from `zoe-stack.env`.
+The operator classifies a host with a loaded `zoe-runner.service` as a systemd
+deployment, even when `ZOE_COMPOSE_FILE` is present because
+`zoe-compose.service` supervises the stack. A Compose-only deployment has no
+loaded runner unit. Keep `provider-deployment.json` consistent with this layout
+or let the operator rediscover the mode from `zoe-stack.env` and systemd.
 
 The installer creates the external Docker network `zoe` when it is missing. The
 existing remote CLIProxyAPI deployment remains outside Zoe's lifecycle.
@@ -42,8 +42,8 @@ Check service status without printing environment files or secret values:
 
 ```bash
 systemctl is-active zoe-compose zoe-runner zoe-macair-tunnel
-curl --fail http://127.0.0.1:8787/healthz
-curl --fail http://127.0.0.1:8787/readyz
+ curl --fail 'http://127.0.0.1:${ZOE_SERVER_PORT:-8787}/healthz'
+ curl --fail 'http://127.0.0.1:${ZOE_SERVER_PORT:-8787}/readyz'
 ```
 
 The previously recorded installation binds port 8787 on both host loopback and the authorized

@@ -92,9 +92,9 @@ func composePorts(o LifecycleOptions, _ ReleaseManifest) []int {
 	path := filepath.Join(o.Release, "deploy-linux", "docker-compose.yml")
 	b, err := preflightReadFile(path)
 	if err != nil {
-		return []int{8787}
+		return []int{stackServerPort(o)}
 	}
-	port := 8787
+	port := stackServerPort(o)
 	for _, line := range strings.Split(string(b), "\n") {
 		if !strings.Contains(line, "127.0.0.1:${ZOE_SERVER_PORT:-") {
 			continue
@@ -107,6 +107,15 @@ func composePorts(o LifecycleOptions, _ ReleaseManifest) []int {
 		}
 	}
 	return []int{port}
+}
+
+func stackServerPort(o LifecycleOptions) int {
+	if value := readEnvValue(filepath.Join(o.Root, "zoe-stack.env"), "ZOE_SERVER_PORT"); value != "" {
+		if port, err := strconv.Atoi(value); err == nil && port > 0 && port <= 65535 {
+			return port
+		}
+	}
+	return 8787
 }
 
 func portInUse(output string, port int) bool {

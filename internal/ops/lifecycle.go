@@ -18,10 +18,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -153,6 +155,9 @@ func (m Manager) Install(ctx context.Context, o LifecycleOptions) (ReleaseManife
 	if err = m.checkOpenCodeVersion(ctx, o); err != nil {
 		return manifest, err
 	}
+	if err = m.prepareHost(ctx, o); err != nil {
+		return manifest, err
+	}
 	if installed, err := installAlreadyComplete(o, manifest); err == nil && installed {
 		if o.Out != nil {
 			fmt.Fprintln(o.Out, "already installed")
@@ -200,7 +205,7 @@ func (m Manager) Install(ctx context.Context, o LifecycleOptions) (ReleaseManife
 	if err := m.start(ctx); err != nil {
 		return manifest, err
 	}
-	if err := waitHealth(ctx, m, o.HealthURL, o.HealthTimeout); err != nil {
+	if err := waitHealth(ctx, m, o, o.HealthURL, o.HealthTimeout); err != nil {
 		return manifest, err
 	}
 	printNextSteps(o.Out)
@@ -251,6 +256,9 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 		return err
 	}
 	if err = m.checkOpenCodeVersion(ctx, o); err != nil {
+		return err
+	}
+	if err = m.prepareHost(ctx, o); err != nil {
 		return err
 	}
 	current := filepath.Join(o.OptRoot, "releases", "current")
@@ -782,7 +790,11 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 		return err
 	}
 	stack := map[string]string{"ZOE_SERVER_IMAGE": image(mfest, "zoe-server"), "ZOE_MEMORY_WORKER_IMAGE": image(mfest, "zoe-memory-worker"), "ZOE_SERVER_DATA_ROOT": filepath.Join(o.DataRoot, "server"), "ZOE_MEMORY_DATA_ROOT": filepath.Join(o.DataRoot, "memory"), "ZOE_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "runner-token"), "ZOE_MEMORY_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "memory-runner-token"), "ZOE_MEM0_LLM_API_KEY_FILE": filepath.Join(o.Root, "secrets", "mem0-llm-api-key"), "ZOE_RUNTIME_PROFILES": profiles, "ZOE_DEFAULT_PROFILE_ID": "worker", "ZOE_COMPOSE_FILE": filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", "docker-compose.yml")}
-	runnerEnv := map[string]string{"ZOE_OPENCODE_BASE_URL": "http://127.0.0.1:4096", "ZOE_OPENCODE_PASSWORD_FILE": "/run/credentials/zoe-runner.service/opencode-password", "ZOE_OPENCODE_WORKSPACE_ROOT": filepath.Join(o.DataRoot, "runner", "workspaces"), "ZOE_CONTROL_URL": "http://127.0.0.1:8787", "ZOE_RUNNER_JOURNAL_PATH": filepath.Join(o.DataRoot, "runner", "journal.sqlite"), "ZOE_RUNNER_ROUTES": routes, "ZOE_OPENCODE_MODEL": model}
+	port := readEnvValue(filepath.Join(o.Root, "zoe-stack.env"), "ZOE_SERVER_PORT")
+	if _, err := strconv.Atoi(port); err != nil || port == "" {
+		port = "8787"
+	}
+	runnerEnv := map[string]string{"ZOE_OPENCODE_BASE_URL": "http://127.0.0.1:4096", "ZOE_OPENCODE_PASSWORD_FILE": "/run/credentials/zoe-runner.service/opencode-password", "ZOE_OPENCODE_WORKSPACE_ROOT": filepath.Join(o.DataRoot, "runner", "workspaces"), "ZOE_CONTROL_URL": "http://127.0.0.1:" + port, "ZOE_RUNNER_JOURNAL_PATH": filepath.Join(o.DataRoot, "runner", "journal.sqlite"), "ZOE_RUNNER_ROUTES": routes, "ZOE_OPENCODE_MODEL": model}
 	if o.OpenCodeBinary != "" {
 		runnerEnv["ZOE_OPENCODE_BINARY"] = o.OpenCodeBinary
 	}
@@ -987,6 +999,118 @@ func (m Manager) ensureNetwork(ctx context.Context) error {
 	}
 	return nil
 }
+
+var hostPrepEUID = os.Geteuid
+var hostPrepChown = func(path string, uid, gid int) error { return os.Chown(path, uid, gid) }
+
+func (m Manager) prepareHost(ctx context.Context, o LifecycleOptions) error {
+	if hostPrepEUID() != 0 {
+		return errors.New("host preparation requires root (use sudo)")
+	}
+	step := func(name string, err error) error {
+		if err != nil {
+			return fmt.Errorf("prepare host %s: %w", name, err)
+		}
+		return nil
+	}
+	if _, err := m.Run(ctx, "getent", "group", "docker"); err != nil {
+		return step("Docker group", err)
+	}
+	if _, err := m.Run(ctx, "getent", "group", "zoe-runner"); err != nil {
+		if _, err = m.Run(ctx, "groupadd", "--system", "zoe-runner"); err != nil {
+			return step("zoe-runner group", err)
+		}
+	}
+	if _, err := m.Run(ctx, "id", "zoe-runner"); err != nil {
+		if _, err = m.Run(ctx, "useradd", "--system", "--gid", "zoe-runner", "--home-dir", filepath.Join(o.DataRoot, "runner"), "--shell", "/usr/sbin/nologin", "zoe-runner"); err != nil {
+			return step("zoe-runner user", err)
+		}
+	}
+	if _, err := m.Run(ctx, "usermod", "--append", "--groups", "docker", "zoe-runner"); err != nil {
+		return step("Docker group membership", err)
+	}
+	if _, err := m.Run(ctx, "docker", "network", "inspect", "zoe"); err != nil {
+		if _, err = m.Run(ctx, "docker", "network", "create", "zoe"); err != nil {
+			return step("Docker network", err)
+		}
+	}
+	zoeRunner, zoeGroup := 0, 0
+	if u, err := user.Lookup("zoe-runner"); err == nil {
+		zoeRunner, _ = strconv.Atoi(u.Uid)
+		zoeGroup, _ = strconv.Atoi(u.Gid)
+	}
+	if g, err := user.LookupGroup("zoe-runner"); err == nil {
+		zoeGroup, _ = strconv.Atoi(g.Gid)
+	}
+	dirs := []struct {
+		path     string
+		mode     os.FileMode
+		uid, gid int
+	}{
+		{o.OptRoot + "/releases", 0755, 0, 0},
+		{o.DataRoot, 0750, 0, zoeGroup}, {filepath.Join(o.DataRoot, "server/data"), 0700, 65532, 65532},
+		{filepath.Join(o.DataRoot, "memory"), 0700, 65532, 65532}, {filepath.Join(o.DataRoot, "runner"), 0700, zoeRunner, zoeGroup},
+		{filepath.Join(o.DataRoot, "runner-authority"), 0700, zoeRunner, zoeGroup}, {filepath.Join(o.Root, "secrets"), 0700, 0, 0},
+		{filepath.Join(o.Root, "runner-secrets"), 0750, 0, zoeGroup}, {filepath.Join(o.DataRoot, "opencode"), 0700, 0, 0},
+	}
+	if o.Root == "/etc/zoe" {
+		dirs = append(dirs, struct {
+			path     string
+			mode     os.FileMode
+			uid, gid int
+		}{"/var/cache/zoe/builds", 0750, 0, 0})
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d.path, d.mode); err != nil {
+			return step("directory "+d.path, err)
+		}
+		if err := os.Chmod(d.path, d.mode); err != nil {
+			return step("mode "+d.path, err)
+		}
+		if err := hostPrepChown(d.path, d.uid, d.gid); err != nil {
+			return step("owner "+d.path, err)
+		}
+	}
+	for _, sub := range []string{"xdg-config/opencode", "xdg-data", "xdg-state", "xdg-cache"} {
+		p := filepath.Join(o.DataRoot, "opencode", sub)
+		if err := os.MkdirAll(p, 0700); err != nil {
+			return step("directory "+p, err)
+		}
+		if err := os.Chmod(p, 0700); err != nil {
+			return step("mode "+p, err)
+		}
+		if err := hostPrepChown(p, 0, 0); err != nil {
+			return step("owner "+p, err)
+		}
+	}
+	authority := filepath.Join(o.DataRoot, "runner-authority/runner-deployment-authority.db")
+	if info, err := os.Lstat(authority); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("prepare host runner authority: must not be a symlink")
+	} else if os.IsNotExist(err) {
+		if err := os.WriteFile(authority, nil, 0600); err != nil {
+			return step("runner authority", err)
+		}
+	}
+	if err := os.Chmod(authority, 0600); err != nil {
+		return step("runner authority mode", err)
+	}
+	if err := hostPrepChown(authority, zoeRunner, zoeGroup); err != nil {
+		return step("runner authority owner", err)
+	}
+	if o.Root == "/etc/zoe" {
+		tmpfiles := "f /run/lock/zoe-runner-deployments.lock 0600 zoe-runner zoe-runner -\n"
+		if err := os.WriteFile("/etc/tmpfiles.d/zoe-runner.conf", []byte(tmpfiles), 0644); err != nil {
+			return step("tmpfiles configuration", err)
+		}
+		if _, err := m.Run(ctx, "systemd-tmpfiles", "--create", "/etc/tmpfiles.d/zoe-runner.conf"); err != nil {
+			return step("tmpfiles", err)
+		}
+	}
+	if _, err := m.Run(ctx, "systemctl", "daemon-reload"); err != nil {
+		return step("systemd reload", err)
+	}
+	return nil
+}
 func (m Manager) pull(ctx context.Context, manifest ReleaseManifest) error {
 	for _, name := range []string{"zoe-server", "zoe-memory-worker", "zoe-runner"} {
 		i := manifest.Images[name]
@@ -1127,7 +1251,11 @@ func serviceIsActive(ctx context.Context, m Manager, unit string) (bool, error) 
 
 func waitAllHealth(ctx context.Context, o LifecycleOptions, m Manager, url string, timeout time.Duration) error {
 	if url == "" {
-		url = "http://127.0.0.1:8787/healthz"
+		port := readEnvValue(filepath.Join(o.Root, "zoe-stack.env"), "ZOE_SERVER_PORT")
+		if _, err := strconv.Atoi(port); err != nil || port == "" {
+			port = "8787"
+		}
+		url = "http://127.0.0.1:" + port + "/healthz"
 	}
 	deadline := time.Now().Add(timeout)
 	lastFailure := "zoe-compose.service"
@@ -1202,9 +1330,13 @@ func opencodeInfoHealthy(ctx context.Context, o LifecycleOptions) bool {
 	defer r.Body.Close()
 	return r.StatusCode == http.StatusOK
 }
-func waitHealth(ctx context.Context, m Manager, url string, timeout time.Duration) error {
+func waitHealth(ctx context.Context, m Manager, o LifecycleOptions, url string, timeout time.Duration) error {
 	if url == "" {
-		url = "http://127.0.0.1:8787/healthz"
+		port := readEnvValue(filepath.Join(o.Root, "zoe-stack.env"), "ZOE_SERVER_PORT")
+		if _, err := strconv.Atoi(port); err != nil || port == "" {
+			port = "8787"
+		}
+		url = "http://127.0.0.1:" + port + "/healthz"
 	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestDiscoverDeploymentTreatsSystemdSupervisedComposeAsCompose(t *testing.T) {
+func TestDiscoverDeploymentTreatsSystemdSupervisedComposeAsSystemd(t *testing.T) {
 	root := t.TempDir()
 	compose := filepath.Join(root, "active.compose.yaml")
 	if err := os.WriteFile(compose, []byte("services: {}\n"), 0600); err != nil {
@@ -21,6 +21,27 @@ func TestDiscoverDeploymentTreatsSystemdSupervisedComposeAsCompose(t *testing.T)
 	}
 	m := NewManager(func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 		return []byte("LoadState=loaded\nEnvironmentFiles=/etc/zoe/zoe-runner.env\n"), nil
+	})
+	d, err := DiscoverDeployment(context.Background(), m, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Mode != ModeSystemd {
+		t.Fatalf("mode=%q, want systemd", d.Mode)
+	}
+}
+
+func TestDiscoverDeploymentTreatsComposeWithoutRunnerUnitAsCompose(t *testing.T) {
+	root := t.TempDir()
+	compose := filepath.Join(root, "active.compose.yaml")
+	if err := os.WriteFile(compose, []byte("services: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_COMPOSE_FILE="+compose+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("LoadState=not-found\n"), os.ErrNotExist
 	})
 	d, err := DiscoverDeployment(context.Background(), m, root)
 	if err != nil {
