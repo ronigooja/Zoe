@@ -710,11 +710,18 @@ func prepareLifecycleFiles(o LifecycleOptions) error {
 	if err := prepareLifecycleSecret(runnerSecret, zoeRunner, zoeGroup); err != nil {
 		return err
 	}
+	runnerWorkspaces := filepath.Join(o.DataRoot, "runner", "workspaces")
 	opencode := filepath.Join(o.DataRoot, "opencode")
-	for _, p := range []string{opencode, filepath.Join(opencode, "xdg-config", "opencode"), filepath.Join(opencode, "xdg-data"), filepath.Join(opencode, "xdg-state"), filepath.Join(opencode, "xdg-cache"), filepath.Join(o.DataRoot, "runner", "workspaces")} {
+	for _, p := range []string{opencode, filepath.Join(opencode, "xdg-config", "opencode"), filepath.Join(opencode, "xdg-data"), filepath.Join(opencode, "xdg-state"), filepath.Join(opencode, "xdg-cache"), runnerWorkspaces} {
 		if err := os.MkdirAll(p, 0700); err != nil {
 			return err
 		}
+	}
+	if err := os.Chmod(runnerWorkspaces, 0700); err != nil {
+		return err
+	}
+	if err := hostPrepChown(runnerWorkspaces, zoeRunner, zoeGroup); err != nil {
+		return err
 	}
 	password := filepath.Join(opencode, "password")
 	if _, err := os.Stat(password); os.IsNotExist(err) {
@@ -1101,6 +1108,7 @@ func (m Manager) prepareHost(ctx context.Context, o LifecycleOptions) error {
 		{o.Root, 0750, 0, zoeGroup}, {o.DataRoot, 0750, 0, zoeGroup},
 		{filepath.Join(o.DataRoot, "server"), 0700, 65532, 65532}, {filepath.Join(o.DataRoot, "server/data"), 0700, 65532, 65532},
 		{filepath.Join(o.DataRoot, "memory"), 0700, 65532, 65532}, {filepath.Join(o.DataRoot, "runner"), 0700, zoeRunner, zoeGroup},
+		{filepath.Join(o.DataRoot, "runner/workspaces"), 0700, zoeRunner, zoeGroup},
 		{filepath.Join(o.DataRoot, "runner-authority"), 0700, zoeRunner, zoeGroup}, {filepath.Join(o.Root, "secrets"), 0700, 0, 0},
 		{filepath.Join(o.Root, "runner-secrets"), 0750, 0, zoeGroup}, {filepath.Join(o.DataRoot, "opencode"), 0700, 0, 0},
 	}

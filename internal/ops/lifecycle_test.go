@@ -449,7 +449,7 @@ func TestPrepareHostCreatesFreshLayoutAndIsIdempotent(t *testing.T) {
 	if err := m.prepareHost(context.Background(), o); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{filepath.Join(opt, "releases"), filepath.Join(data, "server"), filepath.Join(data, "server/data"), filepath.Join(data, "memory"), filepath.Join(data, "runner"), filepath.Join(root, "secrets"), filepath.Join(root, "runner-secrets"), filepath.Join(data, "runner-authority")} {
+	for _, path := range []string{filepath.Join(opt, "releases"), filepath.Join(data, "server"), filepath.Join(data, "server/data"), filepath.Join(data, "memory"), filepath.Join(data, "runner"), filepath.Join(data, "runner/workspaces"), filepath.Join(root, "secrets"), filepath.Join(root, "runner-secrets"), filepath.Join(data, "runner-authority")} {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("missing %s: %v", path, err)
 		}
@@ -461,15 +461,16 @@ func TestPrepareHostCreatesFreshLayoutAndIsIdempotent(t *testing.T) {
 		mode     os.FileMode
 		uid, gid int
 	}{
-		root:                          {0750, 0, 4343},
-		filepath.Join(data, "server"): {0700, 65532, 65532},
+		root:                                     {0750, 0, 4343},
+		filepath.Join(data, "server"):            {0700, 65532, 65532},
+		filepath.Join(data, "runner/workspaces"): {0700, 4242, 4343},
 	}
 	for _, owner := range owners {
 		if expected, ok := want[owner.path]; ok && (owner.mode != expected.mode || owner.uid != expected.uid || owner.gid != expected.gid) {
 			t.Errorf("%s prepared as mode %04o uid %d gid %d, want mode %04o uid %d gid %d", owner.path, owner.mode, owner.uid, owner.gid, expected.mode, expected.uid, expected.gid)
 		}
 	}
-	rootIndex, serverIndex := -1, -1
+	rootIndex, serverIndex, runnerIndex, workspaceIndex := -1, -1, -1, -1
 	for i, owner := range owners {
 		if owner.path == root {
 			rootIndex = i
@@ -477,9 +478,15 @@ func TestPrepareHostCreatesFreshLayoutAndIsIdempotent(t *testing.T) {
 		if owner.path == filepath.Join(data, "server") {
 			serverIndex = i
 		}
+		if owner.path == filepath.Join(data, "runner") {
+			runnerIndex = i
+		}
+		if owner.path == filepath.Join(data, "runner/workspaces") {
+			workspaceIndex = i
+		}
 	}
-	if rootIndex < 0 || serverIndex < 0 || rootIndex > serverIndex {
-		t.Fatalf("managed parents were not prepared before children: root=%d server=%d owners=%v", rootIndex, serverIndex, owners)
+	if rootIndex < 0 || serverIndex < 0 || rootIndex > serverIndex || runnerIndex < 0 || workspaceIndex < 0 || runnerIndex > workspaceIndex {
+		t.Fatalf("managed parents were not prepared before children: root=%d server=%d runner=%d workspace=%d owners=%v", rootIndex, serverIndex, runnerIndex, workspaceIndex, owners)
 	}
 	managed := make(map[string]bool, len(owners))
 	for _, owner := range owners {
@@ -488,7 +495,7 @@ func TestPrepareHostCreatesFreshLayoutAndIsIdempotent(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(root, "secrets"), filepath.Join(root, "runner-secrets"),
 		filepath.Join(data, "server"), filepath.Join(data, "server/data"),
-		filepath.Join(data, "memory"), filepath.Join(data, "runner"),
+		filepath.Join(data, "memory"), filepath.Join(data, "runner"), filepath.Join(data, "runner/workspaces"),
 		filepath.Join(data, "runner-authority"), filepath.Join(data, "opencode"),
 	} {
 		parent := filepath.Dir(path)
@@ -522,6 +529,47 @@ func TestPrepareHostRequiresRoot(t *testing.T) {
 	}
 }
 
+func TestUpdateConvergesExistingRootOwnedRunnerWorkspaces(t *testing.T) {
+	root, opt, data := t.TempDir(), filepath.Join(t.TempDir(), "opt"), filepath.Join(t.TempDir(), "data")
+	workspaceRoot := filepath.Join(data, "runner", "workspaces")
+	if err := os.MkdirAll(workspaceRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "existing-file"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldEUID, oldChown, oldLookup := hostPrepEUID, hostPrepChown, hostPrepLookupZoeRunnerIDs
+	t.Cleanup(func() { hostPrepEUID, hostPrepChown, hostPrepLookupZoeRunnerIDs = oldEUID, oldChown, oldLookup })
+	hostPrepEUID = func() int { return 0 }
+	hostPrepLookupZoeRunnerIDs = func() (int, int, error) { return 4242, 4343, nil }
+	var workspacesChown struct{ uid, gid int }
+	hostPrepChown = func(path string, uid, gid int) error {
+		if path == workspaceRoot {
+			workspacesChown = struct{ uid, gid int }{uid, gid}
+		}
+		return nil
+	}
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "getent" && args[1] == "docker" {
+			return nil, nil
+		}
+		return nil, nil
+	}
+	if err := (NewManager(run)).prepareHost(context.Background(), LifecycleOptions{Root: root, OptRoot: opt, DataRoot: data}); err != nil {
+		t.Fatal(err)
+	}
+	if workspacesChown.uid != 4242 || workspacesChown.gid != 4343 {
+		t.Fatalf("workspace owner convergence = %d:%d, want 4242:4343", workspacesChown.uid, workspacesChown.gid)
+	}
+	if mode := dataMode(t, workspaceRoot); mode != 0700 {
+		t.Fatalf("workspace root mode = %04o, want 0700", mode)
+	}
+	contents, err := os.ReadFile(filepath.Join(workspaceRoot, "existing-file"))
+	if err != nil || string(contents) != "keep" {
+		t.Fatalf("existing workspace contents changed: %q, %v", contents, err)
+	}
+}
+
 func TestPrepareLifecycleFilesFreshTokensSetOwnersAndModes(t *testing.T) {
 	root := t.TempDir()
 	oldChown, oldLookup := hostPrepChown, hostPrepLookupZoeRunnerIDs
@@ -547,6 +595,7 @@ func TestPrepareLifecycleFilesFreshTokensSetOwnersAndModes(t *testing.T) {
 		filepath.Join(root, "secrets", "memory-runner-token"): {65532, 65532},
 		filepath.Join(root, "runner-secrets", "runner-token"): {4242, 4343},
 	}
+	wantOwners[filepath.Join(root, "data", "runner", "workspaces")] = [2]int{4242, 4343}
 	if len(owners) != len(wantOwners) {
 		t.Fatalf("chown calls = %d, want %d: %v", len(owners), len(wantOwners), owners)
 	}
@@ -556,6 +605,12 @@ func TestPrepareLifecycleFilesFreshTokensSetOwnersAndModes(t *testing.T) {
 		}
 	}
 	for path := range wantOwners {
+		if strings.HasSuffix(path, "/runner/workspaces") {
+			if mode := dataMode(t, path); mode != 0700 {
+				t.Errorf("%s mode = %04o, want 0700", path, mode)
+			}
+			continue
+		}
 		if mode := dataMode(t, path); mode != 0400 {
 			t.Errorf("%s mode = %04o, want 0400", path, mode)
 		}
@@ -628,6 +683,7 @@ func TestPrepareLifecycleFilesConvergesExistingRootOwnedTokens(t *testing.T) {
 		filepath.Join(secrets, "memory-runner-token"): {65532, 65532},
 		filepath.Join(runnerSecrets, "runner-token"):  {4242, 4343},
 	}
+	wantOwners[filepath.Join(root, "data", "runner", "workspaces")] = [2]int{4242, 4343}
 	if len(owners) != len(wantOwners) {
 		t.Fatalf("chown calls = %d, want %d: %v", len(owners), len(wantOwners), owners)
 	}
