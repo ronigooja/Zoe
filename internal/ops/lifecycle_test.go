@@ -1,15 +1,23 @@
 package ops
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/runner"
@@ -306,4 +314,332 @@ func TestUpdateRollbackReportsFailingStepAndCommandOutput(t *testing.T) {
 			t.Fatalf("rollback did not restore %s byte-for-byte: %q, %v", name, data, readErr)
 		}
 	}
+}
+
+type updateFixture struct {
+	root, opt, data, release, binary string
+	previous, revision               string
+}
+
+func newUpdateFixture(t *testing.T) updateFixture {
+	t.Helper()
+	f := updateFixture{
+		root: t.TempDir(), opt: filepath.Join(t.TempDir(), "opt"), data: filepath.Join(t.TempDir(), "data"),
+		release: filepath.Join(t.TempDir(), "release"), binary: filepath.Join(t.TempDir(), "opencode"),
+		revision: strings.Repeat("b", 40),
+	}
+	f.previous = filepath.Join(f.opt, "releases", "previous")
+	if err := os.MkdirAll(f.previous, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("previous", filepath.Join(f.opt, "releases", "current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.root, "zoe-stack.env"), []byte("STACK=old\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.root, "zoe-runner.env"), []byte("RUNNER=old\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.binary, []byte("fake binary"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(f.release, "deploy-linux"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{
+		"bin/zoe-secret-entrypoint":         []byte("entrypoint\n"),
+		"bin/zoe-server":                    []byte("server\n"),
+		"bin/zoe-runner":                    []byte("runner\n"),
+		"bin/zoe":                           []byte("cli\n"),
+		"deploy-linux/docker-compose.yml":   []byte("services: {}\n"),
+		"deploy-linux/zoe-compose.service":  []byte("[Service]\n"),
+		"deploy-linux/zoe-runner.service":   []byte("[Service]\n"),
+		"deploy-linux/zoe-opencode.service": []byte("[Service]\nExecStart=/root/.opencode/bin/opencode serve\n"),
+	}
+	artifacts := make([]ReleaseArtifact, 0, len(files))
+	for name, data := range files {
+		path := filepath.Join(f.release, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		artifacts = append(artifacts, ReleaseArtifact{Name: filepath.Base(name), Path: name, SHA256: hex.EncodeToString(sum[:])})
+	}
+	manifest := ReleaseManifest{
+		SourceRevision: f.revision, Architecture: runtime.GOARCH, Artifacts: artifacts,
+		Images: map[string]ReleaseImage{
+			"zoe-server":        {Ref: "ghcr.io/test/zoe-server:test", Digest: "sha256:" + strings.Repeat("1", 64)},
+			"zoe-memory-worker": {Ref: "ghcr.io/test/zoe-memory:test", Digest: "sha256:" + strings.Repeat("2", 64)},
+			"zoe-runner":        {Ref: "ghcr.io/test/zoe-runner:test", Digest: "sha256:" + strings.Repeat("3", 64)},
+		},
+	}
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.release, "release-manifest.json"), manifestData, 0644); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+type updateRunner struct {
+	commands     []string
+	active       bool
+	runnerChecks int
+	runnerFlipAt int
+}
+
+func (r *updateRunner) run(_ context.Context, name string, args ...string) ([]byte, error) {
+	command := strings.Join(append([]string{name}, args...), " ")
+	r.commands = append(r.commands, command)
+	if len(args) == 1 && args[0] == "--version" {
+		return []byte("opencode v2.2.5-ronigooja.3\n"), nil
+	}
+	if name == "docker" {
+		return nil, nil
+	}
+	if name != "systemctl" {
+		return nil, nil
+	}
+	if len(args) >= 3 && args[0] == "enable" && args[2] == "zoe-opencode.service" {
+		r.active = true
+		return nil, nil
+	}
+	if len(args) >= 2 && (args[0] == "restart" || args[0] == "start") && args[1] == "zoe-opencode.service" {
+		r.active = true
+		return nil, nil
+	}
+	if len(args) >= 2 && args[0] == "is-active" {
+		switch args[1] {
+		case "zoe-opencode.service":
+			if !r.active {
+				return []byte("failed\n"), errors.New("inactive")
+			}
+			return []byte("active\n"), nil
+		case "zoe-compose.service":
+			return []byte("active\n"), nil
+		case "zoe-runner.service":
+			r.runnerChecks++
+			if r.runnerFlipAt > 0 && r.runnerChecks >= r.runnerFlipAt {
+				return []byte("failed\n"), errors.New("runner failed")
+			}
+			return []byte("active\n"), nil
+		}
+	}
+	return nil, nil
+}
+
+func (f updateFixture) options(out io.Writer) LifecycleOptions {
+	return LifecycleOptions{Root: f.root, OptRoot: f.opt, DataRoot: f.data, Release: f.release, OpenCodeBinary: f.binary, HealthTimeout: 2 * time.Second, Out: out}
+}
+
+func fixedUpdateServers(t *testing.T, passwordPath string, sessions bool, infoOK bool) (close func()) {
+	t.Helper()
+	var err error
+	info := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		password, _ := os.ReadFile(passwordPath)
+		if !ok || user != "opencode" || pass != strings.TrimSpace(string(password)) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !infoOK {
+			http.Error(w, "unhealthy", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	info.Listener, err = net.Listen("tcp", "127.0.0.1:4096")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Start()
+	active := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if sessions {
+			_, _ = w.Write([]byte(`{"data":{"session-1":{}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	}))
+	active.Listener, err = net.Listen("tcp", "127.0.0.1:4097")
+	if err != nil {
+		info.Close()
+		t.Fatal(err)
+	}
+	active.Start()
+	control := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	control.Listener, err = net.Listen("tcp", "127.0.0.1:8787")
+	if err != nil {
+		info.Close()
+		active.Close()
+		t.Fatal(err)
+	}
+	control.Start()
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/api/session/active") {
+			r.URL.Host = "127.0.0.1:4097"
+		}
+		return oldTransport.RoundTrip(r)
+	})
+	return func() { http.DefaultTransport = oldTransport; info.Close(); active.Close(); control.Close() }
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestUpdatePreparesOpenCodeFilesIdempotently(t *testing.T) {
+	f := newUpdateFixture(t)
+	runner := &updateRunner{}
+	m := NewManager(runner.run)
+	closeServers := fixedUpdateServers(t, filepath.Join(f.data, "opencode", "password"), false, true)
+	defer closeServers()
+	if err := m.Update(context.Background(), f.options(nil)); err != nil {
+		t.Fatal(err)
+	}
+	passwordPath := filepath.Join(f.data, "opencode", "password")
+	first, err := os.ReadFile(passwordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := dataMode(t, passwordPath); mode != 0600 {
+		t.Fatalf("password mode = %04o", mode)
+	}
+	for _, path := range []string{"xdg-data", "xdg-state", "xdg-cache"} {
+		if _, err := os.Stat(filepath.Join(f.data, "opencode", path)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "runner", "workspaces")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Update(context.Background(), f.options(nil)); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(passwordPath)
+	if err != nil || !bytes.Equal(first, second) {
+		t.Fatalf("password changed: %v", err)
+	}
+}
+
+func TestUpdateStartsInactiveOpenCodeAndWaitsForAuthenticatedInfo(t *testing.T) {
+	f := newUpdateFixture(t)
+	runner := &updateRunner{}
+	closeServers := fixedUpdateServers(t, filepath.Join(f.data, "opencode", "password"), false, true)
+	defer closeServers()
+	if err := NewManager(runner.run).Update(context.Background(), f.options(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if !containsCommand(runner.commands, "systemctl enable --now zoe-opencode.service") {
+		t.Fatalf("OpenCode was not started: %v", runner.commands)
+	}
+}
+
+func TestUpdateSkipsRestartWithActiveOpenCodeSessions(t *testing.T) {
+	f := newUpdateFixture(t)
+	runner := &updateRunner{active: true}
+	closeServers := fixedUpdateServers(t, filepath.Join(f.data, "opencode", "password"), true, true)
+	defer closeServers()
+	if err := NewManager(runner.run).Update(context.Background(), f.options(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if containsCommand(runner.commands, "systemctl restart zoe-opencode.service") {
+		t.Fatalf("OpenCode was restarted: %v", runner.commands)
+	}
+}
+
+func TestUpdateRollsBackWhenOpenCodeNeverBecomesHealthy(t *testing.T) {
+	f := newUpdateFixture(t)
+	oldStack, _ := os.ReadFile(filepath.Join(f.root, "zoe-stack.env"))
+	oldRunner, _ := os.ReadFile(filepath.Join(f.root, "zoe-runner.env"))
+	runner := &updateRunner{}
+	closeServers := fixedUpdateServers(t, filepath.Join(f.data, "opencode", "password"), false, false)
+	defer closeServers()
+	err := NewManager(runner.run).Update(context.Background(), f.options(nil))
+	if err == nil || !strings.Contains(err.Error(), "zoe-opencode.service") {
+		t.Fatalf("Update error = %v, want named OpenCode unit", err)
+	}
+	if strings.Contains(err.Error(), "password") || strings.Contains(err.Error(), "runner-token") {
+		t.Fatalf("Update error contains secret material: %v", err)
+	}
+	current, readErr := os.Readlink(filepath.Join(f.opt, "releases", "current"))
+	if readErr != nil || current != "previous" {
+		t.Fatalf("current selector = %q, %v", current, readErr)
+	}
+	if got, _ := os.ReadFile(filepath.Join(f.root, "zoe-stack.env")); !bytes.Equal(got, oldStack) {
+		t.Fatalf("stack not restored: %q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(f.root, "zoe-runner.env")); !bytes.Equal(got, oldRunner) {
+		t.Fatalf("runner env not restored: %q", got)
+	}
+}
+
+func TestUpdateRollsBackWhenRunnerFlipsFailedDuringStabilityWindow(t *testing.T) {
+	f := newUpdateFixture(t)
+	oldStack, _ := os.ReadFile(filepath.Join(f.root, "zoe-stack.env"))
+	oldRunner, _ := os.ReadFile(filepath.Join(f.root, "zoe-runner.env"))
+	runner := &updateRunner{runnerFlipAt: 2}
+	closeServers := fixedUpdateServers(t, filepath.Join(f.data, "opencode", "password"), false, true)
+	defer closeServers()
+	err := NewManager(runner.run).Update(context.Background(), f.options(nil))
+	if err == nil || !strings.Contains(err.Error(), "zoe-runner.service") {
+		t.Fatalf("Update error = %v", err)
+	}
+	current, readErr := os.Readlink(filepath.Join(f.opt, "releases", "current"))
+	if readErr != nil || current != "previous" {
+		t.Fatalf("current selector = %q, %v", current, readErr)
+	}
+	if got, _ := os.ReadFile(filepath.Join(f.root, "zoe-stack.env")); !bytes.Equal(got, oldStack) {
+		t.Fatalf("stack not restored: %q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(f.root, "zoe-runner.env")); !bytes.Equal(got, oldRunner) {
+		t.Fatalf("runner env not restored: %q", got)
+	}
+}
+
+func TestUpdateMigratesRunnerOpenCodeEnvironment(t *testing.T) {
+	f := newUpdateFixture(t)
+	legacy := "ZOE_OPENCODE_IMAGE=old\nZOE_OPENCODE_PROVIDER_SOCKET=old-socket\nUNKNOWN_OPERATOR=keep\n"
+	if err := os.WriteFile(filepath.Join(f.root, "zoe-runner.env"), []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &updateRunner{}
+	closeServers := fixedUpdateServers(t, filepath.Join(f.data, "opencode", "password"), false, true)
+	defer closeServers()
+	if err := NewManager(runner.run).Update(context.Background(), f.options(nil)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(f.root, "zoe-runner.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, old := range []string{"ZOE_OPENCODE_IMAGE", "ZOE_OPENCODE_PROVIDER_SOCKET"} {
+		if strings.Contains(text, old) {
+			t.Fatalf("legacy key remains: %q", text)
+		}
+	}
+	for _, key := range []string{"ZOE_OPENCODE_BASE_URL", "ZOE_OPENCODE_PASSWORD_FILE", "ZOE_OPENCODE_BINARY"} {
+		if !strings.Contains(text, key+"=") {
+			t.Fatalf("missing %s: %q", key, text)
+		}
+	}
+	if !strings.Contains(text, "UNKNOWN_OPERATOR=keep") {
+		t.Fatalf("unknown line was not preserved: %q", text)
+	}
+}
+
+func containsCommand(commands []string, want string) bool {
+	for _, command := range commands {
+		if command == want {
+			return true
+		}
+	}
+	return false
 }

@@ -1064,7 +1064,7 @@ func waitOpenCode(ctx context.Context, o LifecycleOptions, m Manager, timeout ti
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
-	return errors.New("OpenCode health check timed out")
+	return errors.New("zoe-opencode.service health check timed out")
 }
 
 func openCodeActive(ctx context.Context, o LifecycleOptions, _ Manager) (bool, error) {
