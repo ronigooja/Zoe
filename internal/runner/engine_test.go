@@ -135,6 +135,11 @@ func kinds(c *controlFake) string {
 
 func testEngine(t *testing.T, f *runtimeFake, c *controlFake, j *Journal) *Engine {
 	t.Helper()
+	if f.done && f.result.Info.Role == "" {
+		f.result.Info.Role = "assistant"
+		f.result.Info.Time.Completed = 1
+		f.result.Info.Finish = "stop"
+	}
 	return &Engine{Control: c, Runtime: f, Journal: j, Routes: map[string]Route{"profile": {ProfileID: "profile", Harness: "opencode", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Model: "model"}}, PollInterval: time.Millisecond}
 }
 
