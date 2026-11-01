@@ -39,6 +39,10 @@ install -d -o zoe-runner -g zoe-runner -m 0700 /var/lib/zoe/runner
 install -d -o zoe-runner -g zoe-runner -m 0700 /var/lib/zoe/runner-authority
 install -d -o root -g root -m 0700 /etc/zoe/secrets
 install -d -o root -g zoe-runner -m 0750 /etc/zoe/runner-secrets
+install -d -o root -g root -m 0700 /var/lib/zoe/opencode
+for dir in xdg-config/opencode xdg-data xdg-state xdg-cache; do
+  install -d -o root -g root -m 0700 "/var/lib/zoe/opencode/$dir"
+done
 
 authority=/var/lib/zoe/runner-authority/runner-deployment-authority.db
 if [[ -L "$authority" ]]; then

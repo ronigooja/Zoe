@@ -108,6 +108,7 @@ func lifecycleFlags(name string, args []string, errOut io.Writer) (ops.Lifecycle
 	fs.StringVar(&o.OptRoot, "opt-root", "/opt/zoe", "release installation root")
 	fs.StringVar(&o.DataRoot, "data-root", "/var/lib/zoe", "persistent data root")
 	fs.StringVar(&o.OpenCodeImage, "opencode-image", "", "pinned GHCR OpenCode image")
+	fs.StringVar(&o.OpenCodeBinary, "opencode-binary", "", "path to the host-installed OpenCode executable")
 	fs.BoolVar(&o.NonInteractive, "non-interactive", false, "do not prompt")
 	fs.BoolVar(&o.Yes, "yes", false, "confirm destructive operation")
 	fs.BoolVar(&o.Yes, "non-interactive-with-yes", false, "confirm destructive operation without prompts")

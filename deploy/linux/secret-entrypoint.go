@@ -16,6 +16,8 @@ var allowedNames = map[string]bool{
 	"ZOE_VOICE_GATEWAY_API_KEY": true,
 	"ZOE_MEM0_LLM_API_KEY":      true,
 	"ZOE_QDRANT_API_KEY":        true,
+	"ZOE_PROVIDER_KEY":          true,
+	"OPENCODE_SERVER_PASSWORD":  true,
 }
 
 func main() {

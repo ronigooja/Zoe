@@ -279,6 +279,16 @@ func (m Manager) ConfigureProvider(ctx context.Context, d Deployment, c Provider
 		return result, probeError("provider", result)
 	}
 	paths := []string{d.RunnerEnv, c.SecretPath, filepath.Join(d.Root, "provider-deployment.json")}
+	serviceOptions, managedOpenCode := providerOpenCodeOptions(d)
+	if managedOpenCode {
+		serviceFiles, e := snapshotOpenCode(serviceOptions)
+		if e != nil {
+			return result, e
+		}
+		for _, s := range serviceFiles {
+			paths = append(paths, s.path)
+		}
+	}
 	if d.DropInPath == "" {
 		return result, errors.New("runner systemd drop-in path is required")
 	}
@@ -361,6 +371,30 @@ func (m Manager) ConfigureProvider(ctx context.Context, d Deployment, c Provider
 	}
 	if err = WriteRunnerEnvAtomic(d.RunnerEnv, c); err != nil {
 		return result, rollback(err)
+	}
+	if managedOpenCode {
+		if err = renderOpenCodeConfig(serviceOptions); err != nil {
+			return result, rollback(err)
+		}
+		unitPath := filepath.Join(openCodeUnitDir(serviceOptions), "zoe-opencode.service")
+		b, e := os.ReadFile(unitPath)
+		if e != nil {
+			return result, rollback(e)
+		}
+		b, e = m.renderOpenCodeUnit(ctx, serviceOptions, b)
+		if e != nil {
+			return result, rollback(e)
+		}
+		if err = writeFileAtomic(unitPath, b, 0644); err != nil {
+			return result, rollback(err)
+		}
+		active, e := openCodeActive(ctx, serviceOptions, m)
+		if e != nil || active {
+			return result, rollback(errors.New("provider change requires an idle, reachable Zoe OpenCode service"))
+		}
+		if _, err = m.Run(ctx, "systemctl", "restart", "zoe-opencode.service"); err != nil {
+			return result, rollback(err)
+		}
 	}
 	if strings.ContainsAny(d.RunnerEnv, "\r\n\x00%\"\\") {
 		return result, rollback(errors.New("unsupported systemd environment path"))

@@ -13,6 +13,8 @@ SQLite inspection, and voice pool isolation checks, see the
 - `/opt/zoe/releases/current` selects the immutable server/runner release.
 - `zoe-compose.service` supervises the server, memory worker, and Qdrant.
 - `zoe-runner.service` runs the trusted execution runner.
+- `zoe-opencode.service` runs the operator-installed OpenCode server as root,
+  bound to `127.0.0.1:4096`, with private state under `/var/lib/zoe/opencode`.
 - `zoe-macair-tunnel.service` maintains private SSH forwarding to the Mac.
 - `/etc/zoe` contains deployment configuration and secret references.
 - `/var/lib/zoe` contains authority databases and persistent service data.
@@ -70,16 +72,16 @@ single bootstrap entry point:
 ```sh
 sudo bash deploy-linux/install-cli.sh /path/to/zoe-linux-<arch>.tar.gz
 sudo zoe install [--start] --release /path/to/release \
-  --opencode-image ghcr.io/OWNER/zoe-opencode:TAG@sha256:DIGEST
+  --opencode-binary /root/.opencode/bin/opencode
 ```
 
    The bootstrap verifies `SHA256SUMS`, installs the CLI atomically, and keeps one
    immutable CLI release. `zoe install` validates the release and host before
-   writing files, stages the release, pins images by digest, pulls them, installs
+    writing files, verifies the host-installed OpenCode binary, stages the release, pins images by digest, pulls them, installs
    the systemd units, preserves existing tokens and operator environment keys, and creates
-   deployment-owned runner tokens only when absent. It does not create an instance
+    deployment-owned runner tokens only when absent. It creates the OpenCode password once with mode 0600 and never prints or regenerates it. It does not create an instance
    key or a model gateway key. It leaves services stopped by default; `--start`
-   starts both units and waits for the health probe. It prints the next steps in
+    enables OpenCode, waits for authenticated `GET /api/info`, then starts the runner and waits for the health probe. It prints the next steps in
    order: `zoe key init`, `zoe memory configure`, then `zoe provider configure` for
    systemd/runner deployments. Until key init, `zoe status` shows
    `Instance key: pending (run zoe key init)`. Provider and memory keys come from
@@ -113,20 +115,26 @@ model-backed task execution.
 
 ### Upgrade and removal
 
-Use `zoe update --release /path/to/release --opencode-image ...` to stage and pull
+Use `zoe update --release /path/to/release` to stage and pull
 the new release, switch `current`, restart Compose and the runner, and verify
 health. Update refreshes release-owned environment keys, including image
 references and paths derived from the configured roots, while preserving
 operator-owned keys and unknown lines. A failed update restores the prior
 selector and environment files byte-for-byte and reports the failing command's
 bounded output; data and secrets are not touched.
+Plain server/runner upgrades do not restart `zoe-opencode.service`. It is
+restarted only when its unit, generated configuration, or discovered binary
+version changes and no active OpenCode sessions exist; otherwise the restart is
+skipped and reported.
 Use `zoe uninstall` for reviewed removal. It
 first prints the exact Compose-project containers, `io.zoe.managed=true` runtime
 containers, and local IDs for the four Zoe image repositories. It removes the
 Compose project with `docker compose down --remove-orphans`, removes only those
 queried IDs, keeps the shared Qdrant image, and never runs Docker prune. It
 requires typing `yes` unless `--yes` is supplied; non-interactive use must supply
-`--yes`. By default it keeps `/var/lib/zoe` and all `/etc/zoe`. Add `--purge-data`
+    `--yes`. It stops and disables `zoe-opencode.service`, removes its Zoe-owned unit,
+    configuration, and `/var/lib/zoe/opencode`, and never touches `/root/.opencode`
+    or `/root/.config/opencode`. By default it keeps `/var/lib/zoe` and all `/etc/zoe`. Add `--purge-data`
 to remove data and Zoe-generated configuration/tokens while explicitly keeping
 the three gateway credentials; add `--purge-credentials` to remove those too.
 It removes `/opt/zoe`, including the installed CLI and all releases, only after
@@ -139,7 +147,7 @@ operator package.
 
 The Linux control server reads deployment settings from its process environment. Follow the repository's [credential handling rule](../../AGENTS.md) for deployment-managed secrets; the server does not print them. Bind to loopback or a private trusted interface and put external TLS termination behind the deployment's authenticated network boundary.
 
-Configure `ZOE_OPENCODE_BASE_URL`, `ZOE_OPENCODE_PASSWORD_FILE`, `ZOE_OPENCODE_MODEL`, and `ZOE_OPENCODE_WORKSPACE_ROOT` in the runner environment. The separate host service owns its OpenCode configuration and provider secret. CLIProxyAPI remains external and unchanged.
+Configure `ZOE_OPENCODE_BASE_URL`, `ZOE_OPENCODE_PASSWORD_FILE`, `ZOE_OPENCODE_MODEL`, and `ZOE_OPENCODE_WORKSPACE_ROOT` in the runner environment. The separate host service owns its OpenCode configuration and provider secret. CLIProxyAPI remains external and unchanged. The service deliberately does not use `ProtectSystem` or `ProtectHome`, because its configured user must be able to write OpenCode state and authorized workspaces.
 
 ### Configure the OpenCode runtime
 

@@ -43,11 +43,11 @@ type ReleaseImage struct {
 	Digest string `json:"digest"`
 }
 type LifecycleOptions struct {
-	Root, OptRoot, DataRoot, Release, OpenCodeImage         string
-	NonInteractive, Yes, PurgeData, PurgeCredentials, Start bool
-	HealthURL                                               string
-	HealthTimeout                                           time.Duration
-	Out                                                     io.Writer
+	Root, OptRoot, DataRoot, Release, OpenCodeImage, OpenCodeBinary string
+	NonInteractive, Yes, PurgeData, PurgeCredentials, Start         bool
+	HealthURL                                                       string
+	HealthTimeout                                                   time.Duration
+	Out                                                             io.Writer
 }
 
 type UninstallPlan struct {
@@ -135,7 +135,10 @@ func (m Manager) Install(ctx context.Context, o LifecycleOptions) (ReleaseManife
 	if err = validateArch(manifest); err != nil {
 		return manifest, err
 	}
-	if err = validateOpenCode(o.OpenCodeImage); err != nil {
+	if o.OpenCodeBinary, err = m.openCodeBinary(ctx, o); err != nil {
+		return manifest, err
+	}
+	if err = m.checkOpenCodeVersion(ctx, o); err != nil {
 		return manifest, err
 	}
 	if installed, err := installAlreadyComplete(o, manifest); err == nil && installed {
@@ -168,6 +171,16 @@ func (m Manager) Install(ctx context.Context, o LifecycleOptions) (ReleaseManife
 	if err = m.installUnits(o); err != nil {
 		return manifest, err
 	}
+	if o.Start {
+		if err = m.startOpenCode(ctx, o); err != nil {
+			return manifest, err
+		}
+	}
+	if o.Start {
+		if err = waitOpenCode(ctx, o, m, o.HealthTimeout); err != nil {
+			return manifest, err
+		}
+	}
 	if !o.Start {
 		printNextSteps(o.Out)
 		return manifest, nil
@@ -193,7 +206,7 @@ func installAlreadyComplete(o LifecycleOptions, manifest ReleaseManifest) (bool,
 			return false, nil
 		}
 	}
-	for _, path := range []string{filepath.Join(o.Root, "systemd", "zoe-compose.service"), filepath.Join(o.Root, "systemd", "zoe-runner.service"), "/etc/systemd/system/zoe-compose.service", "/etc/systemd/system/zoe-runner.service"} {
+	for _, path := range []string{filepath.Join(openCodeUnitDir(o), "zoe-compose.service"), filepath.Join(openCodeUnitDir(o), "zoe-runner.service"), filepath.Join(openCodeUnitDir(o), "zoe-opencode.service"), openCodeConfigPath(o)} {
 		if _, err := os.Stat(path); err == nil {
 			continue
 		}
@@ -203,6 +216,9 @@ func installAlreadyComplete(o LifecycleOptions, manifest ReleaseManifest) (bool,
 }
 
 func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
+	if o.DataRoot == "" {
+		o.DataRoot = "/var/lib/zoe"
+	}
 	if o.Root == "" {
 		o.Root = "/etc/zoe"
 	}
@@ -219,7 +235,10 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if err = validateArch(manifest); err != nil {
 		return err
 	}
-	if err = validateOpenCode(o.OpenCodeImage); err != nil {
+	if o.OpenCodeBinary, err = m.openCodeBinary(ctx, o); err != nil {
+		return err
+	}
+	if err = m.checkOpenCodeVersion(ctx, o); err != nil {
 		return err
 	}
 	current := filepath.Join(o.OptRoot, "releases", "current")
@@ -241,14 +260,66 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if runnerErr != nil {
 		return runnerErr
 	}
+	saved, err := snapshotOpenCode(o)
+	if err != nil {
+		return err
+	}
+	restarted := false
 	if err = m.writeDeploymentFiles(o, manifest); err != nil {
-		return restoreUpdate(ctx, m, o, current, previous, stackSnapshot, runnerSnapshot, err)
+		args := make([]any, 0, len(saved)+1)
+		args = append(args, err)
+		for _, s := range saved {
+			args = append(args, s)
+		}
+		return restoreUpdate(ctx, m, o, current, previous, stackSnapshot, runnerSnapshot, args...)
 	}
 	rollback := func(cause error) error {
-		return restoreUpdate(ctx, m, o, current, previous, stackSnapshot, runnerSnapshot, cause)
+		args := make([]any, 0, len(saved)+1)
+		args = append(args, cause)
+		for _, s := range saved {
+			args = append(args, s)
+		}
+		result := restoreUpdate(ctx, m, o, current, previous, stackSnapshot, runnerSnapshot, args...)
+		if restarted {
+			if _, e := m.Run(ctx, "systemctl", "restart", "zoe-opencode.service"); e != nil {
+				return errors.Join(result, e)
+			}
+		}
+		return result
 	}
 	if err = m.switchCurrent(o, manifest.SourceRevision); err != nil {
 		return rollback(err)
+	}
+	if err = m.installUnits(o); err != nil {
+		return rollback(err)
+	}
+	changed, err := openCodeChanged(saved)
+	if err != nil {
+		return rollback(err)
+	}
+	if changed {
+		active, e := openCodeActive(ctx, o, m)
+		if e != nil || active {
+			if o.Out != nil {
+				fmt.Fprintln(o.Out, "OpenCode restart skipped: active runs or session state unavailable")
+			}
+			// Leave the last applied fingerprint in place so a later update retries.
+			for _, s := range saved {
+				if filepath.Base(s.path) == "applied-fingerprint" {
+					if e := s.restore(); e != nil {
+						return rollback(e)
+					}
+				}
+			}
+		} else {
+			restarted = true
+			if _, err = m.Run(ctx, "systemctl", "restart", "zoe-opencode.service"); err != nil {
+				return rollback(err)
+			}
+			if err = waitOpenCode(ctx, o, m, o.HealthTimeout); err != nil {
+				return rollback(err)
+			}
+		}
 	}
 	if err = m.start(ctx); err != nil {
 		return rollback(err)
@@ -262,7 +333,20 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	return nil
 }
 
-func restoreUpdate(ctx context.Context, m Manager, o LifecycleOptions, selector, previous string, stack, runner fileSnapshot, cause error) error {
+func restoreUpdate(ctx context.Context, m Manager, o LifecycleOptions, selector, previous string, stack, runner fileSnapshot, args ...any) error {
+	var cause error
+	var serviceFiles []fileSnapshot
+	for _, arg := range args {
+		switch v := arg.(type) {
+		case error:
+			cause = v
+		case fileSnapshot:
+			serviceFiles = append(serviceFiles, v)
+		}
+	}
+	if cause == nil {
+		cause = errors.New("update failed")
+	}
 	var rollbackErrs []error
 	if previous != "" {
 		if err := os.Remove(selector); err != nil && !os.IsNotExist(err) {
@@ -277,6 +361,16 @@ func restoreUpdate(ctx context.Context, m Manager, o LifecycleOptions, selector,
 	}
 	if err := runner.restore(); err != nil {
 		rollbackErrs = append(rollbackErrs, err)
+	}
+	for _, s := range serviceFiles {
+		if err := s.restore(); err != nil {
+			rollbackErrs = append(rollbackErrs, err)
+		}
+	}
+	if len(serviceFiles) > 0 {
+		if _, err := m.Run(ctx, "systemctl", "daemon-reload"); err != nil {
+			rollbackErrs = append(rollbackErrs, err)
+		}
 	}
 	if err := m.start(ctx); err != nil {
 		rollbackErrs = append(rollbackErrs, fmt.Errorf("restart previous release: %w", err))
@@ -306,11 +400,31 @@ func validateArch(m ReleaseManifest) error {
 	}
 	return nil
 }
-func validateOpenCode(v string) error {
-	if !imageRefRE.MatchString(strings.Split(v, "@")[0]) || !strings.Contains(v, "@") || !digestRE.MatchString(strings.SplitN(v, "@", 2)[1]) {
-		return errors.New("--opencode-image must be a pinned GHCR image reference")
+func (m Manager) openCodeBinary(ctx context.Context, o LifecycleOptions) (string, error) {
+	if o.OpenCodeBinary == "" {
+		o.OpenCodeBinary = readEnvValue(filepath.Join(o.Root, "zoe-runner.env"), "ZOE_OPENCODE_BINARY")
 	}
-	return nil
+	if o.OpenCodeBinary == "" {
+		o.OpenCodeBinary = os.Getenv("ZOE_OPENCODE_BINARY")
+	}
+	if o.OpenCodeBinary != "" {
+		if st, err := os.Stat(o.OpenCodeBinary); err == nil && st.Mode().IsRegular() && st.Mode()&0111 != 0 {
+			return o.OpenCodeBinary, nil
+		}
+		return "", fmt.Errorf("OpenCode binary %q is missing or not executable", o.OpenCodeBinary)
+	}
+	if out, err := m.Run(ctx, "sh", "-c", "command -v opencode"); err == nil {
+		p := strings.TrimSpace(string(out))
+		if p != "" {
+			if st, e := os.Stat(p); e == nil && st.Mode().IsRegular() && st.Mode()&0111 != 0 {
+				return p, nil
+			}
+		}
+	}
+	if st, err := os.Stat("/root/.opencode/bin/opencode"); err == nil && st.Mode().IsRegular() && st.Mode()&0111 != 0 {
+		return "/root/.opencode/bin/opencode", nil
+	}
+	return "", errors.New("OpenCode binary was not found; install an executable opencode and retry (set --opencode-binary to specify its path)")
 }
 func ensureDirs(o LifecycleOptions) error {
 	for _, p := range []string{o.Root, filepath.Join(o.Root, "secrets"), filepath.Join(o.Root, "runner-secrets"), filepath.Join(o.OptRoot, "releases"), o.DataRoot} {
@@ -331,6 +445,22 @@ func ensureDirs(o LifecycleOptions) error {
 			if e = os.WriteFile(p, []byte(base64.RawURLEncoding.EncodeToString(b)), 0400); e != nil {
 				return e
 			}
+		}
+	}
+	opencode := filepath.Join(o.DataRoot, "opencode")
+	for _, p := range []string{opencode, filepath.Join(opencode, "xdg-config", "opencode"), filepath.Join(opencode, "xdg-data"), filepath.Join(opencode, "xdg-state"), filepath.Join(opencode, "xdg-cache"), filepath.Join(o.DataRoot, "runner", "workspaces")} {
+		if err := os.MkdirAll(p, 0700); err != nil {
+			return err
+		}
+	}
+	password := filepath.Join(opencode, "password")
+	if _, err := os.Stat(password); os.IsNotExist(err) {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return err
+		}
+		if err := os.WriteFile(password, []byte(base64.RawURLEncoding.EncodeToString(b)), 0600); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -370,7 +500,7 @@ func (m Manager) stageRelease(o LifecycleOptions, manifest ReleaseManifest) erro
 			_ = os.WriteFile(filepath.Join(target, "SOURCE_REVISION"), b, 0644)
 		}
 	}
-	for _, path := range []string{filepath.Join(target, "bin", "zoe-secret-entrypoint"), filepath.Join(target, "deploy-linux", "docker-compose.yml")} {
+	for _, path := range []string{filepath.Join(target, "bin", "zoe-secret-entrypoint"), filepath.Join(target, "deploy-linux", "docker-compose.yml"), filepath.Join(target, "deploy-linux", "zoe-opencode.service")} {
 		if _, e := os.Stat(path); e != nil {
 			return fmt.Errorf("release staging incomplete: required artifact %s is missing; release must contain bin/zoe-secret-entrypoint and deploy-linux/docker-compose.yml", path)
 		}
@@ -381,7 +511,7 @@ func copyDeployFiles(src, dst string) error {
 	if err := os.MkdirAll(filepath.Join(dst, "deploy-linux"), 0755); err != nil {
 		return err
 	}
-	for _, name := range []string{"docker-compose.yml", "zoe-compose.service", "zoe-runner.service", "zoe-runner-tmpfiles.conf"} {
+	for _, name := range []string{"docker-compose.yml", "zoe-compose.service", "zoe-runner.service", "zoe-opencode.service", "zoe-runner-tmpfiles.conf"} {
 		p := filepath.Join(src, "deploy-linux", name)
 		b, e := os.ReadFile(p)
 		if os.IsNotExist(e) {
@@ -411,34 +541,31 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 	}
 	model := readEnvValue(filepath.Join(o.Root, "zoe-runner.env"), "ZOE_OPENCODE_MODEL")
 	if strings.TrimSpace(model) == "" {
-		model = "provider/model"
+		model = "cliproxyapi/gpt-6.1-sol"
 	}
 	profiles, routes, err := defaultProfileValues(model)
 	if err != nil {
 		return err
 	}
 	stack := map[string]string{"ZOE_SERVER_IMAGE": image(mfest, "zoe-server"), "ZOE_MEMORY_WORKER_IMAGE": image(mfest, "zoe-memory-worker"), "ZOE_SERVER_DATA_ROOT": filepath.Join(o.DataRoot, "server"), "ZOE_MEMORY_DATA_ROOT": filepath.Join(o.DataRoot, "memory"), "ZOE_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "runner-token"), "ZOE_MEMORY_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "memory-runner-token"), "ZOE_MEM0_LLM_API_KEY_FILE": filepath.Join(o.Root, "secrets", "mem0-llm-api-key"), "ZOE_RUNTIME_PROFILES": profiles, "ZOE_DEFAULT_PROFILE_ID": "worker", "ZOE_COMPOSE_FILE": filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", "docker-compose.yml")}
-	runnerEnv := map[string]string{"ZOE_OPENCODE_BASE_URL": "http://127.0.0.1:4096", "ZOE_OPENCODE_PASSWORD_FILE": filepath.Join(o.DataRoot, "opencode", "password"), "ZOE_OPENCODE_WORKSPACE_ROOT": filepath.Join(o.DataRoot, "runner", "workspaces"), "ZOE_CONTROL_URL": "http://127.0.0.1:8787", "ZOE_RUNNER_JOURNAL_PATH": filepath.Join(o.DataRoot, "runner", "journal.sqlite"), "ZOE_RUNNER_ROUTES": routes, "ZOE_OPENCODE_MODEL": model}
+	runnerEnv := map[string]string{"ZOE_OPENCODE_BASE_URL": "http://127.0.0.1:4096", "ZOE_OPENCODE_PASSWORD_FILE": "/run/credentials/zoe-runner.service/opencode-password", "ZOE_OPENCODE_WORKSPACE_ROOT": filepath.Join(o.DataRoot, "runner", "workspaces"), "ZOE_CONTROL_URL": "http://127.0.0.1:8787", "ZOE_RUNNER_JOURNAL_PATH": filepath.Join(o.DataRoot, "runner", "journal.sqlite"), "ZOE_RUNNER_ROUTES": routes, "ZOE_OPENCODE_MODEL": model}
+	if o.OpenCodeBinary != "" {
+		runnerEnv["ZOE_OPENCODE_BINARY"] = o.OpenCodeBinary
+	}
 	if err := writeEnv(filepath.Join(o.Root, "zoe-stack.env"), stack, 0600); err != nil {
 		return err
 	}
-	return writeEnv(filepath.Join(o.Root, "zoe-runner.env"), runnerEnv, 0600)
+	if err := writeEnv(filepath.Join(o.Root, "zoe-runner.env"), runnerEnv, 0600); err != nil {
+		return err
+	}
+	return renderOpenCodeConfig(o)
 }
 
 const defaultOpenCodeModel = "provider/model"
 
 func readEnvValue(path, wanted string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(line, "export ")), "=")
-		if ok && strings.TrimSpace(key) == wanted {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
+	values, _ := readEnv(path)
+	return values[wanted]
 }
 
 func defaultProfileValues(model string) (string, string, error) {
@@ -552,6 +679,8 @@ func isOperatorOwnedEnvKey(key string) bool {
 	switch key {
 	case "ZOE_RUNTIME_PROFILES", "ZOE_DEFAULT_PROFILE_ID", "ZOE_RUNNER_ROUTES":
 		return true
+	case "ZOE_OPENCODE_BASE_URL", "ZOE_OPENCODE_PASSWORD_FILE", "ZOE_OPENCODE_WORKSPACE_ROOT", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_BINARY", "ZOE_OPENCODE_USER":
+		return true
 	default:
 		return false
 	}
@@ -562,6 +691,8 @@ func validOperatorEnvValue(key, value string) bool {
 		return false
 	}
 	switch key {
+	case "ZOE_OPENCODE_BASE_URL", "ZOE_OPENCODE_PASSWORD_FILE", "ZOE_OPENCODE_WORKSPACE_ROOT", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_BINARY", "ZOE_OPENCODE_USER":
+		return true
 	case "ZOE_DEFAULT_PROFILE_ID":
 		return true
 	case "ZOE_RUNTIME_PROFILES":
@@ -619,12 +750,19 @@ func (m Manager) installUnits(o LifecycleOptions) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	for _, n := range []string{"zoe-compose.service", "zoe-runner.service"} {
+	for _, n := range []string{"zoe-compose.service", "zoe-runner.service", "zoe-opencode.service"} {
 		b, e := os.ReadFile(filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", n))
 		if e != nil {
-			continue
+			return e
 		}
-		b = bytesReplacePaths(b, o)
+		if n == "zoe-opencode.service" {
+			b, e = m.renderOpenCodeUnit(context.Background(), o, b)
+			if e != nil {
+				return e
+			}
+		} else {
+			b = bytesReplacePaths(b, o)
+		}
 		if e = os.WriteFile(filepath.Join(dir, n), b, 0644); e != nil {
 			return e
 		}
@@ -632,8 +770,83 @@ func (m Manager) installUnits(o LifecycleOptions) error {
 	_, e := m.Run(context.Background(), "systemctl", "daemon-reload")
 	return e
 }
+
+func (m Manager) startOpenCode(ctx context.Context, o LifecycleOptions) error {
+	if _, err := m.Run(ctx, "systemctl", "enable", "--now", "zoe-opencode.service"); err != nil {
+		return fmt.Errorf("start zoe-opencode.service: %w", err)
+	}
+	return nil
+}
+
+func waitOpenCode(ctx context.Context, o LifecycleOptions, m Manager, timeout time.Duration) error {
+	password, err := os.ReadFile(filepath.Join(o.DataRoot, "opencode", "password"))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	url := "http://127.0.0.1:4096/api/info"
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		req.SetBasicAuth("opencode", strings.TrimSpace(string(password)))
+		if r, e := http.DefaultClient.Do(req); e == nil {
+			r.Body.Close()
+			if r.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		if _, e := m.Run(ctx, "systemctl", "is-active", "zoe-opencode.service"); e != nil { /* keep waiting for systemd startup */
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return errors.New("OpenCode health check timed out")
+}
+
+func openCodeActive(ctx context.Context, o LifecycleOptions, _ Manager) (bool, error) {
+	password, err := os.ReadFile(filepath.Join(o.DataRoot, "opencode", "password"))
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:4096/api/session/active", nil)
+	req.SetBasicAuth("opencode", strings.TrimSpace(string(password)))
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("OpenCode active sessions returned HTTP %d", r.StatusCode)
+	}
+	var payload struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		return false, err
+	}
+	return len(payload.Data) > 0, nil
+}
 func bytesReplacePaths(b []byte, o LifecycleOptions) []byte {
-	return []byte(strings.ReplaceAll(strings.ReplaceAll(string(b), "/etc/zoe", o.Root), "/opt/zoe", o.OptRoot))
+	s := strings.ReplaceAll(strings.ReplaceAll(string(b), "/etc/zoe", o.Root), "/opt/zoe", o.OptRoot)
+	if o.DataRoot != "" {
+		s = strings.ReplaceAll(s, "/var/lib/zoe", o.DataRoot)
+	}
+	if o.OpenCodeBinary != "" {
+		s = strings.ReplaceAll(s, "/root/.opencode/bin/opencode", o.OpenCodeBinary)
+	}
+	return []byte(s)
 }
 func (m Manager) start(ctx context.Context) error {
 	_, e := m.Run(ctx, "systemctl", "restart", "zoe-compose.service")
@@ -702,7 +915,7 @@ func (m Manager) UninstallPlan(ctx context.Context, o LifecycleOptions) (Uninsta
 	if o.DataRoot == "" {
 		o.DataRoot = "/var/lib/zoe"
 	}
-	plan := UninstallPlan{Units: []string{"zoe-compose.service", "zoe-runner.service", "zoe-compose.service.d/*", "zoe-runner.service.d/*", "zoe-runner.conf"}, Network: "zoe", OptRoot: o.OptRoot, DataRoot: o.DataRoot}
+	plan := UninstallPlan{Units: []string{"zoe-compose.service", "zoe-runner.service", "zoe-opencode.service", "zoe-compose.service.d/*", "zoe-runner.service.d/*", "zoe-runner.conf"}, Network: "zoe", OptRoot: o.OptRoot, DataRoot: o.DataRoot}
 	composeFile := filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", "docker-compose.yml")
 	if env, err := readEnv(filepath.Join(o.Root, "zoe-stack.env")); err == nil && filepath.IsAbs(env["ZOE_COMPOSE_FILE"]) {
 		composeFile = env["ZOE_COMPOSE_FILE"]
@@ -727,14 +940,24 @@ func (m Manager) UninstallPlan(ctx context.Context, o LifecycleOptions) (Uninsta
 		}
 		plan.ImageIDs = append(plan.ImageIDs, lines(out)...)
 	}
-	plan.KeepFiles = []string{filepath.Join(o.Root, "secrets", "cliproxyapi-api-key"), filepath.Join(o.Root, "secrets", "voice-gateway-api-key"), filepath.Join(o.Root, "secrets", "mem0-llm-api-key")}
+	plan.KeepFiles = []string{filepath.Join(o.Root, "secrets", "cliproxyapi-api-key"), filepath.Join(o.Root, "runner-secrets", "cliproxyapi-api-key"), filepath.Join(o.Root, "secrets", "voice-gateway-api-key"), filepath.Join(o.Root, "secrets", "mem0-llm-api-key")}
+	plan.RemoveFiles = []string{filepath.Join(o.DataRoot, "opencode"), filepath.Join(o.Root, "zoe-opencode.env"), filepath.Join(openCodeUnitDir(o), "zoe-opencode.service")}
 	if o.PurgeData {
-		plan.RemoveFiles = []string{o.DataRoot, filepath.Join(o.Root, "zoe-stack.env"), filepath.Join(o.Root, "zoe-runner.env"), filepath.Join(o.Root, "secrets", "runner-token"), filepath.Join(o.Root, "secrets", "memory-runner-token")}
+		plan.RemoveFiles = append(plan.RemoveFiles, o.DataRoot, filepath.Join(o.Root, "zoe-stack.env"), filepath.Join(o.Root, "zoe-runner.env"), filepath.Join(o.Root, "secrets", "runner-token"), filepath.Join(o.Root, "secrets", "memory-runner-token"))
 	}
 	return plan, nil
 }
 
 func (m Manager) Uninstall(ctx context.Context, o LifecycleOptions) error {
+	if o.Root == "" {
+		o.Root = "/etc/zoe"
+	}
+	if o.OptRoot == "" {
+		o.OptRoot = "/opt/zoe"
+	}
+	if o.DataRoot == "" {
+		o.DataRoot = "/var/lib/zoe"
+	}
 	plan, err := m.UninstallPlan(ctx, o)
 	if err != nil {
 		return err
@@ -752,8 +975,8 @@ func (m Manager) Uninstall(ctx context.Context, o LifecycleOptions) error {
 		}
 		done(description)
 	}
-	run("stop units", "systemctl", "stop", "zoe-runner.service", "zoe-compose.service")
-	run("disable units", "systemctl", "disable", "zoe-runner.service", "zoe-compose.service")
+	run("stop units", "systemctl", "stop", "zoe-opencode.service", "zoe-runner.service", "zoe-compose.service")
+	run("disable units", "systemctl", "disable", "zoe-opencode.service", "zoe-runner.service", "zoe-compose.service")
 	if plan.ComposeFile != "" {
 		args := []string{"compose", "--project-name", "zoe", "--env-file", filepath.Join(o.Root, "zoe-stack.env"), "--file", plan.ComposeFile, "down", "--remove-orphans"}
 		run("remove Compose stack", "docker", args...)
@@ -767,10 +990,17 @@ func (m Manager) Uninstall(ctx context.Context, o LifecycleOptions) error {
 		run("remove Zoe images", "docker", append([]string{"image", "rm"}, plan.ImageIDs...)...)
 	}
 	run("remove Zoe network", "docker", "network", "rm", "zoe")
-	for _, p := range []string{filepath.Join(o.Root, "systemd", "zoe-compose.service"), filepath.Join(o.Root, "systemd", "zoe-runner.service"), filepath.Join(o.Root, "systemd", "zoe-runner-tmpfiles.conf"), "/etc/systemd/system/zoe-compose.service", "/etc/systemd/system/zoe-runner.service", "/etc/tmpfiles.d/zoe-runner.conf"} {
+	paths := []string{filepath.Join(openCodeUnitDir(o), "zoe-compose.service"), filepath.Join(openCodeUnitDir(o), "zoe-runner.service"), filepath.Join(openCodeUnitDir(o), "zoe-opencode.service"), filepath.Join(o.Root, "zoe-opencode.env")}
+	if o.Root == "/etc/zoe" {
+		paths = append(paths, "/etc/tmpfiles.d/zoe-runner.conf")
+	}
+	for _, p := range paths {
 		if err = os.Remove(p); err != nil && !os.IsNotExist(err) {
 			errs = append(errs, fmt.Errorf("remove %s: %w", p, err))
 		}
+	}
+	if err = os.RemoveAll(filepath.Join(o.DataRoot, "opencode")); err != nil {
+		errs = append(errs, err)
 	}
 	run("reload systemd", "systemctl", "daemon-reload")
 	if o.PurgeData {

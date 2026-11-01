@@ -1,0 +1,25 @@
+[Unit]
+Description=Zoe host-installed OpenCode server
+After=network-online.target
+Before=zoe-runner.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=/etc/zoe/zoe-opencode.env
+Environment=HOME=/var/lib/zoe/opencode
+Environment=XDG_CONFIG_HOME=/var/lib/zoe/opencode/xdg-config
+Environment=XDG_DATA_HOME=/var/lib/zoe/opencode/xdg-data
+Environment=XDG_STATE_HOME=/var/lib/zoe/opencode/xdg-state
+Environment=XDG_CACHE_HOME=/var/lib/zoe/opencode/xdg-cache
+ExecStart=/opt/zoe/releases/current/bin/zoe-secret-entrypoint /root/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 4096
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+# Deliberately not hardened with ProtectSystem/ProtectHome: OpenCode must write
+# operator-authorized workspaces and its own persistent state on the host.
+
+[Install]
+WantedBy=multi-user.target

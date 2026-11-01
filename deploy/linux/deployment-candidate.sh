@@ -23,7 +23,6 @@ done
 if [[ -n "$compose_file" && ! -f "$compose_file" ]]; then echo "compose file not found: $compose_file" >&2; exit 1; fi
 if [[ -n "$env_file" && ! -f "$env_file" ]]; then echo "env file not found: $env_file" >&2; exit 1; fi
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 python3 - "$manifest" "$compose_file" "$env_file" "$output" <<'PY'
 import hashlib, json, os, pathlib, re, subprocess, sys
 manifest_path, compose, env_file, output = sys.argv[1:]

@@ -3,6 +3,7 @@ Description=Zoe trusted OpenCode runner (Docker daemon authority)
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
+Wants=zoe-opencode.service
 
 [Service]
 Type=simple
@@ -10,6 +11,7 @@ User=zoe-runner
 Group=zoe-runner
 SupplementaryGroups=docker
 EnvironmentFile=/etc/zoe/zoe-runner.env
+LoadCredential=opencode-password:/var/lib/zoe/opencode/password
 Environment=ZOE_SECRET_FILE_MAP=ZOE_RUNNER_TOKEN=/etc/zoe/runner-secrets/runner-token
 ExecStart=/opt/zoe/releases/current/bin/zoe-secret-entrypoint /opt/zoe/releases/current/bin/zoe-runner
 Restart=on-failure
