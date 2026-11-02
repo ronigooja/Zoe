@@ -134,9 +134,9 @@ func TestRuntimeAbortOnToolStepLimit(t *testing.T) {
 	c := &controlFake{}
 	j := openTestJournal(t)
 	e := &Engine{Control: c, Runtime: f, Journal: j, Routes: map[string]Route{"profile": {ProfileID: "profile", Harness: "opencode", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Model: "model"}}, PollInterval: time.Millisecond}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	_ = e.Process(ctx, testClaim())
+	if err := e.Process(testContext(t), testClaim()); err != nil {
+		t.Fatal(err)
+	}
 	if f.aborts == 0 {
 		t.Fatal("tool-step limit did not abort")
 	}
