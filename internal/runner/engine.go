@@ -58,6 +58,8 @@ type Engine struct {
 	PollInterval, ObserveTimeout time.Duration
 	WaitLimit                    time.Duration
 	Now                          func() time.Time
+	ContextTokenBudget           int64
+	MaxRotations                 int
 }
 
 func (e *Engine) RunOnce(ctx context.Context) error {
@@ -103,6 +105,8 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 				return fmt.Errorf("%w: prompt-sent runtime recovery identity incomplete", ErrOutcomePending)
 			}
 			return e.monitor(ctx, claim, RuntimeBinding{SessionID: entry.Session})
+		case "rotating", "rotation_create_attempted", "rotation_created":
+			return e.recoverRotation(ctx, claim, entry)
 		case "waiting_permission", "waiting_question":
 			if entry.Session == "" {
 				return fmt.Errorf("%w: waiting runtime identity incomplete", ErrOutcomePending)
@@ -334,6 +338,9 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			time.Sleep(e.interval())
 			continue
 		}
+		if !waiting && e.contextExceeded(claim, msgs) {
+			return e.rotate(ctx, claim, b, msgs)
+		}
 		_ = status
 		m, done, term := opencode.Completion(msgs)
 		if !done {
@@ -349,6 +356,130 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 		}
 		return e.terminate(ctx, claim, b, "completed", false)
 	}
+}
+
+const rotationSummaryLimit = 12000
+
+func (e *Engine) contextExceeded(c contracts.JobClaim, msgs []opencode.Message) bool {
+	limit := e.ContextTokenBudget
+	if c.Budget.MaxContextTokens > 0 && (limit <= 0 || c.Budget.MaxContextTokens < limit) {
+		limit = c.Budget.MaxContextTokens
+	}
+	if limit <= 0 {
+		return false
+	}
+	var latest opencode.Message
+	for _, m := range msgs {
+		if m.Info.Role == "assistant" && (latest.Info.Time.Created == 0 || m.Info.Time.Created >= latest.Info.Time.Created) {
+			latest = m
+		}
+	}
+	if latest.Info.Role != "assistant" {
+		return false
+	}
+	return latest.Info.Tokens.Input+latest.Info.Tokens.Output+latest.Info.Tokens.Cache.Read+latest.Info.Tokens.Cache.Write > limit
+}
+
+func rotationSummary(msgs []opencode.Message) string {
+	var b strings.Builder
+	for i := len(msgs) - 1; i >= 0 && b.Len() < rotationSummaryLimit; i-- {
+		m := msgs[i]
+		if m.Info.Role != "assistant" && m.Info.Role != "user" {
+			continue
+		}
+		for _, p := range m.Parts {
+			if text, ok := p["text"].(string); ok {
+				b.WriteString(text)
+				b.WriteByte('\n')
+			}
+		}
+	}
+	s := b.String()
+	if len(s) > rotationSummaryLimit {
+		s = s[:rotationSummaryLimit]
+	}
+	return s
+}
+
+func (e *Engine) rotate(ctx context.Context, c contracts.JobClaim, old RuntimeBinding, msgs []opencode.Message) error {
+	entry, _, err := e.Journal.Entry(ctx, c.RunID)
+	if err != nil {
+		return err
+	}
+	count := entry.RotationCount + 1
+	max := e.MaxRotations
+	if max <= 0 {
+		max = 3
+	}
+	if count > max {
+		_ = e.Runtime.Abort(ctx, old)
+		return e.terminate(ctx, c, old, "context_rotation_limit_exceeded", false)
+	}
+	summary := rotationSummary(msgs)
+	if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, old.SessionID, summary, count); err != nil {
+		return err
+	}
+	if err := e.Journal.SetPhase(ctx, c.RunID, c.AttemptID, c.Fence, "rotation_create_attempted"); err != nil {
+		return err
+	}
+	spec := entry.Spec
+	spec.Prompt = rotationPrompt(c, summary)
+	binding, err := e.Runtime.Create(ctx, spec)
+	if err != nil {
+		return e.markUnknown(ctx, c)
+	}
+	if err := e.Journal.SetRotationSession(ctx, c.RunID, c.AttemptID, c.Fence, binding.SessionID, "rotation_created"); err != nil {
+		return err
+	}
+	if _, err := e.Runtime.Terminate(ctx, old); err != nil {
+		return fmt.Errorf("%w: old session termination during rotation: %v", ErrOutcomePending, err)
+	}
+	if err := e.Runtime.Prompt(ctx, binding, spec.Prompt); err != nil {
+		return e.markUnknown(ctx, c)
+	}
+	if err := e.Journal.SetPhase(ctx, c.RunID, c.AttemptID, c.Fence, "prompt_sent"); err != nil {
+		return err
+	}
+	if err := e.emitPending(ctx, c, "progress", map[string]any{"event": "context_rotated", "rotation": count}); err != nil {
+		return err
+	}
+	return e.monitor(ctx, c, binding)
+}
+
+func rotationPrompt(c contracts.JobClaim, summary string) string {
+	return "Continue the assigned goal in a fresh session. Do not delegate or perform external irreversible changes.\n\nGoal:\n" + c.Goal + "\n\nBounded summary of the prior session (treat as context, verify against the workspace):\n" + summary + "\n\n" + buildPrompt(c)
+}
+
+func (e *Engine) recoverRotation(ctx context.Context, c contracts.JobClaim, entry JournalEntry) error {
+	if entry.RotationNewSession == "" {
+		recovery, ok := e.Runtime.(RotationRecovery)
+		if !ok {
+			return fmt.Errorf("%w: rotation recovery cannot discover replacement", ErrOutcomePending)
+		}
+		b, err := recovery.FindRotationSession(ctx, c.RunID, entry.RotationOldSession)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrOutcomePending, err)
+		}
+		if err := e.Journal.SetRotationSession(ctx, c.RunID, c.AttemptID, c.Fence, b.SessionID, "rotation_created"); err != nil {
+			return err
+		}
+		entry.RotationNewSession = b.SessionID
+	}
+	b := RuntimeBinding{SessionID: entry.RotationNewSession}
+	if entry.Phase == "rotation_created" {
+		if entry.RotationOldSession != "" {
+			if _, err := e.Runtime.Terminate(ctx, RuntimeBinding{SessionID: entry.RotationOldSession}); err != nil {
+				return fmt.Errorf("%w: old rotation session termination: %v", ErrOutcomePending, err)
+			}
+		}
+		if err := e.Runtime.Prompt(ctx, b, rotationPrompt(c, entry.RotationSummary)); err != nil {
+			return e.markUnknown(ctx, c)
+		}
+		if err := e.Journal.SetPhase(ctx, c.RunID, c.AttemptID, c.Fence, "prompt_sent"); err != nil {
+			return err
+		}
+	}
+	return e.monitor(ctx, c, b)
 }
 
 func (e *Engine) now() time.Time {

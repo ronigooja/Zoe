@@ -53,6 +53,9 @@ type Runtime interface {
 	Abort(context.Context, RuntimeBinding) error
 	Terminate(context.Context, RuntimeBinding) (string, error)
 }
+type RotationRecovery interface {
+	FindRotationSession(context.Context, string, string) (RuntimeBinding, error)
+}
 type PendingRequests interface {
 	PendingPermissions(context.Context, RuntimeBinding) ([]opencode.PermissionRequest, error)
 	PendingForms(context.Context, RuntimeBinding) ([]opencode.FormRequest, error)
@@ -106,6 +109,23 @@ func (r OpenCodeRuntime) Create(ctx context.Context, s RuntimeSpec) (RuntimeBind
 		return RuntimeBinding{}, err
 	}
 	return RuntimeBinding{SessionID: session.ID}, nil
+}
+func (r OpenCodeRuntime) FindRotationSession(ctx context.Context, runID, oldSession string) (RuntimeBinding, error) {
+	c, err := r.client()
+	if err != nil {
+		return RuntimeBinding{}, err
+	}
+	sessions, err := c.Sessions(ctx)
+	if err != nil {
+		return RuntimeBinding{}, err
+	}
+	title := "zoe-run-" + runID
+	for _, s := range sessions {
+		if s.Title == title && s.ID != oldSession {
+			return RuntimeBinding{SessionID: s.ID}, nil
+		}
+	}
+	return RuntimeBinding{}, errors.New("replacement OpenCode session not found")
 }
 func (r OpenCodeRuntime) Prompt(ctx context.Context, b RuntimeBinding, p string) error {
 	c, e := r.client()

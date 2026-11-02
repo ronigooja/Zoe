@@ -303,6 +303,7 @@ type RunBudgetSnapshot struct {
 	MaxOutputUnits   int64     `json:"max_output_units"`
 	MaxToolSteps     int64     `json:"max_tool_steps"`
 	MaxArtifactBytes int64     `json:"max_artifact_bytes"`
+	MaxContextTokens int64     `json:"max_context_tokens,omitempty"`
 }
 
 type ChildTaskBudget struct {

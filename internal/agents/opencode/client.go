@@ -78,6 +78,14 @@ type Message struct {
 		} `json:"time"`
 		Finish string `json:"finish"`
 		Error  any    `json:"error,omitempty"`
+		Tokens struct {
+			Input  int64 `json:"input"`
+			Output int64 `json:"output"`
+			Cache  struct {
+				Read  int64 `json:"read"`
+				Write int64 `json:"write"`
+			} `json:"cache"`
+		} `json:"tokens"`
 	} `json:"info"`
 	Parts []map[string]any `json:"parts,omitempty"`
 }
@@ -164,6 +172,13 @@ func (c *Client) CreateSession(ctx context.Context, title string, options ...any
 		return out.Data, fmt.Errorf("%w: session response has no id", ErrOutcomeUnknown)
 	}
 	return out.Data, nil
+}
+func (c *Client) Sessions(ctx context.Context) ([]Session, error) {
+	var out struct {
+		Data []Session `json:"data"`
+	}
+	_, err := c.do(ctx, http.MethodGet, "/api/session", nil, &out)
+	return out.Data, err
 }
 func (c *Client) MoveSession(ctx context.Context, sessionID, directory string) error {
 	b, _ := json.Marshal(map[string]string{"directory": directory})

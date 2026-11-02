@@ -25,7 +25,7 @@ Runs use one wildcard allow rule, so impact levels cannot follow capabilities. A
 
 ### Bounded context
 
-9. Every long-lived conversation has a context budget and is replaced by a fresh one seeded from a Zoe summary when it is exceeded. Agent sessions are measured by the sum of the last assistant message's token usage reported by OpenCode. Voice calls are measured by transcript characters, because the upstream reports no tokens. Thresholds are operator settings. The summary is written through the memory path before the replacement starts.
+9. Every long-lived conversation has a context budget and is replaced by a fresh one seeded from a Zoe summary when it is exceeded; the agent runner performs this replacement crash-safely for OpenCode sessions.
 
 ### Memory and voice context
 

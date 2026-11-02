@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -94,15 +95,17 @@ func run(args []string) error {
 	}
 	openCode := runner.OpenCodeRuntime{BaseURL: opencodeURL, Username: "opencode", Password: strings.TrimSpace(string(password)), WorkspaceRoot: workspaceRoot, Model: opencodeModel}
 	engine := &runner.Engine{
-		Control:        control,
-		Instance:       control,
-		Runtime:        openCode,
-		Journal:        journal,
-		Routes:         routes,
-		Isolation:      nil,
-		PollInterval:   durationEnv("ZOE_RUNNER_POLL_INTERVAL", 2*time.Second),
-		ObserveTimeout: durationEnv("ZOE_RUNNER_OBSERVE_TIMEOUT", 15*time.Second),
-		WaitLimit:      durationEnv("ZOE_WAIT_LIMIT", 30*time.Minute),
+		Control:            control,
+		Instance:           control,
+		Runtime:            openCode,
+		Journal:            journal,
+		Routes:             routes,
+		Isolation:          nil,
+		PollInterval:       durationEnv("ZOE_RUNNER_POLL_INTERVAL", 2*time.Second),
+		ObserveTimeout:     durationEnv("ZOE_RUNNER_OBSERVE_TIMEOUT", 15*time.Second),
+		WaitLimit:          durationEnv("ZOE_WAIT_LIMIT", 30*time.Minute),
+		ContextTokenBudget: int64Env("ZOE_AGENT_CONTEXT_TOKEN_BUDGET", 100000),
+		MaxRotations:       intEnv("ZOE_AGENT_MAX_ROTATIONS", 3),
 	}
 	if *reconcileRuns != "" || *confirm || *actor != "" || len(retainContainers) > 0 || len(preexistingContainers) > 0 {
 		if *once {
@@ -295,6 +298,19 @@ func boolEnv(name string, fallback bool) bool {
 	}
 	return value == "1" || value == "true" || value == "yes"
 }
+
+func int64Env(name string, fallback int64) int64 {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 1 {
+		return fallback
+	}
+	return n
+}
+func intEnv(name string, fallback int) int { return int(int64Env(name, int64(fallback))) }
 
 func safeID(id string) string {
 	if len(id) > 64 {

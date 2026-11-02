@@ -161,7 +161,7 @@ For local mode, `zoe install`/`zoe update` may install pinned Scrapling `0.5` wi
 
 For a remote host, copy the release package and run `sudo bash deploy/scrapling/install-remote.sh install`; the script installs `python3-venv` when absent, provisions `/opt/scrapling/0.5/venv`, verifies the pinned Scrapling wheel before installation, installs browser dependencies, writes `/etc/scrapling/env` mode 0600, and enables `scrapling-mcp.service` on port 8000 with `MemoryMax=900M`. The Scrapling wheel is checksum-pinned, but transitive dependencies are intentionally version-unpinned because no generated hash-pinned lock is committed; review the resolved dependency set when upgrading the pin. Use `status` for service checks and `print-token --yes` only when explicitly copying the secret to Zoe; never put it in logs or source control. The operator's selected endpoint may therefore be `http://HOST:8000/mcp`.
 
-The runner creates one OpenCode session per run. Runtime profiles select the OpenCode provider/model route; clients cannot override execution routes or grants.
+The runner creates one OpenCode session per run and rotates agent sessions when the last assistant message reports input + output + cache read + cache write tokens above the configured budget. Set `ZOE_AGENT_CONTEXT_TOKEN_BUDGET` to a positive integer (default 100000; per-run claims may lower it but never raise it) and `ZOE_AGENT_MAX_ROTATIONS` to a positive integer (default 3). Runtime profiles select the OpenCode provider/model route; clients cannot override execution routes or grants.
 
 The workspace path must be absolute, private, and available to the runner-created container.
 

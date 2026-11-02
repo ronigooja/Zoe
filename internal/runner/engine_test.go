@@ -3,8 +3,10 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,11 +18,13 @@ type runtimeFake struct {
 	calls                       []string
 	promptText                  string
 	promptBinding               RuntimeBinding
+	createdSpecs                []RuntimeSpec
 	promptErr                   error
 	events                      chan opencode.Event
 	done                        bool
 	result                      opencode.Message
 	messages                    []opencode.Message
+	rotationMessages            []opencode.Message
 	pendingPermissions          []opencode.PermissionRequest
 	pendingForms                []opencode.FormRequest
 	formsReplied                []string
@@ -49,10 +53,14 @@ func (f *runtimeFake) ReplyPermission(_ context.Context, _ RuntimeBinding, reque
 	return nil
 }
 
-func (f *runtimeFake) Create(context.Context, RuntimeSpec) (RuntimeBinding, error) {
+func (f *runtimeFake) Create(_ context.Context, spec RuntimeSpec) (RuntimeBinding, error) {
 	f.creates++
+	f.createdSpecs = append(f.createdSpecs, spec)
 	f.calls = append(f.calls, "Create")
-	return RuntimeBinding{SessionID: "session"}, nil
+	if f.creates == 1 {
+		return RuntimeBinding{SessionID: "session"}, nil
+	}
+	return RuntimeBinding{SessionID: "session-" + fmt.Sprint(f.creates)}, nil
 }
 func (f *runtimeFake) Prompt(_ context.Context, b RuntimeBinding, prompt string) error {
 	f.prompts++
@@ -69,7 +77,10 @@ func (f *runtimeFake) Status(context.Context, RuntimeBinding) (map[string]openco
 	}
 	return map[string]opencode.Status{"session": {Type: "busy"}}, nil
 }
-func (f *runtimeFake) Messages(context.Context, RuntimeBinding) ([]opencode.Message, error) {
+func (f *runtimeFake) Messages(_ context.Context, b RuntimeBinding) ([]opencode.Message, error) {
+	if b.SessionID != "session" && f.rotationMessages != nil {
+		return f.rotationMessages, nil
+	}
 	if f.done {
 		if f.messages != nil {
 			return f.messages, nil
@@ -87,6 +98,9 @@ func (f *runtimeFake) Abort(context.Context, RuntimeBinding) error { f.aborts++;
 func (f *runtimeFake) Terminate(context.Context, RuntimeBinding) (string, error) {
 	f.terminates++
 	return "session", nil
+}
+func (f *runtimeFake) FindRotationSession(context.Context, string, string) (RuntimeBinding, error) {
+	return RuntimeBinding{SessionID: "session-2"}, nil
 }
 
 type controlFake struct {
@@ -183,6 +197,59 @@ func TestRuntimeAbortOnToolStepLimit(t *testing.T) {
 	}
 	if f.aborts == 0 {
 		t.Fatal("tool-step limit did not abort")
+	}
+}
+
+func assistantUsage(input, output, read, write int64) opencode.Message {
+	var m opencode.Message
+	m.Info.Role = "assistant"
+	m.Info.Time.Created = 1
+	m.Info.Time.Completed = 2
+	m.Info.Finish = "stop"
+	m.Info.Tokens.Input = input
+	m.Info.Tokens.Output = output
+	m.Info.Tokens.Cache.Read = read
+	m.Info.Tokens.Cache.Write = write
+	m.Parts = []map[string]any{{"type": "text", "text": "summary from prior session"}}
+	return m
+}
+
+func TestContextUsageBelowBudgetDoesNotRotate(t *testing.T) {
+	f := completingRuntimeFake()
+	f.result = assistantUsage(2, 2, 1, 1)
+	e := testEngine(t, f, &controlFake{}, openTestJournal(t))
+	e.ContextTokenBudget = 10
+	if err := e.Process(testContext(t), testClaim()); err != nil {
+		t.Fatal(err)
+	}
+	if f.creates != 1 {
+		t.Fatalf("creates=%d, want one session", f.creates)
+	}
+}
+
+func TestContextUsageRotatesWithSameRuntimeSpecAndCompletes(t *testing.T) {
+	f := completingRuntimeFake()
+	f.result = assistantUsage(8, 2, 1, 1)
+	f.rotationMessages = []opencode.Message{assistantUsage(1, 1, 0, 0)}
+	c := &controlFake{}
+	e := testEngine(t, f, c, openTestJournal(t))
+	e.ContextTokenBudget = 10
+	claim := testClaim()
+	claim.Goal = "finish the important goal"
+	if err := e.Process(testContext(t), claim); err != nil {
+		t.Fatal(err)
+	}
+	if f.creates != 2 || f.terminates != 2 {
+		t.Fatalf("creates=%d terminates=%d", f.creates, f.terminates)
+	}
+	if len(f.createdSpecs) != 2 || f.createdSpecs[0].Agent != f.createdSpecs[1].Agent || f.createdSpecs[0].Model != f.createdSpecs[1].Model || f.createdSpecs[0].Workspace != f.createdSpecs[1].Workspace || !reflect.DeepEqual(f.createdSpecs[0].Permissions, f.createdSpecs[1].Permissions) {
+		t.Fatalf("replacement spec widened or changed: %+v", f.createdSpecs)
+	}
+	if !strings.Contains(f.createdSpecs[1].Prompt, "summary from prior session") || !strings.Contains(f.createdSpecs[1].Prompt, claim.Goal) {
+		t.Fatalf("seed prompt=%q", f.createdSpecs[1].Prompt)
+	}
+	if !strings.Contains(kinds(c), "progress") {
+		t.Fatalf("rotation observation missing: %s", kinds(c))
 	}
 }
 
