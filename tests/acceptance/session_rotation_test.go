@@ -72,8 +72,8 @@ func newRotationRecoveryFixture(t *testing.T, normal bool, firstOld string) *rot
 			t.Fatal(err)
 		}
 	}
-	queue(contracts.RunnerObservation{ObservationID: "journal-started", RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: claim.Fence, Kind: "dispatch_started"})
-	queue(boundObservation(*claim, "journal-bound", "A"))
+	queue(contracts.RunnerObservation{ObservationID: "server-started", RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: claim.Fence, Kind: "dispatch_started"})
+	queue(boundObservation(*claim, "server-bound", "A"))
 	for i, session := range []string{"S1", "S2", "S3"} {
 		result := mustRotationJSON(i + 1)
 		if i == 0 && firstOld != "" {
