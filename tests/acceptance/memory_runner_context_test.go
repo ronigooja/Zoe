@@ -59,17 +59,14 @@ func memoryRunnerServer(t *testing.T, cfg control.Config) (*storage.Store, http.
 	if err := control.RegisterInstanceMaintenanceMigration(store); err != nil {
 		t.Fatal(err)
 	}
-	if err := memory.RegisterMigrations(store); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Migrate(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	srv, err := control.NewServer(store, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := memory.Register(srv, store); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if err := srv.RegisterRunnerCredential(context.Background(), cfg.RunnerToken, cfg.RunnerID, cfg.RunnerWorkspaceIDs, cfg.RunnerScopes); err != nil {
