@@ -232,9 +232,9 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 	if status == "complete" || status == "failed" || status == "canceled" {
 		return contracts.CommandResult{}, nil, apiError(409, "state_conflict", "terminal task cannot accept entries", map[string]any{"status": status})
 	}
-	var interaction, scope, interactionRun, actionDigest, expires string
+	var interaction, expiredKind, scope, interactionRun, actionDigest, expires string
 	var interactionVersion int64
-	if err = tx.QueryRowContext(ctx, `SELECT interaction_state,interaction_scope,interaction_run_id,interaction_action_digest,coalesce(interaction_expires_at,''),interaction_expected_version FROM tasks WHERE id=? AND workspace_id=?`, p.TaskID, c.Principal.WorkspaceID).Scan(&interaction, &scope, &interactionRun, &actionDigest, &expires, &interactionVersion); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT interaction_state,interaction_expired_kind,interaction_scope,interaction_run_id,interaction_action_digest,coalesce(interaction_expires_at,''),interaction_expected_version FROM tasks WHERE id=? AND workspace_id=?`, p.TaskID, c.Principal.WorkspaceID).Scan(&interaction, &expiredKind, &scope, &interactionRun, &actionDigest, &expires, &interactionVersion); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	if (status == "waiting" || status == "awaiting_user") && interaction == "none" {
@@ -267,7 +267,13 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 	}
 	version++
 	nextStatus := status
-	if (status == "waiting" || status == "awaiting_user") && interaction == "awaiting_message" {
+	expiredInteraction := expiredKind == "question" || expiredKind == "permission"
+	if (status == "waiting" || status == "awaiting_user") && (interaction == "awaiting_message" || expiredInteraction) {
+		nextStatus = "queued"
+	}
+	// An expired permission is not an authorization to retry. Keep it
+	// answerable until the user supplies a typed answer, then queue the new run.
+	if expiredKind == "permission" && strings.TrimSpace(p.Content) != "" {
 		nextStatus = "queued"
 	}
 	if interaction == "awaiting_message" && interactionRun != "" && actionDigest != "" {
@@ -275,7 +281,7 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 			return contracts.CommandResult{}, nil, err
 		}
 	}
-	if interaction == "explicit_confirmation" && confirmed {
+	if interaction == "explicit_confirmation" && !expiredInteraction && confirmed {
 		nextStatus = "queued"
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status=?,interaction_state=?,version=?,updated_at=? WHERE id=? AND workspace_id=?`, nextStatus, interaction, version, at, p.TaskID, c.Principal.WorkspaceID); err != nil {
@@ -286,7 +292,7 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 	}
 	entry := contracts.TaskEntry{ID: id, Kind: "user_message", Content: p.Content, AuthorDeviceID: c.Principal.DeviceID, CreatedAt: c.AcceptedAt}
 	events := []contracts.Event{event("task.entry_appended", "task", p.TaskID, version, map[string]any{"task_id": p.TaskID, "entry": entry, "interaction_state": interaction, "status": nextStatus})}
-	if interaction == "explicit_confirmation" && confirmed {
+	if interaction == "explicit_confirmation" && !expiredInteraction && confirmed {
 		confirmationID, genErr := randomID()
 		if genErr != nil {
 			return contracts.CommandResult{}, nil, genErr
@@ -294,7 +300,7 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 		if _, err = tx.ExecContext(ctx, `INSERT INTO task_confirmations(id,workspace_id,task_id,run_id,action_digest,task_version,scope,confirmed_text,device_id,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, confirmationID, c.Principal.WorkspaceID, p.TaskID, interactionRun, actionDigest, version, scope, p.Content, c.Principal.DeviceID, at, expires); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET interaction_state='none',interaction_scope='',interaction_run_id='',interaction_action_digest='',interaction_expires_at=NULL,interaction_expected_version=0 WHERE id=? AND workspace_id=?`, p.TaskID, c.Principal.WorkspaceID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET interaction_state='none',interaction_expired_kind='',interaction_scope='',interaction_run_id='',interaction_action_digest='',interaction_expires_at=NULL,interaction_expected_version=0 WHERE id=? AND workspace_id=?`, p.TaskID, c.Principal.WorkspaceID); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='once' WHERE task_id=? AND run_id=? AND action_digest=? AND authorization_used=0`, p.TaskID, interactionRun, actionDigest); err != nil {

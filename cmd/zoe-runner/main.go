@@ -102,6 +102,7 @@ func run(args []string) error {
 		Isolation:      nil,
 		PollInterval:   durationEnv("ZOE_RUNNER_POLL_INTERVAL", 2*time.Second),
 		ObserveTimeout: durationEnv("ZOE_RUNNER_OBSERVE_TIMEOUT", 15*time.Second),
+		WaitLimit:      durationEnv("ZOE_WAIT_LIMIT", 30*time.Minute),
 	}
 	if *reconcileRuns != "" || *confirm || *actor != "" || len(retainContainers) > 0 || len(preexistingContainers) > 0 {
 		if *once {

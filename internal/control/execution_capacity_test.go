@@ -124,3 +124,34 @@ func TestClaimCapacityUsesConfiguredLimit(t *testing.T) {
 		t.Fatal("claim capacity did not follow configured limit")
 	}
 }
+
+func TestWaitingRunOccupiesCapacityUntilStopped(t *testing.T) {
+	store, server, key := instanceAuthFixture(t)
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,owner_subject_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('waiting-capacity','default','owner','waiting','goal','user','profile','active',1,?,?, 'instance','command')`, at, at); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('waiting-capacity-run','default','waiting-capacity','waiting-capacity-attempt','active','run',1,'runner','instance','command','goal','profile','runtime','model','worker','opencode',?)`, at); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() contracts.Snapshot {
+		w := instanceRequest(server.Handler(), "GET", "/v1/snapshot", key, "")
+		if w.Code != 200 {
+			t.Fatalf("snapshot status=%d body=%s", w.Code, w.Body.String())
+		}
+		var out contracts.Snapshot
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if got := snapshot().ExecutionCapacity.ActiveRuns; got != 1 {
+		t.Fatalf("waiting active runs=%d", got)
+	}
+	if _, err := store.DB().Exec(`UPDATE runs SET status='stopped' WHERE id='waiting-capacity-run'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := snapshot().ExecutionCapacity.ActiveRuns; got != 0 {
+		t.Fatalf("stopped waiting run still occupies slot: %d", got)
+	}
+}

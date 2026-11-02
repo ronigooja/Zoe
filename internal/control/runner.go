@@ -71,7 +71,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	rows, err := tx.QueryContext(r.Context(), `SELECT id,workspace_id,title,goal,profile_id,harness,version,created_by_device_id,command_id,coalesce(lineage_root_task_id,id),coalesce(lineage_parent_task_id,''),lineage_depth,child_policy_json,pregrant_capabilities_json,source FROM tasks WHERE status='queued' AND NOT EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id=tasks.id AND d.status<>'satisfied') ORDER BY created_at,id`)
+	rows, err := tx.QueryContext(r.Context(), `SELECT id,workspace_id,title,goal,profile_id,harness,version,created_by_device_id,command_id,coalesce(lineage_root_task_id,id),coalesce(lineage_parent_task_id,''),lineage_depth,child_policy_json,pregrant_capabilities_json,source,interaction_state,interaction_expired_kind,coalesce(interaction_question,''),interaction_expected_version FROM tasks WHERE status='queued' AND NOT EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id=tasks.id AND d.status<>'satisfied') ORDER BY created_at,id`)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -83,11 +83,13 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		depth                                                         int
 		childPolicyJSON, pregrantJSON                                 []byte
 		version                                                       int64
+		interaction, interactionExpiredKind, interactionQuestion      string
+		interactionExpectedVersion                                    int64
 	}
 	var chosen *candidate
 	for rows.Next() {
 		var c candidate
-		if err = rows.Scan(&c.id, &c.workspace, &c.title, &c.goal, &c.profile, &c.harness, &c.version, &c.device, &c.command, &c.root, &c.parent, &c.depth, &c.childPolicyJSON, &c.pregrantJSON, &c.source); err != nil {
+		if err = rows.Scan(&c.id, &c.workspace, &c.title, &c.goal, &c.profile, &c.harness, &c.version, &c.device, &c.command, &c.root, &c.parent, &c.depth, &c.childPolicyJSON, &c.pregrantJSON, &c.source, &c.interaction, &c.interactionExpiredKind, &c.interactionQuestion, &c.interactionExpectedVersion); err != nil {
 			rows.Close()
 			writeError(w, err)
 			return
@@ -150,7 +152,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profile := s.cfg.Profiles[chosen.profile]
-	budget := contracts.RunBudgetSnapshot{HardDeadline: time.Now().UTC().Add(30 * time.Minute), MaxModelCalls: 32, MaxInputUnits: 500_000, MaxOutputUnits: 100_000, MaxToolSteps: 128, MaxArtifactBytes: 16 << 20}
+	budget := contracts.RunBudgetSnapshot{HardDeadline: time.Now().UTC().Add(4 * time.Hour), MaxModelCalls: 32, MaxInputUnits: 500_000, MaxOutputUnits: 100_000, MaxToolSteps: 128, MaxArtifactBytes: 16 << 20}
 	budgetJSON, err := json.Marshal(budget)
 	if err != nil {
 		writeError(w, err)
@@ -212,6 +214,12 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claim := contracts.JobClaim{RunID: runID, TaskID: chosen.id, AttemptID: attemptID, WorkspaceID: chosen.workspace, TaskVersion: newVersion, Goal: chosen.goal, ProfileID: profile.ID, Harness: chosen.harness, RuntimeRouteID: profile.RuntimeRouteID, ModelRouteID: profile.ModelRouteID, IsolationPolicy: profile.IsolationPolicy, Role: profile.Role, Agent: profile.Agent, PermissionTier: profile.PermissionTier, PermissionRules: rules, ImpactLevel: impact, Authorization: authorization, Fence: fence, LineageRootTaskID: chosen.root, LineageParentTaskID: chosen.parent, LineageDepth: chosen.depth, PregrantCapabilityIDs: append([]string{}, pregrant...), Budget: budget}
+	if chosen.interactionExpiredKind != "" {
+		claim.ResumeQuestion = chosen.interactionQuestion
+		if chosen.interactionExpiredKind == "question" && chosen.version > chosen.interactionExpectedVersion {
+			_ = tx.QueryRowContext(r.Context(), `SELECT coalesce(content,'') FROM task_entries WHERE task_id=? AND kind='user_message' ORDER BY created_at DESC,id DESC LIMIT 1`, chosen.id).Scan(&claim.ResumeAnswer)
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		writeError(w, err)
 		return
@@ -269,6 +277,31 @@ func loadClaim(ctx context.Context, tx *sql.Tx, runID string, cfg Config) (contr
 		c.PregrantCapabilityIDs = append([]string{}, c.Authorization.CapabilityIDs...)
 	} else {
 		c.PregrantCapabilityIDs = []string{}
+	}
+	var interaction string
+	if err := tx.QueryRowContext(ctx, `SELECT interaction_state FROM tasks WHERE id=?`, c.TaskID).Scan(&interaction); err != nil {
+		return c, err
+	}
+	var expiredKind string
+	if err := tx.QueryRowContext(ctx, `SELECT interaction_expired_kind FROM tasks WHERE id=?`, c.TaskID).Scan(&expiredKind); err != nil {
+		return c, err
+	}
+	if expiredKind != "" {
+		var expected, current int64
+		if err := tx.QueryRowContext(ctx, `SELECT coalesce(interaction_question,''),interaction_expected_version,version FROM tasks WHERE id=?`, c.TaskID).Scan(&c.ResumeQuestion, &expected, &current); err != nil {
+			return c, err
+		}
+		if current > expected {
+			if err := tx.QueryRowContext(ctx, `SELECT coalesce(content,'') FROM task_entries WHERE task_id=? AND kind='user_message' ORDER BY created_at DESC,id DESC LIMIT 1`, c.TaskID).Scan(&c.ResumeAnswer); err != nil {
+				return c, err
+			}
+		}
+		if len(c.ResumeQuestion) > 4000 {
+			c.ResumeQuestion = c.ResumeQuestion[:4000]
+		}
+		if len(c.ResumeAnswer) > 20000 {
+			c.ResumeAnswer = c.ResumeAnswer[:20000]
+		}
 	}
 	return c, nil
 }
@@ -631,6 +664,11 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var taskVersion int64
+	var interactionState string
+	if err = tx.QueryRowContext(r.Context(), `SELECT interaction_state FROM tasks WHERE id=? AND workspace_id=?`, taskID, workspace).Scan(&interactionState); err != nil {
+		writeError(w, err)
+		return
+	}
 	nextRunStatus := status
 	nextTaskStatus := ""
 	if observation.Kind == "permission_requested" || observation.Kind == "worker_question" {
@@ -845,6 +883,16 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		// Runner emits this only after independent termination and cleanup confirmation.
 		nextRunStatus = "stopped"
 		nextTaskStatus = "canceled"
+		if interactionState == "awaiting_message" || interactionState == "explicit_confirmation" {
+			var expired string
+			_ = tx.QueryRowContext(r.Context(), `SELECT interaction_expired_kind FROM tasks WHERE id=?`, taskID).Scan(&expired)
+			if expired == "" {
+				nextTaskStatus = "canceled"
+			}
+		}
+		if interactionState == "awaiting_message" || interactionState == "explicit_confirmation" {
+			nextTaskStatus = "awaiting_user"
+		}
 	case "runtime_terminated":
 		nextRunStatus = "verification_pending"
 		var resultCount int
@@ -855,6 +903,16 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		if desired == "stop" {
 			nextRunStatus = "stopped"
 			nextTaskStatus = "canceled"
+			if interactionState == "awaiting_message" || interactionState == "explicit_confirmation" {
+				var expired string
+				_ = tx.QueryRowContext(r.Context(), `SELECT interaction_expired_kind FROM tasks WHERE id=?`, taskID).Scan(&expired)
+				if expired == "" {
+					nextTaskStatus = "canceled"
+				}
+			}
+			if interactionState == "awaiting_message" || interactionState == "explicit_confirmation" {
+				nextTaskStatus = "awaiting_user"
+			}
 		} else if resultCount > 0 {
 			nextTaskStatus = "awaiting_user"
 		} else {

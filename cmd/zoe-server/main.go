@@ -104,6 +104,7 @@ func run() error {
 	if err = store.Migrate(ctx); err != nil {
 		return err
 	}
+	server.StartRuntimeWaitingWorker()
 	if _, _, err = control.InitializeInstanceAuthPending(ctx, store, instanceKey); err != nil {
 		return err
 	}

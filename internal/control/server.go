@@ -31,6 +31,8 @@ type Config struct {
 	MaxRuns            int
 	WaitLimit          time.Duration
 	PushSender         PushSender
+	Now                func() time.Time
+	WaitSweepInterval  time.Duration
 }
 
 type RuntimeProfile struct {
@@ -264,6 +266,12 @@ func NewServer(store *storage.Store, cfg Config) (*Server, error) {
 	}
 	if cfg.WaitLimit < time.Minute || cfg.WaitLimit > 24*time.Hour {
 		return nil, errors.New("wait limit must be between 1 minute and 24 hours")
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.WaitSweepInterval <= 0 {
+		cfg.WaitSweepInterval = 3 * time.Second
 	}
 	profiles := make(map[string]RuntimeProfile, len(cfg.Profiles))
 	for id, profile := range cfg.Profiles {

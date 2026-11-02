@@ -56,6 +56,7 @@ type Engine struct {
 	Routes                       map[string]Route
 	Isolation                    WorkIsolation
 	PollInterval, ObserveTimeout time.Duration
+	WaitLimit                    time.Duration
 }
 
 func (e *Engine) RunOnce(ctx context.Context) error {
@@ -140,7 +141,11 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 			return e.reportNoEffect(ctx, claim, reason, "dispatch authorization denied")
 		}
 	}
-	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: fmt.Sprint(claim.Fence), Model: route.Model, ModelRouteID: claim.ModelRouteID, Agent: claim.Agent, Permissions: claim.PermissionRules, Prompt: buildPrompt(claim), Workspace: claim.WorkspaceID}
+	prompt := buildPrompt(claim)
+	if claim.ResumeQuestion != "" {
+		prompt = buildResumePrompt(claim.Goal, claim.ResumeQuestion, claim.ResumeAnswer)
+	}
+	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: fmt.Sprint(claim.Fence), Model: route.Model, ModelRouteID: claim.ModelRouteID, Agent: claim.Agent, Permissions: claim.PermissionRules, Prompt: prompt, Workspace: claim.WorkspaceID}
 	entry, err = e.Journal.SaveClaim(ctx, claim, spec, "claimed")
 	if err != nil {
 		return err
@@ -240,9 +245,11 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			_ = e.Runtime.Abort(ctx, b)
 			return e.terminate(ctx, claim, b, "stop_confirmed", true)
 		}
-		if !claim.Budget.HardDeadline.IsZero() && time.Now().UTC().After(claim.Budget.HardDeadline) {
+		entry, _, _ := e.Journal.Entry(ctx, claim.RunID)
+		waiting := entry.Phase == "waiting_permission" || entry.Phase == "waiting_question"
+		if waiting && e.WaitLimit > 0 && !entry.Updated.IsZero() && time.Now().UTC().After(entry.Updated.Add(e.WaitLimit)) {
 			_ = e.Runtime.Abort(ctx, b)
-			return e.terminate(ctx, claim, b, "run_deadline_exceeded", false)
+			return e.terminate(ctx, claim, b, "wait_limit_exceeded", false)
 		}
 		status, err := e.Runtime.Status(ctx, b)
 		if err != nil {
@@ -289,6 +296,12 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 				}
 				return e.emitPending(ctx, claim, "worker_question", map[string]any{"request_id": f.ID, "question": question, "title": f.Title})
 			}
+		}
+		entry, _, _ = e.Journal.Entry(ctx, claim.RunID)
+		waiting = entry.Phase == "waiting_permission" || entry.Phase == "waiting_question"
+		if !waiting && !claim.Budget.HardDeadline.IsZero() && time.Now().UTC().After(claim.Budget.HardDeadline) {
+			_ = e.Runtime.Abort(ctx, b)
+			return e.terminate(ctx, claim, b, "run_deadline_exceeded", false)
 		}
 		msgs, err := e.Runtime.Messages(ctx, b)
 		if err != nil {
