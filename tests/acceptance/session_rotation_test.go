@@ -81,13 +81,19 @@ func newRotationRecoveryFixture(t *testing.T, normal bool, firstOld string) *rot
 		}
 		queue(contracts.RunnerObservation{ObservationID: "progress-" + session, RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: claim.Fence, Kind: "progress", RuntimeSessionID: session, Result: result})
 	}
-	queue(terminationObservation(*claim, "termination", "S3"))
 	queue(contracts.RunnerObservation{ObservationID: "failure", RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: claim.Fence, Kind: "failure", RuntimeSessionID: "S3", Error: "runtime failed"})
+	// The control state machine records failure evidence before the final
+	// runtime_terminated proof; this keeps the terminal proof admissible while
+	// preserving the journal's unacknowledged recovery flow.
+	queue(terminationObservation(*claim, "termination", "S3"))
 	if normal {
 		for i, pair := range [][2]string{{"A", "S1"}, {"S1", "S2"}, {"S2", "S3"}} {
 			raw := json.RawMessage(`{"event":"context_rotated","rotation":1,"old_session_id":"` + pair[0] + `","new_session_id":"` + pair[1] + `"}`)
 			observe(contracts.RunnerObservation{ObservationID: "normal-" + pair[0], RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: claim.Fence, Kind: "session_rotated", RuntimeSessionID: pair[1], Result: raw})
 			if _, err := journal.QueueObservation(t.Context(), claim.RunID, contracts.RunnerObservation{ObservationID: "normal-" + pair[0], RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: claim.Fence, Kind: "session_rotated", RuntimeSessionID: pair[1], Result: raw}); err != nil {
+				t.Fatal(err)
+			}
+			if err := journal.AcknowledgeObservation(t.Context(), "normal-"+pair[0]); err != nil {
 				t.Fatal(err)
 			}
 			_ = i
