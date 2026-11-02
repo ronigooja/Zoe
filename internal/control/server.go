@@ -138,34 +138,7 @@ func (s *Server) AppendEventsTx(ctx context.Context, tx *sql.Tx, p contracts.Pri
 			return err
 		}
 	}
-	if err := appendScreenUpdatedTx(ctx, tx, p, events); err != nil {
-		return err
-	}
 	return nil
-}
-
-func appendScreenUpdatedTx(ctx context.Context, tx *sql.Tx, p contracts.Principal, events []contracts.Event) error {
-	if len(events) == 0 {
-		return nil
-	}
-	var cursor int64
-	if err := tx.QueryRowContext(ctx, `UPDATE event_counters SET current_cursor=current_cursor+1 WHERE workspace_id=? RETURNING current_cursor`, p.WorkspaceID).Scan(&cursor); err != nil {
-		return err
-	}
-	payload, err := json.Marshal(map[string]any{"revision": cursor})
-	if err != nil {
-		return err
-	}
-	e := contracts.Event{EventID: fmt.Sprintf("screen-%d", cursor), Cursor: fmt.Sprint(cursor), SchemaVersion: 1, Type: "screen.updated", OccurredAt: events[len(events)-1].OccurredAt, WorkspaceID: p.WorkspaceID, SubjectID: p.SubjectID, AggregateType: "workspace", AggregateID: p.WorkspaceID, AggregateVersion: cursor, Payload: payload}
-	b, err := json.Marshal(e)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, e.EventID, p.WorkspaceID, cursor, e.SchemaVersion, e.Type, e.OccurredAt.Format(time.RFC3339Nano), p.SubjectID, e.AggregateType, e.AggregateID, e.AggregateVersion, b)
-	if err != nil {
-		return err
-	}
-	return enqueueEventNotification(ctx, tx, e)
 }
 
 type TaskSourceAdmissionHandler func(context.Context, *sql.Tx, contracts.Principal, string, *TaskSourceRequest, json.RawMessage, time.Time) ([]contracts.Event, error)

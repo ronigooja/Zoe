@@ -176,9 +176,6 @@ func (s *Server) ExecuteCommand(ctx context.Context, p contracts.Principal, key 
 			return contracts.CommandReceipt{}, e
 		}
 	}
-	if err = appendScreenUpdatedTx(ctx, tx, p, events); err != nil {
-		return contracts.CommandReceipt{}, err
-	}
 	if cursor == 0 {
 		if err = tx.QueryRowContext(ctx, `SELECT current_cursor FROM event_counters WHERE workspace_id=?`, p.WorkspaceID).Scan(&cursor); err != nil {
 			return contracts.CommandReceipt{}, err
