@@ -56,7 +56,7 @@ The deployment override `/etc/zoe/control.lan.compose.yaml` adds this binding;
 the service's Compose commands. The source template is
 `deploy/linux/docker-compose.lan.yml`; set `ZOE_SERVER_LAN_ADDRESS` to the
 host LAN address. Update that setting if the host address changes.
-OpenCode runs in the dedicated host-installed service. The runner uses its authenticated local HTTP API; health/readiness responses do not prove model execution, memory processing, or task completion. Set `ZOE_MAX_RUNS` on the server to an integer from 1 through 64 (default 12); it counts active, dispatching, and uncertain runs.
+OpenCode runs in the dedicated host-installed service. The runner uses its authenticated local HTTP API; health/readiness responses do not prove model execution, memory processing, or task completion. Set `ZOE_MAX_RUNS` on the server to an integer from 1 through 64 (default 12); it counts active, dispatching, and uncertain runs. Set `ZOE_CONTEXT_MAX_TOKENS` (default 120000) and `ZOE_VOICE_CONTEXT_MAX_CHARS` (default 60000) to positive values no greater than 10000000. Voice marks a session `rotate_required` when the gateway-reported character count exceeds its budget.
 
 ## Installation and configuration
 

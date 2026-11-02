@@ -370,7 +370,11 @@ func validateClaim(c contracts.JobClaim) error {
 	return nil
 }
 func buildPrompt(c contracts.JobClaim) string {
-	return "Work only on the assigned goal. Do not delegate or perform external irreversible changes.\n\nGoal:\n" + c.Goal
+	prompt := "Work only on the assigned goal. Do not delegate or perform external irreversible changes.\n\nGoal:\n" + c.Goal
+	if text := strings.TrimSpace(c.MemoryContext.Text); text != "" {
+		prompt += "\n\nMemory context (bounded, authority-checked; uncertainty is explicit):\n" + text
+	}
+	return prompt
 }
 func observationID(run, attempt string, fence uint64, kind, disc string) string {
 	h := sha256.Sum256([]byte(strings.Join([]string{run, attempt, fmt.Sprint(fence), kind, disc}, "\x00")))

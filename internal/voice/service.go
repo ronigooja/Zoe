@@ -29,6 +29,7 @@ type Config struct {
 	AccountMediaLifecycle AccountMediaLifecycle
 	HeartbeatTimeout      time.Duration
 	Now                   func() time.Time
+	ContextMaxChars       int
 }
 
 type Service struct {
@@ -40,6 +41,7 @@ type Service struct {
 	accountMedia     AccountMediaLifecycle
 	heartbeatTimeout time.Duration
 	now              func() time.Time
+	contextMaxChars  int
 	reaperStop       chan struct{}
 	reaperDone       chan struct{}
 }
@@ -70,6 +72,11 @@ type sessionResponse struct {
 	AccountLeaseID          string `json:"account_lease_id,omitempty"`
 	AccountLeaseGeneration  int64  `json:"account_lease_generation,omitempty"`
 	AccountLeaseAccountHash []byte `json:"-"`
+	Conversation            string `json:"conversation,omitempty"`
+	ConversationReason      string `json:"conversation_reason,omitempty"`
+	ConversationConfirmed   *bool  `json:"conversation_confirmed"`
+	ContextChars            int    `json:"context_chars"`
+	RotateRequired          bool   `json:"rotate_required"`
 }
 
 type gatewaySessionRequest struct {
@@ -87,6 +94,10 @@ type gatewaySessionResponse struct {
 	AccountLeaseID         string `json:"account_lease_id,omitempty"`
 	AccountLeaseGeneration int64  `json:"account_lease_generation,omitempty"`
 	AccountID              string `json:"account_id,omitempty"`
+	Conversation           string `json:"conversation,omitempty"`
+	ConversationReason     string `json:"conversation_reason,omitempty"`
+	ConversationConfirmed  *bool  `json:"conversation_confirmed"`
+	ContextChars           int    `json:"context_chars"`
 }
 
 func Register(server *control.Server, store *storage.Store, cfg Config) error {
@@ -146,11 +157,15 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if timeout > 600*time.Second {
 		timeout = 600 * time.Second
 	}
+	contextMax := cfg.ContextMaxChars
+	if contextMax <= 0 {
+		contextMax = 60000
+	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextMaxChars: contextMax, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func (s *Service) Start() { go s.reaper() }
@@ -397,7 +412,30 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	} else if _, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET gateway_media_generation=? WHERE id=? AND state='active'`, upstream.VoiceSessionGeneration, id); err != nil {
 		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_outcome_unknown", "media generation could not be durably bound; account pool remains isolated", nil)
 	}
-	return sessionResponse{SessionID: id, Generation: 1, State: "active", AnswerSDP: upstream.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash}, nil
+	rotate := RotateRequired(upstream.ContextChars, s.contextMaxChars)
+	if _, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET conversation_state=?,conversation_reason=?,conversation_confirmed=?,context_chars=?,rotate_required=? WHERE id=?`, defaultConversation(upstream.Conversation), upstream.ConversationReason, nullableBool(upstream.ConversationConfirmed), upstream.ContextChars, boolInt(rotate), id); err != nil {
+		return sessionResponse{}, err
+	}
+	return sessionResponse{SessionID: id, Generation: 1, State: "active", AnswerSDP: upstream.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, Conversation: defaultConversation(upstream.Conversation), ConversationReason: upstream.ConversationReason, ConversationConfirmed: upstream.ConversationConfirmed, ContextChars: upstream.ContextChars, RotateRequired: rotate}, nil
+}
+
+func defaultConversation(value string) string {
+	if value == "" {
+		return "new"
+	}
+	return value
+}
+func nullableBool(value *bool) any {
+	if value == nil {
+		return nil
+	}
+	return boolInt(*value)
+}
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (s *Service) markSession(ctx context.Context, id, state, code string, answer []byte, gatewayID string) error {

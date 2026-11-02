@@ -78,18 +78,24 @@ func run() error {
 	if maxRuns == 0 {
 		return errors.New("ZOE_MAX_RUNS must be an integer from 1 through 64")
 	}
-	cfg := control.Config{
-		RunnerToken:        runnerToken,
-		RunnerID:           env("ZOE_RUNNER_ID", "configured-runner"),
-		RunnerWorkspaceIDs: splitEnv("ZOE_RUNNER_WORKSPACES", "default"),
-		RunnerScopes:       splitEnv("ZOE_RUNNER_SCOPES", "runner:claim,runner:observe,runner:control:read"),
-		InstanceScopes:     optionalSplitEnv("ZOE_INSTANCE_SCOPES"),
-		DefaultProfileID:   strings.TrimSpace(os.Getenv("ZOE_DEFAULT_PROFILE_ID")),
-		Profiles:           profiles,
-		PushSender:         pushSender,
-		MaxRuns:            maxRuns,
+	agentContext, voiceContext := contextBudgetsEnv()
+	if agentContext == 0 || voiceContext == 0 {
+		return errors.New("context budgets must be positive and at most 10000000")
 	}
-	server, err := composeControlServer(store, cfg, voice.Config{GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	cfg := control.Config{
+		RunnerToken:           runnerToken,
+		RunnerID:              env("ZOE_RUNNER_ID", "configured-runner"),
+		RunnerWorkspaceIDs:    splitEnv("ZOE_RUNNER_WORKSPACES", "default"),
+		RunnerScopes:          splitEnv("ZOE_RUNNER_SCOPES", "runner:claim,runner:observe,runner:control:read"),
+		InstanceScopes:        optionalSplitEnv("ZOE_INSTANCE_SCOPES"),
+		DefaultProfileID:      strings.TrimSpace(os.Getenv("ZOE_DEFAULT_PROFILE_ID")),
+		Profiles:              profiles,
+		PushSender:            pushSender,
+		MaxRuns:               maxRuns,
+		AgentContextMaxTokens: agentContext,
+		VoiceContextMaxChars:  voiceContext,
+	}
+	server, err := composeControlServer(store, cfg, voice.Config{GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), HeartbeatTimeout: voiceHeartbeatTimeout(), ContextMaxChars: voiceContext}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	}, memory.DerivedConfig{BackupDeleteManifestPath: strings.TrimSpace(os.Getenv("ZOE_BACKUP_DELETE_MANIFEST_PATH"))})
@@ -255,6 +261,21 @@ func maxRunsEnv() int {
 		return 0
 	}
 	return n
+}
+
+func contextBudgetsEnv() (int, int) {
+	parse := func(name string, fallback int) int {
+		v := strings.TrimSpace(os.Getenv(name))
+		if v == "" {
+			return fallback
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 10000000 {
+			return 0
+		}
+		return n
+	}
+	return parse("ZOE_CONTEXT_MAX_TOKENS", 120000), parse("ZOE_VOICE_CONTEXT_MAX_CHARS", 60000)
 }
 
 func splitEnv(name, fallback string) []string {

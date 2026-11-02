@@ -51,7 +51,9 @@ func (s *Service) handleReadSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var result sessionResponse
-	err := s.db.QueryRowContext(r.Context(), `SELECT id,generation,state FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND id=?`, p.WorkspaceID, p.SubjectID, r.PathValue("session_id")).Scan(&result.SessionID, &result.Generation, &result.State)
+	var rotate int
+	err := s.db.QueryRowContext(r.Context(), `SELECT id,generation,state,conversation_state,conversation_reason,conversation_confirmed,context_chars,rotate_required FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND id=?`, p.WorkspaceID, p.SubjectID, r.PathValue("session_id")).Scan(&result.SessionID, &result.Generation, &result.State, &result.Conversation, &result.ConversationReason, &result.ConversationConfirmed, &result.ContextChars, &rotate)
+	result.RotateRequired = rotate != 0
 	if errors.Is(err, sql.ErrNoRows) {
 		control.WriteError(w, apiError(http.StatusNotFound, "not_found", "voice session not found", nil))
 		return

@@ -120,8 +120,14 @@ UPDATE voice_sessions SET gateway_unbind_unknown=1 WHERE state='quarantined' AND
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 205, Name: "voice_gateway_media_generation", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 205, Name: "voice_gateway_media_generation", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN gateway_media_generation INTEGER NOT NULL DEFAULT 0`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 206, Name: "voice_context_metrics", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN conversation_state TEXT NOT NULL DEFAULT 'new'; ALTER TABLE voice_sessions ADD COLUMN conversation_reason TEXT NOT NULL DEFAULT ''; ALTER TABLE voice_sessions ADD COLUMN conversation_confirmed INTEGER; ALTER TABLE voice_sessions ADD COLUMN context_chars INTEGER NOT NULL DEFAULT 0; ALTER TABLE voice_sessions ADD COLUMN rotate_required INTEGER NOT NULL DEFAULT 0 CHECK(rotate_required IN (0,1))`)
 		return err
 	}})
 }

@@ -251,6 +251,15 @@ type JobClaim struct {
 	PermissionTier        string            `json:"permission_tier,omitempty"`
 	PermissionRules       []PermissionRule  `json:"permission_rules,omitempty"`
 	ImpactLevel           string            `json:"impact_level,omitempty"`
+	MemoryContext         MemoryContext     `json:"memory_context,omitempty"`
+}
+
+type MemoryContext struct {
+	Text       string   `json:"text,omitempty"`
+	ManifestID string   `json:"manifest_id,omitempty"`
+	Conflicts  []string `json:"conflicts,omitempty"`
+	Missing    []string `json:"missing,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
 }
 
 // RunBudgetSnapshot is immutable for a run and is copied into its claim. Usage
@@ -262,6 +271,14 @@ type RunBudgetSnapshot struct {
 	MaxOutputUnits   int64     `json:"max_output_units"`
 	MaxToolSteps     int64     `json:"max_tool_steps"`
 	MaxArtifactBytes int64     `json:"max_artifact_bytes"`
+}
+
+type AssistantTokenUsage struct {
+	Input      int64
+	Output     int64
+	Reasoning  int64
+	CacheRead  int64
+	CacheWrite int64
 }
 
 type ChildTaskBudget struct {

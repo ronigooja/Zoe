@@ -17,19 +17,21 @@ import (
 )
 
 type Config struct {
-	RunnerToken        string
-	RunnerID           string
-	RunnerWorkspaceIDs []string
-	RunnerScopes       []string
-	InstanceScopes     []string
-	DefaultProfileID   string
-	RoleProfiles       map[string]string
-	RuntimeRouteID     string
-	ModelRouteID       string
-	Profiles           map[string]RuntimeProfile
-	MaxRequestBytes    int64
-	MaxRuns            int
-	PushSender         PushSender
+	RunnerToken           string
+	RunnerID              string
+	RunnerWorkspaceIDs    []string
+	RunnerScopes          []string
+	InstanceScopes        []string
+	DefaultProfileID      string
+	RoleProfiles          map[string]string
+	RuntimeRouteID        string
+	ModelRouteID          string
+	Profiles              map[string]RuntimeProfile
+	MaxRequestBytes       int64
+	MaxRuns               int
+	AgentContextMaxTokens int
+	VoiceContextMaxChars  int
+	PushSender            PushSender
 }
 
 type RuntimeProfile struct {
@@ -257,6 +259,15 @@ func NewServer(store *storage.Store, cfg Config) (*Server, error) {
 	}
 	if cfg.MaxRuns < 1 || cfg.MaxRuns > 64 {
 		return nil, errors.New("max runs must be between 1 and 64")
+	}
+	if cfg.AgentContextMaxTokens == 0 {
+		cfg.AgentContextMaxTokens = 120000
+	}
+	if cfg.VoiceContextMaxChars == 0 {
+		cfg.VoiceContextMaxChars = 60000
+	}
+	if err := ValidateContextBudgets(cfg.AgentContextMaxTokens, cfg.VoiceContextMaxChars); err != nil {
+		return nil, err
 	}
 	profiles := make(map[string]RuntimeProfile, len(cfg.Profiles))
 	for id, profile := range cfg.Profiles {
