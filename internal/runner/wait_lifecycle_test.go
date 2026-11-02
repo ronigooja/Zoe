@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
 )
 
@@ -58,16 +59,9 @@ func TestWaitingRunUsesWaitLimitInsteadOfGenericDeadline(t *testing.T) {
 	clock := time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC)
 	e.Now = func() time.Time { return clock }
 	reported := make(chan struct{})
-	f.onStatus = func() {
-		for _, o := range c.observations {
-			if o.Kind == "permission_requested" {
-				select {
-				case <-reported:
-				default:
-					close(reported)
-				}
-				return
-			}
+	c.onObserve = func(o contracts.RunnerObservation) {
+		if o.Kind == "permission_requested" {
+			close(reported)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
