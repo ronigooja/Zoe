@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" == --dry-run ]]; then
+  echo "would install python3-venv if missing"
+  echo "would create /opt/scrapling/0.5/venv and install scrapling[ai]==0.5"
+  echo "would run scrapling install and render scrapling-mcp.service on port 8000"
+  exit 0
+fi
 [[ "$(id -u)" == 0 ]] || { echo 'must run as root' >&2; exit 1; }
 root=/opt/scrapling
 etc=/etc/scrapling

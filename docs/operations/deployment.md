@@ -151,6 +151,16 @@ Configure `ZOE_OPENCODE_BASE_URL`, `ZOE_OPENCODE_PASSWORD_FILE`, `ZOE_OPENCODE_M
 
 ### Configure the OpenCode runtime
 
+### Scrapling web access
+
+Workers may use `webfetch` and, when enabled, only tools from the `scrapling` MCP server. `websearch` is disabled in every permission tier because this deployment has no search provider.
+
+Set `ZOE_SCRAPLING_MODE` to `off` (default), `remote`, or `local`. If the mode is unset and `ZOE_SCRAPLING_URL` is present, remote is selected; local never uses a URL. Remote URLs must be `http` or `https`, include a host, and contain no credentials. Set `ZOE_SCRAPLING_TOKEN_FILE` to the root-readable, non-world-readable token file (default `/etc/zoe/runner-secrets/scrapling-mcp-token`). OpenCode receives a `{file:path}` reference, not the token value. The operator selected token-only authentication over plain HTTP, so protect the network path and rotate the shared token by restarting Scrapling.
+
+For local mode, `zoe install`/`zoe update` may install pinned Scrapling `0.5` with the `ai` extra under `/opt/zoe/scrapling/0.5/venv`; browser dependencies are installed with `scrapling install`. A failed optional local install is warned, omitted from generated MCP configuration, and does not fail the Zoe update; status reports the omission. `ZOE_SCRAPLING_MAX_BROWSERS` defaults to 1 and accepts 1–8; it is passed to the local server environment, while Scrapling itself controls actual browser-session capacity.
+
+For a remote host, copy the release package and run `sudo bash deploy/scrapling/install-remote.sh install`; the script installs `python3-venv` when absent, provisions `/opt/scrapling/0.5/venv`, installs browser dependencies, writes `/etc/scrapling/env` mode 0600, and enables `scrapling-mcp.service` on port 8000 with `MemoryMax=900M`. Use `status` for service checks and `print-token --yes` only when explicitly copying the secret to Zoe; never put it in logs or source control. The operator's selected endpoint may therefore be `http://HOST:8000/mcp`.
+
 The runner creates one OpenCode session per run. Runtime profiles select the OpenCode provider/model route; clients cannot override execution routes or grants.
 
 The workspace path must be absolute, private, and available to the runner-created container.

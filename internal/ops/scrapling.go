@@ -106,3 +106,10 @@ func ValidateScraplingReleaseVersion(v string) error {
 	}
 	return nil
 }
+
+func ValidateScraplingWheel(version, digest string) error {
+	if version != ScraplingVersion || digest != "366f0ec9f1e7e998900e6c5e3a4063ea34062326394ced64e5c389b690572726" {
+		return errors.New("Scrapling release pin or wheel checksum mismatch")
+	}
+	return nil
+}

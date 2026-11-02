@@ -16,10 +16,11 @@ Runs use one wildcard allow rule, so impact levels cannot follow capabilities. A
 4. The Steward chooses among server-defined tiers (read-only research, workspace read-write, external paths). It never writes individual rules. Individual rules come only from server policy or a recorded confirmation.
 5. OpenCode permissions are the only enforcement layer. By operator decision there is no OS sandbox: `zoe-opencode` runs as root without unit hardening, so a run that is allowed `shell` can act anywhere on the host, including reading `/etc/zoe`. Tool-level rules (read-only tier without `edit` and `shell`, unlisted tools denied, `external_directory` for file tools, `ask` for confirmation) still hold; path and impact limits do not hold for `shell`. Measured on the live host: a `workspace_read_write` run wrote outside its workspace through `shell`. Child sessions inherit the parent's session permissions.
 6. The active-run ceiling is an operator setting (`ZOE_MAX_RUNS`), default 12.
+7. Web research uses `webfetch` and the explicitly scoped Scrapling MCP server; `websearch` is not enabled because this deployment has no default search provider.
 
 ### Asking the user
 
-7. A permission `ask` that still occurs is detected by the runner, reported as a pending action, and answered only after the server validates a scoped confirmation or applies policy. Expiry or no answer means reject.
+8. A permission `ask` that still occurs is detected by the runner, reported as a pending action, and answered only after the server validates a scoped confirmation or applies policy. Expiry or no answer means reject.
 8. A Worker question ends the turn and puts the task in `awaiting_user` with the run kept. The answer is prompted into the same OpenCode session. After the wait limit (default 30 minutes, operator setting) the run is terminated and its slot released; the answer then starts a new run that continues from task messages and workspace files.
 
 ### Bounded context

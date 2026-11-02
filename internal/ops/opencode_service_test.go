@@ -98,6 +98,9 @@ func TestRenderedScraplingLocalStdioAndOff(t *testing.T) {
 	if err := os.MkdirAll(bin, 0700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(bin, "scrapling-mcp"), []byte("x"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +123,31 @@ func TestRenderedScraplingLocalStdioAndOff(t *testing.T) {
 	b, _ = os.ReadFile(filepath.Join(d, "opencode", "xdg-config", "opencode", "opencode.json"))
 	if strings.Contains(string(b), "scrapling") {
 		t.Fatalf("off still rendered: %s", b)
+	}
+}
+
+func TestScraplingWheelPinAndTokenFingerprint(t *testing.T) {
+	if err := ValidateScraplingWheel(ScraplingVersion, "366f0ec9f1e7e998900e6c5e3a4063ea34062326394ced64e5c389b690572726"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateScraplingWheel(ScraplingVersion, "bad"); err == nil {
+		t.Fatal("accepted checksum mismatch")
+	}
+	d := t.TempDir()
+	token := filepath.Join(d, "token")
+	if err := os.WriteFile(token, []byte("one"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := ScraplingSettings{Mode: "remote", TokenFile: token}
+	first := string(scraplingTokenFingerprint(s))
+	if first == "" {
+		t.Fatal("missing fingerprint")
+	}
+	if err := os.WriteFile(token, []byte("two"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if first == string(scraplingTokenFingerprint(s)) {
+		t.Fatal("token change did not change fingerprint")
 	}
 }
 
