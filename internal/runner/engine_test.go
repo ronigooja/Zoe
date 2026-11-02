@@ -26,6 +26,7 @@ type runtimeFake struct {
 	formsReplied                []string
 	formAnswers                 []map[string]any
 	permissionsReplied          []string
+	onStatus                    func()
 }
 
 func (f *runtimeFake) PendingPermissions(context.Context, RuntimeBinding) ([]opencode.PermissionRequest, error) {
@@ -60,6 +61,9 @@ func (f *runtimeFake) Prompt(_ context.Context, b RuntimeBinding, prompt string)
 	return f.promptErr
 }
 func (f *runtimeFake) Status(context.Context, RuntimeBinding) (map[string]opencode.Status, error) {
+	if f.onStatus != nil {
+		f.onStatus()
+	}
 	if f.done {
 		return map[string]opencode.Status{"session": {Type: "idle"}}, nil
 	}
@@ -85,7 +89,10 @@ func (f *runtimeFake) Terminate(context.Context, RuntimeBinding) (string, error)
 	return "session", nil
 }
 
-type controlFake struct{ observations []contracts.RunnerObservation }
+type controlFake struct {
+	observations []contracts.RunnerObservation
+	onObserve    func(contracts.RunnerObservation)
+}
 
 func (*controlFake) Claim(context.Context) (*contracts.JobClaim, error)    { return nil, ErrNoClaim }
 func (*controlFake) Current(context.Context) ([]contracts.JobClaim, error) { return nil, nil }
@@ -94,6 +101,9 @@ func (*controlFake) Control(context.Context, string) (contracts.RunControl, erro
 }
 func (c *controlFake) Observe(_ context.Context, _ string, o contracts.RunnerObservation) error {
 	c.observations = append(c.observations, o)
+	if c.onObserve != nil {
+		c.onObserve(o)
+	}
 	return nil
 }
 func testClaim() contracts.JobClaim {

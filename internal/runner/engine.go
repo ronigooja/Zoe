@@ -57,6 +57,7 @@ type Engine struct {
 	Isolation                    WorkIsolation
 	PollInterval, ObserveTimeout time.Duration
 	WaitLimit                    time.Duration
+	Now                          func() time.Time
 }
 
 func (e *Engine) RunOnce(ctx context.Context) error {
@@ -233,7 +234,7 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 		}
 		entry, _, _ := e.Journal.Entry(ctx, claim.RunID)
 		waiting := entry.Phase == "waiting_permission" || entry.Phase == "waiting_question"
-		if waiting && e.WaitLimit > 0 && !entry.Updated.IsZero() && time.Now().UTC().After(entry.Updated.Add(e.WaitLimit)) {
+		if waiting && e.WaitLimit > 0 && !entry.Updated.IsZero() && e.now().After(entry.Updated.Add(e.WaitLimit)) {
 			_ = e.Runtime.Abort(ctx, b)
 			return e.terminate(ctx, claim, b, "wait_limit_exceeded", false)
 		}
@@ -324,7 +325,7 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 		}
 		entry, _, _ = e.Journal.Entry(ctx, claim.RunID)
 		waiting = entry.Phase == "waiting_permission" || entry.Phase == "waiting_question"
-		if !waiting && !claim.Budget.HardDeadline.IsZero() && time.Now().UTC().After(claim.Budget.HardDeadline) {
+		if !waiting && !claim.Budget.HardDeadline.IsZero() && e.now().After(claim.Budget.HardDeadline) {
 			_ = e.Runtime.Abort(ctx, b)
 			return e.terminate(ctx, claim, b, "run_deadline_exceeded", false)
 		}
@@ -348,6 +349,13 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 		}
 		return e.terminate(ctx, claim, b, "completed", false)
 	}
+}
+
+func (e *Engine) now() time.Time {
+	if e.Now != nil {
+		return e.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (e *Engine) emitPending(ctx context.Context, c contracts.JobClaim, kind string, payload map[string]any) error {

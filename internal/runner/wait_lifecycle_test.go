@@ -52,11 +52,30 @@ func TestWaitingRunUsesWaitLimitInsteadOfGenericDeadline(t *testing.T) {
 	c := &controlFake{}
 	j := openTestJournal(t)
 	claim := testClaim()
-	claim.Budget.HardDeadline = time.Now().Add(-time.Hour)
+	claim.Budget.HardDeadline = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	e := testEngine(t, f, c, j)
 	e.WaitLimit = time.Hour
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	clock := time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC)
+	e.Now = func() time.Time { return clock }
+	reported := make(chan struct{})
+	f.onStatus = func() {
+		for _, o := range c.observations {
+			if o.Kind == "permission_requested" {
+				select {
+				case <-reported:
+				default:
+					close(reported)
+				}
+				return
+			}
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go func() {
+		<-reported
+		cancel()
+	}()
 	if err := e.Process(ctx, claim); err == nil {
 		t.Fatal("waiting run unexpectedly completed")
 	}
@@ -72,8 +91,20 @@ func TestWaitingJournalRecoveryDoesNotReportPendingActionAgain(t *testing.T) {
 	j := openTestJournal(t)
 	claim := seedRuntimePhase(t, j, "waiting_question")
 	e := testEngine(t, f, c, j)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	reported := make(chan struct{})
+	f.onStatus = func() {
+		select {
+		case <-reported:
+		default:
+			close(reported)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go func() {
+		<-reported
+		cancel()
+	}()
 	if err := e.Process(ctx, claim); err == nil {
 		t.Fatal("waiting recovery did not remain monitored")
 	}
