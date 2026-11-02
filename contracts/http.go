@@ -252,6 +252,8 @@ type JobClaim struct {
 	PermissionTier        string            `json:"permission_tier,omitempty"`
 	PermissionRules       []PermissionRule  `json:"permission_rules,omitempty"`
 	ImpactLevel           string            `json:"impact_level,omitempty"`
+	ResumeQuestion        string            `json:"resume_question,omitempty"`
+	ResumeAnswer          string            `json:"resume_answer,omitempty"`
 }
 
 // RunBudgetSnapshot is immutable for a run and is copied into its claim. Usage

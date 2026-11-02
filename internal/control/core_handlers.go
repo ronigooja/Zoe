@@ -240,6 +240,7 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 	if (status == "waiting" || status == "awaiting_user") && interaction == "none" {
 		interaction = "awaiting_message"
 	}
+	expiredInteraction := interaction == "expired_question" || interaction == "expired_permission"
 	confirmed := false
 	if interaction == "explicit_confirmation" {
 		if interactionVersion != version || scope == "" || interactionRun == "" || actionDigest == "" || expires == "" {
@@ -267,7 +268,7 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 	}
 	version++
 	nextStatus := status
-	if (status == "waiting" || status == "awaiting_user") && interaction == "awaiting_message" {
+	if (status == "waiting" || status == "awaiting_user") && (interaction == "awaiting_message" || expiredInteraction) {
 		nextStatus = "queued"
 	}
 	if interaction == "awaiting_message" && interactionRun != "" && actionDigest != "" {

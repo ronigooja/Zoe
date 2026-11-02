@@ -140,7 +140,11 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 			return e.reportNoEffect(ctx, claim, reason, "dispatch authorization denied")
 		}
 	}
-	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: fmt.Sprint(claim.Fence), Model: route.Model, ModelRouteID: claim.ModelRouteID, Agent: claim.Agent, Permissions: claim.PermissionRules, Prompt: buildPrompt(claim), Workspace: claim.WorkspaceID}
+	prompt := buildPrompt(claim)
+	if claim.ResumeQuestion != "" {
+		prompt = buildResumePrompt(claim.Goal, claim.ResumeQuestion, claim.ResumeAnswer)
+	}
+	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: fmt.Sprint(claim.Fence), Model: route.Model, ModelRouteID: claim.ModelRouteID, Agent: claim.Agent, Permissions: claim.PermissionRules, Prompt: prompt, Workspace: claim.WorkspaceID}
 	entry, err = e.Journal.SaveClaim(ctx, claim, spec, "claimed")
 	if err != nil {
 		return err
@@ -240,7 +244,9 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			_ = e.Runtime.Abort(ctx, b)
 			return e.terminate(ctx, claim, b, "stop_confirmed", true)
 		}
-		if !claim.Budget.HardDeadline.IsZero() && time.Now().UTC().After(claim.Budget.HardDeadline) {
+		entry, _, _ := e.Journal.Entry(ctx, claim.RunID)
+		waiting := entry.Phase == "waiting_permission" || entry.Phase == "waiting_question"
+		if !waiting && !claim.Budget.HardDeadline.IsZero() && time.Now().UTC().After(claim.Budget.HardDeadline) {
 			_ = e.Runtime.Abort(ctx, b)
 			return e.terminate(ctx, claim, b, "run_deadline_exceeded", false)
 		}
