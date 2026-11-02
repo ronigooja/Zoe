@@ -33,4 +33,4 @@ Directory, permission, and completion behavior was checked against local source 
 
 ## Consequences
 
-Host permissions, filesystem ownership, and OpenCode configuration replace container isolation. Zoe's safety floors and control-plane validation are unchanged. A service restart may preserve persisted sessions but never authorizes replay of an uncertain create.
+OpenCode configuration and session permissions replace container isolation; there is no OS sandbox and `zoe-opencode` runs as root by operator decision ([ADR 0011](0011-profiles-permissions-and-context-hygiene.md)). Zoe's safety floors and control-plane validation are unchanged. A service restart may preserve persisted sessions but never authorizes replay of an uncertain create.

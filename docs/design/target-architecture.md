@@ -47,6 +47,8 @@ user <-> voice --handoff--> gateway --> Zoe --> Steward --> answer directly | ad
 
 These hold regardless of role or route: the client never fabricates content; the runner and agents cannot grant their own authority; high-impact actions need server-validated scoped confirmation; the menu-bar item and microphone-use indication always remain.
 
+Current gap: enforcement relies on OpenCode permissions alone and `zoe-opencode` runs as root, so an agent allowed `shell` is not bound by workspace or confirmation limits ([ADR 0011](../architecture/decisions/0011-profiles-permissions-and-context-hygiene.md)).
+
 ## Impact levels
 
 Impact is set by server policy from a profile's declared capabilities and scopes, never by the model's own description.

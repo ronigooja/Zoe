@@ -207,3 +207,15 @@ Environment: the voice gateway host, one-off probes against a copy of the accoun
 - Limitations: synthetic speech only, one account, no failure injection. No product milestone is accepted by these probes.
 
 Open measurements tied to [ADR 0009](../architecture/decisions/0009-voice-steward-impact-policy.md): steward latency and cost against the run ceiling, metering of OpenCode internal sub-agents, handoff event behavior with real speech, and transcript availability.
+
+## Per-run permission probe on the live host — 2026-11-02
+
+Environment: Zoe host with release `53daae1`, `zoe-opencode` v2.2.5-ronigooja.3 running as root, one synthetic task through `task.create`, model `cliproxyapi/gpt-6.1-sol`. No product milestone is accepted by this probe.
+
+- Session created with agent `zoe-worker` and the `workspace_read_write` ruleset (deny-all first, no `external_directory` allow); `ZOE_MAX_RUNS` read back as 12.
+- Allowed and observed: file creation inside the run workspace through `patch`, `echo` through `shell`.
+- A `shell` redirect wrote a file outside the workspace. The ruleset did not prevent it; `external_directory` applies to file tools only. The probe file was removed afterwards.
+- `websearch` ended with "Web search cancelled"; the cause is not established.
+- Not exercised: a live `ask`, Worker question, expiry, or reply against a real OpenCode session.
+
+Consequence recorded in [ADR 0011](../architecture/decisions/0011-profiles-permissions-and-context-hygiene.md): OpenCode permissions are the only enforcement layer by operator decision.

@@ -14,7 +14,7 @@ Runs use one wildcard allow rule, so impact levels cannot follow capabilities. A
 2. The server computes one effective permission set per run at admission from the profile defaults and the task scope, and carries it in the claim. The runner only translates it into OpenCode session `permissions` (`{action, resource, effect}`, last match wins) and never widens it. Rules are written deny-all first, then explicit allows, so no request reaches `ask`.
 3. Workspace-external access is allowed but is high impact. Widening beyond the profile default needs a scoped confirmation.
 4. The Steward chooses among server-defined tiers (read-only research, workspace read-write, external paths). It never writes individual rules. Individual rules come only from server policy or a recorded confirmation.
-5. OpenCode permissions are a policy layer, not isolation. The enforced boundary stays the runner's host user and unit sandbox. Child sessions inherit the parent's session permissions.
+5. OpenCode permissions are the only enforcement layer. By operator decision there is no OS sandbox: `zoe-opencode` runs as root without unit hardening, so a run that is allowed `shell` can act anywhere on the host, including reading `/etc/zoe`. Tool-level rules (read-only tier without `edit` and `shell`, unlisted tools denied, `external_directory` for file tools, `ask` for confirmation) still hold; path and impact limits do not hold for `shell`. Measured on the live host: a `workspace_read_write` run wrote outside its workspace through `shell`. Child sessions inherit the parent's session permissions.
 6. The active-run ceiling is an operator setting (`ZOE_MAX_RUNS`), default 12.
 
 ### Asking the user
@@ -33,4 +33,4 @@ Runs use one wildcard allow rule, so impact levels cannot follow capabilities. A
 
 ## Consequences
 
-`allow *` and the fixed ceiling are removed. The runner gains permission-request and waiting-run states. Capacity accounting must count waiting runs that keep their session. Memory retrieval is keyword-scored today; semantic retrieval and time filters are separate work and gate how useful recall is. Open measurements: memory pressure at the configured ceiling, token thresholds, resume behavior on the live route.
+High-impact confirmation covers only actions OpenCode itself asks about; a `shell` command is not classified, and `workspace_read_write` and `external_paths` differ only for file tools. `allow *` and the fixed ceiling are removed. The runner gains permission-request and waiting-run states. Capacity accounting must count waiting runs that keep their session. Memory retrieval is keyword-scored today; semantic retrieval and time filters are separate work and gate how useful recall is. Open measurements: memory pressure at the configured ceiling, token thresholds, resume behavior on the live route.
