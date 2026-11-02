@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ronigooja/Zoe/contracts"
-	"github.com/ronigooja/Zoe/internal/agents/opencode"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/agents/opencode"
 )
 
 type runtimeFake struct {
@@ -19,6 +20,8 @@ type runtimeFake struct {
 	promptText                  string
 	promptBinding               RuntimeBinding
 	createdSpecs                []RuntimeSpec
+	live                        map[string]bool
+	createErr                   error
 	promptErr                   error
 	events                      chan opencode.Event
 	done                        bool
@@ -54,13 +57,21 @@ func (f *runtimeFake) ReplyPermission(_ context.Context, _ RuntimeBinding, reque
 }
 
 func (f *runtimeFake) Create(_ context.Context, spec RuntimeSpec) (RuntimeBinding, error) {
+	if f.createErr != nil {
+		return RuntimeBinding{}, f.createErr
+	}
 	f.creates++
 	f.createdSpecs = append(f.createdSpecs, spec)
 	f.calls = append(f.calls, "Create")
-	if f.creates == 1 {
-		return RuntimeBinding{SessionID: "session"}, nil
+	id := "session"
+	if f.creates > 1 {
+		id += "-" + fmt.Sprint(f.creates)
 	}
-	return RuntimeBinding{SessionID: "session-" + fmt.Sprint(f.creates)}, nil
+	if f.live == nil {
+		f.live = map[string]bool{}
+	}
+	f.live[id] = true
+	return RuntimeBinding{SessionID: id}, nil
 }
 func (f *runtimeFake) Prompt(_ context.Context, b RuntimeBinding, prompt string) error {
 	f.prompts++
@@ -87,6 +98,9 @@ func (f *runtimeFake) Messages(_ context.Context, b RuntimeBinding) ([]opencode.
 		}
 		return []opencode.Message{f.result}, nil
 	}
+	if f.messages != nil {
+		return f.messages, nil
+	}
 	return nil, nil
 }
 func (f *runtimeFake) Events(context.Context, RuntimeBinding) (<-chan opencode.Event, <-chan error) {
@@ -95,12 +109,20 @@ func (f *runtimeFake) Events(context.Context, RuntimeBinding) (<-chan opencode.E
 	return f.events, make(chan error)
 }
 func (f *runtimeFake) Abort(context.Context, RuntimeBinding) error { f.aborts++; return nil }
-func (f *runtimeFake) Terminate(context.Context, RuntimeBinding) (string, error) {
+func (f *runtimeFake) Terminate(_ context.Context, b RuntimeBinding) (string, error) {
 	f.terminates++
-	return "session", nil
+	if f.live != nil {
+		f.live[b.SessionID] = false
+	}
+	return b.SessionID, nil
 }
 func (f *runtimeFake) FindRotationSession(context.Context, string, string) (RuntimeBinding, error) {
-	return RuntimeBinding{SessionID: "session-2"}, nil
+	for id, live := range f.live {
+		if live && id != "session" {
+			return RuntimeBinding{SessionID: id}, nil
+		}
+	}
+	return RuntimeBinding{}, errors.New("replacement session not found")
 }
 
 type controlFake struct {
@@ -229,6 +251,7 @@ func TestContextUsageBelowBudgetDoesNotRotate(t *testing.T) {
 
 func TestContextUsageRotatesWithSameRuntimeSpecAndCompletes(t *testing.T) {
 	f := completingRuntimeFake()
+	f.live = map[string]bool{"session": true}
 	f.result = assistantUsage(8, 2, 1, 1)
 	f.rotationMessages = []opencode.Message{assistantUsage(1, 1, 0, 0)}
 	c := &controlFake{}
@@ -242,14 +265,195 @@ func TestContextUsageRotatesWithSameRuntimeSpecAndCompletes(t *testing.T) {
 	if f.creates != 2 || f.terminates != 2 {
 		t.Fatalf("creates=%d terminates=%d", f.creates, f.terminates)
 	}
-	if len(f.createdSpecs) != 2 || f.createdSpecs[0].Agent != f.createdSpecs[1].Agent || f.createdSpecs[0].Model != f.createdSpecs[1].Model || f.createdSpecs[0].Workspace != f.createdSpecs[1].Workspace || !reflect.DeepEqual(f.createdSpecs[0].Permissions, f.createdSpecs[1].Permissions) {
+	if len(f.createdSpecs) != 2 || f.createdSpecs[0].Agent != f.createdSpecs[1].Agent || f.createdSpecs[0].Model != f.createdSpecs[1].Model || f.createdSpecs[0].Workspace != f.createdSpecs[1].Workspace || f.createdSpecs[0].RunID != f.createdSpecs[1].RunID || f.createdSpecs[0].AttemptID != f.createdSpecs[1].AttemptID || f.createdSpecs[0].Fence != f.createdSpecs[1].Fence || !reflect.DeepEqual(f.createdSpecs[0].Permissions, f.createdSpecs[1].Permissions) {
 		t.Fatalf("replacement spec widened or changed: %+v", f.createdSpecs)
+	}
+	if live := liveSessions(f); len(live) != 1 || live[0] != "session-2" {
+		t.Fatalf("live sessions=%v, want replacement only", live)
 	}
 	if !strings.Contains(f.createdSpecs[1].Prompt, "summary from prior session") || !strings.Contains(f.createdSpecs[1].Prompt, claim.Goal) {
 		t.Fatalf("seed prompt=%q", f.createdSpecs[1].Prompt)
 	}
 	if !strings.Contains(kinds(c), "progress") {
 		t.Fatalf("rotation observation missing: %s", kinds(c))
+	}
+}
+
+func liveSessions(f *runtimeFake) []string {
+	var out []string
+	for id, live := range f.live {
+		if live {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func seedRotation(t *testing.T, j *Journal, phase, summary, old, replacement string) contracts.JobClaim {
+	t.Helper()
+	c := testClaim()
+	spec := RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: buildPrompt(c), Workspace: c.WorkspaceID, Agent: c.Agent, Model: "model", Permissions: c.PermissionRules}
+	if _, err := j.SaveClaim(context.Background(), c, spec, "claimed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.SetSession(context.Background(), c.RunID, c.AttemptID, c.Fence, old, "prompt_sent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.BeginRotation(context.Background(), c.RunID, c.AttemptID, c.Fence, old, summary, 1); err != nil {
+		t.Fatal(err)
+	}
+	if phase != "rotating" {
+		if replacement != "" {
+			if err := j.SetRotationSession(context.Background(), c.RunID, c.AttemptID, c.Fence, replacement, phase); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := j.SetPhase(context.Background(), c.RunID, c.AttemptID, c.Fence, phase); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return c
+}
+
+func TestRotationRecoveryFromRotatingSummaryKeepsOneLiveSession(t *testing.T) {
+	f := completingRuntimeFake()
+	f.live = map[string]bool{"session": true}
+	f.rotationMessages = []opencode.Message{assistantUsage(1, 1, 0, 0)}
+	j := openTestJournal(t)
+	c := seedRotation(t, j, "rotating", "durable summary", "session", "")
+	if err := testEngine(t, f, &controlFake{}, j).Process(testContext(t), c); err != nil {
+		t.Fatal(err)
+	}
+	if got := liveSessions(f); len(got) != 1 || got[0] != "session-2" {
+		t.Fatalf("live sessions=%v", got)
+	}
+	e, _, _ := j.Entry(context.Background(), c.RunID)
+	if e.RotationSummary != "durable summary" {
+		t.Fatalf("summary=%q", e.RotationSummary)
+	}
+}
+
+func TestRotationRecoveryFromCreateAttemptedMarksUnknownWithoutSecondCreate(t *testing.T) {
+	f := completingRuntimeFake()
+	f.live = map[string]bool{"session": true}
+	j := openTestJournal(t)
+	c := seedRotation(t, j, "rotation_create_attempted", "durable summary", "session", "")
+	e := testEngine(t, f, &controlFake{}, j)
+	if err := e.Process(testContext(t), c); !errors.Is(err, ErrOutcomePending) {
+		t.Fatalf("error=%v, want fenced recovery", err)
+	}
+	if f.creates != 0 {
+		t.Fatalf("recovery created a second replacement: %d", f.creates)
+	}
+	if got := liveSessions(f); len(got) != 1 || got[0] != "session" {
+		t.Fatalf("live sessions=%v", got)
+	}
+}
+
+func TestRotationRecoveryFromCreatedAbortsOldAndCompletes(t *testing.T) {
+	f := completingRuntimeFake()
+	f.live = map[string]bool{"session": true, "session-2": true}
+	f.rotationMessages = []opencode.Message{assistantUsage(1, 1, 0, 0)}
+	j := openTestJournal(t)
+	c := seedRotation(t, j, "rotation_created", "durable summary", "session", "session-2")
+	if err := testEngine(t, f, &controlFake{}, j).Process(testContext(t), c); err != nil {
+		t.Fatal(err)
+	}
+	if got := liveSessions(f); len(got) != 1 || got[0] != "session-2" {
+		t.Fatalf("live sessions=%v", got)
+	}
+}
+
+func TestRotationRecoveryFromPromptSentCompletesWithOneLiveSession(t *testing.T) {
+	f := completingRuntimeFake()
+	f.live = map[string]bool{"session-2": true}
+	f.rotationMessages = []opencode.Message{assistantUsage(1, 1, 0, 0)}
+	j := openTestJournal(t)
+	c := seedRotation(t, j, "prompt_sent", "durable summary", "session", "session-2")
+	if err := testEngine(t, f, &controlFake{}, j).Process(testContext(t), c); err != nil {
+		t.Fatal(err)
+	}
+	if got := liveSessions(f); len(got) != 1 || got[0] != "session-2" {
+		t.Fatalf("live sessions=%v", got)
+	}
+}
+
+func TestRotationLimitTerminatesWithProofWithoutCreating(t *testing.T) {
+	f := completingRuntimeFake()
+	f.live = map[string]bool{"session": true}
+	f.result = assistantUsage(20, 0, 0, 0)
+	cntl := &controlFake{}
+	j := openTestJournal(t)
+	c := testClaim()
+	c.Budget.MaxContextTokens = 10
+	if _, err := j.SaveClaim(context.Background(), c, RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: buildPrompt(c), Workspace: c.WorkspaceID}, "claimed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.SetSession(context.Background(), c.RunID, c.AttemptID, c.Fence, "session", "prompt_sent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.BeginRotation(context.Background(), c.RunID, c.AttemptID, c.Fence, "session", "already rotated", 1); err != nil {
+		t.Fatal(err)
+	}
+	e := testEngine(t, f, cntl, j)
+	e.MaxRotations = 1
+	if err := e.monitor(testContext(t), c, RuntimeBinding{SessionID: "session"}); err != nil {
+		t.Fatal(err)
+	}
+	last := cntl.observations[len(cntl.observations)-1]
+	if last.TerminationProof == nil || f.creates != 0 {
+		t.Fatalf("proof=%+v creates=%d", last.TerminationProof, f.creates)
+	}
+}
+
+func TestWaitingQuestionOverBudgetDoesNotRotate(t *testing.T) {
+	f := completingRuntimeFake()
+	f.done = false
+	f.live = map[string]bool{"session": true}
+	f.messages = []opencode.Message{assistantUsage(20, 0, 0, 0)}
+	f.pendingForms = []opencode.FormRequest{{ID: "q", Title: "question"}}
+	cntl := &controlFake{}
+	reported := make(chan struct{})
+	cntl.onObserve = func(o contracts.RunnerObservation) {
+		if o.Kind == "worker_question" {
+			close(reported)
+		}
+	}
+	e := testEngine(t, f, cntl, openTestJournal(t))
+	e.ContextTokenBudget = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { <-reported; cancel() }()
+	if err := e.Process(ctx, testClaim()); err == nil {
+		t.Fatal("waiting run completed")
+	}
+	if f.creates != 1 || len(liveSessions(f)) != 1 {
+		t.Fatalf("creates=%d live=%v", f.creates, liveSessions(f))
+	}
+}
+
+func TestWaitingPermissionOverBudgetDoesNotRotate(t *testing.T) {
+	f := completingRuntimeFake()
+	f.done = false
+	f.live = map[string]bool{"session": true}
+	f.messages = []opencode.Message{assistantUsage(20, 0, 0, 0)}
+	f.pendingPermissions = []opencode.PermissionRequest{{ID: "p", Action: "write"}}
+	cntl := &controlFake{}
+	reported := make(chan struct{})
+	cntl.onObserve = func(o contracts.RunnerObservation) {
+		if o.Kind == "permission_requested" {
+			close(reported)
+		}
+	}
+	e := testEngine(t, f, cntl, openTestJournal(t))
+	e.ContextTokenBudget = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { <-reported; cancel() }()
+	if err := e.Process(ctx, testClaim()); err == nil {
+		t.Fatal("waiting run completed")
+	}
+	if f.creates != 1 || len(liveSessions(f)) != 1 {
+		t.Fatalf("creates=%d live=%v", f.creates, liveSessions(f))
 	}
 }
 

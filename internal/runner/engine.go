@@ -451,6 +451,19 @@ func rotationPrompt(c contracts.JobClaim, summary string) string {
 }
 
 func (e *Engine) recoverRotation(ctx context.Context, c contracts.JobClaim, entry JournalEntry) error {
+	if entry.Phase == "rotating" && entry.RotationNewSession == "" {
+		spec := entry.Spec
+		spec.Prompt = rotationPrompt(c, entry.RotationSummary)
+		binding, err := e.Runtime.Create(ctx, spec)
+		if err != nil {
+			return e.markUnknown(ctx, c)
+		}
+		if err := e.Journal.SetRotationSession(ctx, c.RunID, c.AttemptID, c.Fence, binding.SessionID, "rotation_created"); err != nil {
+			return err
+		}
+		entry.RotationNewSession = binding.SessionID
+		entry.Phase = "rotation_created"
+	}
 	if entry.RotationNewSession == "" {
 		recovery, ok := e.Runtime.(RotationRecovery)
 		if !ok {
@@ -458,7 +471,7 @@ func (e *Engine) recoverRotation(ctx context.Context, c contracts.JobClaim, entr
 		}
 		b, err := recovery.FindRotationSession(ctx, c.RunID, entry.RotationOldSession)
 		if err != nil {
-			return fmt.Errorf("%w: %v", ErrOutcomePending, err)
+			return e.markUnknown(ctx, c)
 		}
 		if err := e.Journal.SetRotationSession(ctx, c.RunID, c.AttemptID, c.Fence, b.SessionID, "rotation_created"); err != nil {
 			return err
