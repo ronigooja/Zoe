@@ -93,30 +93,31 @@ type Project struct {
 }
 
 type Task struct {
-	QueueReason             string        `json:"queue_reason,omitempty"`
-	ID                      string        `json:"id"`
-	ProjectID               string        `json:"project_id,omitempty"`
-	Title                   string        `json:"title"`
-	Goal                    string        `json:"goal"`
-	Source                  string        `json:"source"`
-	ProfileID               string        `json:"profile_id,omitempty"`
-	Status                  string        `json:"status"`
-	Version                 int64         `json:"version"`
-	CreatedAt               time.Time     `json:"created_at"`
-	UpdatedAt               time.Time     `json:"updated_at"`
-	AcceptedAt              *time.Time    `json:"accepted_at,omitempty"`
-	StartedAt               *time.Time    `json:"started_at,omitempty"`
-	FinishedAt              *time.Time    `json:"finished_at,omitempty"`
-	Result                  string        `json:"result,omitempty"`
-	Error                   string        `json:"error,omitempty"`
-	Evidence                []Evidence    `json:"evidence"`
-	CanAcceptResult         bool          `json:"can_accept_result"`
-	InteractionState        string        `json:"interaction_state"`
-	InteractionScope        string        `json:"interaction_scope,omitempty"`
-	InteractionRunID        string        `json:"interaction_run_id,omitempty"`
-	InteractionActionDigest string        `json:"interaction_action_digest,omitempty"`
-	InteractionExpiresAt    *time.Time    `json:"interaction_expires_at,omitempty"`
-	Messages                []TaskMessage `json:"messages,omitempty"`
+	QueueReason                string        `json:"queue_reason,omitempty"`
+	ID                         string        `json:"id"`
+	ProjectID                  string        `json:"project_id,omitempty"`
+	Title                      string        `json:"title"`
+	Goal                       string        `json:"goal"`
+	Source                     string        `json:"source"`
+	ProfileID                  string        `json:"profile_id,omitempty"`
+	Status                     string        `json:"status"`
+	Version                    int64         `json:"version"`
+	CreatedAt                  time.Time     `json:"created_at"`
+	UpdatedAt                  time.Time     `json:"updated_at"`
+	AcceptedAt                 *time.Time    `json:"accepted_at,omitempty"`
+	StartedAt                  *time.Time    `json:"started_at,omitempty"`
+	FinishedAt                 *time.Time    `json:"finished_at,omitempty"`
+	Result                     string        `json:"result,omitempty"`
+	Error                      string        `json:"error,omitempty"`
+	Evidence                   []Evidence    `json:"evidence"`
+	CanAcceptResult            bool          `json:"can_accept_result"`
+	InteractionState           string        `json:"interaction_state"`
+	InteractionScope           string        `json:"interaction_scope,omitempty"`
+	InteractionRunID           string        `json:"interaction_run_id,omitempty"`
+	InteractionActionDigest    string        `json:"interaction_action_digest,omitempty"`
+	InteractionExpectedVersion int64         `json:"interaction_expected_version,omitempty"`
+	InteractionExpiresAt       *time.Time    `json:"interaction_expires_at,omitempty"`
+	Messages                   []TaskMessage `json:"messages,omitempty"`
 }
 
 type TaskEntry struct {

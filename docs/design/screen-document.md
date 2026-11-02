@@ -1,6 +1,6 @@
-# Screen-document contract (draft)
+# Screen-document contract
 
-This is a draft contract for AI agents. The Go contracts in [`/contracts`](../../contracts/) are the implemented authority and do not yet include this model. Before server implementation, mirror and version this contract there. Rationale: [ADR 0008](../architecture/decisions/0008-ambient-screen-client.md).
+Status: Go contract implemented in [`contracts/screen.go`](../../contracts/screen.go); Swift renderer pending. The Go contracts are the implemented authority. Rationale: [ADR 0008](../architecture/decisions/0008-ambient-screen-client.md).
 
 ## Surfaces
 

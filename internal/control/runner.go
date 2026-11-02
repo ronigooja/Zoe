@@ -844,7 +844,10 @@ func appendEventTx(ctx context.Context, tx *sql.Tx, e contracts.Event) error {
 	if err != nil {
 		return err
 	}
-	return enqueueEventNotification(ctx, tx, e)
+	if err := enqueueEventNotification(ctx, tx, e); err != nil {
+		return err
+	}
+	return appendScreenUpdatedTx(ctx, tx, contracts.Principal{WorkspaceID: e.WorkspaceID, SubjectID: e.SubjectID}, []contracts.Event{e})
 }
 func sameHash(a, b []byte) bool {
 	if len(a) != len(b) {

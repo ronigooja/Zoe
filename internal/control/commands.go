@@ -32,6 +32,7 @@ func (s *Server) registerCoreRoutes() {
 	s.device.HandleFunc("GET /v1/commands/{command_id}", s.handleGetCommand)
 	s.device.HandleFunc("GET /v1/commands", s.handleGetCommandByKey)
 	s.device.HandleFunc("GET /v1/snapshot", s.handleSnapshot)
+	s.device.HandleFunc("GET /v1/screen", s.handleScreen)
 	s.device.HandleFunc("GET /v1/tasks/{task_id}/entries", s.handleTaskEntries)
 	s.device.HandleFunc("GET /v1/events", s.handleEvents)
 	s.device.HandleFunc("GET /v1/notifications", s.handleNotifications)
@@ -174,6 +175,9 @@ func (s *Server) ExecuteCommand(ctx context.Context, p contracts.Principal, key 
 		if e = enqueueEventNotification(ctx, tx, *event); e != nil {
 			return contracts.CommandReceipt{}, e
 		}
+	}
+	if err = appendScreenUpdatedTx(ctx, tx, p, events); err != nil {
+		return contracts.CommandReceipt{}, err
 	}
 	if cursor == 0 {
 		if err = tx.QueryRowContext(ctx, `SELECT current_cursor FROM event_counters WHERE workspace_id=?`, p.WorkspaceID).Scan(&cursor); err != nil {

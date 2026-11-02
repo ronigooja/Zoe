@@ -63,7 +63,7 @@ Client behavior follows [product chapter 3](product.md#client-behavior-boundarie
 
 ### Ambient macOS screen and client-tools boundary
 
-On macOS the server/AI owns a versioned declarative screen document and opaque interaction intents; the client owns the generic renderer, platform visuals, accessibility, and graceful degradation. The client never fabricates content, hardcodes business concepts, or decides an intent's outcome, and it exposes the surface, component-catalog, settings, voice, and text-bar tools listed in [the screen-document contract](design/screen-document.md). The AI controls its own surfaces and window form; the menu-bar item and microphone-use indication always remain. Rationale is in [ADR 0008](architecture/decisions/0008-ambient-screen-client.md); the Go contracts remain authoritative until that draft is mirrored into `/contracts`.
+On macOS the server/AI owns a versioned declarative screen document and opaque interaction intents; the client owns the generic renderer, platform visuals, accessibility, and graceful degradation. The client never fabricates content, hardcodes business concepts, or decides an intent's outcome, and it exposes the surface, component-catalog, settings, voice, and text-bar tools listed in [the screen-document contract](design/screen-document.md). The AI controls its own surfaces and window form; the menu-bar item and microphone-use indication always remain. Rationale is in [ADR 0008](architecture/decisions/0008-ambient-screen-client.md); the Go contract in [`contracts/screen.go`](../contracts/screen.go) is authoritative while the Swift renderer is pending.
 
 ## Voice and business work
 

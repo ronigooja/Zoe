@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/screen"
 )
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -35,6 +36,65 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, snapshot)
 }
+
+func (s *Server) handleScreen(w http.ResponseWriter, r *http.Request) {
+	p, ok := PrincipalFromContext(r.Context())
+	if !ok {
+		writeError(w, apiError(401, "unauthenticated", "device authentication required", nil))
+		return
+	}
+	tx, err := s.store.DB().BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer tx.Rollback()
+	snapshot, err := loadSnapshot(r.Context(), tx, p.WorkspaceID, p.SubjectID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	notifications := []contracts.Notification{}
+	rows, err := tx.QueryContext(r.Context(), `SELECT id,kind,title,body,aggregate_type,aggregate_id,source_event_id,created_at,read_at FROM notifications WHERE workspace_id=? AND subject_id=? ORDER BY created_at,id`, p.WorkspaceID, p.SubjectID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	for rows.Next() {
+		var n contracts.Notification
+		var created string
+		var read sql.NullString
+		if err := rows.Scan(&n.ID, &n.Kind, &n.Title, &n.Body, &n.AggregateType, &n.AggregateID, &n.SourceEventID, &created, &read); err != nil {
+			rows.Close()
+			writeError(w, err)
+			return
+		}
+		n.CreatedAt = parseTime(created)
+		if read.Valid {
+			v := parseTime(read.String)
+			n.ReadAt = &v
+		}
+		notifications = append(notifications, n)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		writeError(w, err)
+		return
+	}
+	rows.Close()
+	if err = tx.Commit(); err != nil {
+		writeError(w, err)
+		return
+	}
+	out, err := screen.Build(snapshot.Tasks, notifications, parseInt64(snapshot.EventCursor), time.Now().UTC())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+func parseInt64(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
 
 func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string) (contracts.Snapshot, error) {
 	out := contracts.Snapshot{WorkspaceID: workspace, SubjectID: subject, ServerVersion: "1", Projects: []contracts.Project{}, Tasks: []contracts.Task{}, Approvals: []contracts.Approval{}, Runs: []contracts.Run{}}
@@ -71,7 +131,7 @@ func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string) (c
 		return out, err
 	}
 	projects.Close()
-	tasks, err := tx.QueryContext(ctx, `SELECT id,coalesce(project_id,''),title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,started_at,finished_at,result,error,interaction_state,interaction_scope,interaction_run_id,interaction_action_digest,interaction_expires_at FROM tasks t WHERE workspace_id=? AND (owner_subject_id=?) ORDER BY created_at,id`, workspace, subject)
+	tasks, err := tx.QueryContext(ctx, `SELECT id,coalesce(project_id,''),title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,started_at,finished_at,result,error,interaction_state,interaction_scope,interaction_run_id,interaction_action_digest,interaction_expires_at,interaction_expected_version FROM tasks t WHERE workspace_id=? AND (owner_subject_id=?) ORDER BY created_at,id`, workspace, subject)
 	if err != nil {
 		return out, err
 	}
@@ -79,7 +139,7 @@ func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string) (c
 		var t contracts.Task
 		var created, updated string
 		var accepted, started, finished, interactionExpires sql.NullString
-		if err = tasks.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Goal, &t.Source, &t.ProfileID, &t.Status, &t.Version, &created, &updated, &accepted, &started, &finished, &t.Result, &t.Error, &t.InteractionState, &t.InteractionScope, &t.InteractionRunID, &t.InteractionActionDigest, &interactionExpires); err != nil {
+		if err = tasks.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Goal, &t.Source, &t.ProfileID, &t.Status, &t.Version, &created, &updated, &accepted, &started, &finished, &t.Result, &t.Error, &t.InteractionState, &t.InteractionScope, &t.InteractionRunID, &t.InteractionActionDigest, &interactionExpires, &t.InteractionExpectedVersion); err != nil {
 			tasks.Close()
 			return out, err
 		}
@@ -309,7 +369,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		rows, err := tx.QueryContext(r.Context(), `SELECT e.cursor,e.event_type,e.payload,(e.subject_id=? OR ?=1 OR (e.aggregate_type='project' AND EXISTS(SELECT 1 FROM projects p WHERE p.workspace_id=e.workspace_id AND p.id=e.aggregate_id AND (p.owner_subject_id=?))) OR (e.aggregate_type='task' AND EXISTS(SELECT 1 FROM tasks t WHERE t.workspace_id=e.workspace_id AND t.id=e.aggregate_id AND (t.owner_subject_id=?))) OR (e.aggregate_type='run' AND EXISTS(SELECT 1 FROM runs r JOIN tasks t ON t.id=r.task_id AND t.workspace_id=r.workspace_id WHERE r.workspace_id=e.workspace_id AND r.id=e.aggregate_id AND (t.owner_subject_id=?)))) AS visible FROM events e WHERE e.workspace_id=? AND e.cursor>? ORDER BY e.cursor LIMIT 100`, p.SubjectID, true, p.SubjectID, p.SubjectID, p.SubjectID, p.WorkspaceID, cursor)
+		rows, err := tx.QueryContext(r.Context(), `SELECT e.cursor,e.event_type,e.payload,(e.subject_id=? OR ?=1 OR e.aggregate_type='workspace' OR (e.aggregate_type='project' AND EXISTS(SELECT 1 FROM projects p WHERE p.workspace_id=e.workspace_id AND p.id=e.aggregate_id AND (p.owner_subject_id=?))) OR (e.aggregate_type='task' AND EXISTS(SELECT 1 FROM tasks t WHERE t.workspace_id=e.workspace_id AND t.id=e.aggregate_id AND (t.owner_subject_id=?))) OR (e.aggregate_type='run' AND EXISTS(SELECT 1 FROM runs r JOIN tasks t ON t.id=r.task_id AND t.workspace_id=r.workspace_id WHERE r.workspace_id=e.workspace_id AND r.id=e.aggregate_id AND (t.owner_subject_id=?)))) AS visible FROM events e WHERE e.workspace_id=? AND e.cursor>? ORDER BY e.cursor LIMIT 100`, p.SubjectID, true, p.SubjectID, p.SubjectID, p.SubjectID, p.WorkspaceID, cursor)
 		if err != nil {
 			_ = tx.Rollback()
 			return
