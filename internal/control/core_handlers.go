@@ -240,6 +240,16 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 	if (status == "waiting" || status == "awaiting_user") && interaction == "none" {
 		interaction = "awaiting_message"
 	}
+	liveInteractionRun := false
+	if interactionRun != "" {
+		var runStatus string
+		err = tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE id=? AND task_id=? AND workspace_id=?`, interactionRun, p.TaskID, c.Principal.WorkspaceID).Scan(&runStatus)
+		if err == nil {
+			liveInteractionRun = runStatus == "dispatching" || runStatus == "active" || runStatus == "uncertain"
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return contracts.CommandResult{}, nil, err
+		}
+	}
 	confirmed := false
 	if interaction == "explicit_confirmation" {
 		if interactionVersion != version || scope == "" || interactionRun == "" || actionDigest == "" || expires == "" {
@@ -268,13 +278,15 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 	version++
 	nextStatus := status
 	expiredInteraction := expiredKind == "question" || expiredKind == "permission"
-	if (status == "waiting" || status == "awaiting_user") && (interaction == "awaiting_message" || expiredInteraction) {
+	if (status == "waiting" || status == "awaiting_user") && (interaction == "awaiting_message" || expiredInteraction) && !liveInteractionRun {
 		nextStatus = "queued"
 	}
 	// An expired permission is not an authorization to retry. Keep it
 	// answerable until the user supplies a typed answer, then queue the new run.
 	if expiredKind == "permission" && strings.TrimSpace(p.Content) != "" {
-		nextStatus = "queued"
+		if !liveInteractionRun {
+			nextStatus = "queued"
+		}
 	}
 	if interaction == "awaiting_message" && interactionRun != "" && actionDigest != "" {
 		if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='answer',message=? WHERE task_id=? AND run_id=? AND action_digest=? AND authorization_used=0`, p.Content, p.TaskID, interactionRun, actionDigest); err != nil {

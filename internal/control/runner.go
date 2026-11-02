@@ -71,7 +71,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	rows, err := tx.QueryContext(r.Context(), `SELECT id,workspace_id,title,goal,profile_id,harness,version,created_by_device_id,command_id,coalesce(lineage_root_task_id,id),coalesce(lineage_parent_task_id,''),lineage_depth,child_policy_json,pregrant_capabilities_json,source,interaction_state,interaction_expired_kind,coalesce(interaction_question,''),interaction_expected_version FROM tasks WHERE status='queued' AND NOT EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id=tasks.id AND d.status<>'satisfied') ORDER BY created_at,id`)
+	rows, err := tx.QueryContext(r.Context(), `SELECT id,workspace_id,title,goal,profile_id,harness,version,created_by_device_id,command_id,coalesce(lineage_root_task_id,id),coalesce(lineage_parent_task_id,''),lineage_depth,child_policy_json,pregrant_capabilities_json,source,interaction_state,interaction_expired_kind,coalesce(interaction_question,''),interaction_expected_version FROM tasks WHERE status='queued' AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id=tasks.id AND r.status IN ('dispatching','active','uncertain')) AND NOT EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id=tasks.id AND d.status<>'satisfied') ORDER BY created_at,id`)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -883,16 +883,6 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		// Runner emits this only after independent termination and cleanup confirmation.
 		nextRunStatus = "stopped"
 		nextTaskStatus = "canceled"
-		if interactionState == "awaiting_message" || interactionState == "explicit_confirmation" {
-			var expired string
-			_ = tx.QueryRowContext(r.Context(), `SELECT interaction_expired_kind FROM tasks WHERE id=?`, taskID).Scan(&expired)
-			if expired == "" {
-				nextTaskStatus = "canceled"
-			}
-		}
-		if interactionState == "awaiting_message" || interactionState == "explicit_confirmation" {
-			nextTaskStatus = "awaiting_user"
-		}
 	case "runtime_terminated":
 		nextRunStatus = "verification_pending"
 		var resultCount int
@@ -903,16 +893,6 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		if desired == "stop" {
 			nextRunStatus = "stopped"
 			nextTaskStatus = "canceled"
-			if interactionState == "awaiting_message" || interactionState == "explicit_confirmation" {
-				var expired string
-				_ = tx.QueryRowContext(r.Context(), `SELECT interaction_expired_kind FROM tasks WHERE id=?`, taskID).Scan(&expired)
-				if expired == "" {
-					nextTaskStatus = "canceled"
-				}
-			}
-			if interactionState == "awaiting_message" || interactionState == "explicit_confirmation" {
-				nextTaskStatus = "awaiting_user"
-			}
 		} else if resultCount > 0 {
 			nextTaskStatus = "awaiting_user"
 		} else {

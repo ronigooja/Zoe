@@ -24,6 +24,8 @@ type runtimeFake struct {
 	pendingPermissions          []opencode.PermissionRequest
 	pendingForms                []opencode.FormRequest
 	formsReplied                []string
+	formAnswers                 []map[string]any
+	permissionsReplied          []string
 }
 
 func (f *runtimeFake) PendingPermissions(context.Context, RuntimeBinding) ([]opencode.PermissionRequest, error) {
@@ -32,8 +34,17 @@ func (f *runtimeFake) PendingPermissions(context.Context, RuntimeBinding) ([]ope
 func (f *runtimeFake) PendingForms(context.Context, RuntimeBinding) ([]opencode.FormRequest, error) {
 	return f.pendingForms, nil
 }
-func (f *runtimeFake) ReplyForm(_ context.Context, _ RuntimeBinding, formID string, _ map[string]any) error {
+func (f *runtimeFake) ReplyForm(_ context.Context, _ RuntimeBinding, formID string, answer map[string]any) error {
 	f.formsReplied = append(f.formsReplied, formID)
+	f.formAnswers = append(f.formAnswers, answer)
+	f.pendingForms = nil
+	f.done = true
+	return nil
+}
+func (f *runtimeFake) ReplyPermission(_ context.Context, _ RuntimeBinding, requestID string, _ opencode.PermissionDecision, _ string) error {
+	f.permissionsReplied = append(f.permissionsReplied, requestID)
+	f.pendingPermissions = nil
+	f.done = true
 	return nil
 }
 
@@ -394,48 +405,53 @@ func TestPendingPermissionIsReportedWithoutLocalReply(t *testing.T) {
 	c := &controlFake{}
 	j := openTestJournal(t)
 	e := testEngine(t, f, c, j)
+	e.Control = struct {
+		*controlFake
+		*authorizationFake
+	}{c, &authorizationFake{decision: "once", request: "p1"}}
 	if err := e.Process(testContext(t), testClaim()); err != nil {
 		t.Fatal(err)
 	}
-	if f.prompts != 1 || kinds(c) != "dispatch_started,dispatch_bound,permission_requested" {
+	if f.prompts != 1 || len(f.permissionsReplied) != 1 || kinds(c) != "dispatch_started,dispatch_bound,permission_requested,result,runtime_terminated" {
 		t.Fatalf("prompts=%d observations=%s", f.prompts, kinds(c))
 	}
 }
 
-type authorizationFake struct{}
+type authorizationFake struct {
+	calls    int
+	decision string
+	request  string
+}
 
-func (authorizationFake) RuntimeAuthorization(context.Context, string, string, uint64) (*contracts.RuntimeAuthorization, error) {
-	return &contracts.RuntimeAuthorization{RequestID: "form-1", Decision: "answer", Message: "answer"}, nil
+func (f *authorizationFake) RuntimeAuthorization(context.Context, string, string, uint64) (*contracts.RuntimeAuthorization, error) {
+	f.calls++
+	if f.decision == "" || f.calls == 1 {
+		return nil, nil
+	}
+	return &contracts.RuntimeAuthorization{RequestID: f.request, Decision: f.decision, Message: "answer"}, nil
 }
 
 func TestWorkerQuestionAnswerUsesSameSessionFormReply(t *testing.T) {
 	f := completingRuntimeFake()
 	f.done = false
-	f.pendingForms = []opencode.FormRequest{{ID: "form-1", Title: "Questions", Fields: []map[string]any{{"description": "What?"}}}}
+	f.pendingForms = []opencode.FormRequest{{ID: "form-1", Title: "Questions", Fields: []map[string]any{{"key": "real-key", "description": "What?"}}}}
 	c := &controlFake{}
 	j := openTestJournal(t)
 	claim := testClaim()
 	e := testEngine(t, f, c, j)
+	auth := &authorizationFake{request: "form-1", decision: "answer"}
+	e.Control = struct {
+		*controlFake
+		*authorizationFake
+	}{c, auth}
 	if err := e.Process(testContext(t), claim); err != nil {
 		t.Fatal(err)
 	}
-	if err := j.SetPhase(context.Background(), claim.RunID, claim.AttemptID, claim.Fence, "waiting_question"); err != nil {
-		t.Fatal(err)
-	}
-	f.pendingForms = nil
-	f.done = true
 	f.result.Info.Role = "assistant"
 	f.result.Info.Time.Completed = 1
 	f.result.Info.Finish = "stop"
-	e.Control = struct {
-		*controlFake
-		authorizationFake
-	}{c, authorizationFake{}}
-	if err := e.Process(testContext(t), claim); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.formsReplied) != 1 || f.formsReplied[0] != "form-1" {
-		t.Fatalf("form replies=%v", f.formsReplied)
+	if len(f.formsReplied) != 1 || f.formsReplied[0] != "form-1" || f.formAnswers[0]["real-key"] != "answer" {
+		t.Fatalf("form replies=%v answers=%v", f.formsReplied, f.formAnswers)
 	}
 }
 

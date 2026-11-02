@@ -106,20 +106,6 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 			if entry.Session == "" {
 				return fmt.Errorf("%w: waiting runtime identity incomplete", ErrOutcomePending)
 			}
-			if entry.Phase == "waiting_question" {
-				if authc, ok := e.Control.(runtimeAuthorizationControl); ok {
-					if auth, err := authc.RuntimeAuthorization(ctx, claim.RunID, "", claim.Fence); err == nil && auth != nil && auth.Decision == "answer" {
-						reply, ok := e.Runtime.(FormReply)
-						if !ok {
-							return errors.New("runtime does not support same-session form replies")
-						}
-						if err := reply.ReplyForm(ctx, RuntimeBinding{SessionID: entry.Session}, auth.RequestID, map[string]any{"q0": auth.Message}); err != nil {
-							return err
-						}
-						_ = e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_sent")
-					}
-				}
-			}
 			return e.monitor(ctx, claim, RuntimeBinding{SessionID: entry.Session})
 		}
 	}
@@ -259,6 +245,7 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 		if pending, ok := e.Runtime.(PendingRequests); ok {
 			if requests, reqErr := pending.PendingPermissions(ctx, b); reqErr == nil && len(requests) > 0 {
 				r := requests[0]
+				entry, _, _ := e.Journal.Entry(ctx, claim.RunID)
 				if authc, ok := e.Control.(runtimeAuthorizationControl); ok {
 					if authorization, authErr := authc.RuntimeAuthorization(ctx, claim.RunID, r.ID, claim.Fence); authErr == nil && authorization != nil {
 						decision := opencode.PermissionDecision(authorization.Decision)
@@ -274,13 +261,45 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 						}
 					}
 				}
-				if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "waiting_permission"); err != nil {
-					return err
+				if entry.Phase != "waiting_permission" {
+					if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "waiting_permission"); err != nil {
+						return err
+					}
+					if err := e.emitPending(ctx, claim, "permission_requested", map[string]any{"request_id": r.ID, "action": r.Action, "resources": r.Resources, "metadata": r.Metadata}); err != nil {
+						return err
+					}
 				}
-				return e.emitPending(ctx, claim, "permission_requested", map[string]any{"request_id": r.ID, "action": r.Action, "resources": r.Resources, "metadata": r.Metadata})
+				time.Sleep(e.interval())
+				continue
 			}
 			if forms, reqErr := pending.PendingForms(ctx, b); reqErr == nil && len(forms) > 0 {
 				f := forms[0]
+				entry, _, _ := e.Journal.Entry(ctx, claim.RunID)
+				if authc, ok := e.Control.(runtimeAuthorizationControl); ok {
+					if authorization, authErr := authc.RuntimeAuthorization(ctx, claim.RunID, f.ID, claim.Fence); authErr == nil && authorization != nil {
+						if authorization.Decision != "answer" {
+							return errors.New("invalid runtime authorization decision")
+						}
+						reply, ok := e.Runtime.(FormReply)
+						if !ok {
+							return errors.New("runtime does not support same-session form replies")
+						}
+						key := ""
+						if len(f.Fields) > 0 {
+							key, _ = f.Fields[0]["key"].(string)
+						}
+						if key == "" {
+							return errors.New("runtime question form has no field key")
+						}
+						if err := reply.ReplyForm(ctx, b, f.ID, map[string]any{key: authorization.Message}); err != nil {
+							return err
+						}
+						if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_sent"); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 				question := f.Title
 				for _, field := range f.Fields {
 					if q, ok := field["description"].(string); ok && q != "" {
@@ -291,10 +310,16 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 				if len(question) > 4000 {
 					question = question[:4000]
 				}
-				if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "waiting_question"); err != nil {
-					return err
+				if entry.Phase != "waiting_question" {
+					if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "waiting_question"); err != nil {
+						return err
+					}
+					if err := e.emitPending(ctx, claim, "worker_question", map[string]any{"request_id": f.ID, "question": question, "title": f.Title}); err != nil {
+						return err
+					}
 				}
-				return e.emitPending(ctx, claim, "worker_question", map[string]any{"request_id": f.ID, "question": question, "title": f.Title})
+				time.Sleep(e.interval())
+				continue
 			}
 		}
 		entry, _, _ = e.Journal.Entry(ctx, claim.RunID)
