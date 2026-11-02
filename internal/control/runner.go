@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -246,11 +247,15 @@ func (s *Server) attachMemoryContext(ctx context.Context, claim contracts.JobCla
 		return claim
 	}
 	budget := int(claim.Budget.MaxInputUnits)
-	if budget > 32_000 {
-		budget = 32_000
+	if budget <= 0 {
+		budget = contracts.MemoryContextDefaultBudgetTokens
+	}
+	if budget > contracts.MemoryContextMaxBudgetTokens {
+		budget = contracts.MemoryContextMaxBudgetTokens
 	}
 	assembled, err := assembler(ctx, p, claim.TaskID, owner, claim.Goal, budget)
 	if err != nil {
+		log.Printf("runner memory context unavailable task=%s class=%T", claim.TaskID, err)
 		return claim
 	}
 	claim.MemoryContext = assembled

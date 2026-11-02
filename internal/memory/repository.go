@@ -535,7 +535,7 @@ func (r *Repository) assembleContext(ctx context.Context, principal contracts.Pr
 	if principal.WorkspaceID == "" || principal.SubjectID == "" || recipientID == "" {
 		return ContextManifest{}, nil, ErrForbidden
 	}
-	if budget < 1 || budget > 32_000 {
+	if budget < 1 || budget > contracts.MemoryContextMaxBudgetTokens {
 		return ContextManifest{}, nil, errors.New("context budget must be between 1 and 32000 tokens")
 	}
 	if recipientID != principal.SubjectID && !hasScope(principal.Scopes, "memory:context:any") {

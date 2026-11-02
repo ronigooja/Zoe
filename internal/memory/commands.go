@@ -414,7 +414,7 @@ func (s *Service) handleContext(w http.ResponseWriter, r *http.Request) {
 	}
 	budget := 2048
 	if raw := r.URL.Query().Get("budget"); raw != "" {
-		if _, err := fmt.Sscanf(raw, "%d", &budget); err != nil || budget < 1 || budget > 32_000 {
+		if _, err := fmt.Sscanf(raw, "%d", &budget); err != nil || budget < 1 || budget > contracts.MemoryContextMaxBudgetTokens {
 			control.WriteError(w, featureError(http.StatusBadRequest, "invalid_request", "budget must be between 1 and 32000 tokens", nil))
 			return
 		}

@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+// MemoryContextDefaultBudgetTokens applies when a run claim has no positive
+// input-unit budget. MemoryContextMaxBudgetTokens is the authority ceiling for
+// all assembled contexts.
+const (
+	MemoryContextDefaultBudgetTokens = 2048
+	MemoryContextMaxBudgetTokens     = 32_000
+)
+
 // Principal is populated exclusively from authenticated server state.
 type Principal struct {
 	Generation     int64    `json:"-"`
