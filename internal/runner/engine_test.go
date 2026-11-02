@@ -422,6 +422,11 @@ func TestWorkerQuestionAnswerUsesSameSessionFormReply(t *testing.T) {
 	if err := j.SetPhase(context.Background(), claim.RunID, claim.AttemptID, claim.Fence, "waiting_question"); err != nil {
 		t.Fatal(err)
 	}
+	f.pendingForms = nil
+	f.done = true
+	f.result.Info.Role = "assistant"
+	f.result.Info.Time.Completed = 1
+	f.result.Info.Finish = "stop"
 	e.Control = struct {
 		*controlFake
 		authorizationFake
