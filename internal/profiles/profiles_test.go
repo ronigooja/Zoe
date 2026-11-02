@@ -71,12 +71,26 @@ func TestOpenCodeToolActionsAreAllowedByTierAndUnknownActionsDenied(t *testing.T
 }
 
 func TestScraplingOnlyMCPToolsAreAllowed(t *testing.T) {
-	rules, _, err := EffectivePermissionSet(Profile{PermissionTier: TierReadOnlyResearch}, nil, nil)
+	readOnly, _, err := EffectivePermissionSet(Profile{PermissionTier: TierReadOnlyResearch}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evaluate(rules, "scrapling_make_request", "*") != "allow" || evaluate(rules, "other_mcp_tool", "*") != "deny" || evaluate(rules, "websearch", "*") != "deny" {
-		t.Fatalf("rules=%v", rules)
+	write, _, err := EffectivePermissionSet(Profile{PermissionTier: TierWorkspaceReadWrite}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"scrapling_make_request", "scrapling_browser_fetch_once", "scrapling_browser_open", "scrapling_open_request_session", "scrapling_close_session", "scrapling_list_sessions", "scrapling_browser_fetch", "scrapling_session_make_request", "scrapling_browser_screenshot", "scrapling_browser_extract", "scrapling_browser_network_requests", "scrapling_browser_network_request"} {
+		if evaluate(readOnly, action, "*") != "allow" || evaluate(write, action, "*") != "allow" {
+			t.Fatalf("fetch action %s not allowed", action)
+		}
+	}
+	for _, action := range []string{"scrapling_browser_actions", "scrapling_browser_evaluate", "scrapling_browser_save_state", "scrapling_browser_load_state"} {
+		if evaluate(readOnly, action, "*") != "deny" || evaluate(write, action, "*") != "allow" {
+			t.Fatalf("action scope %s read=%s write=%s", action, evaluate(readOnly, action, "*"), evaluate(write, action, "*"))
+		}
+	}
+	if evaluate(readOnly, "other_mcp_tool", "*") != "deny" || evaluate(readOnly, "websearch", "*") != "deny" {
+		t.Fatalf("rules=%v", readOnly)
 	}
 }
 

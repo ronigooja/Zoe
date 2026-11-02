@@ -10,4 +10,6 @@ grep -q 'python3-venv' "$script"
 grep -q 'MemoryMax=900M' "$script"
 grep -q 'SCRAPLING_MCP_AUTH_TOKEN' "$script"
 grep -q 'scrapling-mcp --http' "$script"
+grep -q 'would status-probe' <<<"$output"
+grep -q 'sha256sum' "$script"
 echo 'remote Scrapling installer dry-run checks passed'

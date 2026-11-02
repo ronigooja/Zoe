@@ -865,6 +865,10 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 	if err := writeEnv(filepath.Join(o.Root, "zoe-runner.env"), runnerEnv, 0600); err != nil {
 		return err
 	}
+	values, _ := readEnv(filepath.Join(o.Root, "zoe-runner.env"))
+	if err := m.ensureLocalScrapling(context.Background(), o, values); err != nil {
+		reportScraplingWarning(o.Out, err)
+	}
 	return renderOpenCodeConfig(o)
 }
 

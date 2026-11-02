@@ -1,29 +1,29 @@
 package ops
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
 const ScraplingVersion = "0.5"
 
 type ScraplingSettings struct {
-	Mode       string
-	URL        string
-	TokenFile  string
-	MaxBrowser int
+	Mode      string
+	URL       string
+	TokenFile string
 }
 
 func ParseScraplingSettings(values map[string]string) (ScraplingSettings, error) {
-	s := ScraplingSettings{Mode: strings.ToLower(strings.TrimSpace(values["ZOE_SCRAPLING_MODE"])), URL: strings.TrimSpace(values["ZOE_SCRAPLING_URL"]), TokenFile: values["ZOE_SCRAPLING_TOKEN_FILE"], MaxBrowser: 1}
+	s := ScraplingSettings{Mode: strings.ToLower(strings.TrimSpace(values["ZOE_SCRAPLING_MODE"])), URL: strings.TrimSpace(values["ZOE_SCRAPLING_URL"]), TokenFile: values["ZOE_SCRAPLING_TOKEN_FILE"]}
 	if s.Mode == "" {
 		if s.URL != "" {
 			s.Mode = "remote"
@@ -47,13 +47,6 @@ func ParseScraplingSettings(values map[string]string) (ScraplingSettings, error)
 	}
 	if s.Mode == "local" && s.URL != "" {
 		return s, errors.New("ZOE_SCRAPLING_URL is only valid for remote mode")
-	}
-	if raw := strings.TrimSpace(values["ZOE_SCRAPLING_MAX_BROWSERS"]); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > 8 {
-			return s, errors.New("ZOE_SCRAPLING_MAX_BROWSERS must be between 1 and 8")
-		}
-		s.MaxBrowser = n
 	}
 	if s.TokenFile != "" && (!filepath.IsAbs(s.TokenFile) || strings.ContainsAny(s.TokenFile, "\r\n\x00")) {
 		return s, errors.New("ZOE_SCRAPLING_TOKEN_FILE must be an absolute path")
@@ -80,7 +73,7 @@ func scraplingMCPEntry(s ScraplingSettings, optRoot string) (map[string]any, boo
 		if _, err := os.Stat(path); err != nil {
 			return nil, false, nil
 		}
-		return map[string]any{"type": "local", "command": []string{path}, "environment": map[string]string{"SCRAPLING_MAX_BROWSERS": strconv.Itoa(s.MaxBrowser)}}, true, nil
+		return map[string]any{"type": "local", "command": []string{path}}, true, nil
 	default:
 		return nil, false, errors.New("invalid Scrapling mode")
 	}
@@ -112,4 +105,73 @@ func ValidateScraplingWheel(version, digest string) error {
 		return errors.New("Scrapling release pin or wheel checksum mismatch")
 	}
 	return nil
+}
+
+func (m Manager) ensureLocalScrapling(ctx context.Context, o LifecycleOptions, values map[string]string) error {
+	s, err := ParseScraplingSettings(values)
+	if err != nil || s.Mode != "local" {
+		return err
+	}
+	bin := filepath.Join(o.OptRoot, "scrapling", ScraplingVersion, "venv", "bin", "scrapling-mcp")
+	if _, err := os.Stat(bin); err == nil {
+		return nil
+	}
+	venv := filepath.Dir(bin)
+	if _, err := os.Stat(filepath.Join(venv, "python")); os.IsNotExist(err) {
+		if _, e := m.Run(ctx, "dpkg-query", "-W", "-f=${Status}", "python3-venv"); e != nil {
+			if _, e = m.Run(ctx, "apt-get", "update"); e != nil {
+				return e
+			}
+			if _, e = m.Run(ctx, "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "python3-venv"); e != nil {
+				return e
+			}
+		}
+		if _, e := m.Run(ctx, "python3", "-m", "venv", venv); e != nil {
+			return e
+		}
+	}
+	dir, err := os.MkdirTemp("", "zoe-scrapling-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	if _, err = m.Run(ctx, "python3", "-m", "pip", "download", "--disable-pip-version-check", "--no-deps", "--dest", dir, "scrapling=="+ScraplingVersion); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var wheel string
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) == ".whl" && strings.HasPrefix(e.Name(), "scrapling-") {
+			wheel = filepath.Join(dir, e.Name())
+			break
+		}
+	}
+	if wheel == "" {
+		return errors.New("Scrapling wheel download missing")
+	}
+	b, err := os.ReadFile(wheel)
+	if err != nil {
+		return err
+	}
+	h := sha256.Sum256(b)
+	if err := ValidateScraplingWheel(ScraplingVersion, hex.EncodeToString(h[:])); err != nil {
+		return err
+	}
+	if _, err = m.Run(ctx, filepath.Join(venv, "bin", "pip"), "install", "--disable-pip-version-check", "--no-cache-dir", wheel); err != nil {
+		return err
+	}
+	cache := filepath.Join(o.OptRoot, "scrapling", "cache")
+	if _, err = m.Run(ctx, "env", "PLAYWRIGHT_BROWSERS_PATH="+filepath.Join(o.OptRoot, "scrapling", "browsers"), "XDG_CACHE_HOME="+cache, filepath.Join(venv, "bin", "scrapling"), "install"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func reportScraplingWarning(out io.Writer, err error) {
+	if out != nil && err != nil {
+		fmt.Fprintf(out, "Warning: local Scrapling unavailable; MCP omitted: %v\n", err)
+	}
 }

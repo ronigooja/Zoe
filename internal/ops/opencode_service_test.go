@@ -151,6 +151,60 @@ func TestScraplingWheelPinAndTokenFingerprint(t *testing.T) {
 	}
 }
 
+func TestLocalScraplingInstallerSkipsExistingAndReportsChecksumFailure(t *testing.T) {
+	d := t.TempDir()
+	o := LifecycleOptions{OptRoot: d}
+	bin := filepath.Join(d, "scrapling", ScraplingVersion, "venv", "bin", "scrapling-mcp")
+	if err := os.MkdirAll(filepath.Dir(bin), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("installed"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	m := NewManager(func(context.Context, string, ...string) ([]byte, error) { calls++; return nil, nil })
+	if err := m.ensureLocalScrapling(context.Background(), o, map[string]string{"ZOE_SCRAPLING_MODE": "local"}); err != nil || calls != 0 {
+		t.Fatalf("existing install err=%v calls=%d", err, calls)
+	}
+	os.Remove(bin)
+	m = NewManager(func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "dpkg-query" {
+			return nil, errors.New("missing")
+		}
+		if name == "apt-get" && len(args) > 0 && args[0] == "update" {
+			return nil, nil
+		}
+		if name == "env" {
+			return nil, nil
+		}
+		if name == "python3" && len(args) >= 3 && args[0] == "-m" && args[1] == "venv" {
+			return nil, nil
+		}
+		if name == "python3" && len(args) >= 3 && args[1] == "pip" {
+			return nil, nil
+		}
+		if strings.HasSuffix(name, "/pip") && len(args) > 0 && args[0] == "install" {
+			return nil, nil
+		}
+		return nil, nil
+	})
+	if err := m.ensureLocalScrapling(context.Background(), o, map[string]string{"ZOE_SCRAPLING_MODE": "local"}); err == nil || !strings.Contains(err.Error(), "wheel download missing") {
+		t.Fatalf("expected wheel failure, got %v", err)
+	}
+}
+
+func TestLocalScraplingInstallerFailureIsWarningOnly(t *testing.T) {
+	d := t.TempDir()
+	o := LifecycleOptions{OptRoot: d, Out: new(strings.Builder)}
+	m := NewManager(func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("install failed") })
+	if err := m.ensureLocalScrapling(context.Background(), o, map[string]string{"ZOE_SCRAPLING_MODE": "local"}); err == nil {
+		t.Fatal("expected installer error")
+	}
+	if _, _, err := scraplingMCPEntry(ScraplingSettings{Mode: "local"}, d); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOpenCodeVersionOutput(t *testing.T) {
 	tests := []struct {
 		name, output string

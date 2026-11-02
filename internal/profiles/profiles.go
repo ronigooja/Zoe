@@ -61,10 +61,17 @@ func EffectivePermissionSet(p Profile, taskScopes, extras []string) ([]contracts
 		}
 	}
 	add("read", "grep", "glob", "webfetch", "skill", "opencode_list_mcp_resources", "opencode_read_mcp_resource")
-	// MCP tool actions are the exported server/tool names. Keep the grant narrow
-	// to Scrapling; other configured MCP servers remain denied by the first rule.
-	for _, action := range []string{"scrapling_make_request", "scrapling_browser_fetch_once", "scrapling_browser_open", "scrapling_open_request_session", "scrapling_close_session", "scrapling_list_sessions", "scrapling_browser_fetch", "scrapling_session_make_request", "scrapling_browser_screenshot", "scrapling_browser_extract", "scrapling_browser_actions", "scrapling_browser_evaluate", "scrapling_browser_network_requests", "scrapling_browser_network_request", "scrapling_browser_save_state", "scrapling_browser_load_state"} {
+	// MCP actions are server_tool names. Read-only research gets HTTP/browser
+	// fetch, extraction, screenshots, and session lifecycle only. Workspace
+	// write and external tiers additionally get page actions/evaluation and
+	// browser state persistence; other MCP servers remain denied.
+	for _, action := range []string{"scrapling_make_request", "scrapling_browser_fetch_once", "scrapling_browser_open", "scrapling_open_request_session", "scrapling_close_session", "scrapling_list_sessions", "scrapling_browser_fetch", "scrapling_session_make_request", "scrapling_browser_screenshot", "scrapling_browser_extract", "scrapling_browser_network_requests", "scrapling_browser_network_request"} {
 		add(action)
+	}
+	if tier != TierReadOnlyResearch {
+		for _, action := range []string{"scrapling_browser_actions", "scrapling_browser_evaluate", "scrapling_browser_save_state", "scrapling_browser_load_state"} {
+			add(action)
+		}
 	}
 	if tier != TierReadOnlyResearch {
 		add("edit", "shell", "subagent", "question", "todowrite")
