@@ -481,6 +481,10 @@ WHERE c.workspace_id=? AND c.deleted_at IS NULL AND c.status IN ('active','confl
 		if !mayReadScope(p, c.Scope) || !allowed || !matchesFilter(c.Scope, filter) {
 			continue
 		}
+		if c.Authority == AuthorityModelInferred {
+			result.Missing = append(result.Missing, c.ID+":unverified")
+			continue
+		}
 		if c.ValidFrom != nil && c.ValidFrom.After(at) || c.ValidTo != nil && !c.ValidTo.After(at) {
 			continue
 		}
