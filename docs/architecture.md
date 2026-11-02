@@ -120,3 +120,4 @@ These records capture selected decisions, not new scope or acceptance claims:
 - [0010 — Host-installed OpenCode runtime](architecture/decisions/0010-host-opencode-runtime.md)
 - [0008 — Ambient macOS screen client](architecture/decisions/0008-ambient-screen-client.md)
 - [0009 — Voice front desk, steward routing, and impact-level authorization](architecture/decisions/0009-voice-steward-impact-policy.md)
+- [0011 — Profiles, per-run permissions, waiting runs, and bounded context](architecture/decisions/0011-profiles-permissions-and-context-hygiene.md)

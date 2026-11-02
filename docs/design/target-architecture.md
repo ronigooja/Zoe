@@ -78,4 +78,4 @@ Impact is set by server policy from a profile's declared capabilities and scopes
 - New trigger (schedule, event): same admission path; program first, Worker for semantic judgment, Super for complex coordination.
 - New voice transport: only the gateway changes; Zoe sees normalized events and a small API.
 - New client: consumes the screen document and event stream.
-- Run ceiling: operator setting, default four.
+- Run ceiling: operator setting, default in [ADR 0011](../architecture/decisions/0011-profiles-permissions-and-context-hygiene.md).

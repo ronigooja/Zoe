@@ -13,7 +13,7 @@ Requiring explicit transcript submission for every voice request made speaking a
 3. A spoken request is the instruction. The control plane creates the command on an authenticated path bound to the call and turn identity, with stable turn identity, revisions, and deduplication unchanged. Voice and the steward never create commands directly.
 4. Authorization follows server-set impact levels derived from the profile's declared capabilities and scopes, never from the model's description. Low-impact, reversible work executes on the spoken request. High-impact or irreversible work requires a scoped confirmation challenge bound to task, run, action, expected version, and expiry, answered by voice or screen and recorded by the server. Ambiguous words authorize nothing.
 5. Spoken output and transport continuity never establish completion or approval; only authoritative task events do.
-6. The active-run ceiling is an operator setting, default four.
+6. The active-run ceiling is an operator setting; the default is set in [ADR 0011](0011-profiles-permissions-and-context-hygiene.md).
 
 ## Consequences
 
