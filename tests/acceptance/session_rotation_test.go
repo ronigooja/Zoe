@@ -35,6 +35,10 @@ func TestSessionRotationRebindsRunAndRejectsOldTerminationSession(t *testing.T) 
 		t.Fatalf("claim=%+v err=%v", claim, err)
 	}
 	observe := func(o contracts.RunnerObservation) error { return client.Observe(t.Context(), claim.RunID, o) }
+	started := contracts.RunnerObservation{ObservationID: "started", RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: claim.Fence, Kind: "dispatch_started"}
+	if err := observe(started); err != nil {
+		t.Fatal(err)
+	}
 	bound := contracts.RunnerObservation{ObservationID: "bound", RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: claim.Fence, Kind: "dispatch_bound", RuntimeSessionID: "session-a", ExternalEffects: []contracts.ExternalEffect{{ID: claim.RunID, Kind: "runtime_create", Status: "created", Reference: "session-a"}}}
 	if err := observe(bound); err != nil {
 		t.Fatal(err)
@@ -78,6 +82,10 @@ func TestSessionRotationReplayWrongOldAndFenceAreRejected(t *testing.T) {
 	client, _ := runner.NewControlClient(live.URL, token, live.Client())
 	claim, err := client.Claim(t.Context())
 	if err != nil {
+		t.Fatal(err)
+	}
+	started := contracts.RunnerObservation{ObservationID: "started", RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: claim.Fence, Kind: "dispatch_started"}
+	if err = client.Observe(t.Context(), claim.RunID, started); err != nil {
 		t.Fatal(err)
 	}
 	bound := contracts.RunnerObservation{ObservationID: "bound", RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: claim.Fence, Kind: "dispatch_bound", RuntimeSessionID: "session-a", ExternalEffects: []contracts.ExternalEffect{{ID: claim.RunID, Kind: "runtime_create", Status: "created", Reference: "session-a"}}}
