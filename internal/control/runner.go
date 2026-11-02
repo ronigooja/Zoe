@@ -409,7 +409,7 @@ func (s *Server) handleRuntimeAuthorization(w http.ResponseWriter, r *http.Reque
 	var out contracts.RuntimeAuthorization
 	var used int
 	var expires string
-	query := `SELECT a.run_id,a.request_id,a.fence,a.decision,a.expires_at,a.authorization_used,a.question FROM pending_runtime_actions a JOIN runs r ON r.id=a.run_id WHERE a.run_id=? AND a.fence=? AND r.runner_id=?`
+	query := `SELECT a.run_id,a.request_id,a.fence,a.decision,a.expires_at,a.authorization_used,a.message FROM pending_runtime_actions a JOIN runs r ON r.id=a.run_id WHERE a.run_id=? AND a.fence=? AND r.runner_id=?`
 	args := []any{runID, fence, p.RunnerID}
 	if requestID != "" {
 		query += ` AND a.request_id=?`
@@ -433,7 +433,7 @@ func (s *Server) handleRuntimeAuthorization(w http.ResponseWriter, r *http.Reque
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	result, err := s.store.DB().ExecContext(r.Context(), `UPDATE pending_runtime_actions SET authorization_used=1 WHERE run_id=? AND request_id=? AND fence=? AND authorization_used=0`, runID, requestID, fence)
+	result, err := s.store.DB().ExecContext(r.Context(), `UPDATE pending_runtime_actions SET authorization_used=1 WHERE run_id=? AND request_id=? AND fence=? AND authorization_used=0`, runID, out.RequestID, fence)
 	if err != nil {
 		writeError(w, err)
 		return

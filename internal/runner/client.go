@@ -309,7 +309,12 @@ func (c *ControlClient) ObserveDeployment(ctx context.Context, observation contr
 
 func (c *ControlClient) request(ctx context.Context, method, endpoint string, body []byte, idempotencyKey string) (*http.Response, error) {
 	u := *c.base
-	u.Path = strings.TrimRight(c.base.Path, "/") + endpoint
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	u.Path = strings.TrimRight(c.base.Path, "/") + parsed.Path
+	u.RawQuery = parsed.RawQuery
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
