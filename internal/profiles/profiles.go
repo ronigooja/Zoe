@@ -3,10 +3,17 @@ package profiles
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/ronigooja/Zoe/contracts"
 )
+
+const maxExternalDirectories = 8
+
+var deniedExternalRoots = map[string]bool{
+	"/": true, "/etc": true, "/root": true, "/var/lib/zoe": true, "/opt/zoe": true,
+}
 
 const (
 	TierReadOnlyResearch   = "read_only_research"
@@ -37,10 +44,15 @@ func EffectivePermissionSet(p Profile, taskScopes, extras []string) ([]contracts
 	if tier != TierReadOnlyResearch && tier != TierWorkspaceReadWrite && tier != TierExternalPaths {
 		return nil, "", fmt.Errorf("unknown permission tier %q", tier)
 	}
-	for _, s := range append(append([]string{}, taskScopes...), extras...) {
+	allScopes := append(append([]string{}, taskScopes...), extras...)
+	for _, s := range allScopes {
 		if s == TierExternalPaths {
 			tier = TierExternalPaths
 		}
+	}
+	externalDirs, err := externalDirectories(allScopes)
+	if err != nil {
+		return nil, "", err
 	}
 	rules := []contracts.PermissionRule{{Action: "*", Resource: "*", Effect: "deny"}}
 	add := func(actions ...string) {
@@ -48,18 +60,59 @@ func EffectivePermissionSet(p Profile, taskScopes, extras []string) ([]contracts
 			rules = append(rules, contracts.PermissionRule{Action: action, Resource: "*", Effect: "allow"})
 		}
 	}
-	add("read", "grep", "glob", "webfetch")
+	add("read", "grep", "glob", "webfetch", "websearch", "skill", "opencode_list_mcp_resources", "opencode_read_mcp_resource")
 	if tier != TierReadOnlyResearch {
-		add("edit", "write", "shell")
+		add("edit", "shell", "subagent", "question", "todowrite")
 	}
 	if tier == TierExternalPaths {
-		rules = append(rules, contracts.PermissionRule{Action: "external_directory", Resource: "*", Effect: "allow"})
+		for _, dir := range externalDirs {
+			rules = append(rules, contracts.PermissionRule{Action: "external_directory", Resource: dir + "/*", Effect: "allow"})
+		}
 	}
 	impact := "low"
 	if tier == TierExternalPaths {
 		impact = "high"
 	}
 	return rules, impact, nil
+}
+
+func externalDirectories(scopes []string) ([]string, error) {
+	seen := map[string]bool{}
+	out := make([]string, 0)
+	for _, scope := range scopes {
+		if !strings.HasPrefix(scope, "external_path:") {
+			continue
+		}
+		dir := strings.TrimPrefix(scope, "external_path:")
+		if err := validateExternalDirectory(dir); err != nil {
+			return nil, err
+		}
+		dir = filepath.Clean(dir)
+		if !seen[dir] {
+			seen[dir] = true
+			out = append(out, dir)
+		}
+	}
+	if len(out) > maxExternalDirectories {
+		return nil, fmt.Errorf("too many external directories (maximum %d)", maxExternalDirectories)
+	}
+	return out, nil
+}
+
+func validateExternalDirectory(dir string) error {
+	if dir == "" || !filepath.IsAbs(dir) || strings.ContainsRune(dir, '\x00') {
+		return fmt.Errorf("external directory must be an absolute path")
+	}
+	for _, part := range strings.Split(filepath.ToSlash(dir), "/") {
+		if part == ".." {
+			return fmt.Errorf("external directory must not contain ..")
+		}
+	}
+	clean := filepath.Clean(dir)
+	if deniedExternalRoots[clean] {
+		return fmt.Errorf("external directory %q is too broad", clean)
+	}
+	return nil
 }
 
 func ValidateRuleset(rules []contracts.PermissionRule, tier string) error {
@@ -72,12 +125,25 @@ func ValidateRuleset(rules []contracts.PermissionRule, tier string) error {
 	if tier != TierReadOnlyResearch && tier != TierWorkspaceReadWrite && tier != TierExternalPaths {
 		return errors.New("invalid permission tier")
 	}
+	externalCount := 0
 	for _, r := range rules {
 		if r.Action == "" || r.Resource == "" || (r.Effect != "allow" && r.Effect != "deny" && r.Effect != "ask") {
 			return errors.New("invalid permission rule")
 		}
 		if r.Effect == "allow" && r.Action == "external_directory" && tier != TierExternalPaths {
 			return errors.New("external directory permission exceeds tier")
+		}
+		if r.Effect == "allow" && r.Action == "external_directory" {
+			externalCount++
+			if externalCount > maxExternalDirectories {
+				return fmt.Errorf("too many external directory rules (maximum %d)", maxExternalDirectories)
+			}
+			if r.Resource == "*" || !strings.HasSuffix(r.Resource, "/*") {
+				return errors.New("external directory permission must be directory-scoped")
+			}
+			if err := validateExternalDirectory(strings.TrimSuffix(r.Resource, "/*")); err != nil {
+				return err
+			}
 		}
 		if r.Effect == "allow" && (r.Action == "edit" || r.Action == "write" || r.Action == "shell") && tier == TierReadOnlyResearch {
 			return errors.New("write permission exceeds read-only tier")
