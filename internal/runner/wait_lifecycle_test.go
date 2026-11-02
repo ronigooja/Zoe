@@ -55,8 +55,10 @@ func TestWaitingRunUsesWaitLimitInsteadOfGenericDeadline(t *testing.T) {
 	claim.Budget.HardDeadline = time.Now().Add(-time.Hour)
 	e := testEngine(t, f, c, j)
 	e.WaitLimit = time.Hour
-	if err := e.Process(context.Background(), claim); err != nil {
-		t.Fatal(err)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := e.Process(ctx, claim); err == nil {
+		t.Fatal("waiting run unexpectedly completed")
 	}
 	if f.aborts != 0 || kinds(c) != "dispatch_started,dispatch_bound,permission_requested" {
 		t.Fatalf("waiting deadline behavior aborts=%d observations=%s", f.aborts, kinds(c))
