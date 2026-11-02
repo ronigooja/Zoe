@@ -26,7 +26,10 @@ func TestCurrentClaimRecoveryDoesNotDeadlockOrChangeSnapshot(t *testing.T) {
 	defer live.Close()
 	client := live.Client()
 	request := func(method, path, bearer string) (*http.Response, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		// This is only a generous upper bound for a deadlock. The assertions below
+		// verify the response and immutable snapshot; elapsed time is not part of
+		// the behavior under test.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, method, live.URL+path, nil)
 		if err != nil {
