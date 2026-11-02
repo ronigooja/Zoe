@@ -78,7 +78,9 @@ func testClaim() contracts.JobClaim {
 func TestValidateClaimFailsClosedWithoutPermissionRuleset(t *testing.T) {
 	c := testClaim()
 	c.PermissionRules = nil
-	if err := validateClaim(c); err == nil { t.Fatal("claim without ruleset was accepted") }
+	if err := validateClaim(c); err == nil {
+		t.Fatal("claim without ruleset was accepted")
+	}
 }
 func TestRuntimeProcessUsesHostSessionInterruptionProof(t *testing.T) {
 	f := &runtimeFake{events: make(chan opencode.Event, 1), done: true}
