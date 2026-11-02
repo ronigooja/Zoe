@@ -41,7 +41,7 @@ install() {
   [[ -n "$wheel" ]] || { echo 'Scrapling wheel download missing' >&2; exit 1; }
   actual=$(sha256sum "$wheel" | awk '{print $1}')
   [[ "$actual" == "$wheel_sha256" ]] || { echo 'Scrapling wheel checksum mismatch' >&2; exit 1; }
-  "$venv/bin/pip" install --disable-pip-version-check --no-cache-dir "$wheel"
+  "$venv/bin/pip" install --disable-pip-version-check --no-cache-dir "$wheel[ai]"
   "$venv/bin/scrapling" install
   if [[ ! -s "$env_file" ]]; then umask 077; printf 'SCRAPLING_MCP_AUTH_TOKEN=%s\n' "$(openssl rand -hex 32)" > "$env_file"; fi
   chmod 0600 "$env_file"; chown root:root "$env_file"

@@ -160,7 +160,7 @@ func (m Manager) ensureLocalScrapling(ctx context.Context, o LifecycleOptions, v
 	if err := ValidateScraplingWheel(ScraplingVersion, hex.EncodeToString(h[:])); err != nil {
 		return err
 	}
-	if _, err = m.Run(ctx, filepath.Join(venv, "bin", "pip"), "install", "--disable-pip-version-check", "--no-cache-dir", wheel); err != nil {
+	if _, err = m.Run(ctx, filepath.Join(venv, "bin", "pip"), "install", "--disable-pip-version-check", "--no-cache-dir", wheel+"[ai]"); err != nil {
 		return err
 	}
 	cache := filepath.Join(o.OptRoot, "scrapling", "cache")
