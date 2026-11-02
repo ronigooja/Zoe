@@ -62,6 +62,26 @@ func TestWriteEnvMergesReleaseValuesAndPreservesOperatorLines(t *testing.T) {
 	}
 }
 
+func TestWriteEnvPreservesVoiceUpstreamRoute(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "zoe.env")
+	if err := os.WriteFile(path, []byte("ZOE_VOICE_UPSTREAM_ROUTE=avas\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeEnv(path, map[string]string{"ZOE_VOICE_UPSTREAM_ROUTE": "wm"}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "ZOE_VOICE_UPSTREAM_ROUTE=avas\n" {
+		t.Fatalf("voice route was dropped or rewritten: %q", data)
+	}
+	if !validOperatorEnvValue("ZOE_VOICE_UPSTREAM_ROUTE", "wm") || !validOperatorEnvValue("ZOE_VOICE_UPSTREAM_ROUTE", "avas") || validOperatorEnvValue("ZOE_VOICE_UPSTREAM_ROUTE", "bogus") {
+		t.Fatal("voice route validation mismatch")
+	}
+}
+
 func TestDefaultProfileValuesRoundTripAndShareKeys(t *testing.T) {
 	profilesJSON, routesJSON, err := defaultProfileValues(defaultOpenCodeModel)
 	if err != nil {

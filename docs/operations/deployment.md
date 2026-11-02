@@ -37,6 +37,7 @@ gateway release implements the required lease contract.
 server-side voice reaping: active sessions with no recent heartbeat are reclaimed
 through the normal release flow; unverified termination remains quarantined and
 keeps the voice pool blocked.
+`ZOE_VOICE_UPSTREAM_ROUTE` must match the gateway's `VOICE_UPSTREAM_ROUTE` (default `wm`); if they differ, Zoe calls opening-context on an AVAS gateway, receives 501, records `unsupported`, and the call still works but the opening context is not delivered.
 
 Check service status without printing environment files or secret values:
 

@@ -998,7 +998,7 @@ func isOperatorOwnedEnvKey(key string) bool {
 		return true
 	case "ZOE_OPENCODE_BASE_URL", "ZOE_OPENCODE_PASSWORD_FILE", "ZOE_OPENCODE_WORKSPACE_ROOT", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_BINARY", "ZOE_OPENCODE_USER":
 		return true
-	case "ZOE_SCRAPLING_MODE", "ZOE_SCRAPLING_URL", "ZOE_SCRAPLING_TOKEN_FILE":
+	case "ZOE_SCRAPLING_MODE", "ZOE_SCRAPLING_URL", "ZOE_SCRAPLING_TOKEN_FILE", "ZOE_VOICE_UPSTREAM_ROUTE":
 		return true
 	default:
 		return false
@@ -1036,6 +1036,8 @@ func validOperatorEnvValue(key, value string) bool {
 			}
 		}
 		return true
+	case "ZOE_VOICE_UPSTREAM_ROUTE":
+		return value == "wm" || value == "avas"
 	default:
 		return false
 	}
