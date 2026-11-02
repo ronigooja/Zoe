@@ -59,6 +59,9 @@ func renderOpenCodeConfig(o LifecycleOptions) error {
 		return err
 	}
 	model := v["ZOE_OPENCODE_MODEL"]
+	if o.OptRoot == "" {
+		o.OptRoot = "/opt/zoe"
+	}
 	provider, modelID, ok := strings.Cut(model, "/")
 	if !ok || provider == "" || modelID == "" {
 		return errors.New("OpenCode model must be provider/model")
@@ -75,9 +78,21 @@ func renderOpenCodeConfig(o LifecycleOptions) error {
 	for _, p := range profiles.Definitions {
 		agents[p.ID] = map[string]string{"system": p.SystemPrompt, "model": model}
 	}
+	scrapling, err := ParseScraplingSettings(v)
+	if err != nil {
+		return err
+	}
+	entry, enabled, err := scraplingMCPEntry(scrapling, o.OptRoot)
+	if err != nil {
+		return err
+	}
+	mcp := map[string]any{}
+	if enabled {
+		mcp["scrapling"] = entry
+	}
 	// Do not configure a global deny: OpenCode's configured deny is authoritative
 	// and cannot be overridden by the per-session rules carried by a claim.
-	config := map[string]any{"$schema": "https://opencode.ai/config.json", "model": model, "update": "disable", "providers": providers, "agents": agents}
+	config := map[string]any{"$schema": "https://opencode.ai/config.json", "model": model, "update": "disable", "providers": providers, "agents": agents, "mcp": map[string]any{"servers": mcp}}
 	b, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return err
@@ -181,6 +196,11 @@ func (m Manager) renderOpenCodeUnit(ctx context.Context, o LifecycleOptions, tem
 	h.Write([]byte(s))
 	h.Write(config)
 	h.Write([]byte(env))
+	if values, e := readEnv(filepath.Join(o.Root, "zoe-runner.env")); e == nil {
+		if s, e := ParseScraplingSettings(values); e == nil {
+			h.Write(scraplingTokenFingerprint(s))
+		}
+	}
 	h.Write([]byte(o.OpenCodeBinary + "\n" + versionText))
 	if err := writeFileAtomic(filepath.Join(openCodeRoot(o), "applied-fingerprint"), []byte(hex.EncodeToString(h.Sum(nil))), 0600); err != nil {
 		return nil, err

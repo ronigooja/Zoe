@@ -53,7 +53,7 @@ func TestOpenCodeToolActionsAreAllowedByTierAndUnknownActionsDenied(t *testing.T
 		name, action, tier string
 	}{
 		{"read", "read", TierReadOnlyResearch}, {"grep", "grep", TierReadOnlyResearch}, {"glob", "glob", TierReadOnlyResearch},
-		{"websearch", "websearch", TierReadOnlyResearch}, {"webfetch", "webfetch", TierReadOnlyResearch}, {"skill", "skill", TierReadOnlyResearch},
+		{"webfetch", "webfetch", TierReadOnlyResearch}, {"skill", "skill", TierReadOnlyResearch},
 		{"mcp-resource-list", "opencode_list_mcp_resources", TierReadOnlyResearch}, {"mcp-resource-read", "opencode_read_mcp_resource", TierReadOnlyResearch},
 		{"write", "edit", TierWorkspaceReadWrite}, {"patch", "edit", TierWorkspaceReadWrite}, {"edit", "edit", TierWorkspaceReadWrite},
 		{"shell", "shell", TierWorkspaceReadWrite}, {"subagent", "subagent", TierWorkspaceReadWrite}, {"question", "question", TierWorkspaceReadWrite},
@@ -67,6 +67,16 @@ func TestOpenCodeToolActionsAreAllowedByTierAndUnknownActionsDenied(t *testing.T
 		if evaluate(rules, "unlisted_action", "*") != "deny" {
 			t.Fatalf("unlisted action was not denied for %s", item.name)
 		}
+	}
+}
+
+func TestScraplingOnlyMCPToolsAreAllowed(t *testing.T) {
+	rules, _, err := EffectivePermissionSet(Profile{PermissionTier: TierReadOnlyResearch}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evaluate(rules, "scrapling_make_request", "*") != "allow" || evaluate(rules, "other_mcp_tool", "*") != "deny" || evaluate(rules, "websearch", "*") != "deny" {
+		t.Fatalf("rules=%v", rules)
 	}
 }
 

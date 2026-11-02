@@ -45,6 +45,84 @@ func TestRenderedOpenCodeConfigHasProfilesAndNoWildcardAllow(t *testing.T) {
 	}
 }
 
+func TestScraplingSettingsPrecedenceAndValidation(t *testing.T) {
+	s, err := ParseScraplingSettings(map[string]string{})
+	if err != nil || s.Mode != "off" {
+		t.Fatalf("off: %#v %v", s, err)
+	}
+	s, err = ParseScraplingSettings(map[string]string{"ZOE_SCRAPLING_URL": "http://scraper:8000/mcp"})
+	if err != nil || s.Mode != "remote" {
+		t.Fatalf("implicit remote: %#v %v", s, err)
+	}
+	for _, raw := range []string{"ftp://host/mcp", "http:///mcp", "http://user:pass@host/mcp"} {
+		if _, err := ParseScraplingSettings(map[string]string{"ZOE_SCRAPLING_MODE": "remote", "ZOE_SCRAPLING_URL": raw}); err == nil {
+			t.Fatalf("accepted %q", raw)
+		}
+	}
+	if _, err := ParseScraplingSettings(map[string]string{"ZOE_SCRAPLING_MODE": "local", "ZOE_SCRAPLING_URL": "http://host/mcp"}); err == nil {
+		t.Fatal("local accepted remote URL")
+	}
+}
+
+func TestRenderedScraplingRemoteUsesFileSubstitutionWithoutToken(t *testing.T) {
+	d := t.TempDir()
+	root := filepath.Join(d, "root")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const token = "never-render-this-token"
+	if err := os.WriteFile(filepath.Join(root, "token"), []byte(token), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env := "ZOE_OPENCODE_MODEL=provider/model\nZOE_SCRAPLING_MODE=remote\nZOE_SCRAPLING_URL=http://scraper:8000/mcp\nZOE_SCRAPLING_TOKEN_FILE=" + filepath.Join(root, "token") + "\n"
+	if err := os.WriteFile(filepath.Join(root, "zoe-runner.env"), []byte(env), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderOpenCodeConfig(LifecycleOptions{Root: root, DataRoot: d, OptRoot: filepath.Join(d, "opt")}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(d, "opencode", "xdg-config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), token) || !strings.Contains(string(b), "{file:"+filepath.Join(root, "token")+"}") {
+		t.Fatalf("unsafe config: %s", b)
+	}
+}
+
+func TestRenderedScraplingLocalStdioAndOff(t *testing.T) {
+	d := t.TempDir()
+	root := filepath.Join(d, "root")
+	opt := filepath.Join(d, "opt")
+	bin := filepath.Join(opt, "scrapling", ScraplingVersion, "venv", "bin")
+	if err := os.MkdirAll(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "scrapling-mcp"), []byte("x"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "zoe-runner.env"), []byte("ZOE_OPENCODE_MODEL=provider/model\nZOE_SCRAPLING_MODE=local\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderOpenCodeConfig(LifecycleOptions{Root: root, DataRoot: d, OptRoot: opt}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(d, "opencode", "xdg-config", "opencode", "opencode.json"))
+	if !strings.Contains(string(b), "scrapling-mcp") {
+		t.Fatalf("local MCP missing: %s", b)
+	}
+	if err := os.WriteFile(filepath.Join(root, "zoe-runner.env"), []byte("ZOE_OPENCODE_MODEL=provider/model\nZOE_SCRAPLING_MODE=off\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderOpenCodeConfig(LifecycleOptions{Root: root, DataRoot: d, OptRoot: opt}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(filepath.Join(d, "opencode", "xdg-config", "opencode", "opencode.json"))
+	if strings.Contains(string(b), "scrapling") {
+		t.Fatalf("off still rendered: %s", b)
+	}
+}
+
 func TestOpenCodeVersionOutput(t *testing.T) {
 	tests := []struct {
 		name, output string
