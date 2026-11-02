@@ -224,6 +224,14 @@ func (c *ControlClient) Observe(ctx context.Context, runID string, observation c
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+		var apiErr struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(body, &apiErr)
+		if apiErr.Code != "" {
+			return fmt.Errorf("runner API submit observation failed (HTTP %d, %s)", response.StatusCode, apiErr.Code)
+		}
 		return safeHTTPError("submit observation", response.StatusCode)
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
