@@ -288,7 +288,7 @@ func TestContextUsageRotatesWithSameRuntimeSpecAndCompletes(t *testing.T) {
 	if !strings.Contains(f.createdSpecs[1].Prompt, "summary from prior session") || !strings.Contains(f.createdSpecs[1].Prompt, claim.Goal) {
 		t.Fatalf("seed prompt=%q", f.createdSpecs[1].Prompt)
 	}
-	if !strings.Contains(kinds(c), "progress") {
+	if !strings.Contains(kinds(c), "session_rotated") {
 		t.Fatalf("rotation observation missing: %s", kinds(c))
 	}
 }
