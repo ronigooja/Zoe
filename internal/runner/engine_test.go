@@ -301,7 +301,7 @@ func TestRealFlatMessagesDriveRotationAndSummary(t *testing.T) {
 	if len(messages) != 5 || messages[0].Type != "user" || messages[0].Text == "" || len(messages[1].Parts) != 2 {
 		t.Fatalf("flat messages did not decode: %+v", messages)
 	}
-	e := &Engine{ContextTokenBudget: 1000}
+	e := &Engine{ContextTokenBudget: 1000, Runtime: &runtimeFake{}, Routes: map[string]Route{"profile": {Model: "cliproxyapi/gpt-6.1-sol"}}}
 	claim := testClaim()
 	if !e.contextExceeded(context.Background(), claim, messages) {
 		t.Fatal("flat assistant usage did not exceed context budget")

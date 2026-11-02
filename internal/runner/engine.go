@@ -64,6 +64,7 @@ type Engine struct {
 	MaxRotations                 int
 	windowMu                     sync.Mutex
 	windowCache                  map[string]int64
+	windowUnavailable            map[string]bool
 }
 
 func (e *Engine) RunOnce(ctx context.Context) error {
@@ -416,6 +417,10 @@ func (e *Engine) contextWindow(ctx context.Context, c contracts.JobClaim) (int64
 			return w, true
 		}
 	}
+	if e.windowUnavailable != nil && e.windowUnavailable[key] {
+		e.windowMu.Unlock()
+		return 0, false
+	}
 	e.windowMu.Unlock()
 	p, ok := e.Runtime.(ContextWindowProvider)
 	if !ok {
@@ -423,7 +428,16 @@ func (e *Engine) contextWindow(ctx context.Context, c contracts.JobClaim) (int64
 	}
 	w, err := p.ContextWindow(ctx, route.Model)
 	if err != nil || w <= 0 {
-		log.Printf("context rotation window unavailable for run %s; rotation disabled", safeRuntimeID(c.RunID))
+		e.windowMu.Lock()
+		if e.windowUnavailable == nil {
+			e.windowUnavailable = map[string]bool{}
+		}
+		first := !e.windowUnavailable[key]
+		e.windowUnavailable[key] = true
+		e.windowMu.Unlock()
+		if first {
+			log.Printf("context rotation window unavailable for run %s; rotation disabled", safeRuntimeID(c.RunID))
+		}
 		return 0, false
 	}
 	e.windowMu.Lock()

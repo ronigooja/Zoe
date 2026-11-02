@@ -150,6 +150,23 @@ func TestCreateSessionOptionsSendAgentModelDirectoryAndPermissions(t *testing.T)
 	}
 }
 
+func TestModelContextWindowUsesRealAPIShape(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/model" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-6.1-sol","modelID":"gpt-6.1-sol","providerID":"cliproxyapi","limit":{"context":1050000}},{"id":"no-limit","modelID":"no-limit","providerID":"cliproxyapi"}]}`))
+	}))
+	defer s.Close()
+	c, _ := New(Config{BaseURL: s.URL, Password: "p"})
+	if got, err := c.ModelContextWindow(context.Background(), "cliproxyapi", "gpt-6.1-sol"); err != nil || got != 1050000 {
+		t.Fatalf("window=%d err=%v", got, err)
+	}
+	if _, err := c.ModelContextWindow(context.Background(), "cliproxyapi", "no-limit"); err == nil {
+		t.Fatal("model without limit was accepted")
+	}
+}
+
 func TestPrompt204IsNotCompletionAndCompletionNeedsMessage(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
