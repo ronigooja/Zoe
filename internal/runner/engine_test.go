@@ -117,6 +117,21 @@ func TestValidateClaimFailsClosedWithoutPermissionRuleset(t *testing.T) {
 		t.Fatal("claim without ruleset was accepted")
 	}
 }
+
+func TestBuildPromptIncludesOnlyClaimedMemoryAndManifest(t *testing.T) {
+	c := testClaim()
+	c.MemoryContext = contracts.MemoryContext{
+		Manifest: contracts.MemoryContextManifest{ID: "manifest-1", RecipientID: "owner"},
+		Items:    []contracts.MemoryContextItem{{Subject: "project", Key: "verified", Content: "use SQLite"}},
+	}
+	prompt := buildPrompt(c)
+	if !strings.Contains(prompt, "use SQLite") || !strings.Contains(prompt, "manifest-1") {
+		t.Fatalf("prompt omitted supplied memory or manifest: %q", prompt)
+	}
+	if strings.Contains(prompt, "other recipient") {
+		t.Fatalf("prompt contained unclaimed memory: %q", prompt)
+	}
+}
 func TestRuntimeProcessUsesHostSessionInterruptionProof(t *testing.T) {
 	f := &runtimeFake{events: make(chan opencode.Event, 1), done: true}
 	m := opencode.Message{}

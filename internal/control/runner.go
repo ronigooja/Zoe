@@ -54,6 +54,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 			writeError(w, e)
 			return
 		}
+		claim = s.attachMemoryContext(r.Context(), claim)
 		writeJSON(w, 200, claim)
 		return
 	}
@@ -71,7 +72,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	rows, err := tx.QueryContext(r.Context(), `SELECT id,workspace_id,title,goal,profile_id,harness,version,created_by_device_id,command_id,coalesce(lineage_root_task_id,id),coalesce(lineage_parent_task_id,''),lineage_depth,child_policy_json,pregrant_capabilities_json,source,interaction_state,interaction_expired_kind,coalesce(interaction_question,''),interaction_expected_version FROM tasks WHERE status='queued' AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id=tasks.id AND r.status IN ('dispatching','active','uncertain')) AND NOT EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id=tasks.id AND d.status<>'satisfied') ORDER BY created_at,id`)
+	rows, err := tx.QueryContext(r.Context(), `SELECT id,workspace_id,title,goal,profile_id,harness,version,created_by_device_id,command_id,coalesce(lineage_root_task_id,id),coalesce(lineage_parent_task_id,''),lineage_depth,child_policy_json,pregrant_capabilities_json,source,interaction_state,interaction_expired_kind,coalesce(interaction_question,''),interaction_expected_version,coalesce(owner_subject_id,'') FROM tasks WHERE status='queued' AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id=tasks.id AND r.status IN ('dispatching','active','uncertain')) AND NOT EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id=tasks.id AND d.status<>'satisfied') ORDER BY created_at,id`)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -85,11 +86,12 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		version                                                       int64
 		interaction, interactionExpiredKind, interactionQuestion      string
 		interactionExpectedVersion                                    int64
+		owner                                                         string
 	}
 	var chosen *candidate
 	for rows.Next() {
 		var c candidate
-		if err = rows.Scan(&c.id, &c.workspace, &c.title, &c.goal, &c.profile, &c.harness, &c.version, &c.device, &c.command, &c.root, &c.parent, &c.depth, &c.childPolicyJSON, &c.pregrantJSON, &c.source, &c.interaction, &c.interactionExpiredKind, &c.interactionQuestion, &c.interactionExpectedVersion); err != nil {
+		if err = rows.Scan(&c.id, &c.workspace, &c.title, &c.goal, &c.profile, &c.harness, &c.version, &c.device, &c.command, &c.root, &c.parent, &c.depth, &c.childPolicyJSON, &c.pregrantJSON, &c.source, &c.interaction, &c.interactionExpiredKind, &c.interactionQuestion, &c.interactionExpectedVersion, &c.owner); err != nil {
 			rows.Close()
 			writeError(w, err)
 			return
@@ -224,7 +226,35 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	claim = s.attachMemoryContext(r.Context(), claim)
 	writeJSON(w, 200, claim)
+}
+
+func (s *Server) attachMemoryContext(ctx context.Context, claim contracts.JobClaim) contracts.JobClaim {
+	var owner string
+	if err := s.store.DB().QueryRowContext(ctx, `SELECT coalesce(owner_subject_id,'') FROM tasks WHERE workspace_id=? AND id=?`, claim.WorkspaceID, claim.TaskID).Scan(&owner); err != nil {
+		return claim
+	}
+	if owner == "" {
+		return claim
+	}
+	p := contracts.Principal{WorkspaceID: claim.WorkspaceID, SubjectID: owner, Scopes: claim.Authorization.Scopes}
+	s.mu.RLock()
+	assembler := s.contextAssembler
+	s.mu.RUnlock()
+	if assembler == nil {
+		return claim
+	}
+	budget := int(claim.Budget.MaxInputUnits)
+	if budget > 32_000 {
+		budget = 32_000
+	}
+	assembled, err := assembler(ctx, p, claim.TaskID, owner, claim.Goal, budget)
+	if err != nil {
+		return claim
+	}
+	claim.MemoryContext = assembled
+	return claim
 }
 
 func runnerHasAnyWorkspaceScope(p contracts.RunnerPrincipal, scope string) bool {

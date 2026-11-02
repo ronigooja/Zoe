@@ -254,6 +254,36 @@ type JobClaim struct {
 	ImpactLevel           string            `json:"impact_level,omitempty"`
 	ResumeQuestion        string            `json:"resume_question,omitempty"`
 	ResumeAnswer          string            `json:"resume_answer,omitempty"`
+	MemoryContext         MemoryContext     `json:"memory_context,omitempty"`
+}
+
+type MemoryContext struct {
+	Manifest MemoryContextManifest `json:"manifest"`
+	Items    []MemoryContextItem   `json:"items"`
+}
+
+type MemoryContextManifest struct {
+	ID          string               `json:"id"`
+	WorkspaceID string               `json:"workspace_id"`
+	TaskID      string               `json:"task_id,omitempty"`
+	RecipientID string               `json:"recipient_id"`
+	Entries     []MemoryContextEntry `json:"entries"`
+	Budget      int                  `json:"budget"`
+	Missing     []string             `json:"missing,omitempty"`
+	Conflicts   []string             `json:"conflicts,omitempty"`
+}
+
+type MemoryContextEntry struct {
+	ClaimID     string   `json:"claim_id"`
+	Revision    int64    `json:"revision"`
+	SourceIDs   []string `json:"source_ids"`
+	ContentHash string   `json:"content_hash"`
+}
+
+type MemoryContextItem struct {
+	Subject string `json:"subject"`
+	Key     string `json:"key"`
+	Content string `json:"content"`
 }
 
 // RunBudgetSnapshot is immutable for a run and is copied into its claim. Usage

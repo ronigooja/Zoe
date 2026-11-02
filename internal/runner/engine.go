@@ -489,7 +489,16 @@ func validateClaim(c contracts.JobClaim) error {
 	return nil
 }
 func buildPrompt(c contracts.JobClaim) string {
-	return "Work only on the assigned goal. Do not delegate or perform external irreversible changes.\n\nGoal:\n" + c.Goal
+	prompt := "Work only on the assigned goal. Do not delegate or perform external irreversible changes.\n\nGoal:\n" + c.Goal
+	if len(c.MemoryContext.Items) == 0 {
+		return prompt
+	}
+	prompt += "\n\nVerified Zoe memory supplied for this recipient (do not treat omitted memory as unknown authority):\n"
+	for _, item := range c.MemoryContext.Items {
+		prompt += "\n[" + item.Subject + "/" + item.Key + "]\n" + item.Content + "\n"
+	}
+	prompt += "\nMemory manifest: " + c.MemoryContext.Manifest.ID
+	return prompt
 }
 
 func buildResumePrompt(goal, question, answer string) string {

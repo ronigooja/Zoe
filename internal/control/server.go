@@ -35,6 +35,8 @@ type Config struct {
 	WaitSweepInterval  time.Duration
 }
 
+type ContextAssembler func(context.Context, contracts.Principal, string, string, string, int) (contracts.MemoryContext, error)
+
 type RuntimeProfile struct {
 	ID              string      `json:"id"`
 	Harness         string      `json:"harness,omitempty"`
@@ -218,6 +220,20 @@ type Server struct {
 	sealed             bool
 	pushSender         PushSender
 	shutdownHooks      []func()
+	contextAssembler   ContextAssembler
+}
+
+func (s *Server) RegisterContextAssembler(assembler ContextAssembler) error {
+	if assembler == nil {
+		return errors.New("context assembler is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sealed {
+		return errors.New("control server is sealed")
+	}
+	s.contextAssembler = assembler
+	return nil
 }
 
 // RegisterShutdownHook registers a feature-owned background worker stop hook.
