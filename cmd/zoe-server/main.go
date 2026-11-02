@@ -94,7 +94,7 @@ func run() error {
 		MaxRuns:            maxRuns,
 		WaitLimit:          waitLimit,
 	}
-	server, err := composeControlServer(store, cfg, voice.Config{GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	server, err := composeControlServer(store, cfg, voice.Config{GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	}, memory.DerivedConfig{BackupDeleteManifestPath: strings.TrimSpace(os.Getenv("ZOE_BACKUP_DELETE_MANIFEST_PATH"))})

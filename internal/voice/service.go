@@ -33,6 +33,7 @@ type Config struct {
 	OpeningContextBudget  int
 	ContextCharBudget     int
 	OutcomeWriter         func(context.Context, contracts.Principal, string, string, string) error
+	UpstreamRoute         string
 }
 
 type Service struct {
@@ -48,6 +49,7 @@ type Service struct {
 	openingBudget     int
 	contextCharBudget int
 	outcomeWriter     func(context.Context, contracts.Principal, string, string, string) error
+	upstreamRoute     string
 	reaperStop        chan struct{}
 	reaperDone        chan struct{}
 }
@@ -140,7 +142,9 @@ func (s *Service) buildOpeningContext(ctx context.Context, p contracts.Principal
 	if err != nil || len(assembled.Items) == 0 {
 		return nil
 	}
-	c := &openingContext{Kind: "full", Version: 1}
+	version := 1
+	_ = s.db.QueryRowContext(ctx, `SELECT coalesce(max(opening_context_version),0)+1 FROM voice_sessions WHERE workspace_id=? AND owner_id=?`, p.WorkspaceID, p.SubjectID).Scan(&version)
+	c := &openingContext{Kind: "full", Version: version}
 	used := 0
 	for _, item := range assembled.Items {
 		text := strings.TrimSpace(item.Subject + ": " + item.Key + " = " + item.Content)
@@ -172,6 +176,20 @@ func (s *Service) buildOpeningContext(ctx context.Context, p contracts.Principal
 		return nil
 	}
 	return c
+}
+
+func (s *Service) deltaOpeningContext(ctx context.Context, p contracts.Principal, full *openingContext) *openingContext {
+	if full == nil {
+		return nil
+	}
+	var version int
+	if err := s.db.QueryRowContext(ctx, `SELECT opening_context_version FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND state='active'`, p.WorkspaceID, p.SubjectID).Scan(&version); err != nil || version < 1 {
+		return full
+	}
+	if version >= full.Version {
+		return nil
+	}
+	return full
 }
 
 func (s *Service) applyOpeningContext(ctx context.Context, sessionID string, c *openingContext) (string, error) {
@@ -276,7 +294,11 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if contextBudget <= 0 {
 		contextBudget = 12000
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	route := strings.ToLower(strings.TrimSpace(cfg.UpstreamRoute))
+	if route != "avas" {
+		route = "wm"
+	}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func (s *Service) writeOutcome(ctx context.Context, p contracts.Principal, sessionID, summary, outcome string) error {
@@ -504,7 +526,10 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	if err := tx.Commit(); err != nil {
 		return sessionResponse{}, err
 	}
-	opening := s.buildOpeningContext(ctx, p)
+	var opening *openingContext
+	if s.upstreamRoute == "avas" {
+		opening = s.buildOpeningContext(ctx, p)
+	}
 	// The gateway owns account selection and returns only its opaque sticky
 	// session handle. Zoe never receives or records an account credential/id.
 	gatewayBody, _ := json.Marshal(gatewaySessionRequest{OfferSDP: req.OfferSDP, Voice: req.Voice, VoiceMode: req.VoiceMode, LanguageCode: req.LanguageCode, OpeningContext: opening})
@@ -535,7 +560,22 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 		_ = s.markSession(ctx, id, "quarantined", "gateway_media_generation_invalid", nil, "")
 		return sessionResponse{}, apiError(http.StatusBadGateway, "voice_outcome_unknown", "Space gateway returned an invalid media generation; media lease quarantined", nil)
 	}
-	if upstream.OpeningContext != nil && upstream.OpeningContext.Applied {
+	if s.upstreamRoute == "wm" {
+		opening = s.buildOpeningContext(ctx, p)
+		if upstream.Conversation == "resumed" {
+			opening = s.deltaOpeningContext(ctx, p, opening)
+			if opening != nil {
+				opening.Kind = "delta"
+			}
+		}
+	}
+	if s.upstreamRoute == "avas" {
+		openingDelivery = []byte("unsupported")
+		if opening != nil {
+			openingVersion = opening.Version
+			openingChars = openingCharsFor(opening)
+		}
+	} else if upstream.OpeningContext != nil && upstream.OpeningContext.Applied {
 		openingDelivery = []byte("delivered")
 		openingVersion = opening.Version
 		openingChars = openingCharsFor(opening)
@@ -567,7 +607,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	if opening == nil {
 		openingDelivery = []byte("unsupported")
 	}
-	if opening != nil {
+	if opening != nil && s.upstreamRoute == "wm" {
 		// The gateway owns route selection. WM applies context through this
 		// endpoint; AVAS returns 501 because its creation-time initial_items
 		// already carried the context. Both outcomes are non-fatal to media.

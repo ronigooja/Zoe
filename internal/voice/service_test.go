@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -349,6 +351,194 @@ func TestVoiceCreatePersistsOnlyAccountHashAndOpaqueLease(t *testing.T) {
 	}
 	if mediaGeneration != 3 {
 		t.Fatalf("gateway media generation=%d want 3", mediaGeneration)
+	}
+}
+
+func TestVoiceOpeningContextWMIsPostedOnceAndUnverifiedIsRecorded(t *testing.T) {
+	var createCalls, openingCalls int
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/voice/sessions" && r.Method == http.MethodPost:
+			createCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"answer_sdp": "v=0\r\n", "voice_session_id": "gw-wm", "opening_context": map[string]any{"applied": true}})
+		case r.URL.Path == "/v1/voice/sessions/gw-wm/opening-context" && r.Method == http.MethodPost:
+			openingCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"applied": true, "silent": "unverified", "version": 1})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	store, svc := newVoiceTestService(t, Config{GatewayURL: server.URL, GatewayAPIKey: "test-key", HTTPClient: server.Client(), ContextAssembler: func(context.Context, contracts.Principal, string, string, string, int) (contracts.MemoryContext, error) {
+		return contracts.MemoryContext{Items: []contracts.MemoryContextItem{{Subject: "owner", Key: "rule", Content: "wm context"}}}, nil
+	}})
+	created, err := svc.create(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}, createRequest{RequestID: "wm-opening", OfferSDP: "v=0\r\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createCalls != 1 || openingCalls != 1 {
+		t.Fatalf("create=%d opening=%d; WM must make exactly one opening call", createCalls, openingCalls)
+	}
+	var delivery string
+	if err := store.DB().QueryRow(`SELECT opening_context_delivery FROM voice_sessions WHERE id=?`, created.SessionID).Scan(&delivery); err != nil {
+		t.Fatal(err)
+	}
+	if delivery != "unverified" {
+		t.Fatalf("delivery=%q; silent unverified must not claim delivery", delivery)
+	}
+}
+
+func TestVoiceOpeningContextAVASIsCreationContextAnd501IsNonFatal(t *testing.T) {
+	var openingCalls int
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/voice/sessions" {
+			var body struct {
+				OpeningContext *openingContext `json:"opening_context"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OpeningContext == nil || len(body.OpeningContext.Items) != 1 {
+				t.Errorf("AVAS create missing opening_context: err=%v body=%+v", err, body)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"answer_sdp": "v=0\r\n", "voice_session_id": "gw-avas"})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/opening-context") {
+			openingCalls++
+			http.Error(w, "unsupported", http.StatusNotImplemented)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	store, svc := newVoiceTestService(t, Config{GatewayURL: server.URL, GatewayAPIKey: "test-key", HTTPClient: server.Client(), UpstreamRoute: "avas", ContextAssembler: func(context.Context, contracts.Principal, string, string, string, int) (contracts.MemoryContext, error) {
+		return contracts.MemoryContext{Items: []contracts.MemoryContextItem{{Subject: "owner", Key: "rule", Content: "avas context"}}}, nil
+	}})
+	created, err := svc.create(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}, createRequest{RequestID: "avas-opening", OfferSDP: "v=0\r\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openingCalls != 0 {
+		t.Fatalf("AVAS made %d live opening calls", openingCalls)
+	}
+	var delivery string
+	if err := store.DB().QueryRow(`SELECT opening_context_delivery FROM voice_sessions WHERE id=?`, created.SessionID).Scan(&delivery); err != nil {
+		t.Fatal(err)
+	}
+	if delivery != "unsupported" {
+		t.Fatalf("delivery=%q; AVAS creation context must not claim live delivery", delivery)
+	}
+}
+
+func TestVoiceOpeningContextCharacterBudgetIsDeterministicAndOwnerScoped(t *testing.T) {
+	var payload openingContext
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/voice/sessions" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"answer_sdp": "v=0\r\n", "voice_session_id": "gw-budget"})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/opening-context") {
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			_ = json.NewEncoder(w).Encode(map[string]any{"applied": true, "silent": "unverified"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	store, svc := newVoiceTestService(t, Config{GatewayURL: server.URL, GatewayAPIKey: "test-key", HTTPClient: server.Client(), OpeningContextBudget: 30, ContextAssembler: func(_ context.Context, p contracts.Principal, _ string, _ string, _ string, _ int) (contracts.MemoryContext, error) {
+		return contracts.MemoryContext{Items: []contracts.MemoryContextItem{{Subject: p.SubjectID, Key: "k", Content: "1234567890"}, {Subject: "other-owner", Key: "secret", Content: "must-not-appear"}}}, nil
+	}})
+	_, err := svc.create(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}, createRequest{RequestID: "budget-opening", OfferSDP: "v=0\r\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Items) != 1 || len([]rune(payload.Items[0].Text)) > 30 || strings.Contains(payload.Items[0].Text, "other-owner") {
+		t.Fatalf("payload=%+v; budget/owner filtering failed", payload)
+	}
+	_ = store
+}
+
+func TestVoiceOpeningContextResumedUsesDeltaAndNewUsesFull(t *testing.T) {
+	var requests []openingContext
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/voice/sessions" {
+			var body struct {
+				OpeningContext *openingContext `json:"opening_context"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			conversation := "new"
+			if len(requests) == 1 {
+				conversation = "resumed"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"answer_sdp": "v=0\r\n", "voice_session_id": fmt.Sprintf("gw-%d", len(requests)+1), "conversation": conversation, "conversation_confirmed": conversation == "resumed"})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/opening-context") {
+			var c openingContext
+			_ = json.NewDecoder(r.Body).Decode(&c)
+			requests = append(requests, c)
+			_ = json.NewEncoder(w).Encode(map[string]any{"applied": true, "silent": "unverified"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	store, svc := newVoiceTestService(t, Config{GatewayURL: server.URL, GatewayAPIKey: "test-key", HTTPClient: server.Client(), ContextAssembler: func(context.Context, contracts.Principal, string, string, string, int) (contracts.MemoryContext, error) {
+		return contracts.MemoryContext{Items: []contracts.MemoryContextItem{{Subject: "owner", Key: "rule", Content: "stable context"}}}, nil
+	}})
+	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}
+	first, err := svc.create(context.Background(), p, createRequest{RequestID: "new-context", OfferSDP: "v=0\r\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`UPDATE voice_sessions SET state='ended',opening_context_version=1 WHERE id=?`, first.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`UPDATE voice_pool_state SET blocked=0,source_session_id='' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.create(context.Background(), p, createRequest{RequestID: "resumed-context", OfferSDP: "v=0\r\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[0].Kind != "full" || requests[1].Kind != "delta" || requests[0].Version >= requests[1].Version {
+		t.Fatalf("opening requests=%+v; new must be full and resumed must be newer delta", requests)
+	}
+	var version int
+	if err := store.DB().QueryRow(`SELECT opening_context_version FROM voice_sessions WHERE request_id='resumed-context'`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != requests[1].Version {
+		t.Fatalf("stored version=%d request version=%d", version, requests[1].Version)
+	}
+}
+
+func TestVoiceRotationDeletesOverBudgetSessionBeforeNextCreate(t *testing.T) {
+	var deletes, creates int
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletes++
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path == "/v1/voice/sessions" {
+			creates++
+			_ = json.NewEncoder(w).Encode(map[string]any{"answer_sdp": "v=0\r\n", "voice_session_id": "gw-new"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	store, svc := newVoiceTestService(t, Config{GatewayURL: server.URL, GatewayAPIKey: "test-key", HTTPClient: server.Client(), ContextCharBudget: 10})
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,gateway_session_id,generation,state,created_at,updated_at,gateway_context_chars) VALUES('old','default','user-1','device-1','old',X'01','gw-old',1,'active',?,?,99)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,source_session_id='old' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.create(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}, createRequest{RequestID: "new", OfferSDP: "v=0\r\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if deletes != 1 || creates != 1 {
+		t.Fatalf("deletes=%d creates=%d; rotation did not precede next create", deletes, creates)
 	}
 }
 
