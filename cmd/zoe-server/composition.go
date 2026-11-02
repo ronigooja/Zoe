@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"os"
 	"strings"
 
+	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/capabilities"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/memory"
@@ -30,6 +32,10 @@ func composeControlServer(store *storage.Store, controlConfig control.Config, vo
 		return nil, err
 	}
 	voiceConfig.ContextAssembler = server.ContextAssembler()
+	voiceRepository := memory.NewRepositoryWithStore(store)
+	voiceConfig.OutcomeWriter = func(ctx context.Context, p contracts.Principal, sessionID, summary, outcome string) error {
+		return voiceRepository.RecordVoiceOutcome(ctx, p, sessionID, summary, outcome)
+	}
 	if err = voice.Register(server, store, voiceConfig); err != nil {
 		return nil, err
 	}

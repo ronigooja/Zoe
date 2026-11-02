@@ -82,6 +82,31 @@ func (s *Service) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+func (s *Service) handleOutcome(w http.ResponseWriter, r *http.Request) {
+	p, ok := control.PrincipalFromContext(r.Context())
+	if !ok {
+		control.WriteError(w, apiError(http.StatusUnauthorized, "unauthenticated", "device authentication required", nil))
+		return
+	}
+	var req struct {
+		Summary string `json:"summary"`
+		Outcome string `json:"outcome"`
+	}
+	if err := decodeRequest(w, r, 32_768, &req); err != nil {
+		control.WriteError(w, err)
+		return
+	}
+	if strings.TrimSpace(req.Summary) == "" || len(req.Summary) > 20_000 || (req.Outcome != "completed" && req.Outcome != "failed") {
+		control.WriteError(w, apiError(http.StatusBadRequest, "invalid_request", "bounded summary and completed or failed outcome are required", nil))
+		return
+	}
+	if err := s.writeOutcome(r.Context(), p, r.PathValue("session_id"), strings.TrimSpace(req.Summary), req.Outcome); err != nil {
+		control.WriteError(w, safeSessionError(err))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "source": "voice_session:" + r.PathValue("session_id")})
+}
+
 func (s *Service) handleConnected(w http.ResponseWriter, r *http.Request) {
 	p, ok := control.PrincipalFromContext(r.Context())
 	if !ok {

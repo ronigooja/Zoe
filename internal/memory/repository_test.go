@@ -111,6 +111,32 @@ func TestMemoryChineseVersionConflictAndDeletion(t *testing.T) {
 	}
 }
 
+func TestVoiceOutcomeCreatesScopedSourceAndExtractionJobNotClaim(t *testing.T) {
+	ctx := context.Background()
+	store, repo := newMemoryTestRepo(t)
+	p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner-1"}
+	if err := repo.RecordVoiceOutcome(ctx, p, "voice-1", "The call completed with the agreed plan.", "completed"); err != nil {
+		t.Fatal(err)
+	}
+	var kind, reference, producer, scope, principal string
+	if err := store.DB().QueryRow(`SELECT kind,reference,producer,scope_kind,principal_id FROM memory_sources WHERE workspace_id='default'`).Scan(&kind, &reference, &producer, &scope, &principal); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "voice_call_outcome" || reference != "voice_session:voice-1" || producer != "voice" || scope != "personal" || principal != "owner-1" {
+		t.Fatalf("source=%q %q %q %q %q", kind, reference, producer, scope, principal)
+	}
+	var jobs, claims int
+	if err := store.DB().QueryRow(`SELECT count(*) FROM memory_jobs WHERE entity_id=(SELECT id FROM memory_sources WHERE workspace_id='default') AND kind='extract' AND target='voice_call_outcome'`).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRow(`SELECT count(*) FROM memory_claims WHERE workspace_id='default'`).Scan(&claims); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 1 || claims != 0 {
+		t.Fatalf("jobs=%d claims=%d; outcome must enter source/proposal path only", jobs, claims)
+	}
+}
+
 func TestClaimDeletionInvalidatesWorkspaceContextCacheTransactionally(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.Open(ctx, storage.Config{Path: ":memory:"})

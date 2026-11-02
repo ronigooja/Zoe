@@ -32,6 +32,7 @@ type Config struct {
 	ContextAssembler      control.ContextAssembler
 	OpeningContextBudget  int
 	ContextCharBudget     int
+	OutcomeWriter         func(context.Context, contracts.Principal, string, string, string) error
 }
 
 type Service struct {
@@ -46,6 +47,7 @@ type Service struct {
 	contextAssembler  control.ContextAssembler
 	openingBudget     int
 	contextCharBudget int
+	outcomeWriter     func(context.Context, contracts.Principal, string, string, string) error
 	reaperStop        chan struct{}
 	reaperDone        chan struct{}
 }
@@ -233,6 +235,7 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 		mux.HandleFunc("GET /v1/voice/sessions/{session_id}", svc.handleReadSession)
 		mux.HandleFunc("POST /v1/voice/sessions/{session_id}/connected", svc.handleConnected)
 		mux.HandleFunc("POST /v1/voice/sessions/{session_id}/heartbeat", svc.handleHeartbeat)
+		mux.HandleFunc("POST /v1/voice/sessions/{session_id}/outcome", svc.handleOutcome)
 		mux.HandleFunc("POST /v1/voice/sessions/{session_id}/hangup", svc.handleHangup)
 		mux.HandleFunc("GET /v1/voice/sessions/{session_id}/turns", svc.handleTurns)
 		mux.HandleFunc("GET /v1/voice/sessions/{session_id}/receipts", svc.handleReceipts)
@@ -273,7 +276,14 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if contextBudget <= 0 {
 		contextBudget = 12000
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+}
+
+func (s *Service) writeOutcome(ctx context.Context, p contracts.Principal, sessionID, summary, outcome string) error {
+	if s.outcomeWriter == nil {
+		return errors.New("voice outcome memory writer is unavailable")
+	}
+	return s.outcomeWriter(ctx, p, sessionID, summary, outcome)
 }
 
 func (s *Service) rotateIfOverBudget(ctx context.Context, p contracts.Principal) error {

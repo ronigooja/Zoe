@@ -114,6 +114,31 @@ type WriteInput struct {
 	Expected          int64
 }
 
+// RecordVoiceOutcome records a call result as a source only. It deliberately
+// does not create or update a claim; later extraction/review owns that step.
+func (r *Repository) RecordVoiceOutcome(ctx context.Context, p contracts.Principal, sessionID, summary, outcome string) error {
+	if p.WorkspaceID == "" || p.SubjectID == "" || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(summary) == "" {
+		return ErrForbidden
+	}
+	if outcome != "completed" && outcome != "failed" {
+		return errors.New("invalid voice outcome")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	source := Source{ID: uuid.NewString(), Version: 1, Scope: Scope{Kind: ScopePersonal, PrincipalID: p.SubjectID}, Kind: "voice_call_outcome", Reference: "voice_session:" + sessionID, ContentHash: hashString(summary), RecordedAt: now, Producer: "voice"}
+	if err := insertSourceTx(ctx, tx, p.WorkspaceID, source); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO memory_jobs(id,workspace_id,kind,entity_id,entity_version,target,payload,status,available_at,created_at,updated_at) VALUES(?,?, 'extract',?,?,?,?,'pending',?,?,?)`, uuid.NewString(), p.WorkspaceID, source.ID, 1, "voice_call_outcome", []byte(summary+"\nOutcome: "+outcome), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 type DeleteInput struct {
 	WorkspaceID string
 	ActorID     string
