@@ -539,11 +539,12 @@ func (e *Engine) rotate(ctx context.Context, c contracts.JobClaim, old RuntimeBi
 
 func (e *Engine) emitSessionRotated(ctx context.Context, c contracts.JobClaim, oldSession, newSession string, count int) error {
 	raw, _ := json.Marshal(map[string]any{"event": "context_rotated", "rotation": count, "old_session_id": oldSession, "new_session_id": newSession})
-	o := contracts.RunnerObservation{ObservationID: observationID(c.RunID, c.AttemptID, c.Fence, "session_rotated", string(raw)), RunID: c.RunID, AttemptID: c.AttemptID, Fence: c.Fence, Kind: "session_rotated", OccurredAt: time.Now().UTC(), RuntimeSessionID: newSession, Result: raw}
-	if err := e.Journal.QueueObservation(ctx, c.RunID, o); err != nil {
+	o := contracts.RunnerObservation{ObservationID: observationID(c.RunID, c.AttemptID, c.Fence, "session_rotated", string(raw)), RunID: c.RunID, AttemptID: c.AttemptID, Fence: c.Fence, Kind: "session_rotated", OccurredAt: e.now(), RuntimeSessionID: newSession, Result: raw}
+	stored, err := e.Journal.QueueObservation(ctx, c.RunID, o)
+	if err != nil {
 		return err
 	}
-	return e.Control.Observe(ctx, c.RunID, o)
+	return e.Control.Observe(ctx, c.RunID, stored)
 }
 
 func rotationPrompt(c contracts.JobClaim, summary string) string {
@@ -605,11 +606,12 @@ func (e *Engine) now() time.Time {
 func (e *Engine) emitPending(ctx context.Context, c contracts.JobClaim, kind string, payload map[string]any) error {
 	raw, _ := json.Marshal(payload)
 	entry, _, _ := e.Journal.Entry(ctx, c.RunID)
-	o := contracts.RunnerObservation{ObservationID: observationID(c.RunID, c.AttemptID, c.Fence, kind, string(raw)), RunID: c.RunID, AttemptID: c.AttemptID, Fence: c.Fence, Kind: kind, OccurredAt: time.Now().UTC(), RuntimeSessionID: entry.Session, Result: raw}
-	if err := e.Journal.QueueObservation(ctx, c.RunID, o); err != nil {
+	o := contracts.RunnerObservation{ObservationID: observationID(c.RunID, c.AttemptID, c.Fence, kind, string(raw)), RunID: c.RunID, AttemptID: c.AttemptID, Fence: c.Fence, Kind: kind, OccurredAt: e.now(), RuntimeSessionID: entry.Session, Result: raw}
+	stored, err := e.Journal.QueueObservation(ctx, c.RunID, o)
+	if err != nil {
 		return err
 	}
-	return e.Control.Observe(ctx, c.RunID, o)
+	return e.Control.Observe(ctx, c.RunID, stored)
 }
 
 func (e *Engine) terminate(ctx context.Context, c contracts.JobClaim, b RuntimeBinding, reason string, stopped bool) error {
@@ -661,7 +663,7 @@ func (e *Engine) emit(ctx context.Context, c contracts.JobClaim, kind, source, s
 	}
 	entry, _, _ := e.Journal.Entry(ctx, c.RunID)
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s", c.RunID, c.AttemptID, kind, summary)))
-	o := contracts.RunnerObservation{ObservationID: hex.EncodeToString(sum[:16]), RunID: c.RunID, AttemptID: c.AttemptID, Fence: c.Fence, Kind: kind, OccurredAt: time.Now().UTC(), RuntimeSessionID: entry.Session, RuntimeContainerID: entry.Container, Result: result, ExternalEffects: effects}
+	o := contracts.RunnerObservation{ObservationID: hex.EncodeToString(sum[:16]), RunID: c.RunID, AttemptID: c.AttemptID, Fence: c.Fence, Kind: kind, OccurredAt: e.now(), RuntimeSessionID: entry.Session, RuntimeContainerID: entry.Container, Result: result, ExternalEffects: effects}
 	if p, ok := proof.(*contracts.TerminationProof); ok {
 		o.TerminationProof = p
 	}
@@ -671,13 +673,14 @@ func (e *Engine) emit(ctx context.Context, c contracts.JobClaim, kind, source, s
 	if p, ok := proof.(*contracts.NoEffectProof); ok {
 		o.NoEffectProof = p
 	}
-	if err := e.Journal.QueueObservation(ctx, c.RunID, o); err != nil {
+	stored, err := e.Journal.QueueObservation(ctx, c.RunID, o)
+	if err != nil {
 		return err
 	}
 	if e.Control == nil {
 		return nil
 	}
-	return e.Control.Observe(ctx, c.RunID, o)
+	return e.Control.Observe(ctx, c.RunID, stored)
 }
 func (e *Engine) emitMessage(ctx context.Context, c contracts.JobClaim, kind, source, summary string, m opencode.Message) error {
 	out := ""
@@ -690,11 +693,12 @@ func (e *Engine) emitMessage(ctx context.Context, c contracts.JobClaim, kind, so
 	entry, _, _ := e.Journal.Entry(ctx, c.RunID)
 	evidence := toolEvidence(entry.Session, m)
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s", c.RunID, c.AttemptID, kind, summary)))
-	o := contracts.RunnerObservation{ObservationID: hex.EncodeToString(sum[:16]), RunID: c.RunID, AttemptID: c.AttemptID, Fence: c.Fence, Kind: kind, OccurredAt: time.Now().UTC(), RuntimeSessionID: entry.Session, RuntimeContainerID: entry.Container, Result: raw, ExternalEffects: []contracts.ExternalEffect{}, Evidence: evidence}
-	if err := e.Journal.QueueObservation(ctx, c.RunID, o); err != nil {
+	o := contracts.RunnerObservation{ObservationID: hex.EncodeToString(sum[:16]), RunID: c.RunID, AttemptID: c.AttemptID, Fence: c.Fence, Kind: kind, OccurredAt: e.now(), RuntimeSessionID: entry.Session, RuntimeContainerID: entry.Container, Result: raw, ExternalEffects: []contracts.ExternalEffect{}, Evidence: evidence}
+	stored, err := e.Journal.QueueObservation(ctx, c.RunID, o)
+	if err != nil {
 		return err
 	}
-	return e.Control.Observe(ctx, c.RunID, o)
+	return e.Control.Observe(ctx, c.RunID, stored)
 }
 func (e *Engine) flush(ctx context.Context, run string) error {
 	pending, err := e.Journal.PendingObservations(ctx, run)

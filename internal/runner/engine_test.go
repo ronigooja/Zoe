@@ -215,6 +215,81 @@ func TestRuntimeProcessUsesHostSessionInterruptionProof(t *testing.T) {
 	}
 }
 
+func TestObservationEmittersReplayStoredBodyAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	j := openTestJournal(t)
+	c := testClaim()
+	spec := RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: buildPrompt(c), Workspace: c.WorkspaceID}
+	if _, err := j.SaveClaim(ctx, c, spec, "claimed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.SetSession(ctx, c.RunID, c.AttemptID, c.Fence, "session-a", "bound"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.SetContainer(ctx, c.RunID, c.AttemptID, c.Fence, "container-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	clock := time.Date(2026, time.November, 3, 7, 0, 0, 0, time.UTC)
+	newEngine := func(control *controlFake) *Engine {
+		return &Engine{Control: control, Journal: j, Now: func() time.Time { return clock }}
+	}
+	assertReplay := func(name string, first func(*Engine) error, second func(*Engine) error) {
+		t.Helper()
+		firstControl := &controlFake{}
+		if err := first(newEngine(firstControl)); err != nil {
+			t.Fatalf("%s first emit: %v", name, err)
+		}
+		if len(firstControl.observations) != 1 {
+			t.Fatalf("%s first observations=%d, want 1", name, len(firstControl.observations))
+		}
+		want := firstControl.observations[0]
+		clock = clock.Add(time.Minute)
+		if err := j.SetSession(ctx, c.RunID, c.AttemptID, c.Fence, "session-b", "bound"); err != nil {
+			t.Fatal(err)
+		}
+		secondControl := &controlFake{}
+		if err := second(newEngine(secondControl)); err != nil {
+			t.Fatalf("%s replay: %v", name, err)
+		}
+		if len(secondControl.observations) != 1 {
+			t.Fatalf("%s replay observations=%d, want 1", name, len(secondControl.observations))
+		}
+		got := secondControl.observations[0]
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s replay body=%+v, want identical body %+v", name, got, want)
+		}
+		var count int
+		if err := j.db.QueryRowContext(ctx, `SELECT count(*) FROM journal_observations WHERE observation_id=?`, want.ObservationID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("%s journal rows=%d, want 1", name, count)
+		}
+	}
+
+	assertReplay("session_rotated",
+		func(e *Engine) error { return e.emitSessionRotated(ctx, c, "session-a", "session-b", 1) },
+		func(e *Engine) error { return e.emitSessionRotated(ctx, c, "session-a", "session-b", 1) })
+	assertReplay("pending",
+		func(e *Engine) error {
+			return e.emitPending(ctx, c, "waiting_question", map[string]any{"question": "continue?"})
+		},
+		func(e *Engine) error {
+			return e.emitPending(ctx, c, "waiting_question", map[string]any{"question": "continue?"})
+		})
+	assertReplay("emit",
+		func(e *Engine) error { return e.emit(ctx, c, "result", "runtime", "done", nil, nil) },
+		func(e *Engine) error { return e.emit(ctx, c, "result", "runtime", "done", nil, nil) })
+	assertReplay("message",
+		func(e *Engine) error {
+			return e.emitMessage(ctx, c, "result", "runtime", "done", opencode.Message{ID: "message-1", Parts: []map[string]any{{"text": "done"}}})
+		},
+		func(e *Engine) error {
+			return e.emitMessage(ctx, c, "result", "runtime", "done", opencode.Message{ID: "message-1", Parts: []map[string]any{{"text": "done"}}})
+		})
+}
+
 // Catches the old newest-first assumption: the terminal idle item is first.
 func TestRuntimeProcessNewestFirstMessagesReachesResultAndTermination(t *testing.T) {
 	f := completingRuntimeFake()

@@ -587,23 +587,27 @@ func (j *Journal) SetPhase(ctx context.Context, runID, attemptID string, fence u
 	return nil
 }
 
-func (j *Journal) QueueObservation(ctx context.Context, runID string, body contracts.RunnerObservation) error {
+func (j *Journal) QueueObservation(ctx context.Context, runID string, body contracts.RunnerObservation) (contracts.RunnerObservation, error) {
 	encoded, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return contracts.RunnerObservation{}, err
 	}
 	_, err = j.db.ExecContext(ctx, `INSERT OR IGNORE INTO journal_observations(observation_id,run_id,body,created_at) VALUES(?,?,?,?)`, body.ObservationID, runID, encoded, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
-		return err
+		return contracts.RunnerObservation{}, err
 	}
 	var prior []byte
 	if err := j.db.QueryRowContext(ctx, `SELECT body FROM journal_observations WHERE observation_id=?`, body.ObservationID).Scan(&prior); err != nil {
-		return err
+		return contracts.RunnerObservation{}, err
 	}
-	if string(prior) != string(encoded) {
-		return errors.New("runner observation id reused with a different body")
+	var stored contracts.RunnerObservation
+	if err := json.Unmarshal(prior, &stored); err != nil {
+		return contracts.RunnerObservation{}, err
 	}
-	return nil
+	if stored.ObservationID != body.ObservationID || stored.RunID != body.RunID || stored.AttemptID != body.AttemptID || stored.Fence != body.Fence || stored.Kind != body.Kind {
+		return contracts.RunnerObservation{}, errors.New("runner observation id reused with different identity")
+	}
+	return stored, nil
 }
 
 func (j *Journal) ObservationExists(ctx context.Context, id string) (bool, bool, error) {
