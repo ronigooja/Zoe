@@ -24,6 +24,7 @@ import (
 type Config struct {
 	GatewayURL            string
 	GatewayAPIKey         string
+	GatewayUpstreamRoute  string
 	HTTPClient            *http.Client
 	MaxOfferBytes         int64
 	AccountMediaLifecycle AccountMediaLifecycle
@@ -37,6 +38,7 @@ type Service struct {
 	key              string
 	client           *http.Client
 	maxSDP           int64
+	upstreamRoute    string
 	accountMedia     AccountMediaLifecycle
 	heartbeatTimeout time.Duration
 	now              func() time.Time
@@ -55,11 +57,22 @@ func withGatewayRequestID(ctx context.Context, requestID string) context.Context
 }
 
 type createRequest struct {
-	RequestID    string `json:"request_id"`
-	OfferSDP     string `json:"offer_sdp"`
-	Voice        string `json:"voice,omitempty"`
-	VoiceMode    string `json:"voice_mode,omitempty"`
-	LanguageCode string `json:"language_code,omitempty"`
+	RequestID      string          `json:"request_id"`
+	OfferSDP       string          `json:"offer_sdp"`
+	Voice          string          `json:"voice,omitempty"`
+	VoiceMode      string          `json:"voice_mode,omitempty"`
+	LanguageCode   string          `json:"language_code,omitempty"`
+	OpeningContext *openingContext `json:"opening_context,omitempty"`
+}
+
+type openingContext struct {
+	Kind    string               `json:"kind"`
+	Version int                  `json:"version"`
+	Items   []openingContextItem `json:"items"`
+}
+type openingContextItem struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
 }
 
 type sessionResponse struct {
@@ -70,14 +83,19 @@ type sessionResponse struct {
 	AccountLeaseID          string `json:"account_lease_id,omitempty"`
 	AccountLeaseGeneration  int64  `json:"account_lease_generation,omitempty"`
 	AccountLeaseAccountHash []byte `json:"-"`
+	Conversation            string `json:"conversation,omitempty"`
+	ConversationConfirmed   *bool  `json:"conversation_confirmed,omitempty"`
+	ContextChars            int    `json:"context_chars,omitempty"`
+	OpeningContextDelivery  string `json:"opening_context_delivery,omitempty"`
 }
 
 type gatewaySessionRequest struct {
-	OfferSDP       string `json:"offer_sdp"`
-	VoiceSessionID string `json:"voice_session_id,omitempty"`
-	Voice          string `json:"voice,omitempty"`
-	VoiceMode      string `json:"voice_mode,omitempty"`
-	LanguageCode   string `json:"language_code,omitempty"`
+	OfferSDP       string          `json:"offer_sdp"`
+	VoiceSessionID string          `json:"voice_session_id,omitempty"`
+	Voice          string          `json:"voice,omitempty"`
+	VoiceMode      string          `json:"voice_mode,omitempty"`
+	LanguageCode   string          `json:"language_code,omitempty"`
+	OpeningContext *openingContext `json:"opening_context,omitempty"`
 }
 
 type gatewaySessionResponse struct {
@@ -87,6 +105,10 @@ type gatewaySessionResponse struct {
 	AccountLeaseID         string `json:"account_lease_id,omitempty"`
 	AccountLeaseGeneration int64  `json:"account_lease_generation,omitempty"`
 	AccountID              string `json:"account_id,omitempty"`
+	Conversation           string `json:"conversation,omitempty"`
+	ConversationReason     string `json:"conversation_reason,omitempty"`
+	ConversationConfirmed  *bool  `json:"conversation_confirmed,omitempty"`
+	ContextChars           int    `json:"context_chars,omitempty"`
 }
 
 func Register(server *control.Server, store *storage.Store, cfg Config) error {
@@ -150,7 +172,11 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	route := strings.TrimSpace(cfg.GatewayUpstreamRoute)
+	if route != "avas" {
+		route = "wm"
+	}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, upstreamRoute: route, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func (s *Service) Start() { go s.reaper() }
@@ -262,6 +288,35 @@ func (s *Service) callGateway(ctx context.Context, method, endpoint string, body
 	return response, requestID, err
 }
 
+func openingContextPayload(c *openingContext) *openingContext {
+	if c == nil || len(c.Items) == 0 {
+		return nil
+	}
+	return c
+}
+
+func (s *Service) deliverOpeningContext(ctx context.Context, sessionID string, c *openingContext) string {
+	if c == nil {
+		return ""
+	}
+	body, err := json.Marshal(c)
+	if err != nil {
+		return "unsupported"
+	}
+	response, _, err := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions/"+url.PathEscape(sessionID)+"/opening-context", body)
+	if err != nil {
+		return "unsupported"
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotImplemented {
+		return "unsupported"
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "unsupported"
+	}
+	return "delivered"
+}
+
 func (s *Service) create(ctx context.Context, p contracts.Principal, req createRequest) (sessionResponse, error) {
 	if !s.gatewayReady() {
 		return sessionResponse{}, apiError(http.StatusServiceUnavailable, "voice_unavailable", "Space voice gateway is not configured", nil)
@@ -336,7 +391,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	}
 	// The gateway owns account selection and returns only its opaque sticky
 	// session handle. Zoe never receives or records an account credential/id.
-	gatewayBody, _ := json.Marshal(gatewaySessionRequest{OfferSDP: req.OfferSDP, Voice: req.Voice, VoiceMode: req.VoiceMode, LanguageCode: req.LanguageCode})
+	gatewayBody, _ := json.Marshal(gatewaySessionRequest{OfferSDP: req.OfferSDP, Voice: req.Voice, VoiceMode: req.VoiceMode, LanguageCode: req.LanguageCode, OpeningContext: openingContextPayload(req.OpeningContext)})
 	response, gatewayRequestID, callErr := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions", gatewayBody)
 	if callErr != nil {
 		_ = s.markSession(ctx, id, "quarantined", "gateway_outcome_unknown", nil, "")
@@ -397,7 +452,17 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	} else if _, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET gateway_media_generation=? WHERE id=? AND state='active'`, upstream.VoiceSessionGeneration, id); err != nil {
 		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_outcome_unknown", "media generation could not be durably bound; account pool remains isolated", nil)
 	}
-	return sessionResponse{SessionID: id, Generation: 1, State: "active", AnswerSDP: upstream.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash}, nil
+	delivery := ""
+	if req.OpeningContext != nil {
+		delivery = "delivered"
+		if s.upstreamRoute != "avas" {
+			// Creation carries the context for AVAS via initial_items. A follow-up
+			// delivery is the WM path; a gateway 501 is recorded as unsupported.
+			delivery = s.deliverOpeningContext(ctx, upstream.VoiceSessionID, req.OpeningContext)
+		}
+		_, _ = s.db.ExecContext(ctx, `UPDATE voice_sessions SET opening_context_delivery=?,conversation_state=?,conversation_confirmed=?,context_chars=? WHERE id=?`, delivery, upstream.Conversation, upstream.ConversationConfirmed, upstream.ContextChars, id)
+	}
+	return sessionResponse{SessionID: id, Generation: 1, State: "active", AnswerSDP: upstream.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, Conversation: upstream.Conversation, ConversationConfirmed: upstream.ConversationConfirmed, ContextChars: upstream.ContextChars, OpeningContextDelivery: delivery}, nil
 }
 
 func (s *Service) markSession(ctx context.Context, id, state, code string, answer []byte, gatewayID string) error {
