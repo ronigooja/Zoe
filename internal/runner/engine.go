@@ -13,6 +13,7 @@ import (
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
+	"github.com/ronigooja/Zoe/internal/profiles"
 )
 
 var ErrNoClaim = errors.New("no runner claim available")
@@ -117,7 +118,7 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 			return e.reportNoEffect(ctx, claim, reason, "dispatch authorization denied")
 		}
 	}
-	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: fmt.Sprint(claim.Fence), Model: route.Model, Prompt: buildPrompt(claim), Workspace: claim.WorkspaceID}
+	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: fmt.Sprint(claim.Fence), Model: route.Model, ModelRouteID: claim.ModelRouteID, Agent: claim.Agent, Permissions: claim.PermissionRules, Prompt: buildPrompt(claim), Workspace: claim.WorkspaceID}
 	entry, err = e.Journal.SaveClaim(ctx, claim, spec, "claimed")
 	if err != nil {
 		return err
@@ -359,6 +360,12 @@ func validateClaim(c contracts.JobClaim) error {
 	}
 	if c.Harness != "opencode" {
 		return errors.New("runner claim selects unsupported runtime")
+	}
+	if c.Agent == "" || c.PermissionTier == "" {
+		return errors.New("runner claim is missing profile permissions")
+	}
+	if err := profiles.ValidateRuleset(c.PermissionRules, c.PermissionTier); err != nil {
+		return fmt.Errorf("invalid runner claim permissions: %w", err)
 	}
 	return nil
 }

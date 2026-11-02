@@ -21,6 +21,7 @@ services:
       ZOE_DATABASE_PATH: /var/lib/zoe/server/data/zoe.sqlite
       ZOE_RUNTIME_PROFILES: ${ZOE_RUNTIME_PROFILES:?set server-selected runtime profiles}
       ZOE_DEFAULT_PROFILE_ID: ${ZOE_DEFAULT_PROFILE_ID:?set default runtime profile}
+      ZOE_MAX_RUNS: ${ZOE_MAX_RUNS:-12}
       ZOE_RUNNER_ID: ${ZOE_RUNNER_ID:-configured-runner}
       ZOE_RUNNER_WORKSPACES: ${ZOE_RUNNER_WORKSPACES:-default}
       ZOE_RUNNER_SCOPES: ${ZOE_RUNNER_SCOPES:-runner:claim,runner:observe,runner:control:read}

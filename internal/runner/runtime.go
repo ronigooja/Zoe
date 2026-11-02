@@ -5,8 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
 )
 
@@ -30,6 +32,9 @@ type RuntimeSpec struct {
 	RunID, AttemptID, Fence                                                string
 	Model, Prompt, Workspace                                               string
 	ClientRequestID, ProjectID, Harness, DisplayName, ApprovalMode, Effort string
+	Agent                                                                  string
+	ModelRouteID                                                           string
+	Permissions                                                            []contracts.PermissionRule
 }
 type RuntimeBinding struct{ SessionID string }
 type RuntimeCreateRejectedError struct{ Code string }
@@ -74,8 +79,15 @@ func (r OpenCodeRuntime) Create(ctx context.Context, s RuntimeSpec) (RuntimeBind
 			return RuntimeBinding{}, err
 		}
 	}
-	permissions := []map[string]string{{"action": "*", "resource": "*", "effect": "allow"}}
-	session, err := c.CreateSession(ctx, "zoe-run-"+s.RunID, dir, permissions)
+	permissions := make([]map[string]string, len(s.Permissions))
+	for i, rule := range s.Permissions {
+		permissions[i] = map[string]string{"action": rule.Action, "resource": rule.Resource, "effect": rule.Effect}
+	}
+	providerID, modelID, _ := strings.Cut(s.Model, "/")
+	if providerID == "" {
+		providerID, modelID = s.ModelRouteID, s.Model
+	}
+	session, err := c.CreateSession(ctx, "zoe-run-"+s.RunID, opencode.SessionOptions{Agent: s.Agent, Model: map[string]string{"id": modelID, "providerID": providerID}, Directory: dir, Permissions: permissions})
 	if err != nil {
 		var httpErr *opencode.HTTPError
 		if errors.As(err, &httpErr) && httpErr.Status >= 400 && httpErr.Status < 500 {

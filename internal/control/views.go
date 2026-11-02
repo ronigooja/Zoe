@@ -25,7 +25,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	snapshot, err := loadSnapshot(r.Context(), tx, p.WorkspaceID, p.SubjectID)
+	snapshot, err := loadSnapshot(r.Context(), tx, p.WorkspaceID, p.SubjectID, s.cfg.MaxRuns)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -49,7 +49,7 @@ func (s *Server) handleScreen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	snapshot, err := loadSnapshot(r.Context(), tx, p.WorkspaceID, p.SubjectID)
+	snapshot, err := loadSnapshot(r.Context(), tx, p.WorkspaceID, p.SubjectID, s.cfg.MaxRuns)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -96,14 +96,14 @@ func (s *Server) handleScreen(w http.ResponseWriter, r *http.Request) {
 
 func parseInt64(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
 
-func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string) (contracts.Snapshot, error) {
+func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, maxRuns int) (contracts.Snapshot, error) {
 	out := contracts.Snapshot{WorkspaceID: workspace, SubjectID: subject, ServerVersion: "1", Projects: []contracts.Project{}, Tasks: []contracts.Task{}, Approvals: []contracts.Approval{}, Runs: []contracts.Run{}}
 	var cursor int64
 	if err := tx.QueryRowContext(ctx, `SELECT current_cursor FROM event_counters WHERE workspace_id=?`, workspace).Scan(&cursor); err != nil {
 		return out, err
 	}
 	out.EventCursor = strconv.FormatInt(cursor, 10)
-	capacity, err := loadExecutionCapacity(ctx, tx)
+	capacity, err := loadExecutionCapacityWithLimit(ctx, tx, maxRuns)
 	if err != nil {
 		return out, err
 	}

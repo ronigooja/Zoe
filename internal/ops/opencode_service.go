@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/profiles"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -70,7 +71,13 @@ func renderOpenCodeConfig(o LifecycleOptions) error {
 		}
 		providers[provider] = map[string]any{"name": provider, "env": []string{"ZOE_PROVIDER_KEY"}, "package": "@opencode/ai/providers/openai-compatible", "settings": map[string]string{"baseURL": baseURL}, "models": mergeProviderModels(o, provider, modelID)}
 	}
-	config := map[string]any{"$schema": "https://opencode.ai/config.json", "model": model, "update": "disable", "providers": providers, "permissions": []map[string]string{{"action": "*", "resource": "*", "effect": "allow"}}}
+	agents := map[string]any{}
+	for _, p := range profiles.Definitions {
+		agents[p.ID] = map[string]string{"system": p.SystemPrompt, "model": model}
+	}
+	// Do not configure a global deny: OpenCode's configured deny is authoritative
+	// and cannot be overridden by the per-session rules carried by a claim.
+	config := map[string]any{"$schema": "https://opencode.ai/config.json", "model": model, "update": "disable", "providers": providers, "agents": agents}
 	b, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return err

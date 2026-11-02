@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -73,6 +74,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	maxRuns := maxRunsEnv()
+	if maxRuns == 0 {
+		return errors.New("ZOE_MAX_RUNS must be an integer from 1 through 64")
+	}
 	cfg := control.Config{
 		RunnerToken:        runnerToken,
 		RunnerID:           env("ZOE_RUNNER_ID", "configured-runner"),
@@ -82,6 +87,7 @@ func run() error {
 		DefaultProfileID:   strings.TrimSpace(os.Getenv("ZOE_DEFAULT_PROFILE_ID")),
 		Profiles:           profiles,
 		PushSender:         pushSender,
+		MaxRuns:            maxRuns,
 	}
 	server, err := composeControlServer(store, cfg, voice.Config{GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
@@ -238,6 +244,17 @@ func env(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+func maxRunsEnv() int {
+	v := strings.TrimSpace(os.Getenv("ZOE_MAX_RUNS"))
+	if v == "" {
+		return 12
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > 64 {
+		return 0
+	}
+	return n
 }
 
 func splitEnv(name, fallback string) []string {

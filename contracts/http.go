@@ -219,8 +219,11 @@ type Run struct {
 }
 
 type JobAuthorization struct {
-	CapabilityIDs []string `json:"capability_ids"`
-	Scopes        []string `json:"scopes"`
+	CapabilityIDs   []string         `json:"capability_ids"`
+	Scopes          []string         `json:"scopes"`
+	PermissionTier  string           `json:"permission_tier,omitempty"`
+	PermissionRules []PermissionRule `json:"permission_rules,omitempty"`
+	ImpactLevel     string           `json:"impact_level,omitempty"`
 }
 
 type JobClaim struct {
@@ -244,6 +247,10 @@ type JobClaim struct {
 	LineageDepth          int               `json:"lineage_depth"`
 	PregrantCapabilityIDs []string          `json:"pregrant_capability_ids"`
 	Budget                RunBudgetSnapshot `json:"budget"`
+	Agent                 string            `json:"agent,omitempty"`
+	PermissionTier        string            `json:"permission_tier,omitempty"`
+	PermissionRules       []PermissionRule  `json:"permission_rules,omitempty"`
+	ImpactLevel           string            `json:"impact_level,omitempty"`
 }
 
 // RunBudgetSnapshot is immutable for a run and is copied into its claim. Usage

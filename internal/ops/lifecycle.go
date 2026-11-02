@@ -850,7 +850,7 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 	if err != nil {
 		return err
 	}
-	stack := map[string]string{"ZOE_SERVER_IMAGE": image(mfest, "zoe-server"), "ZOE_MEMORY_WORKER_IMAGE": image(mfest, "zoe-memory-worker"), "ZOE_SERVER_DATA_ROOT": filepath.Join(o.DataRoot, "server"), "ZOE_MEMORY_DATA_ROOT": filepath.Join(o.DataRoot, "memory"), "ZOE_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "runner-token"), "ZOE_MEMORY_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "memory-runner-token"), "ZOE_MEM0_LLM_API_KEY_FILE": filepath.Join(o.Root, "secrets", "mem0-llm-api-key"), "ZOE_RUNTIME_PROFILES": profiles, "ZOE_DEFAULT_PROFILE_ID": "worker", "ZOE_COMPOSE_FILE": filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", "docker-compose.yml")}
+	stack := map[string]string{"ZOE_SERVER_IMAGE": image(mfest, "zoe-server"), "ZOE_MEMORY_WORKER_IMAGE": image(mfest, "zoe-memory-worker"), "ZOE_SERVER_DATA_ROOT": filepath.Join(o.DataRoot, "server"), "ZOE_MEMORY_DATA_ROOT": filepath.Join(o.DataRoot, "memory"), "ZOE_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "runner-token"), "ZOE_MEMORY_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "memory-runner-token"), "ZOE_MEM0_LLM_API_KEY_FILE": filepath.Join(o.Root, "secrets", "mem0-llm-api-key"), "ZOE_RUNTIME_PROFILES": profiles, "ZOE_DEFAULT_PROFILE_ID": "worker", "ZOE_MAX_RUNS": "12", "ZOE_COMPOSE_FILE": filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", "docker-compose.yml")}
 	port := readEnvValue(filepath.Join(o.Root, "zoe-stack.env"), "ZOE_SERVER_PORT")
 	if _, err := strconv.Atoi(port); err != nil || port == "" {
 		port = "8787"
@@ -877,10 +877,16 @@ func readEnvValue(path, wanted string) string {
 
 func defaultProfileValues(model string) (string, string, error) {
 	profiles := map[string]control.RuntimeProfile{
-		"worker": {ID: "worker", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{}, Scopes: []string{}},
+		"worker":      {ID: "worker", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "worker", Agent: "zoe-worker", PermissionTier: "workspace_read_write", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"workspace.read", "workspace.write"}, Scopes: []string{"workspace"}},
+		"zoe-worker":  {ID: "zoe-worker", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "worker", Agent: "zoe-worker", PermissionTier: "workspace_read_write", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"workspace.read", "workspace.write"}, Scopes: []string{"workspace"}},
+		"zoe-steward": {ID: "zoe-steward", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "steward", Agent: "zoe-steward", PermissionTier: "read_only_research", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"research.read"}, Scopes: []string{"workspace"}},
+		"zoe-super":   {ID: "zoe-super", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "super", Agent: "zoe-super", PermissionTier: "external_paths", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, Scopes: []string{"workspace"}},
 	}
 	routes := map[string]runner.Route{
-		"worker": {ProfileID: "worker", RuntimeRouteID: "opencode", ModelRouteID: "default", IsolationPolicy: "opencode-workspace-write-v1", Harness: "opencode", Model: model, ApprovalMode: "accept-edits"},
+		"worker":      {ProfileID: "worker", RuntimeRouteID: "opencode", ModelRouteID: "default", IsolationPolicy: "opencode-workspace-write-v1", Harness: "opencode", Model: model, ApprovalMode: "accept-edits"},
+		"zoe-worker":  {ProfileID: "zoe-worker", RuntimeRouteID: "opencode", ModelRouteID: "default", IsolationPolicy: "opencode-workspace-write-v1", Harness: "opencode", Model: model, ApprovalMode: "accept-edits"},
+		"zoe-steward": {ProfileID: "zoe-steward", RuntimeRouteID: "opencode", ModelRouteID: "default", IsolationPolicy: "opencode-workspace-write-v1", Harness: "opencode", Model: model, ApprovalMode: "accept-edits"},
+		"zoe-super":   {ProfileID: "zoe-super", RuntimeRouteID: "opencode", ModelRouteID: "default", IsolationPolicy: "opencode-workspace-write-v1", Harness: "opencode", Model: model, ApprovalMode: "accept-edits"},
 	}
 	if err := validateDefaultValues(profiles, routes); err != nil {
 		return "", "", err
@@ -984,7 +990,7 @@ func isReleaseOwnedEnvKey(key string) bool {
 
 func isOperatorOwnedEnvKey(key string) bool {
 	switch key {
-	case "ZOE_RUNTIME_PROFILES", "ZOE_DEFAULT_PROFILE_ID", "ZOE_RUNNER_ROUTES":
+	case "ZOE_RUNTIME_PROFILES", "ZOE_DEFAULT_PROFILE_ID", "ZOE_MAX_RUNS", "ZOE_RUNNER_ROUTES":
 		return true
 	case "ZOE_OPENCODE_BASE_URL", "ZOE_OPENCODE_PASSWORD_FILE", "ZOE_OPENCODE_WORKSPACE_ROOT", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_BINARY", "ZOE_OPENCODE_USER":
 		return true

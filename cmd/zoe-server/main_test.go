@@ -15,6 +15,25 @@ import (
 	"time"
 )
 
+func TestMaxRunsEnvDefaultValidAndInvalid(t *testing.T) {
+	t.Setenv("ZOE_MAX_RUNS", "")
+	if got := maxRunsEnv(); got != 12 {
+		t.Fatalf("default=%d", got)
+	}
+	for _, value := range []string{"1", "64", "12"} {
+		t.Setenv("ZOE_MAX_RUNS", value)
+		if maxRunsEnv() == 0 {
+			t.Fatalf("valid %s rejected", value)
+		}
+	}
+	for _, value := range []string{"0", "65", "not-a-number"} {
+		t.Setenv("ZOE_MAX_RUNS", value)
+		if maxRunsEnv() != 0 {
+			t.Fatalf("invalid %s accepted", value)
+		}
+	}
+}
+
 func TestServerSubprocessBootstrapAndRestart(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "zoe-server")
 	build := exec.Command("go", "build", "-o", binary, ".")

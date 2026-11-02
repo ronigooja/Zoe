@@ -46,12 +46,12 @@ func TestSnapshotExecutionCapacityRetainsUnknownSlotsAndExplainsQueue(t *testing
 		return out
 	}
 	out := snapshot()
-	want := contracts.ExecutionCapacity{ActiveRuns: 2, UncertainRuns: 2, MaxRuns: 4, AvailableSlots: 0, DispatchBlocked: true, ReasonCode: "execution_reconciliation_required"}
+	want := contracts.ExecutionCapacity{ActiveRuns: 2, UncertainRuns: 2, MaxRuns: 12, AvailableSlots: 8, DispatchBlocked: false}
 	if out.ExecutionCapacity != want {
 		t.Fatalf("capacity=%+v want %+v", out.ExecutionCapacity, want)
 	}
 	for _, task := range out.Tasks {
-		if task.QueueReason != want.ReasonCode {
+		if task.QueueReason != "pending_dispatch" {
 			t.Fatalf("queued task=%+v", task)
 		}
 	}
@@ -61,20 +61,20 @@ func TestSnapshotExecutionCapacityRetainsUnknownSlotsAndExplainsQueue(t *testing
 		t.Fatal(err)
 	}
 	out = snapshot()
-	if out.ExecutionCapacity.AvailableSlots != 2 || out.ExecutionCapacity.DispatchBlocked || out.Tasks[0].QueueReason != "pending_dispatch" {
+	if out.ExecutionCapacity.AvailableSlots != 10 || out.ExecutionCapacity.DispatchBlocked || out.Tasks[0].QueueReason != "pending_dispatch" {
 		t.Fatalf("released snapshot=%+v", out)
 	}
 	if _, err := store.DB().ExecContext(ctx, `UPDATE runs SET status='uncertain' WHERE id='run2'`); err != nil {
 		t.Fatal(err)
 	}
 	out = snapshot()
-	if out.ExecutionCapacity.UncertainRuns != 1 || out.ExecutionCapacity.AvailableSlots != 1 || out.ExecutionCapacity.DispatchBlocked {
+	if out.ExecutionCapacity.UncertainRuns != 1 || out.ExecutionCapacity.AvailableSlots != 9 || out.ExecutionCapacity.DispatchBlocked {
 		t.Fatalf("partial unknown capacity=%+v", out.ExecutionCapacity)
 	}
 	if _, err := store.DB().ExecContext(ctx, `UPDATE runs SET status='active' WHERE id IN ('run2','run3')`); err != nil {
 		t.Fatal(err)
 	}
-	if got := snapshot().ExecutionCapacity.ReasonCode; got != "execution_capacity_full" {
+	if got := snapshot().ExecutionCapacity.ReasonCode; got != "" {
 		t.Fatalf("ordinary saturation=%q", got)
 	}
 
@@ -91,5 +91,36 @@ func TestSnapshotExecutionCapacityRetainsUnknownSlotsAndExplainsQueue(t *testing
 	}
 	if got := snapshot().ExecutionCapacity.ReasonCode; got != "instance_dispatch_fenced" {
 		t.Fatalf("fenced reason=%q", got)
+	}
+}
+
+func TestConfiguredCapacityLimitChangesAvailableSlots(t *testing.T) {
+	store, server, key := instanceAuthFixture(t)
+	server.cfg.MaxRuns = 3
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,owner_subject_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('configured-task','default','owner','configured','goal','user','profile','active',1,?,?, 'instance','command')`, at, at); err != nil {
+		t.Fatal(err)
+	}
+	for i, status := range []string{"active", "uncertain"} {
+		if _, err := store.DB().Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,fence,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES(?,'default','configured-task',?,?,?,'instance','command','goal','profile','runtime','model','worker','opencode',?)`, fmt.Sprintf("configured-%d", i), fmt.Sprintf("configured-attempt-%d", i), status, i+1, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := instanceRequest(server.Handler(), "GET", "/v1/snapshot", key, "")
+	if w.Code != 200 {
+		t.Fatalf("snapshot=%d %s", w.Code, w.Body.String())
+	}
+	var out contracts.Snapshot
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ExecutionCapacity.MaxRuns != 3 || out.ExecutionCapacity.AvailableSlots != 1 {
+		t.Fatalf("capacity=%+v", out.ExecutionCapacity)
+	}
+}
+
+func TestClaimCapacityUsesConfiguredLimit(t *testing.T) {
+	if executionCapacityAvailable(2, 3) != true || executionCapacityAvailable(3, 3) != false || executionCapacityAvailable(4, 3) != false {
+		t.Fatal("claim capacity did not follow configured limit")
 	}
 }

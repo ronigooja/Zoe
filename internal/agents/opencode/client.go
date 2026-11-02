@@ -50,6 +50,12 @@ type Session struct {
 		Directory string `json:"directory"`
 	} `json:"location,omitempty"`
 }
+type SessionOptions struct {
+	Agent       string
+	Model       map[string]string
+	Directory   string
+	Permissions []map[string]string
+}
 type Status struct {
 	Type    string `json:"type"`
 	Message string `json:"message,omitempty"`
@@ -104,13 +110,26 @@ func (c *Client) CreateSession(ctx context.Context, title string, options ...any
 	}
 	body := map[string]any{"title": title}
 	if len(options) > 0 {
-		if directory, ok := options[0].(string); ok && directory != "" {
+		if o, ok := options[0].(SessionOptions); ok {
+			if o.Agent != "" {
+				body["agent"] = o.Agent
+			}
+			if len(o.Model) > 0 {
+				body["model"] = o.Model
+			}
+			if o.Directory != "" {
+				body["location"] = map[string]string{"directory": o.Directory}
+			}
+			if o.Permissions != nil {
+				body["permissions"] = o.Permissions
+			}
+		} else if directory, ok := options[0].(string); ok && directory != "" {
 			body["location"] = map[string]string{"directory": directory}
-		}
-	}
-	if len(options) > 1 {
-		if permissions, ok := options[1].([]map[string]string); ok {
-			body["permissions"] = permissions
+			if len(options) > 1 {
+				if permissions, ok := options[1].([]map[string]string); ok {
+					body["permissions"] = permissions
+				}
+			}
 		}
 	}
 	b, _ := json.Marshal(body)

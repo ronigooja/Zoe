@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/profiles"
 )
 
 func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
@@ -65,7 +66,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if active >= MaxConcurrentRuns {
+	if !executionCapacityAvailable(active, s.cfg.MaxRuns) {
 		_ = tx.Rollback()
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -185,7 +186,12 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 	if chosen.parent != "" {
 		capabilityIDs = intersectStrings(capabilityIDs, pregrant)
 	}
-	authorization := contracts.JobAuthorization{CapabilityIDs: append([]string{}, capabilityIDs...), Scopes: append([]string{}, profile.Scopes...)}
+	rules, impact, err := profiles.EffectivePermissionSet(profiles.Profile{ID: profile.ID, PermissionTier: profile.PermissionTier}, profile.Scopes, nil)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	authorization := contracts.JobAuthorization{CapabilityIDs: append([]string{}, capabilityIDs...), Scopes: append([]string{}, profile.Scopes...), PermissionTier: profile.PermissionTier, PermissionRules: rules, ImpactLevel: impact}
 	authorizationJSON, err := json.Marshal(authorization)
 	if err != nil {
 		writeError(w, err)
@@ -205,7 +211,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	claim := contracts.JobClaim{RunID: runID, TaskID: chosen.id, AttemptID: attemptID, WorkspaceID: chosen.workspace, TaskVersion: newVersion, Goal: chosen.goal, ProfileID: profile.ID, Harness: chosen.harness, RuntimeRouteID: profile.RuntimeRouteID, ModelRouteID: profile.ModelRouteID, IsolationPolicy: profile.IsolationPolicy, Role: profile.Role, Authorization: authorization, Fence: fence, LineageRootTaskID: chosen.root, LineageParentTaskID: chosen.parent, LineageDepth: chosen.depth, PregrantCapabilityIDs: append([]string{}, pregrant...), Budget: budget}
+	claim := contracts.JobClaim{RunID: runID, TaskID: chosen.id, AttemptID: attemptID, WorkspaceID: chosen.workspace, TaskVersion: newVersion, Goal: chosen.goal, ProfileID: profile.ID, Harness: chosen.harness, RuntimeRouteID: profile.RuntimeRouteID, ModelRouteID: profile.ModelRouteID, IsolationPolicy: profile.IsolationPolicy, Role: profile.Role, Agent: profile.Agent, PermissionTier: profile.PermissionTier, PermissionRules: rules, ImpactLevel: impact, Authorization: authorization, Fence: fence, LineageRootTaskID: chosen.root, LineageParentTaskID: chosen.parent, LineageDepth: chosen.depth, PregrantCapabilityIDs: append([]string{}, pregrant...), Budget: budget}
 	if err = tx.Commit(); err != nil {
 		writeError(w, err)
 		return
@@ -251,6 +257,10 @@ func loadClaim(ctx context.Context, tx *sql.Tx, runID string, cfg Config) (contr
 	c.Fence = fence
 	if err := json.Unmarshal(authJSON, &c.Authorization); err != nil {
 		return c, fmt.Errorf("decode persisted run authorization: %w", err)
+	}
+	c.PermissionTier, c.PermissionRules, c.ImpactLevel = c.Authorization.PermissionTier, c.Authorization.PermissionRules, c.Authorization.ImpactLevel
+	if profile, ok := cfg.Profiles[c.ProfileID]; ok {
+		c.Agent = profile.Agent
 	}
 	if err := json.Unmarshal(budgetJSON, &c.Budget); err != nil {
 		return c, fmt.Errorf("decode persisted run budget: %w", err)
@@ -310,6 +320,10 @@ func (s *Server) handleCurrentClaims(w http.ResponseWriter, r *http.Request) {
 		if err = json.Unmarshal(authJSON, &claim.Authorization); err != nil {
 			writeError(w, apiError(500, "internal", "persisted run authorization is invalid", nil))
 			return
+		}
+		claim.PermissionTier, claim.PermissionRules, claim.ImpactLevel = claim.Authorization.PermissionTier, claim.Authorization.PermissionRules, claim.Authorization.ImpactLevel
+		if profile, ok := s.cfg.Profiles[claim.ProfileID]; ok {
+			claim.Agent = profile.Agent
 		}
 		if err = json.Unmarshal(budgetJSON, &claim.Budget); err != nil {
 			writeError(w, apiError(500, "internal", "persisted run budget is invalid", nil))

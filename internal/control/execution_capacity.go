@@ -7,11 +7,13 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 )
 
-// MaxConcurrentRuns is the global admission ceiling across all roles/workspaces.
-const MaxConcurrentRuns = 4
+func executionCapacityAvailable(active, maxRuns int) bool { return active < maxRuns }
 
 func loadExecutionCapacity(ctx context.Context, tx *sql.Tx) (contracts.ExecutionCapacity, error) {
-	out := contracts.ExecutionCapacity{MaxRuns: MaxConcurrentRuns}
+	return loadExecutionCapacityWithLimit(ctx, tx, 12)
+}
+func loadExecutionCapacityWithLimit(ctx context.Context, tx *sql.Tx, maxRuns int) (contracts.ExecutionCapacity, error) {
+	out := contracts.ExecutionCapacity{MaxRuns: maxRuns}
 	// Unknown external effects retain their slot until authoritative reconciliation.
 	err := tx.QueryRowContext(ctx, `SELECT coalesce(sum(CASE WHEN status IN ('dispatching','active') THEN 1 ELSE 0 END),0),coalesce(sum(CASE WHEN status='uncertain' THEN 1 ELSE 0 END),0) FROM runs`).Scan(&out.ActiveRuns, &out.UncertainRuns)
 	if err != nil {

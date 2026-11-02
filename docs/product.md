@@ -416,7 +416,7 @@ Projects, code, artifacts, task history, runtime session identity, usage records
 
 ## 6. Agent System Requirements
 
-Separate the coordination role, runtime implementation, and model/provider route. The coordination, routing, and collaboration requirements are defined in [§§6.1–6.4](#61-super-agent). The shared ceiling is an operator setting, four active runs by default, including Super, Workers, and memory curator. Adapter registration alone does not establish support or acceptance.
+Separate the coordination role, runtime implementation, and model/provider route. The coordination, routing, and collaboration requirements are defined in [§§6.1–6.4](#61-super-agent). The shared ceiling is the `ZOE_MAX_RUNS` operator setting, defaulting to 12 active runs, including Super, Workers, and memory curator. Adapter registration alone does not establish support or acceptance.
 
 <a id="cy-06-01"></a>
 

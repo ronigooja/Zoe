@@ -28,6 +28,7 @@ type Config struct {
 	ModelRouteID       string
 	Profiles           map[string]RuntimeProfile
 	MaxRequestBytes    int64
+	MaxRuns            int
 	PushSender         PushSender
 }
 
@@ -41,6 +42,8 @@ type RuntimeProfile struct {
 	CapabilityIDs   []string    `json:"capability_ids"`
 	Scopes          []string    `json:"scopes"`
 	ChildPolicy     ChildPolicy `json:"child_policy,omitempty"`
+	Agent           string      `json:"agent,omitempty"`
+	PermissionTier  string      `json:"permission_tier,omitempty"`
 }
 
 // ChildPolicy is a profile's bounded authority to request descendants. A task
@@ -249,12 +252,24 @@ func NewServer(store *storage.Store, cfg Config) (*Server, error) {
 	if cfg.MaxRequestBytes <= 0 {
 		cfg.MaxRequestBytes = 1 << 20
 	}
+	if cfg.MaxRuns == 0 {
+		cfg.MaxRuns = 12
+	}
+	if cfg.MaxRuns < 1 || cfg.MaxRuns > 64 {
+		return nil, errors.New("max runs must be between 1 and 64")
+	}
 	profiles := make(map[string]RuntimeProfile, len(cfg.Profiles))
 	for id, profile := range cfg.Profiles {
 		profile.IsolationPolicy = normalizeIsolationPolicy(profile.IsolationPolicy)
 		profile.Harness = strings.TrimSpace(profile.Harness)
 		if profile.Harness == "" {
 			profile.Harness = "opencode"
+		}
+		if profile.Agent == "" {
+			profile.Agent = "zoe-" + profile.Role
+		}
+		if profile.PermissionTier == "" {
+			profile.PermissionTier = "workspace_read_write"
 		}
 		profile.CapabilityIDs = append([]string(nil), profile.CapabilityIDs...)
 		profile.Scopes = append([]string(nil), profile.Scopes...)

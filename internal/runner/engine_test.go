@@ -72,7 +72,13 @@ func (c *controlFake) Observe(_ context.Context, _ string, o contracts.RunnerObs
 	return nil
 }
 func testClaim() contracts.JobClaim {
-	return contracts.JobClaim{RunID: "run", TaskID: "task", AttemptID: "attempt", WorkspaceID: "workspace", ProfileID: "profile", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Role: "worker", Fence: 1, Budget: contracts.RunBudgetSnapshot{MaxToolSteps: 1}}
+	return contracts.JobClaim{RunID: "run", TaskID: "task", AttemptID: "attempt", WorkspaceID: "workspace", ProfileID: "profile", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Role: "worker", Agent: "zoe-worker", PermissionTier: "workspace_read_write", PermissionRules: []contracts.PermissionRule{{Action: "*", Resource: "*", Effect: "deny"}, {Action: "read", Resource: "*", Effect: "allow"}}, Fence: 1, Budget: contracts.RunBudgetSnapshot{MaxToolSteps: 1}}
+}
+
+func TestValidateClaimFailsClosedWithoutPermissionRuleset(t *testing.T) {
+	c := testClaim()
+	c.PermissionRules = nil
+	if err := validateClaim(c); err == nil { t.Fatal("claim without ruleset was accepted") }
 }
 func TestRuntimeProcessUsesHostSessionInterruptionProof(t *testing.T) {
 	f := &runtimeFake{events: make(chan opencode.Event, 1), done: true}

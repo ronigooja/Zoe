@@ -126,6 +126,30 @@ func TestClientBasicAuthAndSessionTitleIsNotIdempotency(t *testing.T) {
 	}
 }
 
+func TestCreateSessionOptionsSendAgentModelDirectoryAndPermissions(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["agent"] != "zoe-worker" || body["location"].(map[string]any)["directory"] != "/workspace" {
+			t.Fatalf("body=%v", body)
+		}
+		if body["model"].(map[string]any)["providerID"] != "provider" {
+			t.Fatalf("model=%v", body["model"])
+		}
+		if len(body["permissions"].([]any)) != 1 {
+			t.Fatalf("permissions=%v", body["permissions"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": Session{ID: "session"}})
+	}))
+	defer s.Close()
+	c, _ := New(Config{BaseURL: s.URL, Password: "p"})
+	if _, err := c.CreateSession(context.Background(), "title", SessionOptions{Agent: "zoe-worker", Model: map[string]string{"id": "model", "providerID": "provider"}, Directory: "/workspace", Permissions: []map[string]string{{"action": "read", "resource": "*", "effect": "allow"}}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPrompt204IsNotCompletionAndCompletionNeedsMessage(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

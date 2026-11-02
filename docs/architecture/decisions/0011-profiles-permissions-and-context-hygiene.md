@@ -33,4 +33,4 @@ Runs use one wildcard allow rule, so impact levels cannot follow capabilities. A
 
 ## Consequences
 
-`allow *` and the fixed ceiling of four are removed. The runner gains permission-request and waiting-run states. Capacity accounting must count waiting runs that keep their session. Memory retrieval is keyword-scored today; semantic retrieval and time filters are separate work and gate how useful recall is. Open measurements: memory pressure at twelve concurrent runs, token thresholds, resume behavior on the live route.
+`allow *` and the fixed ceiling are removed. The runner gains permission-request and waiting-run states. Capacity accounting must count waiting runs that keep their session. Memory retrieval is keyword-scored today; semantic retrieval and time filters are separate work and gate how useful recall is. Open measurements: memory pressure at the configured ceiling, token thresholds, resume behavior on the live route.
