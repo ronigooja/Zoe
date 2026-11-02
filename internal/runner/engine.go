@@ -719,6 +719,16 @@ func (e *Engine) flush(ctx context.Context, run string) error {
 	return nil
 }
 
+// FlushPendingObservations runs the durable recovery replay used by terminal
+// claim recovery. It is exported so acceptance tests and recovery operators
+// can exercise the same journal-to-control path without a runtime process.
+func (e *Engine) FlushPendingObservations(ctx context.Context, run string) error {
+	if e.Control == nil || e.Journal == nil {
+		return errors.New("runner recovery requires control client and journal")
+	}
+	return e.flush(ctx, run)
+}
+
 // rebindFromJournal repairs the server binding before terminal observations
 // are replayed. Releases before session_rotated was introduced recorded
 // rotations as progress observations, so the server cannot infer the chain
