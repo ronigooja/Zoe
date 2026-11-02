@@ -237,3 +237,22 @@ func TestPermissionAndFormListReplyShapes(t *testing.T) {
 		t.Fatalf("reply err=%v replied=%v", err, replied)
 	}
 }
+
+func TestFormReplyUsesV2SessionFormEndpoint(t *testing.T) {
+	var got map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/session/s/form/f1/reply" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer s.Close()
+	c, _ := New(Config{BaseURL: s.URL, Password: "p"})
+	if err := c.ReplyForm(context.Background(), "s", "f1", map[string]any{"q0": "answer"}); err != nil {
+		t.Fatal(err)
+	}
+	if got["answer"].(map[string]any)["q0"] != "answer" {
+		t.Fatalf("body=%v", got)
+	}
+}

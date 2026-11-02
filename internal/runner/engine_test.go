@@ -23,6 +23,7 @@ type runtimeFake struct {
 	messages                    []opencode.Message
 	pendingPermissions          []opencode.PermissionRequest
 	pendingForms                []opencode.FormRequest
+	formsReplied                []string
 }
 
 func (f *runtimeFake) PendingPermissions(context.Context, RuntimeBinding) ([]opencode.PermissionRequest, error) {
@@ -30,6 +31,10 @@ func (f *runtimeFake) PendingPermissions(context.Context, RuntimeBinding) ([]ope
 }
 func (f *runtimeFake) PendingForms(context.Context, RuntimeBinding) ([]opencode.FormRequest, error) {
 	return f.pendingForms, nil
+}
+func (f *runtimeFake) ReplyForm(_ context.Context, _ RuntimeBinding, formID string, _ map[string]any) error {
+	f.formsReplied = append(f.formsReplied, formID)
+	return nil
 }
 
 func (f *runtimeFake) Create(context.Context, RuntimeSpec) (RuntimeBinding, error) {
@@ -394,6 +399,38 @@ func TestPendingPermissionIsReportedWithoutLocalReply(t *testing.T) {
 	}
 	if f.prompts != 1 || kinds(c) != "dispatch_started,dispatch_bound,permission_requested" {
 		t.Fatalf("prompts=%d observations=%s", f.prompts, kinds(c))
+	}
+}
+
+type authorizationFake struct{}
+
+func (authorizationFake) RuntimeAuthorization(context.Context, string, string, uint64) (*contracts.RuntimeAuthorization, error) {
+	return &contracts.RuntimeAuthorization{RequestID: "form-1", Decision: "answer", Message: "answer"}, nil
+}
+
+func TestWorkerQuestionAnswerUsesSameSessionFormReply(t *testing.T) {
+	f := completingRuntimeFake()
+	f.done = false
+	f.pendingForms = []opencode.FormRequest{{ID: "form-1", Title: "Questions", Fields: []map[string]any{{"description": "What?"}}}}
+	c := &controlFake{}
+	j := openTestJournal(t)
+	claim := testClaim()
+	e := testEngine(t, f, c, j)
+	if err := e.Process(testContext(t), claim); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.SetPhase(context.Background(), claim.RunID, claim.AttemptID, claim.Fence, "waiting_question"); err != nil {
+		t.Fatal(err)
+	}
+	e.Control = struct {
+		*controlFake
+		authorizationFake
+	}{c, authorizationFake{}}
+	if err := e.Process(testContext(t), claim); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.formsReplied) != 1 || f.formsReplied[0] != "form-1" {
+		t.Fatalf("form replies=%v", f.formsReplied)
 	}
 }
 

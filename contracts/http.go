@@ -344,6 +344,7 @@ type RuntimeAuthorization struct {
 	Fence     uint64 `json:"fence"`
 	Decision  string `json:"decision"`
 	Message   string `json:"message,omitempty"`
+	Question  string `json:"question,omitempty"`
 }
 
 // CreateRejectionProof proves a local deterministic failure before an external

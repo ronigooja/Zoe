@@ -60,6 +60,9 @@ type PendingRequests interface {
 type PermissionReply interface {
 	ReplyPermission(context.Context, RuntimeBinding, string, opencode.PermissionDecision, string) error
 }
+type FormReply interface {
+	ReplyForm(context.Context, RuntimeBinding, string, map[string]any) error
+}
 
 type OpenCodeRuntime struct {
 	BaseURL, Username, Password, WorkspaceRoot, Model string
@@ -145,6 +148,13 @@ func (r OpenCodeRuntime) ReplyPermission(ctx context.Context, b RuntimeBinding, 
 		return e
 	}
 	return c.ReplyPermission(ctx, b.SessionID, requestID, decision, message)
+}
+func (r OpenCodeRuntime) ReplyForm(ctx context.Context, b RuntimeBinding, formID string, answer map[string]any) error {
+	c, e := r.client()
+	if e != nil {
+		return e
+	}
+	return c.ReplyForm(ctx, b.SessionID, formID, answer)
 }
 func (r OpenCodeRuntime) Events(context.Context, RuntimeBinding) (<-chan opencode.Event, <-chan error) {
 	events := make(chan opencode.Event)

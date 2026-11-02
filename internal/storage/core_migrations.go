@@ -411,7 +411,7 @@ CREATE INDEX task_confirmations_task ON task_confirmations(workspace_id,task_id,
 	}}); err != nil {
 		return err
 	}
-	if err := s.RegisterMigration(Migration{Namespace: "core", Version: 15, Name: "pending_runtime_actions", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := s.RegisterMigration(Migration{Namespace: "runtime_waiting", Version: 800, Name: "pending_runtime_actions", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 ALTER TABLE tasks ADD COLUMN interaction_question TEXT NOT NULL DEFAULT '';
 ALTER TABLE runs ADD COLUMN waiting_since TEXT;

@@ -108,7 +108,11 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 			if entry.Phase == "waiting_question" {
 				if authc, ok := e.Control.(runtimeAuthorizationControl); ok {
 					if auth, err := authc.RuntimeAuthorization(ctx, claim.RunID, "", claim.Fence); err == nil && auth != nil && auth.Decision == "answer" {
-						if err := e.Runtime.Prompt(ctx, RuntimeBinding{SessionID: entry.Session}, auth.Message); err != nil {
+						reply, ok := e.Runtime.(FormReply)
+						if !ok {
+							return errors.New("runtime does not support same-session form replies")
+						}
+						if err := reply.ReplyForm(ctx, RuntimeBinding{SessionID: entry.Session}, auth.RequestID, map[string]any{"q0": auth.Message}); err != nil {
 							return err
 						}
 						_ = e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_sent")
