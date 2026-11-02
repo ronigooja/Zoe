@@ -9,7 +9,7 @@ KEYS = ("tests", "macos", "ios", "go", "race", "scripts", "docs", "operator")
 # Packages in the dependency closure of the race-tested packages in linux.yml.
 RACE_PREFIXES = (
     "cmd/zoe/", "cmd/zoe-server/", "contracts/", "internal/agents/opencode/",
-    "internal/capabilities/", "internal/control/", "internal/memory/", "internal/ops/",
+    "internal/capabilities/", "internal/control/", "internal/memory/", "internal/ops/", "internal/profiles/",
     "internal/runner/", "internal/storage/", "internal/voice/",
 )
 OPERATOR_PREFIXES = ("cmd/zoe/", "internal/ops/", "deploy/linux/install-cli.sh")
