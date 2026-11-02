@@ -87,8 +87,38 @@ type Message struct {
 			} `json:"cache"`
 		} `json:"tokens"`
 	} `json:"info"`
-	Parts []map[string]any `json:"parts,omitempty"`
+	Parts   []map[string]any `json:"parts,omitempty"`
+	Content []map[string]any `json:"content,omitempty"`
+	Text    string           `json:"text,omitempty"`
+	Tokens  TokenUsage       `json:"tokens,omitempty"`
 }
+
+// TokenUsage is the flat assistant usage shape returned by OpenCode V2.
+type TokenUsage struct {
+	Input     int64 `json:"input"`
+	Output    int64 `json:"output"`
+	Reasoning int64 `json:"reasoning"`
+	Cache     struct {
+		Read  int64 `json:"read"`
+		Write int64 `json:"write"`
+	} `json:"cache"`
+}
+
+// UnmarshalJSON keeps the legacy envelope usable while exposing flat V2
+// content through Parts for existing runner consumers.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	type messageAlias Message
+	var decoded messageAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*m = Message(decoded)
+	if len(m.Parts) == 0 && len(m.Content) > 0 {
+		m.Parts = m.Content
+	}
+	return nil
+}
+
 type PermissionRequest struct {
 	ID        string         `json:"id"`
 	SessionID string         `json:"sessionID"`

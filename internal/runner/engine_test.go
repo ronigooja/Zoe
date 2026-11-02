@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -12,6 +14,12 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
 )
+
+// This fixture is copied from the real OpenCode GET /api/session/{id}/message shape.
+// The old envelope-only test fixtures do not exercise production decoding.
+//
+//go:embed testdata/real_messages.json
+var realMessagesJSON []byte
 
 type runtimeFake struct {
 	aborts, creates, terminates int
@@ -280,6 +288,42 @@ func TestContextUsageRotatesWithSameRuntimeSpecAndCompletes(t *testing.T) {
 	}
 	if !strings.Contains(kinds(c), "progress") {
 		t.Fatalf("rotation observation missing: %s", kinds(c))
+	}
+}
+
+func TestRealFlatMessagesDriveRotationAndSummary(t *testing.T) {
+	var messages []opencode.Message
+	if err := json.Unmarshal(realMessagesJSON, &messages); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 5 || messages[0].Type != "user" || messages[0].Text == "" || len(messages[1].Parts) != 2 {
+		t.Fatalf("flat messages did not decode: %+v", messages)
+	}
+	e := &Engine{ContextTokenBudget: 1000}
+	claim := testClaim()
+	if !e.contextExceeded(claim, messages) {
+		t.Fatal("flat assistant usage did not exceed context budget")
+	}
+	summary := rotationSummary(messages)
+	if !strings.Contains(summary, "The workspace report is ready.") || !strings.Contains(summary, "Continue with the report.") {
+		t.Fatalf("flat rotation summary=%q", summary)
+	}
+
+	f := completingRuntimeFake()
+	f.messages = messages
+	f.rotationMessages = []opencode.Message{messages[len(messages)-1]}
+	c := &controlFake{}
+	j := openTestJournal(t)
+	e = testEngine(t, f, c, j)
+	e.ContextTokenBudget = 1000
+	if err := e.Process(testContext(t), claim); err != nil {
+		t.Fatal(err)
+	}
+	if f.creates != 2 || f.terminates != 2 {
+		t.Fatalf("flat rotation lifecycle creates=%d terminates=%d", f.creates, f.terminates)
+	}
+	if !strings.Contains(f.createdSpecs[1].Prompt, "The workspace report is ready.") || !strings.Contains(f.createdSpecs[1].Prompt, "Please inspect the workspace") {
+		t.Fatalf("flat rotation prompt=%q", f.createdSpecs[1].Prompt)
 	}
 }
 

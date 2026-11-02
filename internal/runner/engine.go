@@ -370,24 +370,33 @@ func (e *Engine) contextExceeded(c contracts.JobClaim, msgs []opencode.Message) 
 	}
 	var latest opencode.Message
 	for _, m := range msgs {
-		if m.Info.Role == "assistant" && (latest.Info.Time.Created == 0 || m.Info.Time.Created >= latest.Info.Time.Created) {
+		if messageRole(m) == "assistant" && (messageCreated(latest) == 0 || messageCreated(m) >= messageCreated(latest)) {
 			latest = m
 		}
 	}
-	if latest.Info.Role != "assistant" {
+	if messageRole(latest) != "assistant" {
 		return false
 	}
-	return latest.Info.Tokens.Input+latest.Info.Tokens.Output+latest.Info.Tokens.Cache.Read+latest.Info.Tokens.Cache.Write > limit
+	// Reasoning tokens are intentionally excluded: the historical budget counts input, output, and cache tokens.
+	usage := latest.Tokens.Input + latest.Tokens.Output + latest.Tokens.Cache.Read + latest.Tokens.Cache.Write
+	if usage == 0 {
+		usage = latest.Info.Tokens.Input + latest.Info.Tokens.Output + latest.Info.Tokens.Cache.Read + latest.Info.Tokens.Cache.Write
+	}
+	return usage > limit
 }
 
 func rotationSummary(msgs []opencode.Message) string {
 	var b strings.Builder
 	for i := len(msgs) - 1; i >= 0 && b.Len() < rotationSummaryLimit; i-- {
 		m := msgs[i]
-		if m.Info.Role != "assistant" && m.Info.Role != "user" {
+		if messageRole(m) != "assistant" && messageRole(m) != "user" {
 			continue
 		}
-		for _, p := range m.Parts {
+		if m.Text != "" {
+			b.WriteString(m.Text)
+			b.WriteByte('\n')
+		}
+		for _, p := range messageParts(m) {
 			if text, ok := p["text"].(string); ok {
 				b.WriteString(text)
 				b.WriteByte('\n')
@@ -399,6 +408,27 @@ func rotationSummary(msgs []opencode.Message) string {
 		s = s[:rotationSummaryLimit]
 	}
 	return s
+}
+
+func messageRole(m opencode.Message) string {
+	if m.Type != "" {
+		return m.Type
+	}
+	return m.Info.Role
+}
+
+func messageCreated(m opencode.Message) int64 {
+	if m.Time.Created != 0 {
+		return m.Time.Created
+	}
+	return m.Info.Time.Created
+}
+
+func messageParts(m opencode.Message) []map[string]any {
+	if len(m.Parts) > 0 {
+		return m.Parts
+	}
+	return m.Content
 }
 
 func (e *Engine) rotate(ctx context.Context, c contracts.JobClaim, old RuntimeBinding, msgs []opencode.Message) error {

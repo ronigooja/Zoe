@@ -1,0 +1,7 @@
+[
+  {"id":"msg_user_001","time":{"created":1793647783000},"text":"Please inspect the workspace and report the result.","type":"user"},
+  {"id":"msg_assistant_001","time":{"created":1793647783100,"streamed":1793647783200,"completed":1793647783300},"type":"assistant","agent":"zoe-worker","model":{"id":"model","providerID":"provider","variant":"default"},"content":[{"type":"text","text":"I inspected the workspace."},{"type":"tool","tool":"bash","callID":"call_1","state":{"status":"completed","title":"pwd"}}],"finish":"tool-calls","rawFinish":"tool-calls","cost":0,"tokens":{"input":596,"output":5,"reasoning":17,"cache":{"read":12928,"write":0}}},
+  {"id":"msg_user_002","time":{"created":1793647783400},"text":"Continue with the report.","type":"user"},
+  {"id":"msg_assistant_002","time":{"created":1793647783500,"streamed":1793647783600,"completed":1793647783700},"type":"assistant","agent":"zoe-worker","model":{"id":"model","providerID":"provider","variant":"default"},"content":[{"type":"text","text":"The workspace report is ready."}],"finish":"stop","rawFinish":"stop","cost":0,"tokens":{"input":2000,"output":5,"reasoning":23,"cache":{"read":0,"write":0}}},
+  {"id":"msg_idle_001","time":{"created":1793647783800},"type":"idle","outcome":"succeeded"}
+]
