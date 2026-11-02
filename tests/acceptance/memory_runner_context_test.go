@@ -72,7 +72,7 @@ func TestRunnerClaimMemoryContextExcludesAnotherSubjectsPersonalMemory(t *testin
 	now := time.Now().UTC()
 	sourceContent := "only subject B can see this"
 	source := memory.Source{ID: "subject-b-source", Version: 1, Scope: other, Kind: "user_note", Reference: "command:subject-b-source", ContentHash: sha256Hex(sourceContent), RecordedAt: now, Producer: "user"}
-	_, err = repo.PutTx(ctx, tx, memory.WriteInput{WorkspaceID: "default", ActorID: "subject-b", Source: source, Claim: memory.Claim{WorkspaceID: "default", Scope: other, Subject: "private", Key: "fact", Content: "only subject B can see this", Authority: memory.AuthorityUserConfirmed, Status: memory.ClaimActive}})
+	_, err = repo.PutTx(ctx, tx, memory.WriteInput{WorkspaceID: "default", ActorID: "subject-b", Source: source, Claim: memory.Claim{WorkspaceID: "default", Scope: other, Subject: "private", Key: "fact", Content: sourceContent, Authority: memory.AuthorityUserConfirmed, Status: memory.ClaimActive, Sources: []memory.Source{source}}})
 	if err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
