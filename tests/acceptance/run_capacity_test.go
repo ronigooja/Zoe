@@ -11,11 +11,11 @@ import (
 	"github.com/ronigooja/Zoe/internal/control"
 )
 
-func TestGlobalFourRunCapKeepsUnknownOutcomeFenced(t *testing.T) {
+func TestConfiguredRunCapKeepsUnknownOutcomeFenced(t *testing.T) {
 	code, deviceToken := reviewToken(t), reviewToken(t)
 	runnerTokens := []string{reviewToken(t), reviewToken(t), reviewToken(t), reviewToken(t), reviewToken(t)}
 	profile := control.RuntimeProfile{ID: "worker", RuntimeRouteID: "native", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1"}
-	_, h := reviewServer(t, control.Config{DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, func(s *control.Server) {
+	_, h := reviewServer(t, control.Config{DefaultProfileID: "worker", MaxRuns: 4, Profiles: map[string]control.RuntimeProfile{"worker": profile}}, func(s *control.Server) {
 		for i, token := range runnerTokens {
 			if err := s.RegisterRunnerCredential(context.Background(), token, "runner-"+strconv.Itoa(i), []string{"default"}, []string{"runner:claim", "runner:observe", "runner:control:read"}); err != nil {
 				t.Fatal(err)
