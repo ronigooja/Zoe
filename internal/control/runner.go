@@ -239,10 +239,14 @@ func (s *Server) attachMemoryContext(ctx context.Context, claim contracts.JobCla
 	if owner == "" {
 		return claim
 	}
-	p := contracts.Principal{WorkspaceID: claim.WorkspaceID, SubjectID: owner, Scopes: claim.Authorization.Scopes}
+	// Memory context is assembled by the server authority for the task owner,
+	// not by the Worker's per-run tool permissions. The instance scopes are the
+	// authenticated device principal's grants used when the task was created.
 	s.mu.RLock()
+	instanceScopes := append([]string(nil), s.cfg.InstanceScopes...)
 	assembler := s.contextAssembler
 	s.mu.RUnlock()
+	p := contracts.Principal{WorkspaceID: claim.WorkspaceID, SubjectID: owner, Scopes: instanceScopes}
 	if assembler == nil {
 		return claim
 	}
@@ -255,7 +259,7 @@ func (s *Server) attachMemoryContext(ctx context.Context, claim contracts.JobCla
 	}
 	assembled, err := assembler(ctx, p, claim.TaskID, owner, claim.Goal, budget)
 	if err != nil {
-		log.Printf("runner memory context unavailable task=%s class=%T", claim.TaskID, err)
+		log.Printf("runner memory context unavailable task=%s error=%s", claim.TaskID, err.Error())
 		return claim
 	}
 	claim.MemoryContext = assembled

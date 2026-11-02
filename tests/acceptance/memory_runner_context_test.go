@@ -20,7 +20,9 @@ import (
 
 func TestRunnerClaimJSONRoundTripsMemoryContextThroughRealControlClient(t *testing.T) {
 	bootstrap, device, runnerToken := reviewToken(t), reviewToken(t), reviewToken(t)
-	profile := control.RuntimeProfile{ID: "worker", RuntimeRouteID: "runtime", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1", Scopes: []string{"memory:read:personal"}}
+	// Production context authority uses the instance/device principal; the
+	// Worker profile need not be granted memory read as a tool permission.
+	profile := control.RuntimeProfile{ID: "worker", RuntimeRouteID: "runtime", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1"}
 	store, handler := memoryRunnerServer(t, control.Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}})
 	reviewInitializeInstance(t, handler, bootstrap, device)
 	created := reviewRequest(handler, http.MethodPost, "/v1/commands", device, "task", contracts.CommandRequest{Kind: "task.create", Payload: json.RawMessage(`{"title":"memory task","goal":"SQLite","source":"user"}`)})
@@ -50,6 +52,34 @@ func TestRunnerClaimJSONRoundTripsMemoryContextThroughRealControlClient(t *testi
 	var sourceCount int
 	if err := store.DB().QueryRow(`SELECT count(*) FROM memory_revision_sources WHERE claim_id=?`, claim.MemoryContext.Manifest.Entries[0].ClaimID).Scan(&sourceCount); err != nil || sourceCount != 1 {
 		t.Fatalf("source links=%d err=%v", sourceCount, err)
+	}
+}
+
+func TestRunnerClaimMemoryContextFallsBackToScopedMemoryForUnrelatedGoal(t *testing.T) {
+	bootstrap, device, runnerToken := reviewToken(t), reviewToken(t), reviewToken(t)
+	profile := control.RuntimeProfile{ID: "worker", RuntimeRouteID: "runtime", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1", Scopes: []string{"memory:read:personal"}}
+	_, handler := memoryRunnerServer(t, control.Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}})
+	reviewInitializeInstance(t, handler, bootstrap, device)
+	created := reviewRequest(handler, http.MethodPost, "/v1/commands", device, "task", contracts.CommandRequest{Kind: "task.create", Payload: json.RawMessage(`{"title":"unrelated goal","goal":"weather forecast","source":"user"}`)})
+	if created.Code != http.StatusOK {
+		t.Fatalf("task create=%d %s", created.Code, created.Body.String())
+	}
+	remembered := reviewRequest(handler, http.MethodPost, "/v1/commands", device, "memory", contracts.CommandRequest{Kind: "memory.remember", Payload: json.RawMessage(`{"scope":{"kind":"personal"},"subject":"preferences","key":"favorite_color","content":"The user's favorite color is teal.","source_kind":"user_note"}`)})
+	if remembered.Code != http.StatusOK {
+		t.Fatalf("memory remember=%d %s", remembered.Code, remembered.Body.String())
+	}
+	live := httptest.NewServer(handler)
+	defer live.Close()
+	client, err := runner.NewControlClient(live.URL, runnerToken, live.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := client.Claim(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim == nil || len(claim.MemoryContext.Items) != 1 || claim.MemoryContext.Items[0].Content != "The user's favorite color is teal." {
+		t.Fatalf("claim memory context=%+v", claim)
 	}
 }
 

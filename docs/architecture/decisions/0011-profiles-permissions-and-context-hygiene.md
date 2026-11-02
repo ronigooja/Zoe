@@ -30,6 +30,7 @@ Runs use one wildcard allow rule, so impact levels cannot follow capabilities. A
 ### Memory and voice context
 
 10. Zoe assembles opening context from the memory authority (role rules, recent summary, active tasks, scoped memory with recheck) and gives it to a call once at creation, to a Steward per handoff, and to a Worker in its initial prompt. Nothing but Zoe's authority writes claims; call summaries and task outcomes enter as sources, explicit user decisions as `user_confirmed`, model inferences as proposals.
+12. A Worker goal is only a relevance hint: when it has no keyword match, Zoe retries scoped-memory retrieval without keywords, then applies the same scope, task-access, source, and budget checks.
 11. The gateway reports on session creation whether the upstream conversation was resumed or is new. Resumed: Zoe sends only changes since the last context version sent to that conversation. New: Zoe sends the full opening context. Zoe records the last version sent in the call context manifest.
 
 ## Consequences

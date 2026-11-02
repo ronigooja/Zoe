@@ -615,6 +615,15 @@ func (r *Repository) assembleContext(ctx context.Context, principal contracts.Pr
 	if err != nil {
 		return ContextManifest{}, nil, err
 	}
+	// A goal is useful as a relevance hint, but an unrelated goal must not
+	// suppress otherwise-authorized scoped memory. Retry without keywords so
+	// the authority can disclose recent claims after applying the same filters.
+	if query != "" && len(result.Items) == 0 {
+		result, err = r.Search(ctx, reader, "", filter)
+		if err != nil {
+			return ContextManifest{}, nil, err
+		}
+	}
 	manifest := ContextManifest{
 		ID: uuid.NewString(), WorkspaceID: principal.WorkspaceID, TaskID: taskID,
 		RecipientID: recipientID, Budget: budget, Missing: append([]string(nil), result.Missing...),
