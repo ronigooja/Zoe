@@ -368,10 +368,7 @@ const rotationSummaryLimit = 12000
 func (e *Engine) contextExceeded(ctx context.Context, c contracts.JobClaim, msgs []opencode.Message) bool {
 	window, ok := e.contextWindow(ctx, c)
 	if !ok {
-		if e.ContextTokenBudget <= 0 {
-			return false
-		}
-		window = e.ContextTokenBudget
+		return false
 	}
 	ratio := e.ContextWindowRatio
 	if ratio <= 0 {
