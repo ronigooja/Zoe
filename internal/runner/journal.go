@@ -90,6 +90,30 @@ type QueuedObservation struct {
 	Body  contracts.RunnerObservation
 }
 
+// ObservationHistory returns every observation in journal order, including
+// acknowledged rows. Recovery uses this durable history to reconstruct
+// session transitions when an older runner recorded only progress events.
+func (j *Journal) ObservationHistory(ctx context.Context, runID string) ([]QueuedObservation, error) {
+	rows, err := j.db.QueryContext(ctx, `SELECT run_id,body FROM journal_observations WHERE run_id=? ORDER BY created_at,observation_id`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []QueuedObservation
+	for rows.Next() {
+		var queued QueuedObservation
+		var encoded []byte
+		if err := rows.Scan(&queued.RunID, &encoded); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(encoded, &queued.Body); err != nil {
+			return nil, err
+		}
+		out = append(out, queued)
+	}
+	return out, rows.Err()
+}
+
 type DeploymentJournalEntry struct {
 	Claim        contracts.DeploymentClaim
 	Observation  *contracts.DeploymentObservation

@@ -701,6 +701,9 @@ func (e *Engine) emitMessage(ctx context.Context, c contracts.JobClaim, kind, so
 	return e.Control.Observe(ctx, c.RunID, stored)
 }
 func (e *Engine) flush(ctx context.Context, run string) error {
+	if err := e.rebindFromJournal(ctx, run); err != nil {
+		return err
+	}
 	pending, err := e.Journal.PendingObservations(ctx, run)
 	if err != nil {
 		return err
@@ -714,6 +717,114 @@ func (e *Engine) flush(ctx context.Context, run string) error {
 		}
 	}
 	return nil
+}
+
+// rebindFromJournal repairs the server binding before terminal observations
+// are replayed. Releases before session_rotated was introduced recorded
+// rotations as progress observations, so the server cannot infer the chain
+// from those rows itself. Each repair is still submitted through the normal
+// strict server validation path.
+func (e *Engine) rebindFromJournal(ctx context.Context, run string) error {
+	history, err := e.Journal.ObservationHistory(ctx, run)
+	if err != nil {
+		return err
+	}
+	bound := ""
+	for _, q := range history {
+		if q.Body.Kind == "dispatch_bound" && q.Body.RuntimeSessionID != "" {
+			bound = q.Body.RuntimeSessionID
+			break
+		}
+	}
+	if bound == "" {
+		return nil
+	}
+
+	type transition struct {
+		old, new string
+		count    int
+	}
+	existing := make(map[string]bool)
+	var transitions []transition
+	current := bound
+	for _, q := range history {
+		o := q.Body
+		switch o.Kind {
+		case "session_rotated":
+			var payload struct {
+				Old   string `json:"old_session_id"`
+				New   string `json:"new_session_id"`
+				Count int    `json:"rotation"`
+			}
+			if json.Unmarshal(o.Result, &payload) != nil || payload.Old == "" || payload.New == "" {
+				continue
+			}
+			existing[payload.Old+"\x00"+payload.New] = true
+			current = payload.New
+		case "progress":
+			var payload struct {
+				Event string `json:"event"`
+				Count int    `json:"rotation"`
+				Old   string `json:"old_session_id"`
+				New   string `json:"new_session_id"`
+			}
+			if o.RuntimeSessionID == "" || json.Unmarshal(o.Result, &payload) != nil || payload.Event != "context_rotated" {
+				continue
+			}
+			newSession := payload.New
+			if newSession == "" {
+				newSession = o.RuntimeSessionID
+			}
+			oldSession := payload.Old
+			if oldSession == "" {
+				oldSession = current
+			}
+			if newSession == oldSession {
+				continue
+			}
+			transitions = append(transitions, transition{old: oldSession, new: newSession, count: payload.Count})
+			current = newSession
+		}
+	}
+	for i, tr := range transitions {
+		key := tr.old + "\x00" + tr.new
+		if existing[key] {
+			continue
+		}
+		count := tr.count
+		if count <= 0 {
+			count = i + 1
+		}
+		entry, ok, err := e.Journal.Entry(ctx, run)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("runner journal claim missing during rotation recovery")
+		}
+		stored, err := e.Journal.QueueObservation(ctx, run, contracts.RunnerObservation{
+			ObservationID: observationID(entry.Claim.RunID, entry.Claim.AttemptID, entry.Claim.Fence, "session_rotated", tr.old+"\x00"+tr.new),
+			RunID:         entry.Claim.RunID, AttemptID: entry.Claim.AttemptID, Fence: entry.Claim.Fence,
+			Kind: "session_rotated", OccurredAt: e.now(), RuntimeSessionID: tr.new,
+			Result: mustJSON(map[string]any{"event": "context_rotated", "rotation": count, "old_session_id": tr.old, "new_session_id": tr.new}),
+		})
+		if err != nil {
+			return err
+		}
+		if err := e.Control.Observe(ctx, run, stored); err != nil {
+			return err
+		}
+		if err := e.Journal.AcknowledgeObservation(ctx, stored.ObservationID); err != nil {
+			return err
+		}
+		existing[key] = true
+	}
+	return nil
+}
+
+func mustJSON(value any) json.RawMessage {
+	encoded, _ := json.Marshal(value)
+	return encoded
 }
 func (e *Engine) interval() time.Duration {
 	if e.PollInterval > 0 {
