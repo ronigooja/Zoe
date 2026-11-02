@@ -2,6 +2,8 @@ package acceptance
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -68,7 +70,8 @@ func TestRunnerClaimMemoryContextExcludesAnotherSubjectsPersonalMemory(t *testin
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	source := memory.Source{ID: "subject-b-source", Version: 1, Scope: other, Kind: "user_note", Reference: "command:subject-b-source", RecordedAt: now, Producer: "user"}
+	sourceContent := "only subject B can see this"
+	source := memory.Source{ID: "subject-b-source", Version: 1, Scope: other, Kind: "user_note", Reference: "command:subject-b-source", ContentHash: sha256Hex(sourceContent), RecordedAt: now, Producer: "user"}
 	_, err = repo.PutTx(ctx, tx, memory.WriteInput{WorkspaceID: "default", ActorID: "subject-b", Source: source, Claim: memory.Claim{WorkspaceID: "default", Scope: other, Subject: "private", Key: "fact", Content: "only subject B can see this", Authority: memory.AuthorityUserConfirmed, Status: memory.ClaimActive}})
 	if err != nil {
 		_ = tx.Rollback()
@@ -96,6 +99,11 @@ func TestRunnerClaimMemoryContextExcludesAnotherSubjectsPersonalMemory(t *testin
 			t.Fatalf("subject B personal memory leaked into subject A claim: %+v", claim.MemoryContext.Items)
 		}
 	}
+}
+
+func sha256Hex(value string) string {
+	h := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(h[:])
 }
 
 func TestRunnerClaimMemoryContextExcludesUnverifiedAndUnsourcedClaims(t *testing.T) {
