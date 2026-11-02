@@ -358,6 +358,61 @@ func (s *Server) handleRunControl(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, control)
 }
 
+// handleRuntimeAuthorization is the only path that can mint a one-time
+// authorization for a runner. The runner cannot self-authorize: this endpoint
+// returns no record until a device command has created a pending action.
+func (s *Server) handleRuntimeAuthorization(w http.ResponseWriter, r *http.Request) {
+	p, ok := RunnerPrincipalFromContext(r.Context())
+	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:control:read") {
+		writeError(w, apiError(403, "forbidden", "runner lacks authorization read scope", nil))
+		return
+	}
+	runID, requestID := r.PathValue("run_id"), r.PathValue("request_id")
+	fence, err := strconv.ParseUint(r.URL.Query().Get("fence"), 10, 64)
+	if err != nil || fence == 0 {
+		writeError(w, apiError(400, "invalid_request", "fence is required", nil))
+		return
+	}
+	var out contracts.RuntimeAuthorization
+	var used int
+	var expires string
+	query := `SELECT a.run_id,a.request_id,a.fence,a.decision,a.expires_at,a.authorization_used,a.question FROM pending_runtime_actions a JOIN runs r ON r.id=a.run_id WHERE a.run_id=? AND a.fence=? AND r.runner_id=?`
+	args := []any{runID, fence, p.RunnerID}
+	if requestID != "" {
+		query += ` AND a.request_id=?`
+		args = append(args, requestID)
+	} else {
+		query += ` AND a.kind='worker_question'`
+	}
+	query += ` ORDER BY a.created_at LIMIT 1`
+	var message string
+	err = s.store.DB().QueryRowContext(r.Context(), query, args...).Scan(&out.RunID, &out.RequestID, &out.Fence, &out.Decision, &expires, &used, &message)
+	out.Message = message
+	if errors.Is(err, sql.ErrNoRows) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if used != 0 || out.Decision == "" || time.Now().UTC().After(parseTime(expires)) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	result, err := s.store.DB().ExecContext(r.Context(), `UPDATE pending_runtime_actions SET authorization_used=1 WHERE run_id=? AND request_id=? AND fence=? AND authorization_used=0`, runID, requestID, fence)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
 	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:observe") {
@@ -575,6 +630,63 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	var taskVersion int64
+	nextRunStatus := status
+	nextTaskStatus := ""
+	if observation.Kind == "permission_requested" || observation.Kind == "worker_question" {
+		now := time.Now().UTC()
+		if err = tx.QueryRowContext(r.Context(), `SELECT version FROM tasks WHERE id=? AND workspace_id=?`, taskID, workspace).Scan(&taskVersion); err != nil {
+			writeError(w, err)
+			return
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(observation.Result, &payload); err != nil {
+			writeError(w, apiError(400, "invalid_request", "pending action payload is invalid", nil))
+			return
+		}
+		requestID, _ := payload["request_id"].(string)
+		if requestID == "" {
+			writeError(w, apiError(400, "invalid_request", "pending action request id is required", nil))
+			return
+		}
+		action, _ := payload["action"].(string)
+		question, _ := payload["question"].(string)
+		resources := []string{}
+		if values, ok := payload["resources"].([]any); ok {
+			for _, value := range values {
+				if text, ok := value.(string); ok {
+					resources = append(resources, text)
+				}
+			}
+		}
+		canonical, _ := json.Marshal(map[string]any{"run_id": runID, "request_id": requestID, "action": action, "resources": resources, "question": question})
+		digest := fmt.Sprintf("%x", sha256.Sum256(canonical))
+		id, idErr := randomID()
+		if idErr != nil {
+			writeError(w, idErr)
+			return
+		}
+		expires := time.Now().UTC().Add(s.cfg.WaitLimit).Format(time.RFC3339Nano)
+		resourcesJSON, _ := json.Marshal(resources)
+		_, err = tx.ExecContext(r.Context(), `INSERT INTO pending_runtime_actions(id,workspace_id,task_id,run_id,fence,request_id,kind,action,resources_json,question,action_digest,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,request_id) DO NOTHING`, id, workspace, taskID, runID, fence, requestID, observation.Kind, action, resourcesJSON, question, digest, expires, now.Format(time.RFC3339Nano))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		// Keep the run active while its OpenCode session remains alive; the
+		// pending-action row is the durable waiting marker.
+		nextRunStatus, nextTaskStatus = "active", "awaiting_user"
+		if _, err = tx.ExecContext(r.Context(), `UPDATE runs SET waiting_since=?,last_observation_at=? WHERE id=?`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), runID); err != nil {
+			writeError(w, err)
+			return
+		}
+		taskVersion++
+		if _, err = tx.ExecContext(r.Context(), `UPDATE tasks SET status='awaiting_user',interaction_state=?,interaction_run_id=?,interaction_action_digest=?,interaction_expires_at=?,interaction_expected_version=?,interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, map[bool]string{true: "explicit_confirmation", false: "awaiting_message"}[observation.Kind == "permission_requested"], runID, digest, expires, taskVersion, question, now.Format(time.RFC3339Nano), taskID, workspace); err != nil {
+			writeError(w, err)
+			return
+		}
+		taskVersion++
+	}
 	now := time.Now().UTC()
 	if observation.OccurredAt.IsZero() {
 		observation.OccurredAt = now
@@ -588,14 +700,11 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	var taskVersion int64
 	if err = tx.QueryRowContext(r.Context(), `SELECT version FROM tasks WHERE id=? AND workspace_id=?`, taskID, workspace).Scan(&taskVersion); err != nil {
 		writeError(w, err)
 		return
 	}
 	eventKind := "run." + observation.Kind
-	nextRunStatus := status
-	nextTaskStatus := ""
 	var taskResult string
 	provenance, _ := json.Marshal(observation)
 	for _, item := range observation.Evidence {
@@ -713,6 +822,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "progress":
+	case "permission_requested", "worker_question":
 	case "result", "failure":
 	case "no_effect_terminal":
 		if observation.NoEffectProof.Outcome == "stopped" {
@@ -828,6 +938,8 @@ func statusForTask(runStatus, taskStatus string) string {
 func validObservationKind(k string) bool {
 	switch k {
 	case "dispatch_started", "dispatch_bound", "progress", "result", "failure", "effect_unknown", "stop_confirmed", "runtime_terminated", "no_effect_terminal", "create_rejected":
+		return true
+	case "permission_requested", "worker_question":
 		return true
 	}
 	return false

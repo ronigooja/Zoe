@@ -21,6 +21,26 @@ type ControlClient struct {
 	client *http.Client
 }
 
+func (c *ControlClient) RuntimeAuthorization(ctx context.Context, runID, requestID string, fence uint64) (*contracts.RuntimeAuthorization, error) {
+	endpoint := "/runner/v1/runs/" + url.PathEscape(runID) + "/authorizations/" + url.PathEscape(requestID) + "?fence=" + url.QueryEscape(fmt.Sprint(fence))
+	response, err := c.request(ctx, http.MethodGet, endpoint, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNoContent {
+		return nil, nil
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, safeHTTPError("read runtime authorization", response.StatusCode)
+	}
+	var out contracts.RuntimeAuthorization
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // InstanceState is the durable host epoch used to fence external runner
 // effects across backup/restore and deployment handoff.
 type InstanceState struct {

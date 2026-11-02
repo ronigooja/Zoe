@@ -411,6 +411,18 @@ CREATE INDEX task_confirmations_task ON task_confirmations(workspace_id,task_id,
 	}}); err != nil {
 		return err
 	}
+	if err := s.RegisterMigration(Migration{Namespace: "core", Version: 15, Name: "pending_runtime_actions", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+ALTER TABLE tasks ADD COLUMN interaction_question TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN waiting_since TEXT;
+CREATE TABLE pending_runtime_actions (
+ id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), task_id TEXT NOT NULL REFERENCES tasks(id), run_id TEXT NOT NULL REFERENCES runs(id), fence INTEGER NOT NULL, request_id TEXT NOT NULL, kind TEXT NOT NULL, action TEXT NOT NULL DEFAULT '', resources_json BLOB NOT NULL DEFAULT '[]', question TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '', action_digest TEXT NOT NULL, expires_at TEXT NOT NULL, decision TEXT NOT NULL DEFAULT '', authorization_used INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+ UNIQUE(run_id,request_id)
+);`)
+		return err
+	}}); err != nil {
+		return err
+	}
 	if err := RegisterInstanceAuthMigration(s); err != nil {
 		return err
 	}

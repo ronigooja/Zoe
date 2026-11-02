@@ -78,6 +78,10 @@ func run() error {
 	if maxRuns == 0 {
 		return errors.New("ZOE_MAX_RUNS must be an integer from 1 through 64")
 	}
+	waitLimit := waitLimitEnv()
+	if waitLimit == 0 {
+		return errors.New("ZOE_WAIT_LIMIT_MINUTES must be an integer from 1 through 1440")
+	}
 	cfg := control.Config{
 		RunnerToken:        runnerToken,
 		RunnerID:           env("ZOE_RUNNER_ID", "configured-runner"),
@@ -88,6 +92,7 @@ func run() error {
 		Profiles:           profiles,
 		PushSender:         pushSender,
 		MaxRuns:            maxRuns,
+		WaitLimit:          waitLimit * time.Minute,
 	}
 	server, err := composeControlServer(store, cfg, voice.Config{GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
@@ -255,6 +260,17 @@ func maxRunsEnv() int {
 		return 0
 	}
 	return n
+}
+func waitLimitEnv() time.Duration {
+	v := strings.TrimSpace(os.Getenv("ZOE_WAIT_LIMIT_MINUTES"))
+	if v == "" {
+		return 30 * time.Minute
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > 1440 {
+		return 0
+	}
+	return time.Duration(n) * time.Minute
 }
 
 func splitEnv(name, fallback string) []string {

@@ -117,6 +117,7 @@ type Task struct {
 	InteractionActionDigest    string        `json:"interaction_action_digest,omitempty"`
 	InteractionExpectedVersion int64         `json:"interaction_expected_version,omitempty"`
 	InteractionExpiresAt       *time.Time    `json:"interaction_expires_at,omitempty"`
+	InteractionQuestion        string        `json:"interaction_question,omitempty"`
 	Messages                   []TaskMessage `json:"messages,omitempty"`
 }
 
@@ -323,6 +324,26 @@ type RunnerObservation struct {
 	NoEffectProof       *NoEffectProof        `json:"no_effect_proof,omitempty"`
 	CreateRejection     *CreateRejectionProof `json:"create_rejection,omitempty"`
 	BudgetReservationID string                `json:"budget_reservation_id,omitempty"`
+}
+
+type PendingAction struct {
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	RequestID    string    `json:"request_id"`
+	Action       string    `json:"action,omitempty"`
+	Resources    []string  `json:"resources,omitempty"`
+	Question     string    `json:"question,omitempty"`
+	RunID        string    `json:"run_id"`
+	Fence        uint64    `json:"fence"`
+	ActionDigest string    `json:"action_digest"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+type RuntimeAuthorization struct {
+	RequestID string `json:"request_id"`
+	RunID     string `json:"run_id"`
+	Fence     uint64 `json:"fence"`
+	Decision  string `json:"decision"`
+	Message   string `json:"message,omitempty"`
 }
 
 // CreateRejectionProof proves a local deterministic failure before an external

@@ -29,6 +29,7 @@ type Config struct {
 	Profiles           map[string]RuntimeProfile
 	MaxRequestBytes    int64
 	MaxRuns            int
+	WaitLimit          time.Duration
 	PushSender         PushSender
 }
 
@@ -257,6 +258,12 @@ func NewServer(store *storage.Store, cfg Config) (*Server, error) {
 	}
 	if cfg.MaxRuns < 1 || cfg.MaxRuns > 64 {
 		return nil, errors.New("max runs must be between 1 and 64")
+	}
+	if cfg.WaitLimit == 0 {
+		cfg.WaitLimit = 30 * time.Minute
+	}
+	if cfg.WaitLimit < time.Minute || cfg.WaitLimit > 24*time.Hour {
+		return nil, errors.New("wait limit must be between 1 minute and 24 hours")
 	}
 	profiles := make(map[string]RuntimeProfile, len(cfg.Profiles))
 	for id, profile := range cfg.Profiles {

@@ -250,6 +250,11 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 			return contracts.CommandResult{}, nil, apiError(409, "confirmation_expired", "confirmation has expired", nil)
 		}
 		confirmed = explicitConfirmationPhrases[strings.ToLower(p.Content)]
+		if !confirmed {
+			if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='reject' WHERE task_id=? AND run_id=? AND action_digest=? AND authorization_used=0`, p.TaskID, interactionRun, actionDigest); err != nil {
+				return contracts.CommandResult{}, nil, err
+			}
+		}
 	}
 	id, err := randomID()
 	if err != nil {
@@ -264,6 +269,11 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 	nextStatus := status
 	if (status == "waiting" || status == "awaiting_user") && interaction == "awaiting_message" {
 		nextStatus = "queued"
+	}
+	if interaction == "awaiting_message" && interactionRun != "" && actionDigest != "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='answer',message=? WHERE task_id=? AND run_id=? AND action_digest=? AND authorization_used=0`, p.Content, p.TaskID, interactionRun, actionDigest); err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
 	}
 	if interaction == "explicit_confirmation" && confirmed {
 		nextStatus = "queued"
@@ -285,6 +295,9 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 			return contracts.CommandResult{}, nil, err
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET interaction_state='none',interaction_scope='',interaction_run_id='',interaction_action_digest='',interaction_expires_at=NULL,interaction_expected_version=0 WHERE id=? AND workspace_id=?`, p.TaskID, c.Principal.WorkspaceID); err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='once' WHERE task_id=? AND run_id=? AND action_digest=? AND authorization_used=0`, p.TaskID, interactionRun, actionDigest); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 		events = append(events, event("task.confirmation_recorded", "task", p.TaskID, version, map[string]any{"task_id": p.TaskID, "run_id": interactionRun, "action_digest": actionDigest, "scope": scope, "confirmed_text": p.Content, "device_id": c.Principal.DeviceID, "expires_at": expires}))

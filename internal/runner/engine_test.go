@@ -21,6 +21,15 @@ type runtimeFake struct {
 	done                        bool
 	result                      opencode.Message
 	messages                    []opencode.Message
+	pendingPermissions          []opencode.PermissionRequest
+	pendingForms                []opencode.FormRequest
+}
+
+func (f *runtimeFake) PendingPermissions(context.Context, RuntimeBinding) ([]opencode.PermissionRequest, error) {
+	return f.pendingPermissions, nil
+}
+func (f *runtimeFake) PendingForms(context.Context, RuntimeBinding) ([]opencode.FormRequest, error) {
+	return f.pendingForms, nil
 }
 
 func (f *runtimeFake) Create(context.Context, RuntimeSpec) (RuntimeBinding, error) {
@@ -370,5 +379,26 @@ func TestToolEvidenceClassifiesCallsAndStaysUnverified(t *testing.T) {
 		if got[i].Kind != kind || got[i].Verified || got[i].Source == "" {
 			t.Fatalf("evidence[%d]=%+v, want kind %s unverified with source", i, got[i], kind)
 		}
+	}
+}
+
+func TestPendingPermissionIsReportedWithoutLocalReply(t *testing.T) {
+	f := completingRuntimeFake()
+	f.done = false
+	f.pendingPermissions = []opencode.PermissionRequest{{ID: "p1", Action: "write", Resources: []string{"x"}}}
+	c := &controlFake{}
+	j := openTestJournal(t)
+	e := testEngine(t, f, c, j)
+	if err := e.Process(testContext(t), testClaim()); err != nil {
+		t.Fatal(err)
+	}
+	if f.prompts != 1 || kinds(c) != "dispatch_started,dispatch_bound,permission_requested" {
+		t.Fatalf("prompts=%d observations=%s", f.prompts, kinds(c))
+	}
+}
+
+func TestBuildPromptIsStableForAuthorizationBoundary(t *testing.T) {
+	if !strings.Contains(buildPrompt(testClaim()), "assigned goal") {
+		t.Fatal("prompt boundary changed")
 	}
 }

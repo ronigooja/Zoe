@@ -41,7 +41,11 @@ func Build(tasks []contracts.Task, notifications []contracts.Notification, revis
 			if task.InteractionState == "awaiting_message" {
 				options = []any{map[string]any{"label": "Answer", "intent": "task.append", "args": map[string]any{"task_id": task.ID, "run_id": task.InteractionRunID, "action_digest": task.InteractionActionDigest, "expected_version": task.InteractionExpectedVersion, "expiry": expires}, "consequence": "Send an answer for server validation"}}
 			}
-			result.Surfaces = append(result.Surfaces, contracts.SurfaceSpec{ID: "pending_decision." + task.ID, Kind: contracts.SurfacePanel, Document: contracts.ScreenDocument{Version: contracts.ScreenLibraryVersion, Revision: revision, Root: contracts.ScreenNode{ID: "decision." + task.ID, Type: contracts.NodeDecision, Props: map[string]any{"question": task.Title, "options": options}}}})
+			question := task.Title
+			if task.InteractionQuestion != "" {
+				question = task.InteractionQuestion
+			}
+			result.Surfaces = append(result.Surfaces, contracts.SurfaceSpec{ID: "pending_decision." + task.ID, Kind: contracts.SurfacePanel, Document: contracts.ScreenDocument{Version: contracts.ScreenLibraryVersion, Revision: revision, Root: contracts.ScreenNode{ID: "decision." + task.ID, Type: contracts.NodeDecision, Props: map[string]any{"question": question, "options": options}}}})
 		}
 		if task.Result != "" && task.Status == "complete" {
 			result.Surfaces = append(result.Surfaces, contracts.SurfaceSpec{ID: "result." + task.ID, Kind: contracts.SurfaceWindow, Document: contracts.ScreenDocument{Version: contracts.ScreenLibraryVersion, Revision: revision, Root: contracts.ScreenNode{ID: "result." + task.ID, Type: contracts.NodeArticle, Props: map[string]any{"title": task.Title, "body": task.Result}}}})

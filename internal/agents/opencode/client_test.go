@@ -208,3 +208,32 @@ func TestEvents(t *testing.T) {
 		t.Fatal("empty event")
 	}
 }
+
+func TestPermissionAndFormListReplyShapes(t *testing.T) {
+	var replied bool
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/session/s/permission":
+			json.NewEncoder(w).Encode(map[string]any{"data": []PermissionRequest{{ID: "p1", SessionID: "s", Action: "write", Resources: []string{"x"}, Metadata: map[string]any{"k": "v"}}}})
+		case "/api/session/s/form":
+			json.NewEncoder(w).Encode(map[string]any{"data": []FormRequest{{ID: "f1", SessionID: "s", Title: "Questions", Fields: []map[string]any{{"key": "q0"}}}}})
+		case "/api/session/s/permission/p1/reply":
+			var b map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			replied = b["decision"] == "once"
+		}
+	}))
+	defer s.Close()
+	c, _ := New(Config{BaseURL: s.URL, Password: "p"})
+	permissions, err := c.PendingPermissions(context.Background(), "s")
+	if err != nil || len(permissions) != 1 || permissions[0].Action != "write" {
+		t.Fatalf("permissions=%+v err=%v", permissions, err)
+	}
+	forms, err := c.PendingForms(context.Background(), "s")
+	if err != nil || len(forms) != 1 || forms[0].Title != "Questions" {
+		t.Fatalf("forms=%+v err=%v", forms, err)
+	}
+	if err := c.ReplyPermission(context.Background(), "s", "p1", PermissionOnce, ""); err != nil || !replied {
+		t.Fatalf("reply err=%v replied=%v", err, replied)
+	}
+}

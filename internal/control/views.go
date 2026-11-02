@@ -131,7 +131,7 @@ func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, ma
 		return out, err
 	}
 	projects.Close()
-	tasks, err := tx.QueryContext(ctx, `SELECT id,coalesce(project_id,''),title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,started_at,finished_at,result,error,interaction_state,interaction_scope,interaction_run_id,interaction_action_digest,interaction_expires_at,interaction_expected_version FROM tasks t WHERE workspace_id=? AND (owner_subject_id=?) ORDER BY created_at,id`, workspace, subject)
+	tasks, err := tx.QueryContext(ctx, `SELECT id,coalesce(project_id,''),title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,started_at,finished_at,result,error,interaction_state,interaction_scope,interaction_run_id,interaction_action_digest,interaction_expires_at,interaction_expected_version,interaction_question FROM tasks t WHERE workspace_id=? AND (owner_subject_id=?) ORDER BY created_at,id`, workspace, subject)
 	if err != nil {
 		return out, err
 	}
@@ -139,7 +139,7 @@ func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, ma
 		var t contracts.Task
 		var created, updated string
 		var accepted, started, finished, interactionExpires sql.NullString
-		if err = tasks.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Goal, &t.Source, &t.ProfileID, &t.Status, &t.Version, &created, &updated, &accepted, &started, &finished, &t.Result, &t.Error, &t.InteractionState, &t.InteractionScope, &t.InteractionRunID, &t.InteractionActionDigest, &interactionExpires, &t.InteractionExpectedVersion); err != nil {
+		if err = tasks.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Goal, &t.Source, &t.ProfileID, &t.Status, &t.Version, &created, &updated, &accepted, &started, &finished, &t.Result, &t.Error, &t.InteractionState, &t.InteractionScope, &t.InteractionRunID, &t.InteractionActionDigest, &interactionExpires, &t.InteractionExpectedVersion, &t.InteractionQuestion); err != nil {
 			tasks.Close()
 			return out, err
 		}

@@ -81,6 +81,29 @@ type Message struct {
 	} `json:"info"`
 	Parts []map[string]any `json:"parts,omitempty"`
 }
+type PermissionRequest struct {
+	ID        string         `json:"id"`
+	SessionID string         `json:"sessionID"`
+	Action    string         `json:"action"`
+	Resources []string       `json:"resources"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	Message   string         `json:"message,omitempty"`
+}
+type FormRequest struct {
+	ID        string           `json:"id"`
+	SessionID string           `json:"sessionID"`
+	Title     string           `json:"title"`
+	Metadata  map[string]any   `json:"metadata,omitempty"`
+	Fields    []map[string]any `json:"fields"`
+}
+type PermissionDecision string
+
+const (
+	PermissionOnce   PermissionDecision = "once"
+	PermissionAlways PermissionDecision = "always"
+	PermissionReject PermissionDecision = "reject"
+)
+
 type Event struct {
 	Type       string          `json:"type"`
 	Properties json.RawMessage `json:"properties,omitempty"`
@@ -181,6 +204,36 @@ func (c *Client) Messages(ctx context.Context, id string) ([]Message, error) {
 	}
 	_, err := c.do(ctx, http.MethodGet, "/api/session/"+url.PathEscape(id)+"/message", nil, &out)
 	return out.Data, err
+}
+func (c *Client) PendingPermissions(ctx context.Context, id string) ([]PermissionRequest, error) {
+	var out struct {
+		Data []PermissionRequest `json:"data"`
+	}
+	_, err := c.do(ctx, http.MethodGet, "/api/session/"+url.PathEscape(id)+"/permission", nil, &out)
+	return out.Data, err
+}
+func (c *Client) ReplyPermission(ctx context.Context, sessionID, requestID string, decision PermissionDecision, message string) error {
+	body, err := json.Marshal(map[string]any{"decision": decision, "message": message})
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, http.MethodPost, "/api/session/"+url.PathEscape(sessionID)+"/permission/"+url.PathEscape(requestID)+"/reply", body, nil)
+	return err
+}
+func (c *Client) PendingForms(ctx context.Context, id string) ([]FormRequest, error) {
+	var out struct {
+		Data []FormRequest `json:"data"`
+	}
+	_, err := c.do(ctx, http.MethodGet, "/api/session/"+url.PathEscape(id)+"/form", nil, &out)
+	return out.Data, err
+}
+func (c *Client) ReplyForm(ctx context.Context, sessionID, formID string, answer map[string]any) error {
+	body, err := json.Marshal(map[string]any{"answer": answer})
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, http.MethodPost, "/api/session/"+url.PathEscape(sessionID)+"/form/"+url.PathEscape(formID)+"/reply", body, nil)
+	return err
 }
 func (c *Client) Interrupt(ctx context.Context, id string) error {
 	_, err := c.do(ctx, http.MethodPost, "/api/session/"+url.PathEscape(id)+"/interrupt", []byte("{}"), nil)

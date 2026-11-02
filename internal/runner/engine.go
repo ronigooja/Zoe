@@ -35,6 +35,9 @@ type runBudgetControl interface {
 type dispatchAuthorizationControl interface {
 	CheckDispatchAuthorization(context.Context, string) (bool, string, error)
 }
+type runtimeAuthorizationControl interface {
+	RuntimeAuthorization(context.Context, string, string, uint64) (*contracts.RuntimeAuthorization, error)
+}
 type Route struct {
 	ProfileID       string `json:"profile_id"`
 	RuntimeRouteID  string `json:"runtime_route_id"`
@@ -96,6 +99,21 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 		case "prompt_sent":
 			if entry.Session == "" {
 				return fmt.Errorf("%w: prompt-sent runtime recovery identity incomplete", ErrOutcomePending)
+			}
+			return e.monitor(ctx, claim, RuntimeBinding{SessionID: entry.Session})
+		case "waiting_permission", "waiting_question":
+			if entry.Session == "" {
+				return fmt.Errorf("%w: waiting runtime identity incomplete", ErrOutcomePending)
+			}
+			if entry.Phase == "waiting_question" {
+				if authc, ok := e.Control.(runtimeAuthorizationControl); ok {
+					if auth, err := authc.RuntimeAuthorization(ctx, claim.RunID, "", claim.Fence); err == nil && auth != nil && auth.Decision == "answer" {
+						if err := e.Runtime.Prompt(ctx, RuntimeBinding{SessionID: entry.Session}, auth.Message); err != nil {
+							return err
+						}
+						_ = e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_sent")
+					}
+				}
 			}
 			return e.monitor(ctx, claim, RuntimeBinding{SessionID: entry.Session})
 		}
@@ -227,6 +245,47 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			time.Sleep(e.interval())
 			continue
 		}
+		if pending, ok := e.Runtime.(PendingRequests); ok {
+			if requests, reqErr := pending.PendingPermissions(ctx, b); reqErr == nil && len(requests) > 0 {
+				r := requests[0]
+				if authc, ok := e.Control.(runtimeAuthorizationControl); ok {
+					if authorization, authErr := authc.RuntimeAuthorization(ctx, claim.RunID, r.ID, claim.Fence); authErr == nil && authorization != nil {
+						decision := opencode.PermissionDecision(authorization.Decision)
+						if decision != opencode.PermissionOnce && decision != opencode.PermissionAlways && decision != opencode.PermissionReject {
+							return errors.New("invalid runtime authorization decision")
+						}
+						if reply, ok := e.Runtime.(PermissionReply); ok {
+							if err := reply.ReplyPermission(ctx, b, r.ID, decision, authorization.Message); err != nil {
+								return err
+							}
+							_ = e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_sent")
+							continue
+						}
+					}
+				}
+				if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "waiting_permission"); err != nil {
+					return err
+				}
+				return e.emitPending(ctx, claim, "permission_requested", map[string]any{"request_id": r.ID, "action": r.Action, "resources": r.Resources, "metadata": r.Metadata})
+			}
+			if forms, reqErr := pending.PendingForms(ctx, b); reqErr == nil && len(forms) > 0 {
+				f := forms[0]
+				question := f.Title
+				for _, field := range f.Fields {
+					if q, ok := field["description"].(string); ok && q != "" {
+						question = q
+						break
+					}
+				}
+				if len(question) > 4000 {
+					question = question[:4000]
+				}
+				if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "waiting_question"); err != nil {
+					return err
+				}
+				return e.emitPending(ctx, claim, "worker_question", map[string]any{"request_id": f.ID, "question": question, "title": f.Title})
+			}
+		}
 		msgs, err := e.Runtime.Messages(ctx, b)
 		if err != nil {
 			time.Sleep(e.interval())
@@ -247,6 +306,16 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 		}
 		return e.terminate(ctx, claim, b, "completed", false)
 	}
+}
+
+func (e *Engine) emitPending(ctx context.Context, c contracts.JobClaim, kind string, payload map[string]any) error {
+	raw, _ := json.Marshal(payload)
+	entry, _, _ := e.Journal.Entry(ctx, c.RunID)
+	o := contracts.RunnerObservation{ObservationID: observationID(c.RunID, c.AttemptID, c.Fence, kind, string(raw)), RunID: c.RunID, AttemptID: c.AttemptID, Fence: c.Fence, Kind: kind, OccurredAt: time.Now().UTC(), RuntimeSessionID: entry.Session, Result: raw}
+	if err := e.Journal.QueueObservation(ctx, c.RunID, o); err != nil {
+		return err
+	}
+	return e.Control.Observe(ctx, c.RunID, o)
 }
 
 func (e *Engine) terminate(ctx context.Context, c contracts.JobClaim, b RuntimeBinding, reason string, stopped bool) error {

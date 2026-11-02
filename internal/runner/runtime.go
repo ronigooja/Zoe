@@ -53,6 +53,13 @@ type Runtime interface {
 	Abort(context.Context, RuntimeBinding) error
 	Terminate(context.Context, RuntimeBinding) (string, error)
 }
+type PendingRequests interface {
+	PendingPermissions(context.Context, RuntimeBinding) ([]opencode.PermissionRequest, error)
+	PendingForms(context.Context, RuntimeBinding) ([]opencode.FormRequest, error)
+}
+type PermissionReply interface {
+	ReplyPermission(context.Context, RuntimeBinding, string, opencode.PermissionDecision, string) error
+}
 
 type OpenCodeRuntime struct {
 	BaseURL, Username, Password, WorkspaceRoot, Model string
@@ -117,6 +124,27 @@ func (r OpenCodeRuntime) Messages(ctx context.Context, b RuntimeBinding) ([]open
 		return nil, e
 	}
 	return c.Messages(ctx, b.SessionID)
+}
+func (r OpenCodeRuntime) PendingPermissions(ctx context.Context, b RuntimeBinding) ([]opencode.PermissionRequest, error) {
+	c, e := r.client()
+	if e != nil {
+		return nil, e
+	}
+	return c.PendingPermissions(ctx, b.SessionID)
+}
+func (r OpenCodeRuntime) PendingForms(ctx context.Context, b RuntimeBinding) ([]opencode.FormRequest, error) {
+	c, e := r.client()
+	if e != nil {
+		return nil, e
+	}
+	return c.PendingForms(ctx, b.SessionID)
+}
+func (r OpenCodeRuntime) ReplyPermission(ctx context.Context, b RuntimeBinding, requestID string, decision opencode.PermissionDecision, message string) error {
+	c, e := r.client()
+	if e != nil {
+		return e
+	}
+	return c.ReplyPermission(ctx, b.SessionID, requestID, decision, message)
 }
 func (r OpenCodeRuntime) Events(context.Context, RuntimeBinding) (<-chan opencode.Event, <-chan error) {
 	events := make(chan opencode.Event)
