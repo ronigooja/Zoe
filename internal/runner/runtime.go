@@ -53,6 +53,9 @@ type Runtime interface {
 	Abort(context.Context, RuntimeBinding) error
 	Terminate(context.Context, RuntimeBinding) (string, error)
 }
+type ContextWindowProvider interface {
+	ContextWindow(context.Context, string) (int64, error)
+}
 type RotationRecovery interface {
 	FindRotationSession(context.Context, string, string) (RuntimeBinding, error)
 }
@@ -126,6 +129,17 @@ func (r OpenCodeRuntime) FindRotationSession(ctx context.Context, runID, oldSess
 		}
 	}
 	return RuntimeBinding{}, errors.New("replacement OpenCode session not found")
+}
+func (r OpenCodeRuntime) ContextWindow(ctx context.Context, model string) (int64, error) {
+	c, err := r.client()
+	if err != nil {
+		return 0, err
+	}
+	providerID, modelID, ok := strings.Cut(model, "/")
+	if !ok || providerID == "" || modelID == "" {
+		return 0, errors.New("model must be provider/model")
+	}
+	return c.ModelContextWindow(ctx, providerID, modelID)
 }
 func (r OpenCodeRuntime) Prompt(ctx context.Context, b RuntimeBinding, p string) error {
 	c, e := r.client()

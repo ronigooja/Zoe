@@ -25,7 +25,7 @@ Runs use one wildcard allow rule, so impact levels cannot follow capabilities. A
 
 ### Bounded context
 
-9. Every long-lived conversation has a context budget and is replaced by a fresh one seeded from a Zoe summary when it is exceeded; the agent runner performs this replacement crash-safely for OpenCode sessions.
+9. Every long-lived conversation is rotated when the latest assistant usage exceeds 50% of the selected model's `/api/model` `limit.context`; `ZOE_AGENT_CONTEXT_WINDOW_RATIO` defaults to `0.5` and must be in `(0,1)`. If the model window cannot be determined, rotation is disabled for that run. `ZOE_AGENT_CONTEXT_TOKEN_BUDGET`, when set, is an optional absolute cap and can only lower the threshold; a claim `MaxContextTokens` can lower it further. If a fresh session itself starts above the threshold, it rotates again until `ZOE_AGENT_MAX_ROTATIONS`, then ends with `context_rotation_limit_exceeded`.
 
 ### Memory and voice context
 

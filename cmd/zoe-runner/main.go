@@ -67,6 +67,10 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	ratio, err := contextWindowRatioEnv()
+	if err != nil {
+		return err
+	}
 	control, err := runner.NewControlClient(baseURL, controlToken, nil)
 	if err != nil {
 		return fmt.Errorf("configure control API: %w", err)
@@ -104,7 +108,8 @@ func run(args []string) error {
 		PollInterval:       durationEnv("ZOE_RUNNER_POLL_INTERVAL", 2*time.Second),
 		ObserveTimeout:     durationEnv("ZOE_RUNNER_OBSERVE_TIMEOUT", 15*time.Second),
 		WaitLimit:          durationEnv("ZOE_WAIT_LIMIT", 30*time.Minute),
-		ContextTokenBudget: int64Env("ZOE_AGENT_CONTEXT_TOKEN_BUDGET", 100000),
+		ContextTokenBudget: int64Env("ZOE_AGENT_CONTEXT_TOKEN_BUDGET", 0),
+		ContextWindowRatio: ratio,
 		MaxRotations:       intEnv("ZOE_AGENT_MAX_ROTATIONS", 3),
 	}
 	if *reconcileRuns != "" || *confirm || *actor != "" || len(retainContainers) > 0 || len(preexistingContainers) > 0 {
@@ -121,6 +126,18 @@ func run(args []string) error {
 		}}
 	}
 	return serve(ctx, engine, deployments, triggerAdmissions, *once, durationEnv("ZOE_RUNNER_IDLE_POLL_INTERVAL", 2*time.Second))
+}
+
+func contextWindowRatioEnv() (float64, error) {
+	v := strings.TrimSpace(os.Getenv("ZOE_AGENT_CONTEXT_WINDOW_RATIO"))
+	if v == "" {
+		return 0.5, nil
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil || n <= 0 || n >= 1 {
+		return 0, errors.New("ZOE_AGENT_CONTEXT_WINDOW_RATIO must be between 0 and 1")
+	}
+	return n, nil
 }
 
 func serve(ctx context.Context, engine *runner.Engine, deployments *runner.DeploymentWorker, triggerAdmissions *runner.TriggerAdmissionWorker, once bool, idle time.Duration) error {

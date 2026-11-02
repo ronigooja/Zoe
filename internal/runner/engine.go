@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
@@ -59,7 +60,10 @@ type Engine struct {
 	WaitLimit                    time.Duration
 	Now                          func() time.Time
 	ContextTokenBudget           int64
+	ContextWindowRatio           float64
 	MaxRotations                 int
+	windowMu                     sync.Mutex
+	windowCache                  map[string]int64
 }
 
 func (e *Engine) RunOnce(ctx context.Context) error {
@@ -338,7 +342,7 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			time.Sleep(e.interval())
 			continue
 		}
-		if !waiting && e.contextExceeded(claim, msgs) {
+		if !waiting && e.contextExceeded(ctx, claim, msgs) {
 			return e.rotate(ctx, claim, b, msgs)
 		}
 		_ = status
@@ -360,8 +364,22 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 
 const rotationSummaryLimit = 12000
 
-func (e *Engine) contextExceeded(c contracts.JobClaim, msgs []opencode.Message) bool {
-	limit := e.ContextTokenBudget
+func (e *Engine) contextExceeded(ctx context.Context, c contracts.JobClaim, msgs []opencode.Message) bool {
+	window, ok := e.contextWindow(ctx, c)
+	if !ok {
+		if e.ContextTokenBudget <= 0 {
+			return false
+		}
+		window = e.ContextTokenBudget
+	}
+	ratio := e.ContextWindowRatio
+	if ratio <= 0 {
+		ratio = 0.5
+	}
+	limit := int64(float64(window) * ratio)
+	if e.ContextTokenBudget > 0 && e.ContextTokenBudget < limit {
+		limit = e.ContextTokenBudget
+	}
 	if c.Budget.MaxContextTokens > 0 && (limit <= 0 || c.Budget.MaxContextTokens < limit) {
 		limit = c.Budget.MaxContextTokens
 	}
@@ -383,6 +401,38 @@ func (e *Engine) contextExceeded(c contracts.JobClaim, msgs []opencode.Message) 
 		usage = latest.Info.Tokens.Input + latest.Info.Tokens.Output + latest.Info.Tokens.Cache.Read + latest.Info.Tokens.Cache.Write
 	}
 	return usage > limit
+}
+
+func (e *Engine) contextWindow(ctx context.Context, c contracts.JobClaim) (int64, bool) {
+	route, ok := e.Routes[c.ProfileID]
+	if !ok {
+		return 0, false
+	}
+	key := route.Model
+	e.windowMu.Lock()
+	if e.windowCache != nil {
+		if w, ok := e.windowCache[key]; ok {
+			e.windowMu.Unlock()
+			return w, true
+		}
+	}
+	e.windowMu.Unlock()
+	p, ok := e.Runtime.(ContextWindowProvider)
+	if !ok {
+		return 0, false
+	}
+	w, err := p.ContextWindow(ctx, route.Model)
+	if err != nil || w <= 0 {
+		log.Printf("context rotation window unavailable for run %s; rotation disabled", safeRuntimeID(c.RunID))
+		return 0, false
+	}
+	e.windowMu.Lock()
+	defer e.windowMu.Unlock()
+	if e.windowCache == nil {
+		e.windowCache = map[string]int64{}
+	}
+	e.windowCache[key] = w
+	return w, true
 }
 
 func rotationSummary(msgs []opencode.Message) string {
@@ -470,10 +520,19 @@ func (e *Engine) rotate(ctx context.Context, c contracts.JobClaim, old RuntimeBi
 	if err := e.Journal.SetPhase(ctx, c.RunID, c.AttemptID, c.Fence, "prompt_sent"); err != nil {
 		return err
 	}
-	if err := e.emitPending(ctx, c, "progress", map[string]any{"event": "context_rotated", "rotation": count}); err != nil {
+	if err := e.emitSessionRotated(ctx, c, old.SessionID, binding.SessionID, count); err != nil {
 		return err
 	}
 	return e.monitor(ctx, c, binding)
+}
+
+func (e *Engine) emitSessionRotated(ctx context.Context, c contracts.JobClaim, oldSession, newSession string, count int) error {
+	raw, _ := json.Marshal(map[string]any{"event": "context_rotated", "rotation": count, "old_session_id": oldSession, "new_session_id": newSession})
+	o := contracts.RunnerObservation{ObservationID: observationID(c.RunID, c.AttemptID, c.Fence, "session_rotated", string(raw)), RunID: c.RunID, AttemptID: c.AttemptID, Fence: c.Fence, Kind: "session_rotated", OccurredAt: time.Now().UTC(), RuntimeSessionID: newSession, Result: raw}
+	if err := e.Journal.QueueObservation(ctx, c.RunID, o); err != nil {
+		return err
+	}
+	return e.Control.Observe(ctx, c.RunID, o)
 }
 
 func rotationPrompt(c contracts.JobClaim, summary string) string {

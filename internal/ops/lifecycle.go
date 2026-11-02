@@ -994,7 +994,7 @@ func isReleaseOwnedEnvKey(key string) bool {
 
 func isOperatorOwnedEnvKey(key string) bool {
 	switch key {
-	case "ZOE_RUNTIME_PROFILES", "ZOE_DEFAULT_PROFILE_ID", "ZOE_MAX_RUNS", "ZOE_RUNNER_ROUTES":
+	case "ZOE_RUNTIME_PROFILES", "ZOE_DEFAULT_PROFILE_ID", "ZOE_MAX_RUNS", "ZOE_RUNNER_ROUTES", "ZOE_AGENT_CONTEXT_WINDOW_RATIO", "ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "ZOE_AGENT_MAX_ROTATIONS":
 		return true
 	case "ZOE_OPENCODE_BASE_URL", "ZOE_OPENCODE_PASSWORD_FILE", "ZOE_OPENCODE_WORKSPACE_ROOT", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_BINARY", "ZOE_OPENCODE_USER":
 		return true
@@ -1038,6 +1038,12 @@ func validOperatorEnvValue(key, value string) bool {
 		return true
 	case "ZOE_VOICE_UPSTREAM_ROUTE":
 		return value == "wm" || value == "avas"
+	case "ZOE_AGENT_CONTEXT_WINDOW_RATIO":
+		n, err := strconv.ParseFloat(value, 64)
+		return err == nil && n > 0 && n < 1
+	case "ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "ZOE_AGENT_MAX_ROTATIONS":
+		n, err := strconv.ParseInt(value, 10, 64)
+		return err == nil && n >= 0
 	default:
 		return false
 	}

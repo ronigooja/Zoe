@@ -43,6 +43,16 @@ type Client struct {
 	client             *http.Client
 }
 
+type ModelLimit struct {
+	Context int64 `json:"context"`
+}
+type Model struct {
+	ID         string      `json:"id"`
+	ModelID    string      `json:"modelID"`
+	ProviderID string      `json:"providerID"`
+	Limit      *ModelLimit `json:"limit,omitempty"`
+}
+
 type Session struct {
 	ID       string `json:"id"`
 	Title    string `json:"title,omitempty"`
@@ -209,6 +219,28 @@ func (c *Client) Sessions(ctx context.Context) ([]Session, error) {
 	}
 	_, err := c.do(ctx, http.MethodGet, "/api/session", nil, &out)
 	return out.Data, err
+}
+func (c *Client) Models(ctx context.Context) ([]Model, error) {
+	var out struct {
+		Data []Model `json:"data"`
+	}
+	_, err := c.do(ctx, http.MethodGet, "/api/model", nil, &out)
+	return out.Data, err
+}
+func (c *Client) ModelContextWindow(ctx context.Context, providerID, modelID string) (int64, error) {
+	models, err := c.Models(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, model := range models {
+		if model.ProviderID == providerID && (model.ModelID == modelID || model.ID == modelID) {
+			if model.Limit == nil || model.Limit.Context <= 0 {
+				return 0, fmt.Errorf("model context window unavailable")
+			}
+			return model.Limit.Context, nil
+		}
+	}
+	return 0, fmt.Errorf("model not found")
 }
 func (c *Client) MoveSession(ctx context.Context, sessionID, directory string) error {
 	b, _ := json.Marshal(map[string]string{"directory": directory})

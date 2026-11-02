@@ -702,6 +702,20 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if observation.Kind == "session_rotated" {
+		if status != "active" || boundSession == "" || observation.RuntimeSessionID == "" {
+			writeError(w, apiError(409, "state_conflict", "session rotation requires an active bound run", nil))
+			return
+		}
+		var payload struct {
+			OldSessionID string `json:"old_session_id"`
+			NewSessionID string `json:"new_session_id"`
+		}
+		if err := json.Unmarshal(observation.Result, &payload); err != nil || payload.OldSessionID == "" || payload.NewSessionID == "" || payload.NewSessionID != observation.RuntimeSessionID || payload.OldSessionID != boundSession {
+			writeError(w, apiError(409, "session_conflict", "session rotation does not match the bound session", nil))
+			return
+		}
+	}
 	var taskVersion int64
 	var interactionState string
 	if err = tx.QueryRowContext(r.Context(), `SELECT interaction_state FROM tasks WHERE id=? AND workspace_id=?`, taskID, workspace).Scan(&interactionState); err != nil {
@@ -898,6 +912,12 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
+	case "session_rotated":
+		_, err = tx.ExecContext(r.Context(), `UPDATE runs SET runtime_session_id=?,runtime_container_id=? WHERE id=? AND runtime_session_id=?`, observation.RuntimeSessionID, observation.RuntimeContainerID, runID, boundSession)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
 	case "progress":
 	case "permission_requested", "worker_question":
 	case "result", "failure":
@@ -1014,7 +1034,7 @@ func statusForTask(runStatus, taskStatus string) string {
 }
 func validObservationKind(k string) bool {
 	switch k {
-	case "dispatch_started", "dispatch_bound", "progress", "result", "failure", "effect_unknown", "stop_confirmed", "runtime_terminated", "no_effect_terminal", "create_rejected":
+	case "dispatch_started", "dispatch_bound", "progress", "session_rotated", "result", "failure", "effect_unknown", "stop_confirmed", "runtime_terminated", "no_effect_terminal", "create_rejected":
 		return true
 	case "permission_requested", "worker_question":
 		return true

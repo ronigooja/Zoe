@@ -45,6 +45,8 @@ type runtimeFake struct {
 	onStatus                    func()
 }
 
+func (f *runtimeFake) ContextWindow(context.Context, string) (int64, error) { return 20, nil }
+
 func (f *runtimeFake) PendingPermissions(context.Context, RuntimeBinding) ([]opencode.PermissionRequest, error) {
 	return f.pendingPermissions, nil
 }
@@ -301,7 +303,7 @@ func TestRealFlatMessagesDriveRotationAndSummary(t *testing.T) {
 	}
 	e := &Engine{ContextTokenBudget: 1000}
 	claim := testClaim()
-	if !e.contextExceeded(claim, messages) {
+	if !e.contextExceeded(context.Background(), claim, messages) {
 		t.Fatal("flat assistant usage did not exceed context budget")
 	}
 	summary := rotationSummary(messages)
