@@ -2,6 +2,19 @@ package main
 
 import "testing"
 
+func TestContextWindowRatioEnvRejectsInvalidValues(t *testing.T) {
+	for _, value := range []string{"0", "1", "1.5", "-1", "abc"} {
+		t.Setenv("ZOE_AGENT_CONTEXT_WINDOW_RATIO", value)
+		if _, err := contextWindowRatioEnv(); err == nil {
+			t.Fatalf("ratio %q was accepted", value)
+		}
+	}
+	t.Setenv("ZOE_AGENT_CONTEXT_WINDOW_RATIO", "")
+	if got, err := contextWindowRatioEnv(); err != nil || got != 0.5 {
+		t.Fatalf("default ratio=%v err=%v", got, err)
+	}
+}
+
 func TestLoadRoutesRequiresServerMatchingProfile(t *testing.T) {
 	if _, err := loadRoutes(`{"worker":{"profile_id":"other","runtime_route_id":"runtime","model_route_id":"model","isolation_policy":"opencode-workspace-write-v1","harness":"opencode","model":"gpt-6-luna"}}`); err == nil {
 		t.Fatal("route key mismatch was accepted")

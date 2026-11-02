@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,9 @@ import (
 //
 //go:embed testdata/real_messages.json
 var realMessagesJSON []byte
+
+//go:embed testdata/real_models.json
+var realModelsJSON []byte
 
 type runtimeFake struct {
 	aborts, creates, terminates int
@@ -43,9 +47,21 @@ type runtimeFake struct {
 	formAnswers                 []map[string]any
 	permissionsReplied          []string
 	onStatus                    func()
+	contextWindow               int64
+	contextWindowErr            error
+	contextWindowCalls          int32
 }
 
-func (f *runtimeFake) ContextWindow(context.Context, string) (int64, error) { return 20, nil }
+func (f *runtimeFake) ContextWindow(context.Context, string) (int64, error) {
+	atomic.AddInt32(&f.contextWindowCalls, 1)
+	if f.contextWindowErr != nil {
+		return 0, f.contextWindowErr
+	}
+	if f.contextWindow != 0 {
+		return f.contextWindow, nil
+	}
+	return 20, nil
+}
 
 func (f *runtimeFake) PendingPermissions(context.Context, RuntimeBinding) ([]opencode.PermissionRequest, error) {
 	return f.pendingPermissions, nil
@@ -326,6 +342,58 @@ func TestRealFlatMessagesDriveRotationAndSummary(t *testing.T) {
 	}
 	if !strings.Contains(f.createdSpecs[1].Prompt, "The workspace report is ready.") || !strings.Contains(f.createdSpecs[1].Prompt, "Please inspect the workspace") {
 		t.Fatalf("flat rotation prompt=%q", f.createdSpecs[1].Prompt)
+	}
+}
+
+func TestContextExceededUsesModelWindowRatioAndCaps(t *testing.T) {
+	var catalog struct {
+		Data []opencode.Model `json:"data"`
+	}
+	if err := json.Unmarshal(realModelsJSON, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Data) == 0 || catalog.Data[0].Limit == nil || catalog.Data[0].Limit.Context != 1050000 {
+		t.Fatalf("catalog=%+v", catalog)
+	}
+	claim := testClaim()
+	engine := &Engine{ContextWindowRatio: 0.5, Runtime: &runtimeFake{contextWindow: catalog.Data[0].Limit.Context}, Routes: map[string]Route{"profile": {Model: "cliproxyapi/gpt-6.1-sol"}}}
+	if engine.contextExceeded(context.Background(), claim, []opencode.Message{assistantUsage(524999, 0, 0, 0)}) {
+		t.Fatal("usage below 525000 exceeded")
+	}
+	if !engine.contextExceeded(context.Background(), claim, []opencode.Message{assistantUsage(525001, 0, 0, 0)}) {
+		t.Fatal("usage above 525000 did not exceed")
+	}
+	engine.ContextWindowRatio = 0.25
+	if engine.contextExceeded(context.Background(), claim, []opencode.Message{assistantUsage(262499, 0, 0, 0)}) {
+		t.Fatal("quarter-ratio usage below threshold exceeded")
+	}
+	if !engine.contextExceeded(context.Background(), claim, []opencode.Message{assistantUsage(262501, 0, 0, 0)}) {
+		t.Fatal("quarter-ratio usage above threshold did not exceed")
+	}
+	engine.ContextWindowRatio = 0.5
+	engine.ContextTokenBudget = 100
+	if engine.contextExceeded(context.Background(), claim, []opencode.Message{assistantUsage(101, 0, 0, 0)}) != true {
+		t.Fatal("absolute cap did not lower threshold")
+	}
+	claim.Budget.MaxContextTokens = 50
+	if engine.contextExceeded(context.Background(), claim, []opencode.Message{assistantUsage(51, 0, 0, 0)}) != true {
+		t.Fatal("claim cap did not lower threshold")
+	}
+	if engine.contextExceeded(context.Background(), claim, []opencode.Message{assistantUsage(49, 0, 0, 0)}) {
+		t.Fatal("caps raised threshold unexpectedly")
+	}
+}
+
+func TestContextWindowUnavailableDisablesRotationAndCachesFailure(t *testing.T) {
+	f := &runtimeFake{contextWindowErr: errors.New("model has no limit")}
+	e := &Engine{Runtime: f, Routes: map[string]Route{"profile": {Model: "cliproxyapi/no-limit"}}, ContextWindowRatio: 0.5}
+	c := testClaim()
+	msgs := []opencode.Message{assistantUsage(9999999, 0, 0, 0)}
+	if e.contextExceeded(context.Background(), c, msgs) || e.contextExceeded(context.Background(), c, msgs) {
+		t.Fatal("unavailable window caused rotation")
+	}
+	if got := atomic.LoadInt32(&f.contextWindowCalls); got != 1 {
+		t.Fatalf("window calls=%d, want one cached failure", got)
 	}
 }
 

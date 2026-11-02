@@ -82,6 +82,35 @@ func TestWriteEnvPreservesVoiceUpstreamRoute(t *testing.T) {
 	}
 }
 
+func TestWriteEnvPreservesRotationOperatorSettingsAndRejectsInvalidValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "zoe.env")
+	original := "ZOE_AGENT_CONTEXT_WINDOW_RATIO=0.25\nZOE_AGENT_CONTEXT_TOKEN_BUDGET=90000\nZOE_AGENT_MAX_ROTATIONS=5\n"
+	if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{"ZOE_AGENT_CONTEXT_WINDOW_RATIO": "0.5", "ZOE_AGENT_CONTEXT_TOKEN_BUDGET": "0", "ZOE_AGENT_MAX_ROTATIONS": "3"}
+	if err := writeEnv(path, values, 0600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original {
+		t.Fatalf("rotation settings changed: %q", data)
+	}
+	for _, tc := range []struct{ key, value string }{{"ZOE_AGENT_CONTEXT_WINDOW_RATIO", "0"}, {"ZOE_AGENT_CONTEXT_WINDOW_RATIO", "1"}, {"ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "-1"}, {"ZOE_AGENT_MAX_ROTATIONS", "abc"}} {
+		if validOperatorEnvValue(tc.key, tc.value) {
+			t.Fatalf("invalid %s=%q accepted", tc.key, tc.value)
+		}
+	}
+	for _, tc := range []struct{ key, value string }{{"ZOE_AGENT_CONTEXT_WINDOW_RATIO", "0.25"}, {"ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "0"}, {"ZOE_AGENT_MAX_ROTATIONS", "3"}} {
+		if !validOperatorEnvValue(tc.key, tc.value) {
+			t.Fatalf("valid %s=%q rejected", tc.key, tc.value)
+		}
+	}
+}
+
 func TestDefaultProfileValuesRoundTripAndShareKeys(t *testing.T) {
 	profilesJSON, routesJSON, err := defaultProfileValues(defaultOpenCodeModel)
 	if err != nil {
