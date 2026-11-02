@@ -21,6 +21,7 @@ type runtimeFake struct {
 	promptBinding               RuntimeBinding
 	createdSpecs                []RuntimeSpec
 	live                        map[string]bool
+	liveAtBoundary              []string
 	createErr                   error
 	promptErr                   error
 	events                      chan opencode.Event
@@ -77,6 +78,9 @@ func (f *runtimeFake) Prompt(_ context.Context, b RuntimeBinding, prompt string)
 	f.prompts++
 	f.calls = append(f.calls, "Prompt")
 	f.promptBinding, f.promptText = b, prompt
+	if b.SessionID != "session" {
+		f.liveAtBoundary = liveSessions(f)
+	}
 	return f.promptErr
 }
 func (f *runtimeFake) Status(context.Context, RuntimeBinding) (map[string]opencode.Status, error) {
@@ -268,7 +272,7 @@ func TestContextUsageRotatesWithSameRuntimeSpecAndCompletes(t *testing.T) {
 	if len(f.createdSpecs) != 2 || f.createdSpecs[0].Agent != f.createdSpecs[1].Agent || f.createdSpecs[0].Model != f.createdSpecs[1].Model || f.createdSpecs[0].Workspace != f.createdSpecs[1].Workspace || f.createdSpecs[0].RunID != f.createdSpecs[1].RunID || f.createdSpecs[0].AttemptID != f.createdSpecs[1].AttemptID || f.createdSpecs[0].Fence != f.createdSpecs[1].Fence || !reflect.DeepEqual(f.createdSpecs[0].Permissions, f.createdSpecs[1].Permissions) {
 		t.Fatalf("replacement spec widened or changed: %+v", f.createdSpecs)
 	}
-	if live := liveSessions(f); len(live) != 1 || live[0] != "session-2" {
+	if live := f.liveAtBoundary; len(live) != 1 || live[0] != "session-2" {
 		t.Fatalf("live sessions=%v, want replacement only", live)
 	}
 	if !strings.Contains(f.createdSpecs[1].Prompt, "summary from prior session") || !strings.Contains(f.createdSpecs[1].Prompt, claim.Goal) {
@@ -323,7 +327,7 @@ func TestRotationRecoveryFromRotatingSummaryKeepsOneLiveSession(t *testing.T) {
 	if err := testEngine(t, f, &controlFake{}, j).Process(testContext(t), c); err != nil {
 		t.Fatal(err)
 	}
-	if got := liveSessions(f); len(got) != 1 || got[0] != "session-2" {
+	if got := f.liveAtBoundary; len(got) != 1 || got[0] != "session-2" {
 		t.Fatalf("live sessions=%v", got)
 	}
 	e, _, _ := j.Entry(context.Background(), c.RunID)
@@ -358,7 +362,7 @@ func TestRotationRecoveryFromCreatedAbortsOldAndCompletes(t *testing.T) {
 	if err := testEngine(t, f, &controlFake{}, j).Process(testContext(t), c); err != nil {
 		t.Fatal(err)
 	}
-	if got := liveSessions(f); len(got) != 1 || got[0] != "session-2" {
+	if got := f.liveAtBoundary; len(got) != 1 || got[0] != "session-2" {
 		t.Fatalf("live sessions=%v", got)
 	}
 }
