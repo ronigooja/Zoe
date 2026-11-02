@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/control"
 	"net"
 	"net/http"
 	"os"
@@ -34,6 +35,31 @@ func TestMaxRunsEnvDefaultValidAndInvalid(t *testing.T) {
 	}
 }
 
+func TestWaitLimitEnvExactDurationAndConfigRange(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", 30 * time.Minute}, {"30", 30 * time.Minute}, {"1", time.Minute}, {"1440", 24 * time.Hour},
+		{"0", 0}, {"1441", 0}, {"x", 0},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("ZOE_WAIT_LIMIT_MINUTES", tc.value)
+			if got := waitLimitEnv(); got != tc.want {
+				t.Fatalf("waitLimitEnv(%q)=%v, want %v", tc.value, got, tc.want)
+			}
+			if tc.want > 0 {
+				cfg := control.Config{WaitLimit: gotWaitLimitForConfig()}
+				if cfg.WaitLimit < time.Minute || cfg.WaitLimit > 24*time.Hour {
+					t.Fatalf("config WaitLimit=%v out of range", cfg.WaitLimit)
+				}
+			}
+		})
+	}
+}
+
+func gotWaitLimitForConfig() time.Duration { return waitLimitEnv() }
+
 func TestServerSubprocessBootstrapAndRestart(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "zoe-server")
 	build := exec.Command("go", "build", "-o", binary, ".")
@@ -49,9 +75,11 @@ func TestServerSubprocessBootstrapAndRestart(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "state", "zoe.db")
 	token := subprocessSecret(t)
 	startupKey := token
+	var stderr bytes.Buffer
 	start := func() *exec.Cmd {
 		cmd := exec.Command(binary)
 		cmd.Env = append(os.Environ(), "ZOE_LISTEN_ADDR="+addr, "ZOE_DATABASE_PATH="+db, "ZOE_INSTANCE_KEY="+startupKey, "ZOE_VOICE_GATEWAY_URL=", "ZOE_VOICE_GATEWAY_API_KEY=")
+		cmd.Stderr = &stderr
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -108,7 +136,7 @@ func TestServerSubprocessBootstrapAndRestart(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("server did not become ready: %v", err)
+			t.Fatalf("server did not become ready: %v\nstderr:\n%s", err, stderr.String())
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
@@ -147,7 +175,7 @@ func TestServerSubprocessBootstrapAndRestart(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("restarted server did not become ready: %v", err)
+			t.Fatalf("restarted server did not become ready: %v\nstderr:\n%s", err, stderr.String())
 		}
 		time.Sleep(30 * time.Millisecond)
 	}

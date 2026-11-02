@@ -445,6 +445,10 @@ func validateClaim(c contracts.JobClaim) error {
 func buildPrompt(c contracts.JobClaim) string {
 	return "Work only on the assigned goal. Do not delegate or perform external irreversible changes.\n\nGoal:\n" + c.Goal
 }
+
+func buildResumePrompt(goal, question, answer string) string {
+	return "Continue the assigned goal. Do not delegate or perform external irreversible changes.\n\nGoal:\n" + goal + "\n\nThe user was asked:\n" + question + "\n\nThe user answered:\n" + answer
+}
 func observationID(run, attempt string, fence uint64, kind, disc string) string {
 	h := sha256.Sum256([]byte(strings.Join([]string{run, attempt, fmt.Sprint(fence), kind, disc}, "\x00")))
 	return hex.EncodeToString(h[:16])

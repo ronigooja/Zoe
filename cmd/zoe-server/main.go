@@ -92,7 +92,7 @@ func run() error {
 		Profiles:           profiles,
 		PushSender:         pushSender,
 		MaxRuns:            maxRuns,
-		WaitLimit:          waitLimit * time.Minute,
+		WaitLimit:          waitLimit,
 	}
 	server, err := composeControlServer(store, cfg, voice.Config{GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
