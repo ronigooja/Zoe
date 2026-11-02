@@ -29,6 +29,8 @@ type Config struct {
 	AccountMediaLifecycle AccountMediaLifecycle
 	HeartbeatTimeout      time.Duration
 	Now                   func() time.Time
+	ContextAssembler      control.ContextAssembler
+	OpeningContextBudget  int
 }
 
 type Service struct {
@@ -40,6 +42,8 @@ type Service struct {
 	accountMedia     AccountMediaLifecycle
 	heartbeatTimeout time.Duration
 	now              func() time.Time
+	contextAssembler control.ContextAssembler
+	openingBudget    int
 	reaperStop       chan struct{}
 	reaperDone       chan struct{}
 }
@@ -70,23 +74,132 @@ type sessionResponse struct {
 	AccountLeaseID          string `json:"account_lease_id,omitempty"`
 	AccountLeaseGeneration  int64  `json:"account_lease_generation,omitempty"`
 	AccountLeaseAccountHash []byte `json:"-"`
+	OpeningContextDelivery  string `json:"opening_context_delivery,omitempty"`
+	OpeningContextVersion   int    `json:"opening_context_version,omitempty"`
+	OpeningContextChars     int    `json:"opening_context_chars,omitempty"`
+	GatewayContextChars     int    `json:"gateway_context_chars,omitempty"`
 }
 
 type gatewaySessionRequest struct {
-	OfferSDP       string `json:"offer_sdp"`
-	VoiceSessionID string `json:"voice_session_id,omitempty"`
-	Voice          string `json:"voice,omitempty"`
-	VoiceMode      string `json:"voice_mode,omitempty"`
-	LanguageCode   string `json:"language_code,omitempty"`
+	OfferSDP       string          `json:"offer_sdp"`
+	VoiceSessionID string          `json:"voice_session_id,omitempty"`
+	Voice          string          `json:"voice,omitempty"`
+	VoiceMode      string          `json:"voice_mode,omitempty"`
+	LanguageCode   string          `json:"language_code,omitempty"`
+	OpeningContext *openingContext `json:"opening_context,omitempty"`
 }
 
 type gatewaySessionResponse struct {
-	AnswerSDP              string `json:"answer_sdp"`
-	VoiceSessionID         string `json:"voice_session_id"`
-	VoiceSessionGeneration int64  `json:"voice_session_generation,omitempty"`
-	AccountLeaseID         string `json:"account_lease_id,omitempty"`
-	AccountLeaseGeneration int64  `json:"account_lease_generation,omitempty"`
-	AccountID              string `json:"account_id,omitempty"`
+	AnswerSDP              string                `json:"answer_sdp"`
+	VoiceSessionID         string                `json:"voice_session_id"`
+	VoiceSessionGeneration int64                 `json:"voice_session_generation,omitempty"`
+	AccountLeaseID         string                `json:"account_lease_id,omitempty"`
+	AccountLeaseGeneration int64                 `json:"account_lease_generation,omitempty"`
+	AccountID              string                `json:"account_id,omitempty"`
+	Conversation           string                `json:"conversation,omitempty"`
+	ConversationConfirmed  *bool                 `json:"conversation_confirmed,omitempty"`
+	ContextChars           int                   `json:"context_chars,omitempty"`
+	OpeningContext         *openingContextResult `json:"opening_context,omitempty"`
+}
+
+type openingContextItem struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+type openingContext struct {
+	Kind    string               `json:"kind"`
+	Version int                  `json:"version"`
+	Items   []openingContextItem `json:"items"`
+}
+type openingContextResult struct {
+	Applied bool `json:"applied"`
+	Version int  `json:"version,omitempty"`
+	Silent  any  `json:"silent,omitempty"`
+}
+
+func openingCharsFor(c *openingContext) int {
+	if c == nil {
+		return 0
+	}
+	n := 0
+	for _, item := range c.Items {
+		n += len([]rune(item.Text))
+	}
+	return n
+}
+
+func (s *Service) buildOpeningContext(ctx context.Context, p contracts.Principal) *openingContext {
+	if s.contextAssembler == nil || s.openingBudget <= 0 {
+		return nil
+	}
+	assembled, err := s.contextAssembler(ctx, p, "", p.SubjectID, "", contracts.MemoryContextDefaultBudgetTokens)
+	if err != nil || len(assembled.Items) == 0 {
+		return nil
+	}
+	c := &openingContext{Kind: "full", Version: 1}
+	used := 0
+	for _, item := range assembled.Items {
+		text := strings.TrimSpace(item.Subject + ": " + item.Key + " = " + item.Content)
+		cost := len([]rune(text))
+		if cost == 0 || used+cost > s.openingBudget {
+			break
+		}
+		c.Items = append(c.Items, openingContextItem{Role: "user", Text: text})
+		used += cost
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT title,goal FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND status IN ('queued','running','awaiting_user') ORDER BY updated_at DESC LIMIT 8`, p.WorkspaceID, p.SubjectID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var title, goal string
+			if rows.Scan(&title, &goal) != nil {
+				continue
+			}
+			text := "active task: " + strings.TrimSpace(title+" — "+goal)
+			cost := len([]rune(text))
+			if cost == 0 || used+cost > s.openingBudget {
+				break
+			}
+			c.Items = append(c.Items, openingContextItem{Role: "user", Text: text})
+			used += cost
+		}
+	}
+	if len(c.Items) == 0 {
+		return nil
+	}
+	return c
+}
+
+func (s *Service) applyOpeningContext(ctx context.Context, sessionID string, c *openingContext) (string, error) {
+	if c == nil || len(c.Items) == 0 {
+		return "unsupported", nil
+	}
+	body, err := json.Marshal(c)
+	if err != nil {
+		return "unsupported", err
+	}
+	response, _, err := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions/"+url.PathEscape(sessionID)+"/opening-context", body)
+	if err != nil {
+		return "unverified", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotImplemented {
+		return "unsupported", nil
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "unverified", fmt.Errorf("opening context gateway status %d", response.StatusCode)
+	}
+	var result openingContextResult
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&result); err != nil {
+		return "unverified", err
+	}
+	if result.Silent == "unverified" {
+		return "unverified", nil
+	}
+	if result.Applied {
+		return "delivered", nil
+	}
+	return "unverified", nil
 }
 
 func Register(server *control.Server, store *storage.Store, cfg Config) error {
@@ -150,7 +263,11 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	budget := cfg.OpeningContextBudget
+	if budget <= 0 {
+		budget = 8000
+	}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func (s *Service) Start() { go s.reaper() }
@@ -283,12 +400,14 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	var id, state, gatewayID, accountLeaseID string
 	var generation int64
 	var accountLeaseGeneration int64
-	var gatewayMediaGeneration int64
+	var gatewayMediaGeneration, gatewayContextChars int64
+	var openingDelivery, openingManifest []byte
+	var openingVersion, openingChars int
 	var accountLeaseAccountHash []byte
 	var answer []byte
 	var existingHash []byte
-	err = s.db.QueryRowContext(ctx, `SELECT id,generation,state,gateway_session_id,offer_answer,request_hash,account_lease_id,account_lease_generation,account_id_hash,gateway_media_generation FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND request_id=?`, p.WorkspaceID, p.SubjectID, req.RequestID).
-		Scan(&id, &generation, &state, &gatewayID, &answer, &existingHash, &accountLeaseID, &accountLeaseGeneration, &accountLeaseAccountHash, &gatewayMediaGeneration)
+	err = s.db.QueryRowContext(ctx, `SELECT id,generation,state,gateway_session_id,offer_answer,request_hash,account_lease_id,account_lease_generation,account_id_hash,gateway_media_generation,opening_context_delivery,opening_context_version,opening_context_chars,opening_context_manifest,gateway_context_chars FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND request_id=?`, p.WorkspaceID, p.SubjectID, req.RequestID).
+		Scan(&id, &generation, &state, &gatewayID, &answer, &existingHash, &accountLeaseID, &accountLeaseGeneration, &accountLeaseAccountHash, &gatewayMediaGeneration, &openingDelivery, &openingVersion, &openingChars, &openingManifest, &gatewayContextChars)
 	if err == nil {
 		if !bytes.Equal(existingHash, hash[:]) {
 			return sessionResponse{}, apiError(http.StatusConflict, "idempotency_conflict", "request_id was already used with different session input", nil)
@@ -303,7 +422,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 		if err := json.Unmarshal(answer, &saved); err != nil {
 			return sessionResponse{}, err
 		}
-		return sessionResponse{SessionID: id, Generation: generation, State: state, AnswerSDP: saved.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash}, nil
+		return sessionResponse{SessionID: id, Generation: generation, State: state, AnswerSDP: saved.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, OpeningContextDelivery: string(openingDelivery), OpeningContextVersion: openingVersion, OpeningContextChars: openingChars, GatewayContextChars: int(gatewayContextChars)}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return sessionResponse{}, err
@@ -334,9 +453,10 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	if err := tx.Commit(); err != nil {
 		return sessionResponse{}, err
 	}
+	opening := s.buildOpeningContext(ctx, p)
 	// The gateway owns account selection and returns only its opaque sticky
 	// session handle. Zoe never receives or records an account credential/id.
-	gatewayBody, _ := json.Marshal(gatewaySessionRequest{OfferSDP: req.OfferSDP, Voice: req.Voice, VoiceMode: req.VoiceMode, LanguageCode: req.LanguageCode})
+	gatewayBody, _ := json.Marshal(gatewaySessionRequest{OfferSDP: req.OfferSDP, Voice: req.Voice, VoiceMode: req.VoiceMode, LanguageCode: req.LanguageCode, OpeningContext: opening})
 	response, gatewayRequestID, callErr := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions", gatewayBody)
 	if callErr != nil {
 		_ = s.markSession(ctx, id, "quarantined", "gateway_outcome_unknown", nil, "")
@@ -364,6 +484,21 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 		_ = s.markSession(ctx, id, "quarantined", "gateway_media_generation_invalid", nil, "")
 		return sessionResponse{}, apiError(http.StatusBadGateway, "voice_outcome_unknown", "Space gateway returned an invalid media generation; media lease quarantined", nil)
 	}
+	if upstream.OpeningContext != nil && upstream.OpeningContext.Applied {
+		openingDelivery = []byte("delivered")
+		openingVersion = opening.Version
+		openingChars = openingCharsFor(opening)
+	} else if opening != nil {
+		openingDelivery = []byte("unverified")
+		openingVersion = opening.Version
+		openingChars = openingCharsFor(opening)
+	}
+	if upstream.OpeningContext != nil && upstream.OpeningContext.Silent == "unverified" {
+		openingDelivery = []byte("unverified")
+	}
+	if upstream.OpeningContext != nil && upstream.OpeningContext.Silent == nil && upstream.OpeningContext.Applied {
+		openingDelivery = []byte("delivered")
+	}
 	// The gateway's account ID is sensitive correlation data. Persist only the
 	// answer and opaque lease identity; the account ID is hashed below.
 	answerJSON, _ := json.Marshal(struct {
@@ -373,6 +508,21 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 		// The gateway created a session, but Zoe could not durably bind it. Keep
 		// the allocating lease; do not free a potentially live media resource.
 		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_outcome_unknown", "media was negotiated but its durable binding failed; lease remains isolated", nil)
+	}
+	if opening != nil {
+		manifest, _ := json.Marshal(opening)
+		_, _ = s.db.ExecContext(ctx, `UPDATE voice_sessions SET opening_context_delivery=?,opening_context_version=?,opening_context_chars=?,opening_context_manifest=?,gateway_context_chars=? WHERE id=?`, string(openingDelivery), openingVersion, openingChars, manifest, upstream.ContextChars, id)
+	}
+	if opening == nil {
+		openingDelivery = []byte("unsupported")
+	}
+	if opening != nil {
+		// The gateway owns route selection. WM applies context through this
+		// endpoint; AVAS returns 501 because its creation-time initial_items
+		// already carried the context. Both outcomes are non-fatal to media.
+		delivery, _ := s.applyOpeningContext(ctx, upstream.VoiceSessionID, opening)
+		openingDelivery = []byte(delivery)
+		_, _ = s.db.ExecContext(ctx, `UPDATE voice_sessions SET opening_context_delivery=? WHERE id=?`, delivery, id)
 	}
 	// The Space gateway intentionally keeps account_id server-side. Its
 	// downstream contract exposes only the opaque lease identity and
@@ -397,7 +547,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	} else if _, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET gateway_media_generation=? WHERE id=? AND state='active'`, upstream.VoiceSessionGeneration, id); err != nil {
 		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_outcome_unknown", "media generation could not be durably bound; account pool remains isolated", nil)
 	}
-	return sessionResponse{SessionID: id, Generation: 1, State: "active", AnswerSDP: upstream.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash}, nil
+	return sessionResponse{SessionID: id, Generation: 1, State: "active", AnswerSDP: upstream.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, OpeningContextDelivery: string(openingDelivery), OpeningContextVersion: openingVersion, OpeningContextChars: openingChars, GatewayContextChars: upstream.ContextChars}, nil
 }
 
 func (s *Service) markSession(ctx context.Context, id, state, code string, answer []byte, gatewayID string) error {

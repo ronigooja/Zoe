@@ -29,6 +29,7 @@ func composeControlServer(store *storage.Store, controlConfig control.Config, vo
 	if err = memory.RegisterDerived(server, store, memoryConfig); err != nil {
 		return nil, err
 	}
+	voiceConfig.ContextAssembler = server.ContextAssembler()
 	if err = voice.Register(server, store, voiceConfig); err != nil {
 		return nil, err
 	}

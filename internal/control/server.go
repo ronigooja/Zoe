@@ -236,6 +236,15 @@ func (s *Server) RegisterContextAssembler(assembler ContextAssembler) error {
 	return nil
 }
 
+// ContextAssembler returns the registered memory authority assembler for
+// feature-owned context handoffs. The returned function is read-only and must
+// preserve the recipient and scope checks enforced by the authority.
+func (s *Server) ContextAssembler() ContextAssembler {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.contextAssembler
+}
+
 // RegisterShutdownHook registers a feature-owned background worker stop hook.
 func (s *Server) RegisterShutdownHook(hook func()) {
 	s.mu.Lock()
