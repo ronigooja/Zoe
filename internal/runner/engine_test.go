@@ -320,6 +320,7 @@ func seedRotation(t *testing.T, j *Journal, phase, summary, old, replacement str
 
 func TestRotationRecoveryFromRotatingSummaryKeepsOneLiveSession(t *testing.T) {
 	f := completingRuntimeFake()
+	f.creates = 1
 	f.live = map[string]bool{"session": true}
 	f.rotationMessages = []opencode.Message{assistantUsage(1, 1, 0, 0)}
 	j := openTestJournal(t)
@@ -373,10 +374,11 @@ func TestRotationRecoveryFromPromptSentCompletesWithOneLiveSession(t *testing.T)
 	f.rotationMessages = []opencode.Message{assistantUsage(1, 1, 0, 0)}
 	j := openTestJournal(t)
 	c := seedRotation(t, j, "prompt_sent", "durable summary", "session", "session-2")
+	initial := liveSessions(f)
 	if err := testEngine(t, f, &controlFake{}, j).Process(testContext(t), c); err != nil {
 		t.Fatal(err)
 	}
-	if got := liveSessions(f); len(got) != 1 || got[0] != "session-2" {
+	if got := initial; len(got) != 1 || got[0] != "session-2" {
 		t.Fatalf("live sessions=%v", got)
 	}
 }
