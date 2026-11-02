@@ -3,6 +3,7 @@ package acceptance
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -25,7 +26,7 @@ func TestCurrentClaimRecoveryDoesNotDeadlockOrChangeSnapshot(t *testing.T) {
 	live := httptest.NewServer(handler)
 	defer live.Close()
 	client := live.Client()
-	request := func(method, path, bearer string) (*http.Response, error) {
+	request := func(method, path, bearer string) (int, []byte, error) {
 		// This is only a generous upper bound for a deadlock. The assertions below
 		// verify the response and immutable snapshot; elapsed time is not part of
 		// the behavior under test.
@@ -33,21 +34,34 @@ func TestCurrentClaimRecoveryDoesNotDeadlockOrChangeSnapshot(t *testing.T) {
 		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, method, live.URL+path, nil)
 		if err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 		req.Header.Set("Authorization", "Bearer "+bearer)
-		return client.Do(req)
+		response, err := client.Do(req)
+		if err != nil {
+			return 0, nil, err
+		}
+		body, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if readErr != nil {
+			return 0, nil, readErr
+		}
+		if closeErr != nil {
+			return 0, nil, closeErr
+		}
+		return response.StatusCode, body, nil
 	}
-	claimed, err := request(http.MethodPost, "/runner/v1/claims", runnerToken)
+	claimedStatus, claimedBody, err := request(http.MethodPost, "/runner/v1/claims", runnerToken)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if claimedStatus != http.StatusOK {
+		t.Fatalf("claim status=%d", claimedStatus)
+	}
 	var claim contracts.JobClaim
-	if err = json.NewDecoder(claimed.Body).Decode(&claim); err != nil {
-		claimed.Body.Close()
+	if err = json.Unmarshal(claimedBody, &claim); err != nil {
 		t.Fatal(err)
 	}
-	claimed.Body.Close()
 	if claim.IsolationPolicy != "opencode-workspace-write-v1" || claim.Harness != "opencode" || claim.TaskVersion != 2 {
 		t.Fatalf("claim missing server profile or initial task snapshot: %+v", claim)
 	}
@@ -55,16 +69,15 @@ func TestCurrentClaimRecoveryDoesNotDeadlockOrChangeSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	profiles["worker"] = control.RuntimeProfile{ID: "worker", RuntimeRouteID: "changed-route", ModelRouteID: "changed-model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1-changed", CapabilityIDs: []string{"admin"}, Scopes: []string{"*"}}
-	recovered, err := request(http.MethodGet, "/runner/v1/claims/current", runnerToken)
+	recoveredStatus, recoveredBody, err := request(http.MethodGet, "/runner/v1/claims/current", runnerToken)
 	if err != nil {
 		t.Fatalf("current claim recovery blocked on its own query rows: %v", err)
 	}
-	defer recovered.Body.Close()
-	if recovered.StatusCode != http.StatusOK {
-		t.Fatalf("recovery status=%d", recovered.StatusCode)
+	if recoveredStatus != http.StatusOK {
+		t.Fatalf("recovery status=%d", recoveredStatus)
 	}
 	var recovery contracts.ClaimRecovery
-	if err = json.NewDecoder(recovered.Body).Decode(&recovery); err != nil {
+	if err = json.Unmarshal(recoveredBody, &recovery); err != nil {
 		t.Fatal(err)
 	}
 	if len(recovery.Claims) != 1 || recovery.Claims[0].TaskVersion != claim.TaskVersion || recovery.Claims[0].Goal != "original goal" || len(recovery.Claims[0].Authorization.Scopes) != 1 || recovery.Claims[0].Authorization.Scopes[0] != "task:read" || recovery.Claims[0].RuntimeRouteID != "native" || recovery.Claims[0].IsolationPolicy != "opencode-workspace-write-v1" || recovery.Claims[0].Harness != "opencode" {
