@@ -31,21 +31,23 @@ type Config struct {
 	Now                   func() time.Time
 	ContextAssembler      control.ContextAssembler
 	OpeningContextBudget  int
+	ContextCharBudget     int
 }
 
 type Service struct {
-	db               *sql.DB
-	base             *url.URL
-	key              string
-	client           *http.Client
-	maxSDP           int64
-	accountMedia     AccountMediaLifecycle
-	heartbeatTimeout time.Duration
-	now              func() time.Time
-	contextAssembler control.ContextAssembler
-	openingBudget    int
-	reaperStop       chan struct{}
-	reaperDone       chan struct{}
+	db                *sql.DB
+	base              *url.URL
+	key               string
+	client            *http.Client
+	maxSDP            int64
+	accountMedia      AccountMediaLifecycle
+	heartbeatTimeout  time.Duration
+	now               func() time.Time
+	contextAssembler  control.ContextAssembler
+	openingBudget     int
+	contextCharBudget int
+	reaperStop        chan struct{}
+	reaperDone        chan struct{}
 }
 
 type gatewayRequestIDContextKey struct{}
@@ -267,7 +269,43 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if budget <= 0 {
 		budget = 8000
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	contextBudget := cfg.ContextCharBudget
+	if contextBudget <= 0 {
+		contextBudget = 12000
+	}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+}
+
+func (s *Service) rotateIfOverBudget(ctx context.Context, p contracts.Principal) error {
+	if s.contextCharBudget <= 0 {
+		return nil
+	}
+	var id, gatewayID, state string
+	var generation int64
+	var chars int
+	err := s.db.QueryRowContext(ctx, `SELECT id,gateway_session_id,state,generation,gateway_context_chars FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND state='active'`, p.WorkspaceID, p.SubjectID).Scan(&id, &gatewayID, &state, &generation, &chars)
+	if errors.Is(err, sql.ErrNoRows) || chars <= s.contextCharBudget {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if gatewayID == "" {
+		return apiError(http.StatusConflict, "voice_outcome_unknown", "over-budget voice session has no gateway binding", nil)
+	}
+	response, _, err := s.callGateway(ctx, http.MethodDelete, "/v1/voice/sessions/"+url.PathEscape(gatewayID), nil)
+	if err != nil {
+		return apiError(http.StatusServiceUnavailable, "voice_outcome_unknown", "voice rotation outcome is unknown", nil)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return apiError(http.StatusServiceUnavailable, "voice_outcome_unknown", "voice rotation was not confirmed", nil)
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE voice_sessions SET state='ended',gateway_unbound=1,offer_answer='',ended_at=?,updated_at=? WHERE id=? AND generation=? AND state='active'`, s.now().UTC().Format(time.RFC3339Nano), s.now().UTC().Format(time.RFC3339Nano), id, generation)
+	if err == nil {
+		_, err = s.db.ExecContext(ctx, `UPDATE voice_pool_state SET blocked=0,reason_code='',source_session_id='',updated_at=?,updated_by='context_rotation' WHERE id=1 AND source_session_id=?`, s.now().UTC().Format(time.RFC3339Nano), id)
+	}
+	return err
 }
 
 func (s *Service) Start() { go s.reaper() }
@@ -391,6 +429,9 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	}
 	if req.VoiceMode != "" && req.VoiceMode != "primary_assistant" && req.VoiceMode != "wingman" {
 		return sessionResponse{}, apiError(http.StatusBadRequest, "invalid_request", "unsupported voice_mode", nil)
+	}
+	if err := s.rotateIfOverBudget(ctx, p); err != nil {
+		return sessionResponse{}, err
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
