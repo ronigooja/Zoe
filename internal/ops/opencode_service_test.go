@@ -40,6 +40,13 @@ func TestRenderedOpenCodeConfigHasProfilesAndNoWildcardAllow(t *testing.T) {
 			t.Fatal(id)
 		}
 	}
+	summary := agents["zoe-rotation-summary"].(map[string]any)
+	if summary["system"] == "" || summary["model"] != "provider/model" {
+		t.Fatalf("rotation summarizer agent=%v", summary)
+	}
+	if summary["permission"].(map[string]any)["*"] != "deny" {
+		t.Fatalf("rotation summarizer permission=%v", summary["permission"])
+	}
 	if _, exists := cfg["permissions"]; exists {
 		t.Fatalf("global permissions must be absent: %v", cfg["permissions"])
 	}
