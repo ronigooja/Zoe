@@ -460,7 +460,7 @@ func (e *Engine) contextExceeded(ctx context.Context, c contracts.JobClaim, msgs
 	if usage == 0 {
 		usage = latest.Info.Tokens.Input + latest.Info.Tokens.Output + latest.Info.Tokens.Cache.Read + latest.Info.Tokens.Cache.Write
 	}
-	return usage > limit
+	return usage >= limit
 }
 
 func (e *Engine) contextWindow(ctx context.Context, c contracts.JobClaim) (int64, bool) {

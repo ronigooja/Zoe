@@ -53,7 +53,7 @@ func baselineEngine(t *testing.T, replacement [][]opencode.Message) (*Engine, *b
 	// Create, Prompt, Status, and termination behavior.
 	e.Runtime = f
 	e.ContextTokenBudget = 10
-	e.MaxRotations = 1
+	e.MaxRotations = 2
 	return e, f, c, testClaim()
 }
 
@@ -102,8 +102,8 @@ func TestRotationBaselineBelowThresholdRotatesAgainLater(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry.RotationCount != 1 {
-		t.Fatalf("rotation_count=%d, want 1 after limit", entry.RotationCount)
+	if entry.RotationCount != 2 {
+		t.Fatalf("rotation_count=%d, want 2 after limit", entry.RotationCount)
 	}
 }
 
