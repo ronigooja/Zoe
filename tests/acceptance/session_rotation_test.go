@@ -149,11 +149,14 @@ func serverRotationPairs(t *testing.T, f *rotationRecoveryFixture) []string {
 		if err := rows.Scan(&raw); err != nil {
 			t.Fatal(err)
 		}
+		var observation struct {
+			Result json.RawMessage `json:"result"`
+		}
 		var body struct {
 			Old string `json:"old_session_id"`
 			New string `json:"new_session_id"`
 		}
-		if err := json.Unmarshal(raw, &body); err != nil {
+		if err := json.Unmarshal(raw, &observation); err != nil || json.Unmarshal(observation.Result, &body) != nil {
 			t.Fatal(err)
 		}
 		pairs = append(pairs, body.Old+"->"+body.New)
