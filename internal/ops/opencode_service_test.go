@@ -44,8 +44,21 @@ func TestRenderedOpenCodeConfigHasProfilesAndNoWildcardAllow(t *testing.T) {
 	if summary["system"] == "" || summary["model"] != "provider/model" {
 		t.Fatalf("rotation summarizer agent=%v", summary)
 	}
-	if summary["permission"].(map[string]any)["*"] != "deny" {
-		t.Fatalf("rotation summarizer permission=%v", summary["permission"])
+	if _, exists := summary["permission"]; exists {
+		t.Fatalf("rotation summarizer has invalid singular permission key: %v", summary["permission"])
+	}
+	permissions, ok := summary["permissions"].([]any)
+	if !ok || len(permissions) != 1 {
+		t.Fatalf("rotation summarizer permissions=%v", summary["permissions"])
+	}
+	rule, ok := permissions[0].(map[string]any)
+	if !ok || rule["action"] != "*" || rule["resource"] != "*" || rule["effect"] != "deny" {
+		t.Fatalf("rotation summarizer permissions=%v", permissions)
+	}
+	for _, id := range []string{"zoe-worker", "zoe-steward", "zoe-super"} {
+		if _, exists := agents[id].(map[string]any)["permissions"]; exists {
+			t.Fatalf("%s unexpectedly has config permissions", id)
+		}
 	}
 	if _, exists := cfg["permissions"]; exists {
 		t.Fatalf("global permissions must be absent: %v", cfg["permissions"])
