@@ -40,6 +40,7 @@ func (s *Server) registerCoreRoutes() {
 	s.runner.HandleFunc("POST /runner/v1/runs/{run_id}/proposals", s.handleChildProposal)
 	s.runner.HandleFunc("GET /runner/v1/claims/current", s.handleCurrentClaims)
 	s.runner.HandleFunc("GET /runner/v1/runs/{run_id}", s.handleRunControl)
+	s.runner.HandleFunc("GET /runner/v1/runs/{run_id}/rotation-context", s.handleRotationContext)
 	s.runner.HandleFunc("GET /runner/v1/runs/{run_id}/authorizations/{request_id}", s.handleRuntimeAuthorization)
 	s.runner.HandleFunc("POST /runner/v1/runs/{run_id}/dispatch-authorization", s.handleDispatchAuthorization)
 	s.runner.HandleFunc("POST /runner/v1/runs/{run_id}/observations", s.handleObservation)

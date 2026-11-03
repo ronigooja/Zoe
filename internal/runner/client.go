@@ -21,6 +21,23 @@ type ControlClient struct {
 	client *http.Client
 }
 
+func (c *ControlClient) RotationContext(ctx context.Context, runID, attemptID string, fence uint64) (contracts.RotationContext, error) {
+	endpoint := "/runner/v1/runs/" + url.PathEscape(runID) + "/rotation-context?attempt_id=" + url.QueryEscape(attemptID) + "&fence=" + url.QueryEscape(fmt.Sprint(fence))
+	response, err := c.request(ctx, http.MethodGet, endpoint, nil, "")
+	if err != nil {
+		return contracts.RotationContext{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return contracts.RotationContext{}, safeHTTPError("read rotation context", response.StatusCode)
+	}
+	var out contracts.RotationContext
+	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&out); err != nil {
+		return out, fmt.Errorf("decode rotation context: %w", err)
+	}
+	return out, nil
+}
+
 func (c *ControlClient) RuntimeAuthorization(ctx context.Context, runID, requestID string, fence uint64) (*contracts.RuntimeAuthorization, error) {
 	endpoint := "/runner/v1/runs/" + url.PathEscape(runID) + "/authorizations/" + url.PathEscape(requestID) + "?fence=" + url.QueryEscape(fmt.Sprint(fence))
 	response, err := c.request(ctx, http.MethodGet, endpoint, nil, "")

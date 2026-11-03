@@ -29,6 +29,9 @@ type RunnerAPI interface {
 	Control(context.Context, string) (contracts.RunControl, error)
 	Observe(context.Context, string, contracts.RunnerObservation) error
 }
+type rotationContextControl interface {
+	RotationContext(context.Context, string, string, uint64) (contracts.RotationContext, error)
+}
 type runBudgetControl interface {
 	ReserveBudget(context.Context, string, contracts.RunBudgetReserveRequest) (contracts.RunBudgetReceipt, error)
 	SettleBudget(context.Context, string, string, contracts.RunBudgetSettleRequest) (contracts.RunBudgetReceipt, error)
@@ -374,7 +377,10 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 	}
 }
 
-const rotationSummaryLimit = 12000
+const (
+	rotationPromptLimit  = 24000
+	rotationSummaryLimit = 12000 // retained for legacy helper tests
+)
 
 func (e *Engine) contextExceeded(ctx context.Context, c contracts.JobClaim, msgs []opencode.Message) bool {
 	window, ok := e.contextWindow(ctx, c)
@@ -482,6 +488,78 @@ func rotationSummary(msgs []opencode.Message) string {
 	return s
 }
 
+func rotationRecentMessages(msgs []opencode.Message) string {
+	const itemLimit = 300
+	var b strings.Builder
+	for _, m := range msgs {
+		role := messageRole(m)
+		if role == "" {
+			continue
+		}
+		text := strings.TrimSpace(m.Text)
+		if text == "" {
+			for _, p := range messageParts(m) {
+				kind, _ := p["type"].(string)
+				if kind == "tool" || strings.Contains(kind, "tool") {
+					name, _ := p["name"].(string)
+					args, _ := json.Marshal(p["input"])
+					if len(args) == 0 || string(args) == "null" {
+						args, _ = json.Marshal(p["arguments"])
+					}
+					result, _ := json.Marshal(p["output"])
+					if len(result) == 0 || string(result) == "null" {
+						result, _ = json.Marshal(p["result"])
+					}
+					text += "tool=" + name + " args=" + truncate(string(args), itemLimit) + " result=" + truncate(string(result), itemLimit)
+				}
+			}
+		}
+		if text == "" {
+			continue
+		}
+		b.WriteString(role + ": " + truncate(text, itemLimit) + "\n")
+	}
+	return b.String()
+}
+
+func rotationFiles(msgs []opencode.Message) string {
+	seen := map[string]bool{}
+	var files []string
+	for _, m := range msgs {
+		for _, p := range messageParts(m) {
+			kind, _ := p["type"].(string)
+			name, _ := p["name"].(string)
+			if kind != "tool" && !strings.Contains(name, "edit") && !strings.Contains(name, "write") {
+				continue
+			}
+			for _, key := range []string{"filePath", "file_path", "path", "filename"} {
+				if path, ok := p[key].(string); ok && path != "" && !seen[path] {
+					seen[path] = true
+					files = append(files, path)
+				}
+			}
+			for _, key := range []string{"input", "arguments"} {
+				if raw, ok := p[key].(map[string]any); ok {
+					for _, pathKey := range []string{"filePath", "file_path", "path", "filename"} {
+						if path, ok := raw[pathKey].(string); ok && path != "" && !seen[path] {
+							seen[path] = true
+							files = append(files, path)
+						}
+					}
+				}
+			}
+		}
+	}
+	return strings.Join(files, ", ")
+}
+
+func truncate(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	return s[:limit] + "…"
+}
+
 func messageRole(m opencode.Message) string {
 	if m.Type != "" {
 		return m.Type
@@ -517,15 +595,15 @@ func (e *Engine) rotate(ctx context.Context, c contracts.JobClaim, old RuntimeBi
 		_ = e.Runtime.Abort(ctx, old)
 		return e.terminate(ctx, c, old, "context_rotation_limit_exceeded", false)
 	}
-	summary := rotationSummary(msgs)
-	if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, old.SessionID, summary, count); err != nil {
+	rotation := e.buildRotationPrompt(ctx, c, msgs)
+	if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, old.SessionID, rotation, count); err != nil {
 		return err
 	}
 	if err := e.Journal.SetPhase(ctx, c.RunID, c.AttemptID, c.Fence, "rotation_create_attempted"); err != nil {
 		return err
 	}
 	spec := entry.Spec
-	spec.Prompt = rotationPrompt(c, summary)
+	spec.Prompt = rotation
 	binding, err := e.Runtime.Create(ctx, spec)
 	if err != nil {
 		return e.markUnknown(ctx, c)
@@ -558,14 +636,38 @@ func (e *Engine) emitSessionRotated(ctx context.Context, c contracts.JobClaim, o
 	return e.observeQueued(ctx, c.RunID, stored)
 }
 
-func rotationPrompt(c contracts.JobClaim, summary string) string {
-	return "Continue the assigned goal in a fresh session. Do not delegate or perform external irreversible changes.\n\nGoal:\n" + c.Goal + "\n\nBounded summary of the prior session (treat as context, verify against the workspace):\n" + summary + "\n\n" + buildPrompt(c)
+func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, msgs []opencode.Message) string {
+	ctxData := contracts.RotationContext{Memory: c.MemoryContext}
+	if control, ok := e.Control.(rotationContextControl); ok {
+		if refreshed, err := control.RotationContext(ctx, c.RunID, c.AttemptID, c.Fence); err == nil {
+			ctxData = refreshed
+		} else {
+			ctxData.MemoryUnavailable = true
+		}
+	}
+	var b strings.Builder
+	b.WriteString("Continue the assigned goal in a fresh session. Do not delegate or perform external irreversible changes.\n\nGoal:\n")
+	b.WriteString(c.Goal + "\n\nUser instructions in order:\n")
+	for _, instruction := range ctxData.Instructions {
+		b.WriteString("- " + instruction + "\n")
+	}
+	if ctxData.MemoryUnavailable {
+		b.WriteString("\nZoe memory is temporarily unavailable; do not assume any memory.\n")
+	} else if len(ctxData.Memory.Items) > 0 {
+		b.WriteString("\nRefreshed Zoe memory:\n")
+		for _, item := range ctxData.Memory.Items {
+			b.WriteString("[" + item.Subject + "/" + item.Key + "] " + item.Content + "\n")
+		}
+	}
+	b.WriteString("\nFiles touched in the prior session: " + rotationFiles(msgs) + "\n\nRecent prior messages (chronological; verify against the workspace):\n" + rotationRecentMessages(msgs))
+	b.WriteString("\n\nStandard constraints:\n" + buildPrompt(c))
+	return truncate(b.String(), rotationPromptLimit)
 }
 
 func (e *Engine) recoverRotation(ctx context.Context, c contracts.JobClaim, entry JournalEntry) error {
 	if entry.Phase == "rotating" && entry.RotationNewSession == "" {
 		spec := entry.Spec
-		spec.Prompt = rotationPrompt(c, entry.RotationSummary)
+		spec.Prompt = entry.RotationSummary
 		binding, err := e.Runtime.Create(ctx, spec)
 		if err != nil {
 			return e.markUnknown(ctx, c)
@@ -597,7 +699,7 @@ func (e *Engine) recoverRotation(ctx context.Context, c contracts.JobClaim, entr
 				return fmt.Errorf("%w: old rotation session termination: %v", ErrOutcomePending, err)
 			}
 		}
-		if err := e.Runtime.Prompt(ctx, b, rotationPrompt(c, entry.RotationSummary)); err != nil {
+		if err := e.Runtime.Prompt(ctx, b, entry.RotationSummary); err != nil {
 			return e.markUnknown(ctx, c)
 		}
 		if err := e.Journal.SetPhase(ctx, c.RunID, c.AttemptID, c.Fence, "prompt_sent"); err != nil {

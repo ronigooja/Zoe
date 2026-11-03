@@ -232,12 +232,20 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) attachMemoryContext(ctx context.Context, claim contracts.JobClaim) contracts.JobClaim {
+	memory, unavailable := s.assembleMemoryContext(ctx, claim)
+	if !unavailable {
+		claim.MemoryContext = memory
+	}
+	return claim
+}
+
+func (s *Server) assembleMemoryContext(ctx context.Context, claim contracts.JobClaim) (contracts.MemoryContext, bool) {
 	var owner string
 	if err := s.store.DB().QueryRowContext(ctx, `SELECT coalesce(owner_subject_id,'') FROM tasks WHERE workspace_id=? AND id=?`, claim.WorkspaceID, claim.TaskID).Scan(&owner); err != nil {
-		return claim
+		return contracts.MemoryContext{}, true
 	}
 	if owner == "" {
-		return claim
+		return contracts.MemoryContext{}, false
 	}
 	// Memory context is assembled by the server authority for the task owner,
 	// not by the Worker's per-run tool permissions. The instance scopes are the
@@ -248,7 +256,7 @@ func (s *Server) attachMemoryContext(ctx context.Context, claim contracts.JobCla
 	s.mu.RUnlock()
 	p := contracts.Principal{WorkspaceID: claim.WorkspaceID, SubjectID: owner, Scopes: instanceScopes}
 	if assembler == nil {
-		return claim
+		return contracts.MemoryContext{}, true
 	}
 	budget := int(claim.Budget.MaxInputUnits)
 	if budget <= 0 {
@@ -260,10 +268,87 @@ func (s *Server) attachMemoryContext(ctx context.Context, claim contracts.JobCla
 	assembled, err := assembler(ctx, p, claim.TaskID, owner, claim.Goal, budget)
 	if err != nil {
 		log.Printf("runner memory context unavailable task=%s error=%s", claim.TaskID, err.Error())
-		return claim
+		return contracts.MemoryContext{}, true
 	}
-	claim.MemoryContext = assembled
-	return claim
+	return assembled, false
+}
+
+func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
+	p, ok := RunnerPrincipalFromContext(r.Context())
+	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:control:read") {
+		writeError(w, apiError(http.StatusForbidden, "forbidden", "runner lacks rotation context scope", nil))
+		return
+	}
+	runID := r.PathValue("run_id")
+	attempt := strings.TrimSpace(r.URL.Query().Get("attempt_id"))
+	fence, err := strconv.ParseUint(r.URL.Query().Get("fence"), 10, 64)
+	if attempt == "" || err != nil || fence == 0 {
+		writeError(w, apiError(http.StatusBadRequest, "invalid_request", "attempt_id and fence are required", nil))
+		return
+	}
+	var claim contracts.JobClaim
+	var budgetJSON, authJSON []byte
+	var runnerID, workspace, taskID string
+	var storedFence uint64
+	err = s.store.DB().QueryRowContext(r.Context(), `SELECT r.runner_id,r.workspace_id,r.task_id,r.attempt_id,r.fence,r.goal,r.profile_id,r.harness,r.runtime_route_id,r.model_route_id,r.role,r.isolation_policy,r.authorization_json,r.budget_snapshot_json FROM runs r WHERE r.id=? AND r.status IN ('dispatching','active','uncertain')`, runID).Scan(&runnerID, &workspace, &taskID, &claim.AttemptID, &storedFence, &claim.Goal, &claim.ProfileID, &claim.Harness, &claim.RuntimeRouteID, &claim.ModelRouteID, &claim.Role, &claim.IsolationPolicy, &authJSON, &budgetJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, apiError(http.StatusNotFound, "not_found", "active run not found", nil))
+		return
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if runnerID != p.RunnerID || workspace == "" || !HasRunnerScope(p, "runner:control:read", workspace) || claim.AttemptID != attempt || storedFence != fence {
+		writeError(w, apiError(http.StatusConflict, "fence_conflict", "rotation context does not match the active run fence", nil))
+		return
+	}
+	claim.RunID, claim.TaskID, claim.WorkspaceID, claim.Fence = runID, taskID, workspace, fence
+	if err := json.Unmarshal(authJSON, &claim.Authorization); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := json.Unmarshal(budgetJSON, &claim.Budget); err != nil {
+		writeError(w, err)
+		return
+	}
+	rows, err := s.store.DB().QueryContext(r.Context(), `SELECT content FROM task_entries WHERE workspace_id=? AND task_id=? AND kind='user_message' ORDER BY created_at,id`, workspace, taskID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer rows.Close()
+	const limit = 12000
+	var all []string
+	total := 0
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			writeError(w, err)
+			return
+		}
+		all = append(all, content)
+		total += len(content) + 1
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, err)
+		return
+	}
+	if total > limit {
+		kept := []string{}
+		used := 0
+		for i := len(all) - 1; i >= 0; i-- {
+			n := len(all[i]) + 1
+			if used+n > limit-64 {
+				break
+			}
+			kept = append([]string{all[i]}, kept...)
+			used += n
+		}
+		all = append([]string{"[Earlier user instructions omitted: rotation context capped; newest instructions retained.]"}, kept...)
+	}
+	memory, unavailable := s.assembleMemoryContext(r.Context(), claim)
+	writeJSON(w, http.StatusOK, contracts.RotationContext{Instructions: all, Memory: memory, MemoryUnavailable: unavailable})
 }
 
 func runnerHasAnyWorkspaceScope(p contracts.RunnerPrincipal, scope string) bool {

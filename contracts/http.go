@@ -294,6 +294,14 @@ type MemoryContextItem struct {
 	Content string `json:"content"`
 }
 
+// RotationContext is the server-authoritative context refreshed immediately
+// before a runner starts a replacement session.
+type RotationContext struct {
+	Instructions      []string      `json:"instructions"`
+	Memory            MemoryContext `json:"memory"`
+	MemoryUnavailable bool          `json:"memory_unavailable"`
+}
+
 // RunBudgetSnapshot is immutable for a run and is copied into its claim. Usage
 // counters are enforced by the authoritative control-plane ledger.
 type RunBudgetSnapshot struct {
