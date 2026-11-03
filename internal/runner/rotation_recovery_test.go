@@ -75,7 +75,7 @@ func TestRotationCrashBeforeCreateReusesStoredPromptWithoutRefetch(t *testing.T)
 	if len(newRuntime.createdSpecs) != 1 || newRuntime.createdSpecs[0].Prompt != stored {
 		t.Fatalf("recovery prompt=%q, stored=%q", newRuntime.createdSpecs[0].Prompt, stored)
 	}
-	if newControl.calls != 0 || len(liveSessions(newRuntime)) != 1 || newRuntime.liveAtBoundary == nil {
+	if newControl.calls != 0 || len(newRuntime.liveAtBoundary) != 1 || newRuntime.liveAtBoundary[0] != "session-2" {
 		t.Fatalf("context calls=%d live=%v boundary=%v", newControl.calls, liveSessions(newRuntime), newRuntime.liveAtBoundary)
 	}
 	entry, _, err := j.Entry(context.Background(), c.RunID)
