@@ -359,7 +359,7 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			continue
 		}
 		if !waiting && e.contextExceeded(ctx, claim, msgs) {
-			if entry.RotationCount > 0 && firstMeasuredAssistant(msgs) {
+			if entry.RotationCount > 0 && e.rotationHasNoRoom(ctx, claim, msgs) {
 				_ = e.Runtime.Abort(ctx, b)
 				return e.terminate(ctx, claim, b, "context_threshold_below_baseline", false)
 			}
@@ -382,8 +382,25 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 	}
 }
 
-func firstMeasuredAssistant(msgs []opencode.Message) bool {
-	count := 0
+func (e *Engine) rotationHasNoRoom(ctx context.Context, c contracts.JobClaim, msgs []opencode.Message) bool {
+	window, ok := e.contextWindow(ctx, c)
+	if !ok {
+		return false
+	}
+	ratio := e.ContextWindowRatio
+	if ratio <= 0 {
+		ratio = 0.5
+	}
+	limit := int64(float64(window) * ratio)
+	if e.ContextTokenBudget > 0 && e.ContextTokenBudget < limit {
+		limit = e.ContextTokenBudget
+	}
+	if c.Budget.MaxContextTokens > 0 && (limit <= 0 || c.Budget.MaxContextTokens < limit) {
+		limit = c.Budget.MaxContextTokens
+	}
+	if limit <= 0 {
+		return false
+	}
 	for _, m := range msgs {
 		if messageRole(m) != "assistant" {
 			continue
@@ -393,10 +410,10 @@ func firstMeasuredAssistant(msgs []opencode.Message) bool {
 			usage = m.Info.Tokens.Input + m.Info.Tokens.Output + m.Info.Tokens.Cache.Read + m.Info.Tokens.Cache.Write
 		}
 		if usage > 0 {
-			count++
+			return usage >= limit
 		}
 	}
-	return count == 1
+	return false
 }
 
 const (
