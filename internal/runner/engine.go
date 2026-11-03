@@ -359,14 +359,12 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			time.Sleep(e.interval())
 			continue
 		}
-		if !waiting {
+		if !waiting && e.contextExceeded(ctx, claim, msgs) {
 			if entry.RotationCount > 0 && e.rotationHasNoRoom(ctx, claim, msgs) {
 				_ = e.Runtime.Abort(ctx, b)
 				return e.terminate(ctx, claim, b, "context_threshold_below_baseline", false)
 			}
-			if e.contextExceeded(ctx, claim, msgs) {
-				return e.rotate(ctx, claim, b, msgs)
-			}
+			return e.rotate(ctx, claim, b, msgs)
 		}
 		_ = status
 		m, done, term := opencode.Completion(msgs)
