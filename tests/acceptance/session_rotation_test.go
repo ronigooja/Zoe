@@ -13,10 +13,37 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/agents/opencode"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/runner"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
+
+type processRecoveryRuntime struct{}
+
+func (processRecoveryRuntime) Create(context.Context, runner.RuntimeSpec) (runner.RuntimeBinding, error) {
+	return runner.RuntimeBinding{SessionID: "unused"}, nil
+}
+func (processRecoveryRuntime) Prompt(context.Context, runner.RuntimeBinding, string) error {
+	return nil
+}
+func (processRecoveryRuntime) Status(context.Context, runner.RuntimeBinding) (map[string]opencode.Status, error) {
+	return map[string]opencode.Status{"session": {Type: "idle"}}, nil
+}
+func (processRecoveryRuntime) Messages(context.Context, runner.RuntimeBinding) ([]opencode.Message, error) {
+	return []opencode.Message{{Type: "idle", Outcome: "succeeded"}}, nil
+}
+func (processRecoveryRuntime) Events(context.Context, runner.RuntimeBinding) (<-chan opencode.Event, <-chan error) {
+	events := make(chan opencode.Event)
+	errs := make(chan error)
+	close(events)
+	close(errs)
+	return events, errs
+}
+func (processRecoveryRuntime) Abort(context.Context, runner.RuntimeBinding) error { return nil }
+func (processRecoveryRuntime) Terminate(context.Context, runner.RuntimeBinding) (string, error) {
+	return "S3", nil
+}
 
 type rotationRecoveryFixture struct {
 	store   *storage.Store
@@ -116,6 +143,10 @@ func terminationObservation(claim contracts.JobClaim, id, session string) contra
 
 func recoveryEngine(f *rotationRecoveryFixture) *runner.Engine {
 	return &runner.Engine{Control: f.client, Journal: f.journal}
+}
+
+func processRecoveryEngine(f *rotationRecoveryFixture) *runner.Engine {
+	return &runner.Engine{Control: f.client, Journal: f.journal, Runtime: processRecoveryRuntime{}}
 }
 
 func journalPendingCount(t *testing.T, f *rotationRecoveryFixture) int {
@@ -224,6 +255,80 @@ func TestRotationRecoveryReplayIsIdempotent(t *testing.T) {
 	}
 	first := serverRotationPairs(t, f)
 	if err := recoveryEngine(f).FlushPendingObservations(t.Context(), f.claim.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if got := serverRotationPairs(t, f); !reflect.DeepEqual(got, first) {
+		t.Fatalf("second recovery pairs=%v, first=%v", got, first)
+	}
+}
+
+func TestProcessLegacyRotationRecoveryRebindsBeforeTermination(t *testing.T) {
+	f := newRotationRecoveryFixture(t, false, "")
+	if err := f.journal.SetPhase(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "prompt_sent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := processRecoveryEngine(f).Process(t.Context(), f.claim); err != nil {
+		t.Fatal(err)
+	}
+	if got := serverSession(t, f); got != "S3" {
+		t.Fatalf("server session=%q, want S3", got)
+	}
+	if got := serverRotationPairs(t, f); !reflect.DeepEqual(got, []string{"A->S1", "S1->S2", "S2->S3"}) {
+		t.Fatalf("rotation pairs=%v", got)
+	}
+	if got := journalPendingCount(t, f); got != 0 {
+		t.Fatalf("journal pending=%d, want 0", got)
+	}
+}
+
+func TestProcessAlreadyRotatedRecoveryEmitsNoDuplicates(t *testing.T) {
+	f := newRotationRecoveryFixture(t, true, "")
+	if err := f.journal.SetPhase(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "prompt_sent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := processRecoveryEngine(f).Process(t.Context(), f.claim); err != nil {
+		t.Fatal(err)
+	}
+	if got := serverRotationPairs(t, f); !reflect.DeepEqual(got, []string{"A->S1", "S1->S2", "S2->S3"}) {
+		t.Fatalf("rotation pairs=%v, want one each", got)
+	}
+}
+
+func TestProcessBrokenRotationChainLeavesTerminationPending(t *testing.T) {
+	f := newRotationRecoveryFixture(t, false, "wrong")
+	if err := f.journal.SetPhase(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "prompt_sent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := processRecoveryEngine(f).Process(t.Context(), f.claim); err == nil || !strings.Contains(err.Error(), "session_conflict") {
+		t.Fatalf("process error=%v, want session_conflict", err)
+	}
+	if got := serverSession(t, f); got != "A" {
+		t.Fatalf("server session=%q, want A", got)
+	}
+	pending, err := f.journal.PendingObservations(t.Context(), f.claim.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, q := range pending {
+		found = found || q.Body.Kind == "runtime_terminated"
+	}
+	if !found {
+		t.Fatal("termination was acknowledged after broken chain rejection")
+	}
+}
+
+func TestProcessRotationRecoveryIsIdempotent(t *testing.T) {
+	f := newRotationRecoveryFixture(t, false, "")
+	if err := f.journal.SetPhase(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "prompt_sent"); err != nil {
+		t.Fatal(err)
+	}
+	e := processRecoveryEngine(f)
+	if err := e.Process(t.Context(), f.claim); err != nil {
+		t.Fatal(err)
+	}
+	first := serverRotationPairs(t, f)
+	if err := e.Process(t.Context(), f.claim); err != nil {
 		t.Fatal(err)
 	}
 	if got := serverRotationPairs(t, f); !reflect.DeepEqual(got, first) {

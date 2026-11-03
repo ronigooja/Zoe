@@ -81,7 +81,7 @@ func (e *Engine) RunOnce(ctx context.Context) error {
 	return e.Process(ctx, *c)
 }
 
-func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
+func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err error) {
 	if err := validateClaim(claim); err != nil {
 		return err
 	}
@@ -93,6 +93,17 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
 		return err
 	}
 	if ok {
+		// Repair the control-plane binding before any recovery handler can emit
+		// an observation. This is required for prompt_sent and waiting phases,
+		// whose recovery path does not pass through flush.
+		if err := e.rebindFromJournal(ctx, claim.RunID); err != nil {
+			return err
+		}
+		defer func() {
+			if err == nil {
+				err = e.flushPending(ctx, claim.RunID)
+			}
+		}()
 		switch entry.Phase {
 		case "create_attempted", "effect_unknown":
 			return e.reportUnknownCreate(ctx, claim)
@@ -544,7 +555,7 @@ func (e *Engine) emitSessionRotated(ctx context.Context, c contracts.JobClaim, o
 	if err != nil {
 		return err
 	}
-	return e.Control.Observe(ctx, c.RunID, stored)
+	return e.observeQueued(ctx, c.RunID, stored)
 }
 
 func rotationPrompt(c contracts.JobClaim, summary string) string {
@@ -611,7 +622,7 @@ func (e *Engine) emitPending(ctx context.Context, c contracts.JobClaim, kind str
 	if err != nil {
 		return err
 	}
-	return e.Control.Observe(ctx, c.RunID, stored)
+	return e.observeQueued(ctx, c.RunID, stored)
 }
 
 func (e *Engine) terminate(ctx context.Context, c contracts.JobClaim, b RuntimeBinding, reason string, stopped bool) error {
@@ -680,7 +691,14 @@ func (e *Engine) emit(ctx context.Context, c contracts.JobClaim, kind, source, s
 	if e.Control == nil {
 		return nil
 	}
-	return e.Control.Observe(ctx, c.RunID, stored)
+	return e.observeQueued(ctx, c.RunID, stored)
+}
+
+func (e *Engine) observeQueued(ctx context.Context, run string, observation contracts.RunnerObservation) error {
+	if err := e.Control.Observe(ctx, run, observation); err != nil {
+		return err
+	}
+	return e.Journal.AcknowledgeObservation(ctx, observation.ObservationID)
 }
 func (e *Engine) emitMessage(ctx context.Context, c contracts.JobClaim, kind, source, summary string, m opencode.Message) error {
 	out := ""
@@ -704,6 +722,10 @@ func (e *Engine) flush(ctx context.Context, run string) error {
 	if err := e.rebindFromJournal(ctx, run); err != nil {
 		return err
 	}
+	return e.flushPending(ctx, run)
+}
+
+func (e *Engine) flushPending(ctx context.Context, run string) error {
 	pending, err := e.Journal.PendingObservations(ctx, run)
 	if err != nil {
 		return err
