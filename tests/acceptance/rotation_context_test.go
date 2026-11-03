@@ -176,6 +176,9 @@ func TestRotationContextRejectsWrongRunnerFenceAttemptScopeAndTerminal(t *testin
 		if err := f.client.Observe(t.Context(), f.claim.RunID, contracts.RunnerObservation{ObservationID: "terminal-failure", RunID: f.claim.RunID, AttemptID: f.claim.AttemptID, Fence: f.claim.Fence, Kind: "failure", Error: "terminal test failure"}); err != nil {
 			t.Fatal(err)
 		}
+		if err := f.client.Observe(t.Context(), f.claim.RunID, terminationObservation(*f.claim, "terminal-proof", "terminal-session")); err != nil {
+			t.Fatal(err)
+		}
 		assertRotationContextError(t, f.h, f.claim.RunID, f.claim.AttemptID, f.claim.Fence, f.token, http.StatusNotFound, "not_found")
 	})
 }
