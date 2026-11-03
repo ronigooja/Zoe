@@ -57,7 +57,12 @@ func rotationReplacement(messages []opencode.Message) []opencode.Message {
 	replacement.Info.Tokens.Output = 0
 	replacement.Info.Tokens.Cache.Read = 0
 	replacement.Info.Tokens.Cache.Write = 0
-	return []opencode.Message{replacement}
+	var idle opencode.Message
+	idle.ID = "rotation_idle_succeeded"
+	idle.Type = "idle"
+	idle.Outcome = "succeeded"
+	idle.Time.Created = messageCreated(replacement) + 100
+	return []opencode.Message{replacement, idle}
 }
 
 func assertRotationSpec(t *testing.T, f *runtimeFake) string {
