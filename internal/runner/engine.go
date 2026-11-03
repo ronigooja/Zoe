@@ -536,21 +536,28 @@ func rotationRecentMessages(msgs []opencode.Message) string {
 			continue
 		}
 		text := strings.TrimSpace(m.Text)
-		if text == "" {
-			for _, p := range messageParts(m) {
-				kind, _ := p["type"].(string)
-				if kind == "tool" || strings.Contains(kind, "tool") {
-					name, _ := p["name"].(string)
-					args, _ := json.Marshal(p["input"])
-					if len(args) == 0 || string(args) == "null" {
-						args, _ = json.Marshal(p["arguments"])
-					}
-					result, _ := json.Marshal(p["output"])
-					if len(result) == 0 || string(result) == "null" {
-						result, _ = json.Marshal(p["result"])
-					}
-					text += "tool=" + name + " args=" + truncate(string(args), itemLimit) + " result=" + truncate(string(result), itemLimit)
+		for _, p := range messageParts(m) {
+			kind, _ := p["type"].(string)
+			if partText, ok := p["text"].(string); ok && partText != "" {
+				if text != "" {
+					text += "\n"
 				}
+				text += partText
+			}
+			if kind == "tool" || strings.Contains(kind, "tool") {
+				name, _ := p["name"].(string)
+				args, _ := json.Marshal(p["input"])
+				if len(args) == 0 || string(args) == "null" {
+					args, _ = json.Marshal(p["arguments"])
+				}
+				result, _ := json.Marshal(p["output"])
+				if len(result) == 0 || string(result) == "null" {
+					result, _ = json.Marshal(p["result"])
+				}
+				if text != "" {
+					text += "\n"
+				}
+				text += "tool=" + name + " args=" + truncate(string(args), itemLimit) + " result=" + truncate(string(result), itemLimit)
 			}
 		}
 		if text == "" {
