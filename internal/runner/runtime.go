@@ -59,6 +59,9 @@ type ContextWindowProvider interface {
 type RotationRecovery interface {
 	FindRotationSession(context.Context, string, string) (RuntimeBinding, error)
 }
+type RotationSummarizer interface {
+	Summarize(context.Context, string, string) (string, error)
+}
 type PendingRequests interface {
 	PendingPermissions(context.Context, RuntimeBinding) ([]opencode.PermissionRequest, error)
 	PendingForms(context.Context, RuntimeBinding) ([]opencode.FormRequest, error)
@@ -112,6 +115,61 @@ func (r OpenCodeRuntime) Create(ctx context.Context, s RuntimeSpec) (RuntimeBind
 		return RuntimeBinding{}, err
 	}
 	return RuntimeBinding{SessionID: session.ID}, nil
+}
+
+func (r OpenCodeRuntime) Summarize(ctx context.Context, model, content string) (string, error) {
+	if r.Client == nil {
+		return "", errors.New("summarizer requires OpenCode client")
+	}
+	providerID, modelID, ok := strings.Cut(model, "/")
+	if !ok {
+		return "", errors.New("summarizer model must be provider/model")
+	}
+	deny := []map[string]string{{"action": "*", "resource": "*", "effect": "deny"}}
+	session, err := r.Client.CreateSession(ctx, "zoe-rotation-summary", opencode.SessionOptions{Agent: "zoe-rotation-summary", Model: map[string]string{"id": modelID, "providerID": providerID}, Permissions: deny})
+	if err != nil {
+		return "", err
+	}
+	b := RuntimeBinding{SessionID: session.ID}
+	defer r.Terminate(context.Background(), b)
+	if err := r.Client.Prompt(ctx, session.ID, "Summarize only the following old session content in at most 4000 tokens. Do not use tools. Return plain text only.\n\n"+truncateRuntime(content, 16000)); err != nil {
+		return "", err
+	}
+	deadline := time.NewTimer(8 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-deadline.C:
+			return "", errors.New("rotation summarizer timeout")
+		default:
+		}
+		messages, err := r.Client.Messages(ctx, session.ID)
+		if err != nil {
+			return "", err
+		}
+		if message, done, err := opencode.Completion(messages); done {
+			if err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(message.Text), nil
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func truncateRuntime(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	return s[:limit]
 }
 func (r OpenCodeRuntime) FindRotationSession(ctx context.Context, runID, oldSession string) (RuntimeBinding, error) {
 	c, err := r.client()

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -358,6 +359,10 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			continue
 		}
 		if !waiting && e.contextExceeded(ctx, claim, msgs) {
+			if entry.RotationCount > 0 && firstMeasuredAssistant(msgs) {
+				_ = e.Runtime.Abort(ctx, b)
+				return e.terminate(ctx, claim, b, "context_threshold_below_baseline", false)
+			}
 			return e.rotate(ctx, claim, b, msgs)
 		}
 		_ = status
@@ -375,6 +380,23 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 		}
 		return e.terminate(ctx, claim, b, "completed", false)
 	}
+}
+
+func firstMeasuredAssistant(msgs []opencode.Message) bool {
+	count := 0
+	for _, m := range msgs {
+		if messageRole(m) != "assistant" {
+			continue
+		}
+		usage := m.Tokens.Input + m.Tokens.Output + m.Tokens.Cache.Read + m.Tokens.Cache.Write
+		if usage == 0 {
+			usage = m.Info.Tokens.Input + m.Info.Tokens.Output + m.Info.Tokens.Cache.Read + m.Info.Tokens.Cache.Write
+		}
+		if usage > 0 {
+			count++
+		}
+	}
+	return count == 1
 }
 
 const (
@@ -660,6 +682,15 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 		}
 	}
 	b.WriteString("\nFiles touched in the prior session: " + rotationFiles(msgs) + "\n\nRecent prior messages (chronological; verify against the workspace):\n" + rotationRecentMessages(msgs))
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ZOE_AGENT_ROTATION_SUMMARY")), "on") {
+		if summarizer, ok := e.Runtime.(RotationSummarizer); ok {
+			if summary, err := summarizer.Summarize(ctx, e.Routes[c.ProfileID].Model, rotationSummary(msgs)); err == nil && strings.TrimSpace(summary) != "" {
+				b.WriteString("\n\nUnverified context; verify against the workspace:\n" + truncate(summary, 16000))
+			} else if err != nil {
+				log.Printf("rotation summary unavailable: %v", err)
+			}
+		}
+	}
 	b.WriteString("\n\nStandard constraints:\n" + buildPrompt(c))
 	return truncate(b.String(), rotationPromptLimit)
 }
