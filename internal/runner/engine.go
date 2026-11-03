@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +65,7 @@ type Engine struct {
 	ContextTokenBudget           int64
 	ContextWindowRatio           float64
 	MaxRotations                 int
+	RotationSummary              bool
 	windowMu                     sync.Mutex
 	windowCache                  map[string]int64
 	windowUnavailable            map[string]bool
@@ -706,7 +706,7 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 		}
 	}
 	b.WriteString("\nFiles touched in the prior session: " + rotationFiles(msgs) + "\n\nRecent prior messages (chronological; verify against the workspace):\n" + rotationRecentMessages(msgs))
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("ZOE_AGENT_ROTATION_SUMMARY")), "on") {
+	if e.RotationSummary {
 		if summarizer, ok := e.Runtime.(RotationSummarizer); ok {
 			if summary, err := summarizer.Summarize(ctx, e.Routes[c.ProfileID].Model, rotationSummary(msgs)); err == nil && strings.TrimSpace(summary) != "" {
 				b.WriteString("\n\nUnverified context; verify against the workspace:\n" + truncate(summary, 16000))

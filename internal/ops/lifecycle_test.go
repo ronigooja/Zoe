@@ -84,11 +84,11 @@ func TestWriteEnvPreservesVoiceUpstreamRoute(t *testing.T) {
 
 func TestWriteEnvPreservesRotationOperatorSettingsAndRejectsInvalidValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "zoe.env")
-	original := "ZOE_AGENT_CONTEXT_WINDOW_RATIO=0.25\nZOE_AGENT_CONTEXT_TOKEN_BUDGET=90000\nZOE_AGENT_MAX_ROTATIONS=5\n"
+	original := "ZOE_AGENT_CONTEXT_WINDOW_RATIO=0.25\nZOE_AGENT_CONTEXT_TOKEN_BUDGET=90000\nZOE_AGENT_MAX_ROTATIONS=5\nZOE_AGENT_ROTATION_SUMMARY=on\n"
 	if err := os.WriteFile(path, []byte(original), 0600); err != nil {
 		t.Fatal(err)
 	}
-	values := map[string]string{"ZOE_AGENT_CONTEXT_WINDOW_RATIO": "0.5", "ZOE_AGENT_CONTEXT_TOKEN_BUDGET": "0", "ZOE_AGENT_MAX_ROTATIONS": "3"}
+	values := map[string]string{"ZOE_AGENT_CONTEXT_WINDOW_RATIO": "0.5", "ZOE_AGENT_CONTEXT_TOKEN_BUDGET": "0", "ZOE_AGENT_MAX_ROTATIONS": "3", "ZOE_AGENT_ROTATION_SUMMARY": "off"}
 	if err := writeEnv(path, values, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -99,12 +99,12 @@ func TestWriteEnvPreservesRotationOperatorSettingsAndRejectsInvalidValues(t *tes
 	if string(data) != original {
 		t.Fatalf("rotation settings changed: %q", data)
 	}
-	for _, tc := range []struct{ key, value string }{{"ZOE_AGENT_CONTEXT_WINDOW_RATIO", "0"}, {"ZOE_AGENT_CONTEXT_WINDOW_RATIO", "1"}, {"ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "-1"}, {"ZOE_AGENT_MAX_ROTATIONS", "abc"}} {
+	for _, tc := range []struct{ key, value string }{{"ZOE_AGENT_CONTEXT_WINDOW_RATIO", "0"}, {"ZOE_AGENT_CONTEXT_WINDOW_RATIO", "1"}, {"ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "-1"}, {"ZOE_AGENT_MAX_ROTATIONS", "abc"}, {"ZOE_AGENT_ROTATION_SUMMARY", "maybe"}} {
 		if validOperatorEnvValue(tc.key, tc.value) {
 			t.Fatalf("invalid %s=%q accepted", tc.key, tc.value)
 		}
 	}
-	for _, tc := range []struct{ key, value string }{{"ZOE_AGENT_CONTEXT_WINDOW_RATIO", "0.25"}, {"ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "0"}, {"ZOE_AGENT_MAX_ROTATIONS", "3"}} {
+	for _, tc := range []struct{ key, value string }{{"ZOE_AGENT_CONTEXT_WINDOW_RATIO", "0.25"}, {"ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "0"}, {"ZOE_AGENT_MAX_ROTATIONS", "3"}, {"ZOE_AGENT_ROTATION_SUMMARY", "on"}, {"ZOE_AGENT_ROTATION_SUMMARY", "off"}} {
 		if !validOperatorEnvValue(tc.key, tc.value) {
 			t.Fatalf("valid %s=%q rejected", tc.key, tc.value)
 		}

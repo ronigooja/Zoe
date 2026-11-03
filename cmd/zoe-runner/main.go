@@ -111,6 +111,7 @@ func run(args []string) error {
 		ContextTokenBudget: int64Env("ZOE_AGENT_CONTEXT_TOKEN_BUDGET", 0),
 		ContextWindowRatio: ratio,
 		MaxRotations:       intEnv("ZOE_AGENT_MAX_ROTATIONS", 3),
+		RotationSummary:    strings.EqualFold(strings.TrimSpace(os.Getenv("ZOE_AGENT_ROTATION_SUMMARY")), "on"),
 	}
 	if *reconcileRuns != "" || *confirm || *actor != "" || len(retainContainers) > 0 || len(preexistingContainers) > 0 {
 		if *once {
