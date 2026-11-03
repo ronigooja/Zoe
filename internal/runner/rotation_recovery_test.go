@@ -155,6 +155,7 @@ func TestOpenCodeSummarizerSessionIsAllDenyAndTerminated(t *testing.T) {
 			var mu sync.Mutex
 			terminated := false
 			created := make(chan struct{})
+			messageSeen := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/session" {
 					var body map[string]any
@@ -180,7 +181,8 @@ func TestOpenCodeSummarizerSessionIsAllDenyAndTerminated(t *testing.T) {
 					}
 				case "/api/session/summary/message":
 					if tc.cancel {
-						<-r.Context().Done()
+						close(messageSeen)
+						http.Error(w, "cancelled", http.StatusRequestTimeout)
 						return
 					}
 					_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": "m", "type": "assistant", "text": "summary text"}, {"id": "idle", "type": "idle", "outcome": "succeeded"}}})
@@ -211,6 +213,7 @@ func TestOpenCodeSummarizerSessionIsAllDenyAndTerminated(t *testing.T) {
 			}()
 			if tc.cancel {
 				<-created
+				<-messageSeen
 				cancel()
 			}
 			<-result
