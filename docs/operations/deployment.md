@@ -30,8 +30,9 @@ existing remote CLIProxyAPI deployment remains outside Zoe's lifecycle.
 
 Voice account-pool behavior and the fail-closed media boundary are defined in
 [ADR 0005](../architecture/decisions/0005-voice-task-and-lease-boundaries.md).
-Keep `ZOE_VOICE_ACCOUNT_MEDIA_ENABLED` disabled unless a separately reviewed
-gateway release implements the required lease contract.
+`ZOE_VOICE_ACCOUNT_MEDIA_ENABLED=true` pairs with the gateway's
+`VOICE_RELAY_ENABLED=true`; set it with `zoe voice configure --enable-account-media`.
+If the gateway runs client-direct, keep it `false`.
 
 `ZOE_VOICE_HEARTBEAT_TIMEOUT_SECONDS` (default 60, clamped to 30–600) controls
 server-side voice reaping: active sessions with no recent heartbeat are reclaimed
@@ -227,10 +228,8 @@ See [the deployment instructions](../../deploy/voice/README.md).
 The user must manually import a ChatGPT Web account in the gateway management
 UI. Deploying the gateway does not establish voice functionality in Zoe:
 trusted HTTPS, client media permissions, and voice acceptance remain required.
-The optional Zoe account-media integration is not part of the current baseline;
-keep it disabled until a future gateway revision and its lifecycle contract
-have passed a separate architecture review and the applicable acceptance
-checks.
+Account media is part of the current baseline (see
+[ADR 0005](../architecture/decisions/0005-voice-task-and-lease-boundaries.md)).
 
 ## Operator CLI deployment metadata
 
