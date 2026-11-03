@@ -49,6 +49,7 @@ type rotationRecoveryFixture struct {
 	store   *storage.Store
 	server  *httptest.Server
 	client  *runner.ControlClient
+	token   string
 	claim   contracts.JobClaim
 	journal *runner.Journal
 }
@@ -126,7 +127,7 @@ func newRotationRecoveryFixture(t *testing.T, normal bool, firstOld string) *rot
 			_ = i
 		}
 	}
-	return &rotationRecoveryFixture{store: store, server: live, client: client, claim: *claim, journal: journal}
+	return &rotationRecoveryFixture{store: store, server: live, client: client, token: token, claim: *claim, journal: journal}
 }
 
 func boundObservation(claim contracts.JobClaim, id, session string) contracts.RunnerObservation {

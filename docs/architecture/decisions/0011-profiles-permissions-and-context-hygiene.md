@@ -25,7 +25,7 @@ Runs use one wildcard allow rule, so impact levels cannot follow capabilities. A
 
 ### Bounded context
 
-9. Every long-lived conversation is rotated when the latest assistant usage exceeds 50% of the selected model's `/api/model` `limit.context`; `ZOE_AGENT_CONTEXT_WINDOW_RATIO` defaults to `0.5` and must be in `(0,1)`. If the model window cannot be determined, rotation is disabled for that run. `ZOE_AGENT_CONTEXT_TOKEN_BUDGET`, when set, is an optional absolute cap and can only lower the threshold; a claim `MaxContextTokens` can lower it further. If the first measured assistant usage in a fresh session is at or above the threshold, it ends with `context_threshold_below_baseline` rather than rotating repeatedly.
+9. Every long-lived conversation is rotated when the latest assistant usage exceeds 50% of the selected model's `/api/model` `limit.context`; `ZOE_AGENT_CONTEXT_WINDOW_RATIO` defaults to `0.5` and must be in `(0,1)`. If the model window cannot be determined, rotation is disabled for that run. `ZOE_AGENT_CONTEXT_TOKEN_BUDGET`, when set, is an optional absolute cap and can only lower the threshold; a claim `MaxContextTokens` can lower it further. After rotation, the earliest assistant message in the new session, ordered by `(time.created, id)` rather than API list order, being at or above the threshold ends with `context_threshold_below_baseline` rather than rotating repeatedly.
 
 ### Memory and voice context
 

@@ -626,6 +626,19 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, apiError(409, "fence_conflict", "observation does not match active attempt fence", map[string]any{"attempt_id": attempt, "fence": fence}))
 		return
 	}
+	if status == "verified" || status == "stopped" || status == "failed" {
+		var recordedKind string
+		if replayErr := tx.QueryRowContext(r.Context(), `SELECT kind FROM runner_observations WHERE run_id=? AND observation_id=?`, runID, observation.ObservationID).Scan(&recordedKind); replayErr == nil && recordedKind == observation.Kind {
+			if err = tx.Commit(); err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
+			return
+		}
+		writeError(w, apiError(409, "state_conflict", "run is terminal", map[string]any{"status": status}))
+		return
+	}
 	var oldHash []byte
 	err = tx.QueryRowContext(r.Context(), `SELECT body_hash FROM runner_observations WHERE run_id=? AND runner_id=? AND idempotency_key=?`, runID, p.RunnerID, key).Scan(&oldHash)
 	if err == nil {
@@ -642,19 +655,6 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		writeError(w, err)
-		return
-	}
-	if status == "verified" || status == "stopped" || status == "failed" {
-		var recordedKind string
-		if replayErr := tx.QueryRowContext(r.Context(), `SELECT kind FROM runner_observations WHERE run_id=? AND observation_id=?`, runID, observation.ObservationID).Scan(&recordedKind); replayErr == nil && recordedKind == observation.Kind {
-			if err = tx.Commit(); err != nil {
-				writeError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
-			return
-		}
-		writeError(w, apiError(409, "state_conflict", "run is terminal", map[string]any{"status": status}))
 		return
 	}
 	if observation.Kind == "stop_confirmed" && desired != "stop" {

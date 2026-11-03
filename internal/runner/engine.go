@@ -359,12 +359,14 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			time.Sleep(e.interval())
 			continue
 		}
-		if !waiting && e.contextExceeded(ctx, claim, msgs) {
+		if !waiting {
 			if entry.RotationCount > 0 && e.rotationHasNoRoom(ctx, claim, msgs) {
 				_ = e.Runtime.Abort(ctx, b)
 				return e.terminate(ctx, claim, b, "context_threshold_below_baseline", false)
 			}
-			return e.rotate(ctx, claim, b, msgs)
+			if e.contextExceeded(ctx, claim, msgs) {
+				return e.rotate(ctx, claim, b, msgs)
+			}
 		}
 		_ = status
 		m, done, term := opencode.Completion(msgs)
@@ -402,19 +404,24 @@ func (e *Engine) rotationHasNoRoom(ctx context.Context, c contracts.JobClaim, ms
 	if limit <= 0 {
 		return false
 	}
+	var earliest opencode.Message
 	for _, m := range msgs {
-		if messageRole(m) != "assistant" {
+		if messageRole(m) != "assistant" || messageCreated(m) == 0 {
 			continue
 		}
-		usage := m.Tokens.Input + m.Tokens.Output + m.Tokens.Cache.Read + m.Tokens.Cache.Write
-		if usage == 0 {
-			usage = m.Info.Tokens.Input + m.Info.Tokens.Output + m.Info.Tokens.Cache.Read + m.Info.Tokens.Cache.Write
-		}
-		if usage > 0 {
-			return usage >= limit
+		created, current := messageCreated(m), messageCreated(earliest)
+		if current == 0 || created < current || (created == current && m.ID < earliest.ID) {
+			earliest = m
 		}
 	}
-	return false
+	if messageRole(earliest) != "assistant" {
+		return false
+	}
+	usage := earliest.Tokens.Input + earliest.Tokens.Output + earliest.Tokens.Cache.Read + earliest.Tokens.Cache.Write
+	if usage == 0 {
+		usage = earliest.Info.Tokens.Input + earliest.Info.Tokens.Output + earliest.Info.Tokens.Cache.Read + earliest.Info.Tokens.Cache.Write
+	}
+	return usage > 0 && usage >= limit
 }
 
 const (
@@ -840,6 +847,7 @@ func (e *Engine) emit(ctx context.Context, c contracts.JobClaim, kind, source, s
 	entry, _, _ := e.Journal.Entry(ctx, c.RunID)
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s", c.RunID, c.AttemptID, kind, summary)))
 	o := contracts.RunnerObservation{ObservationID: hex.EncodeToString(sum[:16]), RunID: c.RunID, AttemptID: c.AttemptID, Fence: c.Fence, Kind: kind, OccurredAt: e.now(), RuntimeSessionID: entry.Session, RuntimeContainerID: entry.Container, Result: result, ExternalEffects: effects}
+	o.Error = summary
 	if p, ok := proof.(*contracts.TerminationProof); ok {
 		o.TerminationProof = p
 	}
