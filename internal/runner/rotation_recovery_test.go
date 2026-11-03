@@ -154,6 +154,7 @@ func TestOpenCodeSummarizerSessionIsAllDenyAndTerminated(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
 			terminated := false
+			created := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/session" {
 					var body map[string]any
@@ -168,6 +169,7 @@ func TestOpenCodeSummarizerSessionIsAllDenyAndTerminated(t *testing.T) {
 						t.Fatalf("permissions=%v", permissions)
 					}
 					_ = json.NewEncoder(w).Encode(map[string]any{"data": opencode.Session{ID: "summary"}})
+					close(created)
 					return
 				}
 				switch r.URL.Path {
@@ -197,12 +199,21 @@ func TestOpenCodeSummarizerSessionIsAllDenyAndTerminated(t *testing.T) {
 			}
 			r := OpenCodeRuntime{Client: client}
 			ctx := context.Background()
+			var cancel context.CancelFunc
 			if tc.cancel {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, time.Millisecond)
+				ctx, cancel = context.WithCancel(ctx)
 				defer cancel()
 			}
-			_, _ = r.Summarize(ctx, "provider/model", "old content")
+			result := make(chan struct{})
+			go func() {
+				_, _ = r.Summarize(ctx, "provider/model", "old content")
+				close(result)
+			}()
+			if tc.cancel {
+				<-created
+				cancel()
+			}
+			<-result
 			mu.Lock()
 			wasTerminated := terminated
 			mu.Unlock()
