@@ -264,6 +264,9 @@ func TestRotationRecoveryReplayIsIdempotent(t *testing.T) {
 
 func TestProcessLegacyRotationRecoveryRebindsBeforeTermination(t *testing.T) {
 	f := newRotationRecoveryFixture(t, false, "")
+	if err := f.journal.SetSession(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "S3", "prompt_sent"); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.journal.SetPhase(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "prompt_sent"); err != nil {
 		t.Fatal(err)
 	}
@@ -283,6 +286,9 @@ func TestProcessLegacyRotationRecoveryRebindsBeforeTermination(t *testing.T) {
 
 func TestProcessAlreadyRotatedRecoveryEmitsNoDuplicates(t *testing.T) {
 	f := newRotationRecoveryFixture(t, true, "")
+	if err := f.journal.SetSession(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "S3", "prompt_sent"); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.journal.SetPhase(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "prompt_sent"); err != nil {
 		t.Fatal(err)
 	}
@@ -296,6 +302,9 @@ func TestProcessAlreadyRotatedRecoveryEmitsNoDuplicates(t *testing.T) {
 
 func TestProcessBrokenRotationChainLeavesTerminationPending(t *testing.T) {
 	f := newRotationRecoveryFixture(t, false, "wrong")
+	if err := f.journal.SetSession(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "S3", "prompt_sent"); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.journal.SetPhase(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "prompt_sent"); err != nil {
 		t.Fatal(err)
 	}
@@ -320,6 +329,9 @@ func TestProcessBrokenRotationChainLeavesTerminationPending(t *testing.T) {
 
 func TestProcessRotationRecoveryIsIdempotent(t *testing.T) {
 	f := newRotationRecoveryFixture(t, false, "")
+	if err := f.journal.SetSession(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "S3", "prompt_sent"); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.journal.SetPhase(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "prompt_sent"); err != nil {
 		t.Fatal(err)
 	}
