@@ -38,6 +38,7 @@ func (f *rotationSummarizerFake) Summarize(ctx context.Context, model, input str
 func rotationEngine(t *testing.T, f *rotationSummarizerFake, control RunnerAPI, j *Journal) *Engine {
 	t.Helper()
 	e := testEngine(t, f.runtimeFake, &controlFake{}, j)
+	e.Runtime = f
 	e.Control = control
 	e.Routes["profile"] = Route{ProfileID: "profile", Harness: "opencode", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Model: "provider/configured"}
 	e.ContextTokenBudget = 1
@@ -64,6 +65,8 @@ func TestRotationCrashBeforeCreateReusesStoredPromptWithoutRefetch(t *testing.T)
 	}
 	newControl := &rotationContextControlFake{context: contracts.RotationContext{Instructions: []string{"must not fetch"}}}
 	newRuntime := completingRuntimeFake()
+	newRuntime.live = map[string]bool{"session": true}
+	newRuntime.creates = 1
 	newRuntime.rotationMessages = rotationReplacement(msgs)
 	e := rotationEngine(t, &rotationSummarizerFake{runtimeFake: newRuntime}, newControl, j)
 	if err := e.Process(testContext(t), c); err != nil {
@@ -173,11 +176,11 @@ func TestOpenCodeSummarizerSessionIsAllDenyAndTerminated(t *testing.T) {
 						http.Error(w, "bad prompt", http.StatusBadRequest)
 						return
 					}
+				case "/api/session/summary/message":
 					if tc.cancel {
 						<-r.Context().Done()
 						return
 					}
-				case "/api/session/summary/message":
 					_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": "m", "type": "assistant", "text": "summary text"}, {"id": "idle", "type": "idle", "outcome": "succeeded"}}})
 				case "/api/session/summary/interrupt":
 					mu.Lock()
