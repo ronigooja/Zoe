@@ -39,6 +39,7 @@ type rotationContextFixture struct {
 	client *runner.ControlClient
 	claim  *contracts.JobClaim
 	device string
+	token  string
 }
 
 func newRotationContextFixture(t *testing.T, failingAssembler bool) *rotationContextFixture {
@@ -78,7 +79,7 @@ func newRotationContextFixture(t *testing.T, failingAssembler bool) *rotationCon
 	if err != nil || claim == nil {
 		t.Fatalf("claim=%+v err=%v", claim, err)
 	}
-	return &rotationContextFixture{store: store, h: handler, server: live, client: client, claim: claim, device: device}
+	return &rotationContextFixture{store: store, h: handler, server: live, client: client, claim: claim, device: device, token: token}
 }
 
 func rememberRotationMemory(t *testing.T, f *rotationContextFixture, content string) (string, int64) {
@@ -144,11 +145,11 @@ func TestRotationContextMemoryFailureReturnsUnavailableNotStale(t *testing.T) {
 func TestRotationContextRejectsWrongRunnerFenceAttemptScopeAndTerminal(t *testing.T) {
 	t.Run("wrong fence", func(t *testing.T) {
 		f := newRotationContextFixture(t, false)
-		assertRotationContextError(t, f.h, f.claim.RunID, f.claim.AttemptID, f.claim.Fence+1, "runner", http.StatusConflict, "fence_conflict")
+		assertRotationContextError(t, f.h, f.claim.RunID, f.claim.AttemptID, f.claim.Fence+1, f.token, http.StatusConflict, "fence_conflict")
 	})
 	t.Run("wrong attempt", func(t *testing.T) {
 		f := newRotationContextFixture(t, false)
-		assertRotationContextError(t, f.h, f.claim.RunID, "wrong-attempt", f.claim.Fence, "runner", http.StatusConflict, "fence_conflict")
+		assertRotationContextError(t, f.h, f.claim.RunID, "wrong-attempt", f.claim.Fence, f.token, http.StatusConflict, "fence_conflict")
 	})
 	t.Run("different runner", func(t *testing.T) {
 		f := newRotationContextFixture(t, false)
@@ -168,14 +169,14 @@ func TestRotationContextRejectsWrongRunnerFenceAttemptScopeAndTerminal(t *testin
 	})
 	t.Run("missing parameters", func(t *testing.T) {
 		f := newRotationContextFixture(t, false)
-		assertRotationContextError(t, f.h, f.claim.RunID, "", 0, "runner", http.StatusBadRequest, "invalid_request")
+		assertRotationContextError(t, f.h, f.claim.RunID, "", 0, f.token, http.StatusBadRequest, "invalid_request")
 	})
 	t.Run("terminal", func(t *testing.T) {
 		f := newRotationContextFixture(t, false)
 		if err := f.client.Observe(t.Context(), f.claim.RunID, contracts.RunnerObservation{ObservationID: "terminal-failure", RunID: f.claim.RunID, AttemptID: f.claim.AttemptID, Fence: f.claim.Fence, Kind: "failure", Error: "terminal test failure"}); err != nil {
 			t.Fatal(err)
 		}
-		assertRotationContextError(t, f.h, f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "runner", http.StatusNotFound, "not_found")
+		assertRotationContextError(t, f.h, f.claim.RunID, f.claim.AttemptID, f.claim.Fence, f.token, http.StatusNotFound, "not_found")
 	})
 }
 
