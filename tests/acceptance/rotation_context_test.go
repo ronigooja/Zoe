@@ -173,6 +173,9 @@ func TestRotationContextRejectsWrongRunnerFenceAttemptScopeAndTerminal(t *testin
 	})
 	t.Run("terminal", func(t *testing.T) {
 		f := newRotationContextFixture(t, false)
+		if err := f.client.Observe(t.Context(), f.claim.RunID, boundObservation(*f.claim, "terminal-bound", "terminal-session")); err != nil {
+			t.Fatal(err)
+		}
 		if err := f.client.Observe(t.Context(), f.claim.RunID, contracts.RunnerObservation{ObservationID: "terminal-failure", RunID: f.claim.RunID, AttemptID: f.claim.AttemptID, Fence: f.claim.Fence, Kind: "failure", RuntimeSessionID: "terminal-session", Error: "terminal test failure"}); err != nil {
 			t.Fatal(err)
 		}
