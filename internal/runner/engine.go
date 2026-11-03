@@ -683,12 +683,10 @@ func (e *Engine) emitSessionRotated(ctx context.Context, c contracts.JobClaim, o
 }
 
 func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, msgs []opencode.Message) string {
-	ctxData := contracts.RotationContext{Memory: c.MemoryContext}
+	ctxData := contracts.RotationContext{MemoryUnavailable: true}
 	if control, ok := e.Control.(rotationContextControl); ok {
 		if refreshed, err := control.RotationContext(ctx, c.RunID, c.AttemptID, c.Fence); err == nil {
 			ctxData = refreshed
-		} else {
-			ctxData.MemoryUnavailable = true
 		}
 	}
 	var b strings.Builder
@@ -715,7 +713,9 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 			}
 		}
 	}
-	b.WriteString("\n\nStandard constraints:\n" + buildPrompt(c))
+	standardClaim := c
+	standardClaim.MemoryContext = contracts.MemoryContext{}
+	b.WriteString("\n\nStandard constraints:\n" + buildPrompt(standardClaim))
 	return truncate(b.String(), rotationPromptLimit)
 }
 

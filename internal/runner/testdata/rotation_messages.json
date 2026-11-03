@@ -1,0 +1,6 @@
+[
+  {"id":"rotation_user_001","time":{"created":1793647783000},"text":"earliest user message","type":"user"},
+  {"id":"rotation_assistant_001","time":{"created":1793647783100,"completed":1793647783300},"type":"assistant","content":[{"type":"text","text":"assistant first message"},{"type":"tool","tool":"edit","callID":"rotation_call_1","name":"edit","input":{"filePath":"internal/runner/engine.go"},"state":{"status":"completed","title":"updated engine"}}],"finish":"tool-calls","tokens":{"input":2000,"output":5,"cache":{"read":0,"write":0}}},
+  {"id":"rotation_user_002","time":{"created":1793647783400},"text":"latest user message","type":"user"},
+  {"id":"rotation_assistant_002","time":{"created":1793647783500,"completed":1793647783700},"type":"assistant","content":[{"type":"text","text":"assistant latest message"},{"type":"tool","tool":"write","callID":"rotation_call_2","name":"write","input":{"filePath":"internal/runner/rotation_prompt_test.go"},"state":{"status":"completed","title":"added tests"}}],"finish":"stop","tokens":{"input":2000,"output":5,"cache":{"read":0,"write":0}}}
+]
