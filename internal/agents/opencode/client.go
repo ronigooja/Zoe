@@ -73,6 +73,7 @@ type Status struct {
 type Message struct {
 	ID      string `json:"id,omitempty"`
 	Type    string `json:"type,omitempty"`
+	Finish  string `json:"finish,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
 	Error   any    `json:"error,omitempty"`
 	Time    struct {
@@ -383,22 +384,38 @@ func Completion(args ...any) (Message, bool, error) {
 		return Message{}, false, nil
 	}
 	m := latestMessage(messages)
+	// OpenCode V2 reports completion as a separate idle status message. The
+	// assistant content is on the latest completed assistant message, not on
+	// that idle record.
+	terminal := (m.Type == "idle" && m.Outcome != "") || (m.Type == "" && m.Info.Time.Completed != 0)
+	outcome := m.Outcome
+	if terminal && outcome == "" {
+		outcome = "succeeded"
+	}
+	if terminal && outcome == "succeeded" {
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Type == "assistant" && (messages[i].Finish == "stop" || messages[i].Info.Finish == "stop") {
+				m = messages[i]
+				break
+			}
+		}
+	}
 	if m.Type == "" && m.Info.Time.Completed != 0 {
 		if m.Info.Error != nil {
 			return m, true, fmt.Errorf("OpenCode assistant error: %v", m.Info.Error)
 		}
 		return m, true, nil
 	}
-	if m.Type != "idle" {
+	if !terminal && m.Type != "idle" {
 		return Message{}, false, nil
 	}
-	if m.Outcome == "" {
+	if outcome == "" {
 		return Message{}, false, nil
 	}
-	if m.Outcome == "interrupted" {
+	if outcome == "interrupted" {
 		return m, true, context.Canceled
 	}
-	if m.Outcome != "succeeded" {
+	if outcome != "succeeded" {
 		detail := "OpenCode execution failed"
 		if m.Error != nil {
 			detail += fmt.Sprintf(": %v", m.Error)

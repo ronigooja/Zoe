@@ -206,6 +206,17 @@ func TestCompletionUsesLatestAssistantFinishOrError(t *testing.T) {
 	}
 }
 
+func TestCompletionReturnsCompletedAssistantBeforeIdle(t *testing.T) {
+	var messages []Message
+	if err := json.Unmarshal([]byte(`[{"id":"assistant","type":"assistant","finish":"stop","content":[{"type":"text","text":"clarify?"}]},{"id":"idle","type":"idle","outcome":"succeeded"}]`), &messages); err != nil {
+		t.Fatal(err)
+	}
+	got, done, err := Completion(messages)
+	if err != nil || !done || got.ID != "assistant" || got.Parts[0]["text"] != "clarify?" {
+		t.Fatalf("completion=%+v done=%v err=%v", got, done, err)
+	}
+}
+
 func TestEvents(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

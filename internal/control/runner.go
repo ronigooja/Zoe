@@ -891,6 +891,8 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 	}
 	eventKind := "run." + observation.Kind
 	var taskResult string
+	var assistantEntryID string
+	var assistantRole string
 	provenance, _ := json.Marshal(observation)
 	for _, item := range observation.Evidence {
 		eid, e := randomID()
@@ -904,7 +906,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if observation.Kind == "result" {
+	if observation.Kind == "result" || observation.Kind == "failure" {
 		summary := string(observation.Result)
 		if len(summary) > 20000 {
 			summary = summary[:20000]
@@ -935,21 +937,41 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			writeError(w, e)
 			return
 		}
-		_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET result=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, taskResult, now.Format(time.RFC3339Nano), taskID, workspace)
+		if observation.Kind == "result" {
+			_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET result=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, taskResult, now.Format(time.RFC3339Nano), taskID, workspace)
+		} else if taskResult != "" {
+			_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET result=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, taskResult, now.Format(time.RFC3339Nano), taskID, workspace)
+		}
 		if err != nil {
 			writeError(w, err)
 			return
 		}
 		taskVersion++
-		if assistantOutput != "" {
-			entryID, entryErr := randomID()
-			if entryErr != nil {
-				writeError(w, entryErr)
+		if strings.TrimSpace(assistantOutput) != "" {
+			if err = tx.QueryRowContext(r.Context(), `SELECT role FROM runs WHERE id=?`, runID).Scan(&assistantRole); err != nil {
+				writeError(w, err)
 				return
 			}
-			if _, entryErr = tx.ExecContext(r.Context(), `INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,?,?,'assistant_message',?,?,?)`, entryID, taskID, workspace, assistantOutput, authorizedDevice, now.Format(time.RFC3339Nano)); entryErr != nil {
-				writeError(w, entryErr)
-				return
+			if len(assistantOutput) > 20000 {
+				assistantOutput = assistantOutput[:20000]
+			}
+			var existing string
+			// Deduplicate by authoritative run identity, not by task text: two
+			// runs may legitimately produce the same assistant message.
+			_ = tx.QueryRowContext(r.Context(), `SELECT json_extract(payload,'$.entry_id') FROM events WHERE event_type='task.assistant_message' AND aggregate_id=? AND json_extract(payload,'$.run_id')=? ORDER BY cursor LIMIT 1`, taskID, runID).Scan(&existing)
+			if existing != "" {
+				assistantEntryID = existing
+			} else {
+				entryID, entryErr := randomID()
+				if entryErr != nil {
+					writeError(w, entryErr)
+					return
+				}
+				if _, entryErr = tx.ExecContext(r.Context(), `INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,?,?,'assistant_message',?,?,?)`, entryID, taskID, workspace, assistantOutput, authorizedDevice, now.Format(time.RFC3339Nano)); entryErr != nil {
+					writeError(w, entryErr)
+					return
+				}
+				assistantEntryID = entryID
 			}
 		}
 	}
@@ -1103,6 +1125,12 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 	if err = appendEventTx(r.Context(), tx, contracts.Event{Type: eventKind, OccurredAt: now, WorkspaceID: workspace, SubjectID: "", AggregateType: "run", AggregateID: runID, AggregateVersion: int64(fence), Payload: raw(map[string]any{"run_id": runID, "task_id": taskID, "attempt_id": attempt, "kind": observation.Kind, "task_status": nextTaskStatus, "result": taskResult})}); err != nil {
 		writeError(w, err)
 		return
+	}
+	if assistantEntryID != "" {
+		if err = appendEventTx(r.Context(), tx, contracts.Event{Type: "task.assistant_message", OccurredAt: now, WorkspaceID: workspace, AggregateType: "task", AggregateID: taskID, AggregateVersion: taskVersion, Payload: raw(map[string]any{"task_id": taskID, "run_id": runID, "entry_id": assistantEntryID, "entry_kind": "assistant_message", "role": assistantRole})}); err != nil {
+			writeError(w, err)
+			return
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		writeError(w, err)

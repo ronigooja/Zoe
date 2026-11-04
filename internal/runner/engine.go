@@ -373,7 +373,15 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			continue
 		}
 		if term != nil {
-			_ = e.emit(ctx, claim, "failure", "runtime", "runtime reported failure", term, nil)
+			// A runtime failure may still include the assistant's partial reply.
+			// Preserve it through the same observation path as a successful result.
+			if hasMessageText(m) {
+				if err := e.emitMessage(ctx, claim, "failure", "runtime", "runtime reported failure", m); err != nil {
+					return err
+				}
+			} else {
+				_ = e.emit(ctx, claim, "failure", "runtime", "runtime reported failure", term, nil)
+			}
 			return e.terminate(ctx, claim, b, "runtime_error", false)
 		}
 		if err := e.emitMessage(ctx, claim, "result", "runtime", "runtime result", m); err != nil {
@@ -872,13 +880,16 @@ func (e *Engine) observeQueued(ctx context.Context, run string, observation cont
 	return e.Journal.AcknowledgeObservation(ctx, observation.ObservationID)
 }
 func (e *Engine) emitMessage(ctx context.Context, c contracts.JobClaim, kind, source, summary string, m opencode.Message) error {
-	out := ""
-	for _, part := range m.Parts {
-		if text, ok := part["text"].(string); ok {
-			out += text
-		}
+	out := messageText(m)
+	truncated := len(out) > 20000
+	if truncated {
+		out = out[:20000]
 	}
-	raw, _ := json.Marshal(map[string]any{"assistant_output": out, "assistant_message": m})
+	var truncatedValue any
+	if truncated {
+		truncatedValue = true
+	}
+	raw, _ := json.Marshal(map[string]any{"assistant_output": out, "assistant_message": m, "role": c.Role, "assistant_output_truncated": truncatedValue})
 	entry, _, _ := e.Journal.Entry(ctx, c.RunID)
 	evidence := toolEvidence(entry.Session, m)
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s", c.RunID, c.AttemptID, kind, summary)))
@@ -889,6 +900,25 @@ func (e *Engine) emitMessage(ctx context.Context, c contracts.JobClaim, kind, so
 	}
 	return e.Control.Observe(ctx, c.RunID, stored)
 }
+
+func messageText(m opencode.Message) string {
+	out := ""
+	for _, part := range m.Parts {
+		if text, ok := part["text"].(string); ok {
+			out += text
+		}
+	}
+	if out == "" {
+		for _, part := range m.Content {
+			if text, ok := part["text"].(string); ok {
+				out += text
+			}
+		}
+	}
+	return out
+}
+
+func hasMessageText(m opencode.Message) bool { return strings.TrimSpace(messageText(m)) != "" }
 func (e *Engine) flush(ctx context.Context, run string) error {
 	if err := e.rebindFromJournal(ctx, run); err != nil {
 		return err
