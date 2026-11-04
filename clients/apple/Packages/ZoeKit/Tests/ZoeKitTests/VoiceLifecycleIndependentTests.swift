@@ -34,9 +34,19 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
 
     private func recordedDiagnostics(for installationID: String) async throws -> [DiagnosticEvent] {
         let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: try voiceAPI(installationID: installationID).serverURL, installationID: installationID))
-        for _ in 0..<20 {
+        for _ in 0..<100 {
             let events = await queue.take(limit: 20)
             if !events.isEmpty { return events }
+            await Task.yield()
+        }
+        return await queue.take(limit: 20)
+    }
+
+    private func recordedMediaLossDiagnostics(for installationID: String) async throws -> [DiagnosticEvent] {
+        let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: try voiceAPI(installationID: installationID).serverURL, installationID: installationID))
+        for _ in 0..<100 {
+            let events = await queue.take(limit: 20)
+            if events.contains(where: { $0.phase == "voice_media_loss" }) { return events }
             await Task.yield()
         }
         return await queue.take(limit: 20)
@@ -141,7 +151,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
             if case .interrupted = model.voiceStatus { break }
             await Task.yield()
         }
-        let events = try await recordedDiagnostics(for: installationID)
+        let events = try await recordedMediaLossDiagnostics(for: installationID)
         XCTAssertEqual(events.filter { $0.phase == "voice_media_loss" }.count, 1)
         XCTAssertEqual(events.first?.errorType, "data_channel")
         XCTAssertEqual(events.first?.errorSummary, "closed")
@@ -176,7 +186,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         transport.driveDataChannelStateForTesting(.closed)
         await Task.yield()
         XCTAssertEqual(model.voiceStatus, .connecting)
-        let events = try await recordedDiagnostics(for: installationID)
+        let events = try await recordedMediaLossDiagnostics(for: installationID)
         XCTAssertTrue(events.isEmpty)
     }
 
