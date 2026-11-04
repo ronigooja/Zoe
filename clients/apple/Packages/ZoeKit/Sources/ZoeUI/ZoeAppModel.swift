@@ -1173,9 +1173,9 @@ public final class ZoeAppModel: ObservableObject {
         guard let rawReason = loss.message else { return }
         if let api = voiceAPI {
             let (errorType, errorSummary): (String, String) = switch loss {
-            case let .connection(state): ("connection", String(describing: state))
-            case let .audio(event): ("audio", String(describing: event))
-            case let .dataChannel(state): ("data_channel", String(describing: state))
+            case let .connection(state): ("connection", Self.voiceConnectionStateName(state))
+            case let .audio(event): ("audio", Self.voiceAudioEventName(event))
+            case let .dataChannel(state): ("data_channel", Self.voiceDataChannelStateName(state))
             case .leaseRenewalFailed: ("lease", "lease_renewal_failed")
             }
             api.recordDiagnostic(
@@ -1205,6 +1205,35 @@ public final class ZoeAppModel: ObservableObject {
         voiceStartMediaLoss = (mediaEpoch, reason)
         voiceStatus = .interrupted(reason: uiFormat("%@ Stopping voice setup and releasing local media.", reason))
         await closeVoiceLocalMedia(mediaEpoch: mediaEpoch)
+    }
+
+    private static func voiceConnectionStateName(_ state: RTCPeerConnectionState) -> String {
+        switch state {
+        case .new: "new"
+        case .connecting: "connecting"
+        case .connected: "connected"
+        case .disconnected: "disconnected"
+        case .failed: "failed"
+        case .closed: "closed"
+        @unknown default: "unknown"
+        }
+    }
+
+    private static func voiceDataChannelStateName(_ state: RTCDataChannelState) -> String {
+        switch state {
+        case .connecting: "connecting"
+        case .open: "open"
+        case .closing: "closing"
+        case .closed: "closed"
+        @unknown default: "unknown"
+        }
+    }
+
+    private static func voiceAudioEventName(_ event: VoiceAudioLifecycleEvent) -> String {
+        switch event {
+        case .interrupted: "interrupted"
+        case .routeUnavailable: "route_unavailable"
+        }
     }
 
     private func receiveConnectionState(_ state: RTCPeerConnectionState, mediaEpoch: UInt64) async {

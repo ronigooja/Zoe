@@ -182,19 +182,13 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let session = VoiceSessionResponse(voiceSessionId: "reconnect-session", generation: 1, state: "active", answerSdp: "")
         let epoch = model.installVoiceSessionForTesting(session, api: api)
         model.setContinuousVoiceEnabled(true)
+        var observedReconnecting = false
         model.voiceHangupOverrideForTesting = { _ in
-            try await Task.sleep(for: .milliseconds(100))
+            if case .reconnecting = model.voiceStatus { observedReconnecting = true }
             return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
         }
-        let loss = Task { @MainActor in
-            await model.receiveDataChannelStateForTesting(.closing, mediaEpoch: epoch)
-        }
-        for _ in 0..<20 {
-            if case .reconnecting = model.voiceStatus { break }
-            await Task.yield()
-        }
-        XCTAssertTrue({ if case .reconnecting = model.voiceStatus { return true }; return false }())
-        await loss.value
+        await model.receiveDataChannelStateForTesting(.closing, mediaEpoch: epoch)
+        XCTAssertTrue(observedReconnecting)
     }
 
     func testRedactedDiagnosticKeepsOnlyStatusAndCode() {
