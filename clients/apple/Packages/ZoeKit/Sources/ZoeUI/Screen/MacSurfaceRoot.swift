@@ -77,6 +77,7 @@ private struct TextInputBar: View {
     var body: some View {
         HStack { TextField("What should Zoe do?", text: $draft).onSubmit { coordinator.setDraft(draft); coordinator.sendDraft() }; Button("Send") { coordinator.setDraft(draft); coordinator.sendDraft() }.keyboardShortcut(.return, modifiers: [.command]); Button { coordinator.hideTextInput() } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }.textFieldStyle(.roundedBorder).frame(maxWidth: 520)
             .onAppear { draft = model.selectedTaskDraft }
+            .onChange(of: model.selectedTaskDraft) { _, value in draft = value }
             .onExitCommand { coordinator.hideTextInput() }
     }
 }

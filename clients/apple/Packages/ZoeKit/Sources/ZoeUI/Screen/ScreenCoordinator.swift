@@ -56,7 +56,8 @@ public final class ScreenCoordinator: ObservableObject {
     }
 
     public func openDefault() {
-        let document = DefaultScreenBuilder.build(tasks: model.tasks, approvals: model.approvals, notifications: model.notifications, revision: Int64(model.tasks.count + model.approvals.count + model.notifications.count))
+        let revision = Int64(model.snapshot?.eventCursor ?? "") ?? 0
+        let document = DefaultScreenBuilder.build(tasks: model.tasks, approvals: model.approvals, notifications: model.notifications, revision: revision)
         self.document = document
         surfaces.open(SurfaceSpec(id: "main", kind: .window, document: document))
     }

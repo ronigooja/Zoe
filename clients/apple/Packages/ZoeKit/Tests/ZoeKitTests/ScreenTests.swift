@@ -130,4 +130,30 @@ final class ScreenTests: XCTestCase {
         _ = await router.handle(tool: "voice.start", args: [:])
         XCTAssertEqual(starts, 1)
     }
+
+    func testRouterDecodesFlatWindowContractIncludingMenuBarAndDescribesCatalogShape() async throws {
+        let host = TestSurfaceHost()
+        let router = ScreenToolRouter(host: host, settings: SettingsRegistry(), startVoice: {}, endVoice: {}, setSilenceTimeout: { _ in }, showTextInput: {}, hideTextInput: {})
+        let document: JSONValue = .object(["version": .integer(1), "revision": .integer(9), "root": .object(["id": .string("root"), "type": .string("text"), "props": .object(["text": .string("hello")])])])
+        let result = await router.handle(tool: "surface.open", args: ["id": .string("surface"), "kind": .string("window"), "document": document,
+                                                                        "window": .object(["width": .number(400), "height": .number(200), "x": .number(10), "y": .number(20), "floating": .bool(true), "showInMenuBar": .bool(true)])])
+        XCTAssertEqual(result, .object(["ok": .bool(true)]))
+        XCTAssertEqual(host.opened.first?.window.width, 400)
+        XCTAssertEqual(host.opened.first?.window.x, 10)
+        XCTAssertEqual(host.opened.first?.window.showInMenuBar, true)
+
+        let described = await router.handle(tool: "components.describe", args: [:])
+        guard case let .object(fields) = described, case let .array(components)? = fields["components"],
+              case let .object(stack)? = components.first(where: { if case let .object(value) = $0 { return value["type"] == .string("stack") }; return false }) else { return XCTFail("missing stack descriptor") }
+        XCTAssertNotNil(stack["propsSchema"])
+        XCTAssertNotNil(stack["example"])
+        XCTAssertEqual(stack["libraryVersion"], .number(1))
+    }
+
+    func testComponentDescriptorsCarryContractMetadata() {
+        let descriptor = try! XCTUnwrap(ComponentCatalog.descriptors.first(where: { $0.type == "decision" }))
+        XCTAssertEqual(descriptor.libraryVersion, ComponentCatalog.version)
+        XCTAssertEqual(descriptor.example.type, "decision")
+        XCTAssertNotNil(descriptor.propsSchema["question"])
+    }
 }

@@ -54,6 +54,7 @@ public struct SurfaceWindowSpec: Codable, Equatable, Sendable {
     public var takesFocus: Bool?
     public var fullscreen: Bool?
     public var showInDock: Bool?
+    public var showInMenuBar: Bool?
     public var material: String?
     public init() {}
 }
@@ -106,8 +107,16 @@ public enum SettingWriteError: Error, Equatable, Sendable { case unknownKey, use
 public struct ComponentDescriptor: Codable, Equatable, Sendable {
     public var type: String
     public var purpose: String
+    public var propsSchema: [String: JSONValue]
+    public var example: ScreenNode
     public var fallback: String
-    public init(type: String, purpose: String, fallback: String) { self.type = type; self.purpose = purpose; self.fallback = fallback }
+    public var libraryVersion: Int
+    public init(type: String, purpose: String, propsSchema: [String: JSONValue] = [:], example: ScreenNode? = nil,
+                fallback: String, libraryVersion: Int = 1) {
+        self.type = type; self.purpose = purpose; self.propsSchema = propsSchema
+        self.example = example ?? ScreenNode(id: "example", type: type)
+        self.fallback = fallback; self.libraryVersion = libraryVersion
+    }
 }
 
 public extension JSONValue {
