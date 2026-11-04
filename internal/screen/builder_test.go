@@ -61,3 +61,5 @@ func TestBuildStatusCountsOnlyActiveTasks(t *testing.T) {
 		t.Fatalf("status=%q, want 2 active task(s)", status)
 	}
 }
+	}
+}

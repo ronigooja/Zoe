@@ -112,12 +112,22 @@ import Foundation
         result.floating = bool(object["floating"]); result.opacity = number(object["opacity"])
         result.clickThrough = bool(object["clickThrough"]); result.takesFocus = bool(object["takesFocus"])
         result.fullscreen = bool(object["fullscreen"]); result.showInDock = bool(object["showInDock"])
+        result.showInMenuBar = bool(object["showInMenuBar"])
         result.material = string(object["material"])
         return result
     }
 
     private func descriptorJSON(_ descriptor: ComponentDescriptor) -> JSONValue {
-        .object(["type": .string(descriptor.type), "purpose": .string(descriptor.purpose), "fallback": .string(descriptor.fallback)])
+        .object(["type": .string(descriptor.type), "purpose": .string(descriptor.purpose),
+                 "propsSchema": .object(descriptor.propsSchema), "example": descriptorJSON(descriptor.example),
+                 "fallback": .string(descriptor.fallback), "libraryVersion": .number(Double(descriptor.libraryVersion))])
+    }
+
+    private func descriptorJSON(_ node: ScreenNode) -> JSONValue {
+        var value: [String: JSONValue] = ["id": .string(node.id), "type": .string(node.type)]
+        if !node.props.isEmpty { value["props"] = .object(node.props) }
+        if !node.children.isEmpty { value["children"] = .array(node.children.map(descriptorJSON)) }
+        return .object(value)
     }
 
     private func settingJSON(_ descriptor: SettingDescriptor) -> JSONValue {

@@ -6,7 +6,7 @@ Status: Go contract implemented in [`contracts/screen.go`](../../contracts/scree
 
 A surface is a display area the AI creates, updates, and closes. Each has its own screen document. Main window, floating panel, menu-bar item, menu-bar popover, Dock badge, and additional windows are all surfaces; the client has no fixed regions. With no surface open, only the menu-bar item exists.
 
-`SurfaceSpec` is `{id, kind, document, window}`. `kind` is `window | panel | statusItem | popover | dockBadge`. `window` is optional and holds any of: `visible`, `size` (points), `position`, `display`, `level` (normal or floating), `opacity`, `clickThrough`, `takesFocus`, `fullscreen`, `showInDock`, `showInMenuBar`, `material`. Sizes and positions are clamped to the visible area of the chosen display. A user's direct window action (close, drag, resize) wins over an AI window change that arrives immediately after it.
+`SurfaceSpec` is `{id, kind, document, window}`. `kind` is `window | panel | statusItem | popover | dockBadge`. `window` is optional and holds flat fields: `visible`, `width`, `height`, `x`, `y`, `display`, `floating`, `opacity`, `clickThrough`, `takesFocus`, `fullscreen`, `showInDock`, `showInMenuBar`, `material`. Sizes and positions are clamped to the visible area of the chosen display. A user's direct window action (close, drag, resize) wins over an AI window change that arrives immediately after it.
 
 Surface tools: `surface.open(spec)`, `surface.update(id, patch)`, `surface.close(id)`, `surface.list()`.
 
