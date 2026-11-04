@@ -184,6 +184,56 @@ func TestValidateClaimFailsClosedWithoutPermissionRuleset(t *testing.T) {
 	}
 }
 
+func TestMessageTextShapesAndWhitespace(t *testing.T) {
+	cases := []struct {
+		name string
+		m    opencode.Message
+		want string
+		text bool
+	}{
+		{"legacy parts", opencode.Message{Parts: []map[string]any{{"text": "one"}, {"type": "tool"}, {"text": " two"}}}, "one two", true},
+		{"v2 content", opencode.Message{Content: []map[string]any{{"type": "text", "text": "v2"}}}, "v2", true},
+		{"parts win", opencode.Message{Parts: []map[string]any{{"text": "parts"}}, Content: []map[string]any{{"text": "content"}}}, "parts", true},
+		{"empty", opencode.Message{}, "", false},
+		{"non text", opencode.Message{Parts: []map[string]any{{"type": "tool", "input": "x"}}}, "", false},
+		{"whitespace", opencode.Message{Parts: []map[string]any{{"text": " \n\t"}}}, " \n\t", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := messageText(tc.m); got != tc.want {
+				t.Fatalf("messageText=%q want %q", got, tc.want)
+			}
+			if got := hasMessageText(tc.m); got != tc.text {
+				t.Fatalf("hasMessageText=%v want %v", got, tc.text)
+			}
+		})
+	}
+}
+
+func TestEmitMessageTruncatesAssistantOutputToCapAndKeepsJSONValid(t *testing.T) {
+	j := openTestJournal(t)
+	c := testClaim()
+	if _, err := j.SaveClaim(context.Background(), c, RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: "p", Workspace: c.WorkspaceID}, "claimed"); err != nil {
+		t.Fatal(err)
+	}
+	control := &controlFake{}
+	e := &Engine{Control: control, Journal: j}
+	long := strings.Repeat("x", 20001)
+	if err := e.emitMessage(context.Background(), c, "result", "runtime", "done", opencode.Message{Parts: []map[string]any{{"text": long}}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(control.observations) != 1 {
+		t.Fatalf("observations=%d", len(control.observations))
+	}
+	var result map[string]any
+	if err := json.Unmarshal(control.observations[0].Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result["assistant_output"].(string)) != 20000 || result["assistant_output_truncated"] != true {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestRuntimeProcessUsesHostSessionInterruptionProof(t *testing.T) {
 	f := &runtimeFake{events: make(chan opencode.Event, 1), done: true}
 	m := opencode.Message{}

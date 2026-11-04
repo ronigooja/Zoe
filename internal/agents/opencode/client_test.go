@@ -217,6 +217,26 @@ func TestCompletionReturnsCompletedAssistantBeforeIdle(t *testing.T) {
 	}
 }
 
+func TestCompletionIdleWithoutAssistantReturnsEmptyOutcome(t *testing.T) {
+	got, done, err := Completion([]Message{{Type: "idle", Outcome: "succeeded"}})
+	if err != nil || !done || got.ID != "" || len(got.Parts) != 0 {
+		t.Fatalf("completion=%+v done=%v err=%v", got, done, err)
+	}
+}
+
+func TestCompletionUsesLatestCompletedAssistant(t *testing.T) {
+	first := Message{ID: "first", Type: "assistant", Finish: "stop", Parts: []map[string]any{{"text": "old"}}}
+	first.Time.Created = 1
+	second := Message{ID: "second", Type: "assistant", Finish: "stop", Parts: []map[string]any{{"text": "new"}}}
+	second.Time.Created = 2
+	idle := Message{Type: "idle", Outcome: "succeeded"}
+	idle.Time.Created = 3
+	got, done, err := Completion([]Message{first, second, idle})
+	if err != nil || !done || got.ID != "second" {
+		t.Fatalf("completion=%+v done=%v err=%v", got, done, err)
+	}
+}
+
 func TestEvents(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

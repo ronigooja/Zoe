@@ -892,6 +892,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 	eventKind := "run." + observation.Kind
 	var taskResult string
 	var assistantEntryID string
+	var assistantMessageNew bool
 	var assistantRole string
 	provenance, _ := json.Marshal(observation)
 	for _, item := range observation.Evidence {
@@ -960,7 +961,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			var existing string
 			// Deduplicate by authoritative run identity, not by task text: two
 			// runs may legitimately produce the same assistant message.
-			_ = tx.QueryRowContext(r.Context(), `SELECT json_extract(payload,'$.entry_id') FROM events WHERE event_type='task.assistant_message' AND aggregate_id=? AND json_extract(payload,'$.run_id')=? ORDER BY cursor LIMIT 1`, taskID, runID).Scan(&existing)
+			_ = tx.QueryRowContext(r.Context(), `SELECT json_extract(payload,'$.payload.entry_id') FROM events WHERE event_type='task.assistant_message' AND aggregate_id=? AND json_extract(payload,'$.payload.run_id')=? ORDER BY cursor LIMIT 1`, taskID, runID).Scan(&existing)
 			if existing != "" {
 				assistantEntryID = existing
 			} else {
@@ -974,6 +975,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				assistantEntryID = entryID
+				assistantMessageNew = true
 			}
 		}
 	}
@@ -1128,7 +1130,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if assistantEntryID != "" {
+	if assistantEntryID != "" && assistantMessageNew {
 		if err = appendEventTx(r.Context(), tx, contracts.Event{Type: "task.assistant_message", OccurredAt: now, WorkspaceID: workspace, AggregateType: "task", AggregateID: taskID, AggregateVersion: taskVersion, Payload: raw(map[string]any{"task_id": taskID, "run_id": runID, "entry_id": assistantEntryID, "entry_kind": "assistant_message", "role": assistantRole})}); err != nil {
 			writeError(w, err)
 			return
