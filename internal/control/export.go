@@ -57,6 +57,7 @@ type exportCounter struct {
 	Revisions    int64 `json:"memory_revisions"`
 	Sources      int64 `json:"memory_sources"`
 	VoiceLinks   int64 `json:"voice_associations"`
+	VoiceResults int64 `json:"voice_result_deliveries"`
 	Capabilities int64 `json:"capability_authorizations"`
 }
 
@@ -411,7 +412,7 @@ func buildExportManifest(id string, p contracts.Principal, scope string, cursor 
 			"export_audit_event_cursor": strconv.FormatInt(cursor+1, 10), "export_audit_event_id": id,
 			"export_audit_event_type": "data.export.prepared", "source": "sqlite_authority",
 		},
-		"content":     map[string]any{"inventory": []string{"projects", "tasks", "task_dependencies", "task_entries", "approvals", "runs", "evidence", "memory_claims", "memory_revisions", "memory_sources", "voice_associations", "capability_authorizations"}, "counts": counts},
+		"content":     map[string]any{"inventory": []string{"projects", "tasks", "task_dependencies", "task_entries", "approvals", "runs", "evidence", "memory_claims", "memory_revisions", "memory_sources", "voice_associations", "voice_result_deliveries", "capability_authorizations"}, "counts": counts},
 		"permissions": map[string]any{"scope": scope, "row_visibility": "principal_authorized", "secret_values": "excluded"},
 		"artifacts":   map[string]any{"bytes": "referenced_not_included", "voice_audio_bytes": "omitted"},
 		"derived":     map[string]any{"mem0": "not_included_rebuildable", "qdrant": "not_included_rebuildable", "cache": "not_included"},
@@ -700,6 +701,12 @@ func writeExportDocument(ctx context.Context, tx *sql.Tx, out io.Writer, p contr
 		return err
 	}
 	if err := writeRows(ctx, tx, out, &counts.VoiceLinks, `SELECT json_object('session_id',l.session_id,'generation',l.generation,'turn_id',l.turn_id,'turn_revision',l.turn_revision,'task_id',l.task_id,'linked_at',l.linked_at) FROM voice_task_links l JOIN tasks t ON t.workspace_id=l.workspace_id AND t.id=l.task_id WHERE l.workspace_id=?1 AND `+visible.taskOnT+` ORDER BY l.linked_at,l.session_id,l.turn_id`, append([]any(nil), args...)); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(out, `,"voice_result_deliveries":`); err != nil {
+		return err
+	}
+	if err := writeRows(ctx, tx, out, &counts.VoiceResults, `SELECT json_object('entry_id',d.entry_id,'task_id',d.task_id,'run_id',d.run_id,'status',d.status,'attempts',d.attempts,'last_error_code',d.last_error_code,'voice_session_id',d.voice_session_id,'generation',d.generation,'created_at',d.created_at,'updated_at',d.updated_at) FROM voice_result_deliveries d JOIN tasks t ON t.workspace_id=d.workspace_id AND t.id=d.task_id WHERE d.workspace_id=?1 AND `+visible.taskOnT+` ORDER BY d.created_at,d.entry_id`, append([]any(nil), args...)); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(out, `,"capability_authorizations":`); err != nil {

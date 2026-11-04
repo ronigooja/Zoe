@@ -136,5 +136,26 @@ ALTER TABLE voice_sessions ADD COLUMN gateway_context_chars INTEGER NOT NULL DEF
 	}}); err != nil {
 		return err
 	}
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 207, Name: "voice_result_deliveries", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_result_deliveries (
+  entry_id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','delivered','failed','skipped_no_call','skipped_stale')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT NOT NULL,
+  last_error_code TEXT NOT NULL DEFAULT '',
+  voice_session_id TEXT NOT NULL DEFAULT '',
+  generation INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX voice_result_deliveries_due ON voice_result_deliveries(status,next_attempt_at,created_at);`)
+		return err
+	}}); err != nil {
+		return err
+	}
 	return nil
 }
