@@ -831,7 +831,8 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	keyState := "pending (run zoe key init)"
 	probeCtx, probeCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer probeCancel()
-	if req, requestErr := http.NewRequestWithContext(probeCtx, http.MethodGet, "http://127.0.0.1:8787/readyz", nil); requestErr == nil {
+	readyURL := fmt.Sprintf("http://127.0.0.1:%d/readyz", d.ServerPort())
+	if req, requestErr := http.NewRequestWithContext(probeCtx, http.MethodGet, readyURL, nil); requestErr == nil {
 		if response, requestErr := (&http.Client{Timeout: 2 * time.Second}).Do(req); requestErr == nil {
 			response.Body.Close()
 			if response.StatusCode == http.StatusOK {

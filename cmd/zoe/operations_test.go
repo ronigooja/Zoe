@@ -80,6 +80,34 @@ func TestProviderConfigureTestStatusUsePersistedDeployment(t *testing.T) {
 	}
 }
 
+func TestStatusUsesConfiguredServerPortForReadiness(t *testing.T) {
+	ready := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/readyz" {
+			t.Errorf("readiness path=%q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ready.Close()
+	port := strings.TrimPrefix(ready.URL, "http://127.0.0.1:")
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_SERVER_PORT="+port+"\nZOE_COMPOSE_FILE=/tmp/zoe-compose.yaml\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fakeServices(t, false)
+	oldMode := os.Getenv("ZOE_DEPLOYMENT_MODE")
+	if err := os.Setenv("ZOE_DEPLOYMENT_MODE", "compose"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Setenv("ZOE_DEPLOYMENT_MODE", oldMode) })
+	var out, errOut bytes.Buffer
+	if err := statusOperation([]string{"--root", root}, nil, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Instance key: configured") {
+		t.Fatalf("status did not use configured port: %s", out.String())
+	}
+}
+
 func TestMemoryConfigureConsumesCRLFAnswersFromSingleChunk(t *testing.T) {
 	root := t.TempDir()
 	compose := filepath.Join(root, "compose.yml")

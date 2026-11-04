@@ -153,6 +153,12 @@ The Linux control server reads deployment settings from its process environment.
 
 Configure `ZOE_OPENCODE_BASE_URL`, `ZOE_OPENCODE_PASSWORD_FILE`, `ZOE_OPENCODE_MODEL`, and `ZOE_OPENCODE_WORKSPACE_ROOT` in the runner environment. The separate host service owns its OpenCode configuration and provider secret. CLIProxyAPI remains external and unchanged. The service deliberately does not use `ProtectSystem` or `ProtectHome`, because its configured user must be able to write OpenCode state and authorized workspaces.
 
+For a reconcile transient unit, provide the OpenCode password through the systemd
+credential file rather than the unit environment:
+`ZOE_OPENCODE_PASSWORD_FILE=/run/credentials/<unit>.service/opencode-password`.
+The credential is private to that unit and must not be copied into logs, source,
+or persistent deployment metadata.
+
 ### Configure the OpenCode runtime
 
 ### Scrapling web access
@@ -204,7 +210,11 @@ container records.
 
 Use a runner built from the same reviewed source as the control server. Stop `zoe-runner` to hold the deployment and journal locks, then inspect Docker by the exact labels `io.zoe.managed=true`, `io.zoe.runtime=opencode`, `io.zoe.run`, `io.zoe.attempt`, and `io.zoe.fence`. Compare two complete, stable inventories. A matching container ID is preserved and reconciled; no match is a no-effect proof only when the complete inventory is authoritative. Any ambiguity, started container, missing identity, or incomplete inventory remains `effect_unknown`; never replay the create.
 
-Historical uncertain runs were abandoned by operator decision; no reconciliation or migration is required. Do not infer recovery from old records. Restart the runner only after any current inspection is recorded.
+An uncertain run is not evidence of either success or absence. Reconcile only a
+current run after recording two complete, stable, authoritative inspections;
+historical uncertain runs are not recovered from old records and no migration is
+required for them. Restart the runner only after any current inspection is
+recorded.
 
 For the authorized host-removal procedure for retired AO components, see [AO host removal](ao-host-removal.md). It is a separate runbook and has not been executed.
 

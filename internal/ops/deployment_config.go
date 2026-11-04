@@ -167,6 +167,17 @@ func (d Deployment) MemoryConfig() (MemoryConfig, error) {
 	}
 	return c, nil
 }
+
+// ServerPort returns the configured host port for the Zoe server.
+func (d Deployment) ServerPort() int {
+	if value, err := readEnv(d.StackEnv); err == nil {
+		if port, err := strconv.Atoi(value["ZOE_SERVER_PORT"]); err == nil && port > 0 && port <= 65535 {
+			return port
+		}
+	}
+	return 8787
+}
+
 func (d Deployment) InspectConfig() InspectConfig {
 	c, _ := d.ProviderConfig()
 	memory, _ := d.MemoryConfig()

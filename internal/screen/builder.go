@@ -20,11 +20,14 @@ func Build(tasks []contracts.Task, notifications []contracts.Notification, revis
 	}
 	homeChildren = append(homeChildren, contracts.ScreenNode{ID: "home.tasks", Type: contracts.NodeCollection, Props: map[string]any{"items": items, "layout": "list"}})
 	status := "No active tasks"
+	activeTasks := 0
 	for _, task := range tasks {
 		if task.Status != "complete" && task.Status != "canceled" && task.Status != "failed" {
-			status = fmt.Sprintf("%d active task(s)", len(tasks))
-			break
+			activeTasks++
 		}
+	}
+	if activeTasks > 0 {
+		status = fmt.Sprintf("%d active task(s)", activeTasks)
 	}
 	homeChildren = append(homeChildren, contracts.ScreenNode{ID: "home.status", Type: contracts.NodeStatus, Props: map[string]any{"state": "info", "description": status}})
 	for _, notice := range notifications {

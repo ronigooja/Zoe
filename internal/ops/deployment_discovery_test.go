@@ -51,3 +51,15 @@ func TestDiscoverDeploymentTreatsComposeWithoutRunnerUnitAsCompose(t *testing.T)
 		t.Fatalf("mode=%q, want compose", d.Mode)
 	}
 }
+
+func TestDeploymentServerPortUsesConfiguredStackPort(t *testing.T) {
+	root := t.TempDir()
+	stack := filepath.Join(root, "zoe-stack.env")
+	if err := os.WriteFile(stack, []byte("ZOE_SERVER_PORT=19191\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d := Deployment{Root: root, StackEnv: stack}
+	if got := d.ServerPort(); got != 19191 {
+		t.Fatalf("server port=%d, want 19191", got)
+	}
+}

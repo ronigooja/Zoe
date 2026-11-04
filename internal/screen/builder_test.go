@@ -44,3 +44,20 @@ func TestBuildDoesNotExposeSecretsOrRawErrors(t *testing.T) {
 		t.Fatalf("unsafe screen output: %s", b)
 	}
 }
+
+func TestBuildStatusCountsOnlyActiveTasks(t *testing.T) {
+	tasks := []contracts.Task{
+		{ID: "active-1", Status: "queued"},
+		{ID: "active-2", Status: "awaiting_user"},
+		{ID: "complete", Status: "complete"},
+		{ID: "failed", Status: "failed"},
+	}
+	got, err := Build(tasks, nil, 1, time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := got.Surfaces[0].Document.Root.Children[1].Props["description"]
+	if status != "2 active task(s)" {
+		t.Fatalf("status=%q, want 2 active task(s)", status)
+	}
+}
