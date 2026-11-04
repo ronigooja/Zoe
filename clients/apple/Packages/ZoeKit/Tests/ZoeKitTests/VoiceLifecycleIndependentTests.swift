@@ -180,8 +180,8 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let api = try voiceAPI(installationID: "voice-reconnect-" + UUID().uuidString)
         let session = VoiceSessionResponse(voiceSessionId: "reconnect-session", generation: 1, state: "active", answerSdp: "")
-        let epoch = model.installVoiceSessionForTesting(session, api: api)
         model.setContinuousVoiceEnabled(true)
+        let epoch = model.installVoiceSessionForTesting(session, api: api)
         var observedReconnecting = false
         model.voiceHangupOverrideForTesting = { _ in
             if case .reconnecting = model.voiceStatus { observedReconnecting = true }
