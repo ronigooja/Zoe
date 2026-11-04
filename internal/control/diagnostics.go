@@ -22,18 +22,25 @@ type clientDiagnosticRequest struct {
 }
 
 type clientDiagnosticEvent struct {
-	ClientRequestID string `json:"client_request_id"`
-	OccurredAt      string `json:"occurred_at"`
-	AppVersion      string `json:"app_version"`
-	OSVersion       string `json:"os_version"`
-	DeviceIDHash    string `json:"device_id_hash"`
-	Phase           string `json:"phase"`
-	RequestPath     string `json:"request_path"`
-	HTTPStatus      int    `json:"http_status"`
-	ResponseBytes   int64  `json:"response_bytes"`
-	ErrorType       string `json:"error_type"`
-	ErrorSummary    string `json:"error_summary"`
-	Level           string `json:"level,omitempty"`
+	ClientRequestID       string  `json:"client_request_id"`
+	OccurredAt            string  `json:"occurred_at"`
+	AppVersion            string  `json:"app_version"`
+	BuildVersion          string  `json:"build_version"`
+	SourceRevision        string  `json:"source_revision"`
+	OSVersion             string  `json:"os_version"`
+	DeviceIDHash          string  `json:"device_id_hash"`
+	Phase                 string  `json:"phase"`
+	RequestPath           string  `json:"request_path"`
+	HTTPStatus            int     `json:"http_status"`
+	ResponseBytes         int64   `json:"response_bytes"`
+	ErrorType             string  `json:"error_type"`
+	ErrorSummary          string  `json:"error_summary"`
+	Level                 string  `json:"level,omitempty"`
+	VoiceSessionID        *string `json:"voice_session_id,omitempty"`
+	VoiceGeneration       *int64  `json:"voice_generation,omitempty"`
+	VoiceMediaEpoch       *uint64 `json:"voice_media_epoch,omitempty"`
+	VoicePeerState        *string `json:"voice_peer_state,omitempty"`
+	VoiceDataChannelState *string `json:"voice_data_channel_state,omitempty"`
 }
 
 func (s *Server) registerDiagnosticsRoute() {
@@ -108,6 +115,9 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 		level := strings.ToLower(strings.TrimSpace(event.Level))
 		if level == "" {
 			level = "error"
+			if event.HTTPStatus >= 200 && event.HTTPStatus < 300 && strings.TrimSpace(event.ErrorType) == "" && strings.TrimSpace(event.ErrorSummary) == "" {
+				level = "info"
+			}
 		}
 		if !validClientLogLevel(level) {
 			writeError(w, apiError(http.StatusBadRequest, "invalid_diagnostic", "level must be error, info, or debug", nil))
@@ -127,7 +137,7 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 			writeError(w, apiError(http.StatusBadRequest, "invalid_diagnostic", "occurred_at must be RFC3339", nil))
 			return
 		}
-		if _, err = tx.ExecContext(r.Context(), `INSERT INTO client_diagnostic_events(id,workspace_id,subject_id,device_hash,client_request_id,occurred_at,received_at,app_version,os_version,phase,request_path,http_status,response_bytes,error_type,error_summary,level) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, p.WorkspaceID, p.SubjectID, deviceHashText, strings.TrimSpace(event.ClientRequestID), occurred, now.Format(time.RFC3339Nano), bounded(event.AppVersion, 128), bounded(event.OSVersion, 128), bounded(event.Phase, 64), bounded(event.RequestPath, 256), event.HTTPStatus, event.ResponseBytes, bounded(event.ErrorType, 64), bounded(event.ErrorSummary, 512), level); err != nil {
+		if _, err = tx.ExecContext(r.Context(), `INSERT INTO client_diagnostic_events(id,workspace_id,subject_id,device_hash,client_request_id,occurred_at,received_at,app_version,build_version,source_revision,os_version,phase,request_path,http_status,response_bytes,error_type,error_summary,level,voice_session_id,voice_generation,voice_media_epoch,voice_peer_state,voice_data_channel_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, p.WorkspaceID, p.SubjectID, deviceHashText, strings.TrimSpace(event.ClientRequestID), occurred, now.Format(time.RFC3339Nano), bounded(event.AppVersion, 128), bounded(event.BuildVersion, 64), bounded(event.SourceRevision, 64), bounded(event.OSVersion, 128), bounded(event.Phase, 64), bounded(event.RequestPath, 256), event.HTTPStatus, event.ResponseBytes, bounded(event.ErrorType, 64), bounded(event.ErrorSummary, 512), level, boundedPtr(event.VoiceSessionID, 128), boundedInt64Ptr(event.VoiceGeneration), boundedUint64Ptr(event.VoiceMediaEpoch), boundedPtr(event.VoicePeerState, 32), boundedPtr(event.VoiceDataChannelState, 32)); err != nil {
 			writeError(w, err)
 			return
 		}
@@ -141,6 +151,28 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"diagnostic_ids": ids, "dropped": dropped})
+}
+
+func boundedPtr(value *string, max int) any {
+	if value == nil {
+		return nil
+	}
+	return bounded(*value, max)
+}
+func boundedInt64Ptr(value *int64) any {
+	if value == nil {
+		return nil
+	}
+	if *value < 0 {
+		return nil
+	}
+	return *value
+}
+func boundedUint64Ptr(value *uint64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func validDiagnosticEvent(e clientDiagnosticEvent) bool {

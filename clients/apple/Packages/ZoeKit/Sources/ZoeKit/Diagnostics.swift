@@ -17,6 +17,8 @@ public struct DiagnosticEvent: Codable, Equatable, Sendable {
     public let clientRequestID: String
     public let occurredAt: String
     public let appVersion: String
+    public let buildVersion: String
+    public let sourceRevision: String
     public let osVersion: String
     public let deviceIDHash: String
     public let phase: String
@@ -26,14 +28,21 @@ public struct DiagnosticEvent: Codable, Equatable, Sendable {
     public let errorType: String
     public let errorSummary: String
     public let level: String
+    public let voiceSessionID: String?
+    public let voiceGeneration: Int64?
+    public let voiceMediaEpoch: UInt64?
+    public let voicePeerState: String?
+    public let voiceDataChannelState: String?
 
-    enum CodingKeys: String, CodingKey { case clientRequestID, occurredAt, appVersion, osVersion, deviceIDHash, phase, requestPath, httpStatus, responseBytes, errorType, errorSummary, level }
+    enum CodingKeys: String, CodingKey { case clientRequestID, occurredAt, appVersion, buildVersion, sourceRevision, osVersion, deviceIDHash, phase, requestPath, httpStatus, responseBytes, errorType, errorSummary, level, voiceSessionID, voiceGeneration, voiceMediaEpoch, voicePeerState, voiceDataChannelState }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         clientRequestID = try values.decode(String.self, forKey: .clientRequestID)
         occurredAt = try values.decode(String.self, forKey: .occurredAt)
         appVersion = try values.decode(String.self, forKey: .appVersion)
+        buildVersion = try values.decodeIfPresent(String.self, forKey: .buildVersion) ?? "unknown"
+        sourceRevision = try values.decodeIfPresent(String.self, forKey: .sourceRevision) ?? "unknown"
         osVersion = try values.decode(String.self, forKey: .osVersion)
         deviceIDHash = try values.decode(String.self, forKey: .deviceIDHash)
         phase = try values.decode(String.self, forKey: .phase)
@@ -43,12 +52,19 @@ public struct DiagnosticEvent: Codable, Equatable, Sendable {
         errorType = try values.decode(String.self, forKey: .errorType)
         errorSummary = try values.decode(String.self, forKey: .errorSummary)
         level = try values.decodeIfPresent(String.self, forKey: .level) ?? DiagnosticLevel.error.rawValue
+        voiceSessionID = try values.decodeIfPresent(String.self, forKey: .voiceSessionID)
+        voiceGeneration = try values.decodeIfPresent(Int64.self, forKey: .voiceGeneration)
+        voiceMediaEpoch = try values.decodeIfPresent(UInt64.self, forKey: .voiceMediaEpoch)
+        voicePeerState = try values.decodeIfPresent(String.self, forKey: .voicePeerState)
+        voiceDataChannelState = try values.decodeIfPresent(String.self, forKey: .voiceDataChannelState)
     }
 
-    public init(clientRequestID: String, phase: String, requestPath: String, httpStatus: Int = 0, responseBytes: Int64 = 0, errorType: String = "", errorSummary: String = "", installationID: String?, appVersion: String? = nil, osVersion: String? = nil, level: DiagnosticLevel = .error) {
+    public init(clientRequestID: String, phase: String, requestPath: String, httpStatus: Int = 0, responseBytes: Int64 = 0, errorType: String = "", errorSummary: String = "", installationID: String?, appVersion: String? = nil, buildVersion: String? = nil, sourceRevision: String? = nil, osVersion: String? = nil, level: DiagnosticLevel = .error, voiceSessionID: String? = nil, voiceGeneration: Int64? = nil, voiceMediaEpoch: UInt64? = nil, voicePeerState: String? = nil, voiceDataChannelState: String? = nil) {
         self.clientRequestID = clientRequestID
         self.occurredAt = ISO8601DateFormatter().string(from: Date())
         self.appVersion = appVersion ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+        self.buildVersion = String((buildVersion ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown").prefix(64))
+        self.sourceRevision = String((sourceRevision ?? Bundle.main.object(forInfoDictionaryKey: "ZoeSourceRevision") as? String ?? "unknown").prefix(64))
         self.osVersion = osVersion ?? ProcessInfo.processInfo.operatingSystemVersionString
         let source = installationID ?? "unknown"
         self.deviceIDHash = SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -59,6 +75,11 @@ public struct DiagnosticEvent: Codable, Equatable, Sendable {
         self.errorType = String(errorType.prefix(64))
         self.errorSummary = String(errorSummary.prefix(512)).filter { $0.isASCII && $0 != "\n" && $0 != "\r" }
         self.level = level.rawValue
+        self.voiceSessionID = voiceSessionID.map { String($0.prefix(128)) }
+        self.voiceGeneration = voiceGeneration.map { max(0, $0) }
+        self.voiceMediaEpoch = voiceMediaEpoch
+        self.voicePeerState = voicePeerState.map { String($0.prefix(32)) }
+        self.voiceDataChannelState = voiceDataChannelState.map { String($0.prefix(32)) }
     }
 }
 
@@ -122,11 +143,11 @@ actor EncryptedDiagnosticQueue {
         } else { events = [] }
     }
 
-    func append(_ event: DiagnosticEvent) {
-        guard DiagnosticLevel.parse(event.level).isAllowed(by: level) else { return }
+    func append(_ event: DiagnosticEvent) -> Bool {
+        guard DiagnosticLevel.parse(event.level).isAllowed(by: level) else { return true }
         events.append(event)
         if events.count > 100 { events.removeFirst(events.count - 100) }
-        persist()
+        return persist()
     }
 
     func setLevel(_ newLevel: DiagnosticLevel) {
@@ -164,8 +185,9 @@ actor EncryptedDiagnosticQueue {
         persist()
     }
 
-    private func persist() {
-        guard let data = try? encoder.encode(events), let sealed = try? AES.GCM.seal(data, using: key), let combined = sealed.combined else { return }
+    private func persist() -> Bool {
+        guard let data = try? encoder.encode(events), let sealed = try? AES.GCM.seal(data, using: key), let combined = sealed.combined else { return false }
         defaults.set(combined, forKey: storageKey)
+        return defaults.data(forKey: storageKey) != nil
     }
 }

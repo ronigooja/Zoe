@@ -38,13 +38,14 @@ event has these persisted fields:
 | --- | --- |
 | `client_request_id` | Client-side correlation ID. It is required and indexed in SQLite. |
 | `occurred_at` | Client event time; must be RFC3339. Compare with `received_at` for offline queueing or clock skew. |
-| `app_version`, `os_version` | Bounded client identity/version context. |
+| `app_version`, `build_version`, `source_revision`, `os_version` | Bounded client identity/version context. `build_version` is `CFBundleVersion`; CI sets `source_revision` to the 12-character GitHub commit prefix. Local builds use the stable `unknown` fallback. |
 | `device_id_hash` | SHA-256 hex of the `X-Zoe-Installation-ID` value, or the authenticated principal device ID when that header is absent. The submitted value must match the server-computed hash. |
 | `phase` | Bounded stage label, such as `config_request`. Use it as the primary symptom-stage filter. |
 | `request_path` | Bounded request path, not a response body. |
 | `http_status`, `response_bytes` | Status and response size only. |
 | `error_type`, `error_summary` | Bounded, redacted classification and summary. |
 | `level` | Optional `error`, `info`, or `debug`; omitted means `error`. More verbose events are accepted but dropped under the current policy. |
+| `voice_session_id`, `voice_generation`, `voice_media_epoch`, `voice_peer_state`, `voice_data_channel_state` | Nullable bounded voice lifecycle context. These fields contain no media, SDP, tokens, transcripts, or account identifiers. |
 
 The server rejects sensitive keys and sensitive markers, including
 authorization/token/secret/API-key/header/body/SDP/ICE/audio/transcript or

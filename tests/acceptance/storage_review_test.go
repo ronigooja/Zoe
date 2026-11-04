@@ -188,7 +188,7 @@ func TestReviewLateCoreMigrationAfterFeatureHistory(t *testing.T) {
 	if _, err := s.DB().ExecContext(ctx, `DELETE FROM schema_migrations WHERE version=7`); err != nil {
 		t.Fatal(err)
 	}
-	for _, version := range []int{8, 11, 12, 13, 14} {
+	for _, version := range []int{8, 11, 12, 13, 14, 15} {
 		if _, err := s.DB().ExecContext(ctx, `DELETE FROM schema_migrations WHERE version=?`, version); err != nil {
 			t.Fatal(err)
 		}

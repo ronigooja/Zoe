@@ -48,6 +48,7 @@ public final class APIClient: @unchecked Sendable {
     private let decoder: JSONDecoder
     private let diagnosticQueue: EncryptedDiagnosticQueue?
     private let diagnosticsEnabled: Bool
+    private let diagnosticDeliveryFailureKey: String
 
     public var hasCredentials: Bool { credentials != nil }
 
@@ -65,6 +66,7 @@ public final class APIClient: @unchecked Sendable {
         self.session = session
         self.diagnosticQueue = EncryptedDiagnosticQueue(serverURL: self.serverURL, installationID: installationID)
         self.diagnosticsEnabled = installationID != nil
+        self.diagnosticDeliveryFailureKey = "zoe.diagnostics.delivery_failures." + self.serverURL.absoluteString
         encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         decoder = JSONDecoder()
@@ -194,16 +196,18 @@ public final class APIClient: @unchecked Sendable {
         try await request(path: ["v1", "voice", "config"], method: "GET", authenticated: true)
     }
 
-    public func recordDiagnostic(phase: String, requestPath: String, clientRequestID: String = UUID().uuidString.lowercased(), httpStatus: Int = 0, responseBytes: Int64 = 0, errorType: String = "", errorSummary: String = "", level: DiagnosticLevel = .error) {
+    public func recordDiagnostic(phase: String, requestPath: String, clientRequestID: String = UUID().uuidString.lowercased(), httpStatus: Int = 0, responseBytes: Int64 = 0, errorType: String = "", errorSummary: String = "", level: DiagnosticLevel? = nil, voiceSessionID: String? = nil, voiceGeneration: Int64? = nil, voiceMediaEpoch: UInt64? = nil, voicePeerState: String? = nil, voiceDataChannelState: String? = nil) {
         guard diagnosticsEnabled, let queue = diagnosticQueue else { return }
-        let event = DiagnosticEvent(clientRequestID: clientRequestID, phase: phase, requestPath: requestPath, httpStatus: httpStatus, responseBytes: responseBytes, errorType: errorType, errorSummary: errorSummary, installationID: installationID, level: level)
-        Task { await queue.append(event) }
+        let effectiveLevel = level ?? ((200..<300).contains(httpStatus) && errorType.isEmpty ? .info : .error)
+        let event = DiagnosticEvent(clientRequestID: clientRequestID, phase: phase, requestPath: requestPath, httpStatus: httpStatus, responseBytes: responseBytes, errorType: errorType, errorSummary: errorSummary, installationID: installationID, level: effectiveLevel, voiceSessionID: voiceSessionID, voiceGeneration: voiceGeneration, voiceMediaEpoch: voiceMediaEpoch, voicePeerState: voicePeerState, voiceDataChannelState: voiceDataChannelState)
+        Task { if !(await queue.append(event)) { self.noteDiagnosticDeliveryFailure("enqueue") } }
     }
 
-    public func recordDiagnosticAndWait(phase: String, requestPath: String, errorType: String = "", errorSummary: String = "", level: DiagnosticLevel = .error) async {
+    public func recordDiagnosticAndWait(phase: String, requestPath: String, httpStatus: Int = 0, responseBytes: Int64 = 0, errorType: String = "", errorSummary: String = "", level: DiagnosticLevel? = nil, voiceSessionID: String? = nil, voiceGeneration: Int64? = nil, voiceMediaEpoch: UInt64? = nil, voicePeerState: String? = nil, voiceDataChannelState: String? = nil) async {
         guard diagnosticsEnabled, let queue = diagnosticQueue else { return }
-        let event = DiagnosticEvent(clientRequestID: UUID().uuidString.lowercased(), phase: phase, requestPath: requestPath, errorType: errorType, errorSummary: errorSummary, installationID: installationID, level: level)
-        await queue.append(event)
+        let effectiveLevel = level ?? ((200..<300).contains(httpStatus) && errorType.isEmpty ? .info : .error)
+        let event = DiagnosticEvent(clientRequestID: UUID().uuidString.lowercased(), phase: phase, requestPath: requestPath, httpStatus: httpStatus, responseBytes: responseBytes, errorType: errorType, errorSummary: errorSummary, installationID: installationID, level: effectiveLevel, voiceSessionID: voiceSessionID, voiceGeneration: voiceGeneration, voiceMediaEpoch: voiceMediaEpoch, voicePeerState: voicePeerState, voiceDataChannelState: voiceDataChannelState)
+        if !(await queue.append(event)) { noteDiagnosticDeliveryFailure("enqueue") }
     }
 
     public func applyDiagnosticLevel(_ level: DiagnosticLevel) async {
@@ -226,7 +230,7 @@ public final class APIClient: @unchecked Sendable {
         guard await queue.beginUpload() else { return }
         defer { Task { await queue.endUpload() } }
         let events = await queue.take(limit: 50)
-        guard !events.isEmpty, let url = try? makeURL(path: ["v1", "diagnostics", "client"]), let body = try? encoder.encode(["events": events]) else { return }
+        guard !events.isEmpty, let url = try? makeURL(path: ["v1", "diagnostics", "client"]), let body = try? encoder.encode(["events": events]) else { noteDiagnosticDeliveryFailure("prepare"); return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.httpBody = body
@@ -235,10 +239,15 @@ public final class APIClient: @unchecked Sendable {
         if let installationID { request.setValue(installationID, forHTTPHeaderField: "X-Zoe-Installation-ID") }
         do {
             let (_, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { await queue.markFailure(); return }
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { await queue.markFailure(); noteDiagnosticDeliveryFailure("upload"); return }
             await queue.removeFirst(events.count)
             await queue.markSuccess()
-        } catch { await queue.markFailure() }
+        } catch { await queue.markFailure(); noteDiagnosticDeliveryFailure("upload") }
+    }
+
+    private func noteDiagnosticDeliveryFailure(_ kind: String) {
+        let key = diagnosticDeliveryFailureKey + "." + kind
+        UserDefaults.standard.set(min(UserDefaults.standard.integer(forKey: key) + 1, 1000), forKey: key)
     }
 
     public func voicePoolStatus() async throws -> VoicePoolStatus {
@@ -384,7 +393,7 @@ public final class APIClient: @unchecked Sendable {
             do {
                 let decoded = try decoder.decode(Response.self, from: data)
                 if phase != "request" {
-                    recordDiagnostic(phase: phase, requestPath: path, clientRequestID: requestID, httpStatus: response.statusCode, responseBytes: Int64(data.count))
+                    recordDiagnostic(phase: phase, requestPath: path, clientRequestID: requestID, httpStatus: response.statusCode, responseBytes: Int64(data.count), level: .info)
                 }
                 return decoded
             }

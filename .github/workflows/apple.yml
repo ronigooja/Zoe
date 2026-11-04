@@ -116,6 +116,7 @@ jobs:
             -clonedSourcePackagesDirPath "$HOME/environment/zoe-apple/xcode-packages" \
             -packageCachePath "$HOME/environment/zoe-apple/package-cache" \
             CODE_SIGNING_ALLOWED=NO build \
+            ZOE_SOURCE_REVISION="${GITHUB_SHA:0:12}" \
             > "$CI_OUTPUT/logs/macos-build.log" 2>&1 || {
               status=$?
               tail -n 80 "$CI_OUTPUT/logs/macos-build.log"
@@ -192,6 +193,7 @@ jobs:
             -clonedSourcePackagesDirPath "$HOME/environment/zoe-apple/xcode-packages" \
             -packageCachePath "$HOME/environment/zoe-apple/package-cache" \
             CODE_SIGNING_ALLOWED=NO build \
+            ZOE_SOURCE_REVISION="${GITHUB_SHA:0:12}" \
             > "$CI_OUTPUT/logs/ios-build.log" 2>&1 || {
               status=$?
               tail -n 80 "$CI_OUTPUT/logs/ios-build.log"
