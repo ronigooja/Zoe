@@ -190,6 +190,16 @@ public final class ZoeAppModel: ObservableObject {
         await handleVoiceHeartbeatFailure(sessionID: sessionID, api: api, mediaEpoch: mediaEpoch, generation: generation, message: message)
     }
 
+    func receiveVoiceDataForTesting(_ data: Data, generation: UInt64? = nil, mediaEpoch: UInt64? = nil) async {
+        receiveVoiceData(data, generation: generation ?? connectionGeneration.value, mediaEpoch: mediaEpoch ?? voiceMediaEpoch)
+        await Task.yield()
+    }
+
+    func configureVoiceCoordinatorForTesting(api: APIClient, journal: CommandJournal) {
+        self.api = api
+        coordinator = CommandCoordinator(api: api, journal: journal)
+    }
+
     var hasPendingVoiceHangupForTesting: Bool { pendingVoiceHangup() != nil }
 
     func retryPendingVoiceHangupForTesting(api: APIClient) async {
@@ -215,6 +225,9 @@ public final class ZoeAppModel: ObservableObject {
     #endif
     private var voiceTurnID: String?
     private var voiceProviderMessageID: String?
+    private var automaticVoiceTurnInFlight = Set<String>()
+    private var automaticVoiceTurnCompleted = Set<String>()
+    private let automaticVoiceTurnSetLimit = 128
     private let voiceHeartbeat = VoiceHeartbeatLease()
     private var hasLoadedNotificationInbox = false
     private var pendingAPNSTokenHex: String?
@@ -2247,6 +2260,16 @@ public final class ZoeAppModel: ObservableObject {
             event = inner
         }
         let type = (event["type"] as? String) ?? ""
+        if type == "user_audio_turn.final" {
+            guard let final = Self.parseAuthoritativeVoiceTurn(event) else {
+                recordAutomaticVoiceTurnDiagnostic(errorType: "contract_rejected", errorSummary: "invalid_final_event", mediaEpoch: mediaEpoch)
+                return
+            }
+            Task { @MainActor [weak self] in
+                await self?.processAuthoritativeVoiceTurn(final, generation: generation, mediaEpoch: mediaEpoch)
+            }
+            return
+        }
         if type == "voice.end" || type == "voice_end" ||
             ((type == "function_call" || type == "tool_call") && ((event["name"] as? String) == "voice.end" || (event["name"] as? String) == "voice_end")) {
             Task { @MainActor [weak self] in await self?.endVoiceSession() }
@@ -2285,6 +2308,103 @@ public final class ZoeAppModel: ObservableObject {
         guard voiceDraft != clean else { return }
         voiceDraft = clean
         voiceDraftRevision += 1
+    }
+
+    private struct AuthoritativeVoiceTurn: Sendable {
+        let turnID: String
+        let revision: Int64
+        let transcript: String
+    }
+
+    private static func parseAuthoritativeVoiceTurn(_ event: [String: Any]) -> AuthoritativeVoiceTurn? {
+        guard event.keys.contains("type"), event.keys.contains("turn_id"), event.keys.contains("revision"), event.keys.contains("transcript"),
+              event["type"] as? String == "user_audio_turn.final",
+              let turnID = event["turn_id"] as? String,
+              let revisionNumber = event["revision"] as? NSNumber,
+              CFGetTypeID(revisionNumber) != CFBooleanGetTypeID(),
+              !CFNumberIsFloatType(revisionNumber),
+              let transcript = event["transcript"] as? String else { return nil }
+        let cleanTurnID = turnID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTurnID.isEmpty, cleanTurnID.count <= 256,
+              revisionNumber.int64Value >= 1,
+              cleanTranscript.count <= 20_000, !cleanTranscript.isEmpty else { return nil }
+        return AuthoritativeVoiceTurn(turnID: cleanTurnID, revision: revisionNumber.int64Value, transcript: cleanTranscript)
+    }
+
+    private func processAuthoritativeVoiceTurn(_ final: AuthoritativeVoiceTurn, generation: UInt64, mediaEpoch: UInt64) async {
+        guard generation == connectionGeneration.value,
+              mediaEpoch == voiceMediaEpoch,
+              voiceSessionMediaEpoch == mediaEpoch,
+              case .active = voiceStatus,
+              let session = voiceSession,
+              let sourceAPI = voiceAPI,
+              let coordinator else {
+            recordAutomaticVoiceTurnDiagnostic(errorType: "contract_rejected", errorSummary: "stale_voice_epoch", mediaEpoch: mediaEpoch)
+            return
+        }
+        let contentHash = SHA256.hash(data: Data(final.transcript.utf8)).map { String(format: "%02x", $0) }.joined()
+        let identity = "\(session.voiceSessionId)|\(session.generation)|\(final.turnID)|\(final.revision)|\(contentHash)"
+        guard !automaticVoiceTurnCompleted.contains(identity), automaticVoiceTurnInFlight.insert(identity).inserted else { return }
+        defer { automaticVoiceTurnInFlight.remove(identity) }
+
+        let workspaceID = snapshot?.workspaceId
+        let prefix = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+        let commitKey = "voice-final-commit-\(prefix)"
+        let handoffKey = "voice-final-handoff-\(prefix)"
+        let providerMessageID = voiceProviderMessageID
+        voiceDraft = final.transcript
+        voiceDraftRevision = final.revision
+        voiceTurnID = final.turnID
+        do {
+            var fields: [String: JSONValue] = [
+                "session_id": .string(session.voiceSessionId),
+                "generation": .integer(session.generation),
+                "turn_id": .string(final.turnID),
+                "revision": .integer(final.revision),
+                "content": .string(final.transcript),
+                "user_confirmed": .bool(true)
+            ]
+            if let providerMessageID { fields["provider_message_id"] = .string(providerMessageID) }
+            _ = try await coordinator.submit(kind: "voice.turn.commit", payload: .object(fields), workspaceID: workspaceID, idempotencyKey: commitKey)
+            guard isCurrentConnection(generation, sourceAPI: sourceAPI), mediaEpoch == voiceMediaEpoch,
+                  voiceSession?.voiceSessionId == session.voiceSessionId, voiceSessionMediaEpoch == mediaEpoch else { return }
+            let handoff: JSONValue = .object([
+                "session_id": .string(session.voiceSessionId),
+                "generation": .integer(session.generation),
+                "turn_id": .string(final.turnID),
+                "revision": .integer(final.revision),
+                "content_hash": .string(contentHash)
+            ])
+            _ = try await coordinator.submit(kind: "voice.turn.handoff", payload: handoff, workspaceID: workspaceID, idempotencyKey: handoffKey)
+            guard isCurrentConnection(generation, sourceAPI: sourceAPI), mediaEpoch == voiceMediaEpoch else { return }
+            automaticVoiceTurnCompleted.insert(identity)
+            if automaticVoiceTurnCompleted.count > automaticVoiceTurnSetLimit {
+                automaticVoiceTurnCompleted.remove(automaticVoiceTurnCompleted.first!)
+            }
+            voiceDraft = ""
+            voiceTurnID = nil
+            voiceProviderMessageID = nil
+            voiceDraftRevision = 0
+            notice = uiText("Voice turn handed off to Zoe.")
+        } catch {
+            recordAutomaticVoiceTurnDiagnostic(errorType: "processing_failed", errorSummary: RedactedDiagnostic(error).errorSummary, mediaEpoch: mediaEpoch)
+            notice = uiText("The voice turn could not be handed off; the draft was preserved.")
+        }
+    }
+
+    private func recordAutomaticVoiceTurnDiagnostic(errorType: String, errorSummary: String, mediaEpoch: UInt64) {
+        guard let api = voiceAPI else { return }
+        let session = voiceSession
+        Task { await api.recordDiagnosticAndWait(
+            phase: "voice_audio_turn_final",
+            requestPath: "/v1/voice/media",
+            errorType: String(errorType.prefix(64)),
+            errorSummary: String(errorSummary.prefix(128)),
+            voiceSessionID: session?.voiceSessionId,
+            voiceGeneration: session?.generation,
+            voiceMediaEpoch: mediaEpoch
+        ) }
     }
 
     private func listen(using api: APIClient) async {
