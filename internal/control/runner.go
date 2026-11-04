@@ -906,7 +906,9 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if observation.Kind == "result" || observation.Kind == "failure" {
+	// Successful results always carry a structured result. Failure observations
+	// may omit it when the runtime produced no partial assistant output.
+	if observation.Kind == "result" || (observation.Kind == "failure" && len(observation.Result) != 0) {
 		summary := string(observation.Result)
 		if len(summary) > 20000 {
 			summary = summary[:20000]
