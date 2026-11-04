@@ -175,6 +175,14 @@ public final class ZoeAppModel: ObservableObject {
         await handleVoiceMediaLoss(loss, mediaEpoch: mediaEpoch)
     }
 
+    func receiveDataChannelStateForTesting(_ state: RTCDataChannelState, mediaEpoch: UInt64) async {
+        await receiveDataChannelState(state, mediaEpoch: mediaEpoch)
+    }
+
+    func receiveConnectionStateForTesting(_ state: RTCPeerConnectionState, mediaEpoch: UInt64) async {
+        await receiveConnectionState(state, mediaEpoch: mediaEpoch)
+    }
+
     var voiceHeartbeatActiveForTesting: Bool { voiceHeartbeat.isActive }
 
     func installVoiceHeartbeatForTesting(_ task: Task<Void, Never>) {
@@ -905,7 +913,12 @@ public final class ZoeAppModel: ObservableObject {
             }
             transport?.onConnectionState = { [weak self] state in
                 Task { @MainActor in
-                    await self?.handleVoiceMediaLoss(VoiceMediaLoss.connection(state), mediaEpoch: mediaEpoch)
+                    await self?.receiveConnectionState(state, mediaEpoch: mediaEpoch)
+                }
+            }
+            transport?.onDataChannelState = { [weak self] state in
+                Task { @MainActor in
+                    await self?.receiveDataChannelState(state, mediaEpoch: mediaEpoch)
                 }
             }
             let offer = try await transport!.createOffer()
@@ -1149,6 +1162,7 @@ public final class ZoeAppModel: ObservableObject {
         voiceAudioSession = nil
         transport?.onDataMessage = nil
         transport?.onConnectionState = nil
+        transport?.onDataChannelState = nil
         audio?.onLifecycleEvent = nil
         await transport?.close()
         try? audio?.deactivate()
@@ -1157,6 +1171,20 @@ public final class ZoeAppModel: ObservableObject {
     private func handleVoiceMediaLoss(_ loss: VoiceMediaLoss, mediaEpoch: UInt64) async {
         guard mediaEpoch == voiceMediaEpoch else { return }
         guard let rawReason = loss.message else { return }
+        if let api = voiceAPI {
+            let (errorType, errorSummary): (String, String) = switch loss {
+            case let .connection(state): ("connection", String(describing: state))
+            case let .audio(event): ("audio", String(describing: event))
+            case let .dataChannel(state): ("data_channel", String(describing: state))
+            case .leaseRenewalFailed: ("lease", "lease_renewal_failed")
+            }
+            api.recordDiagnostic(
+                phase: "voice_media_loss",
+                requestPath: "/v1/voice/media",
+                errorType: errorType,
+                errorSummary: String(errorSummary.prefix(64))
+            )
+        }
         let reason: String
         if case let .leaseRenewalFailed(message) = loss {
             reason = uiFormat("The voice lease heartbeat failed: %@", message)
@@ -1177,6 +1205,15 @@ public final class ZoeAppModel: ObservableObject {
         voiceStartMediaLoss = (mediaEpoch, reason)
         voiceStatus = .interrupted(reason: uiFormat("%@ Stopping voice setup and releasing local media.", reason))
         await closeVoiceLocalMedia(mediaEpoch: mediaEpoch)
+    }
+
+    private func receiveConnectionState(_ state: RTCPeerConnectionState, mediaEpoch: UInt64) async {
+        await handleVoiceMediaLoss(.connection(state), mediaEpoch: mediaEpoch)
+    }
+
+    private func receiveDataChannelState(_ state: RTCDataChannelState, mediaEpoch: UInt64) async {
+        guard state == .closing || state == .closed else { return }
+        await handleVoiceMediaLoss(.dataChannel(state), mediaEpoch: mediaEpoch)
     }
 
     public func confirmVoiceDraftAsTask(title: String? = nil) async {

@@ -43,6 +43,7 @@ public final class LibWebRTCTransport: NSObject, WebRTCTransport, @unchecked Sen
 
     public var onDataMessage: (@Sendable (Data) -> Void)?
     public var onConnectionState: (@Sendable (RTCPeerConnectionState) -> Void)?
+    public var onDataChannelState: (@Sendable (RTCDataChannelState) -> Void)?
 
     public init(iceServers: [RTCIceServer] = [], dataChannelLabel: String = "oai-events") throws {
         RTCInitializeSSL()
@@ -193,7 +194,9 @@ extension LibWebRTCTransport: RTCPeerConnectionDelegate {
 }
 
 extension LibWebRTCTransport: RTCDataChannelDelegate {
-    public func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {}
+    public func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
+        onDataChannelState?(dataChannel.readyState)
+    }
     public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
         onDataMessage?(buffer.data)
     }
@@ -275,6 +278,7 @@ public enum VoiceIntegrationStatus: Equatable, Sendable {
 enum VoiceMediaLoss {
     case connection(RTCPeerConnectionState)
     case audio(VoiceAudioLifecycleEvent)
+    case dataChannel(RTCDataChannelState)
     case leaseRenewalFailed(String)
 
     var message: String? {
@@ -288,6 +292,8 @@ enum VoiceMediaLoss {
             }
         case .audio(.interrupted): "The system interrupted the voice audio session."
         case .audio(.routeUnavailable): "The previous voice audio route became unavailable."
+        case .dataChannel(.closing), .dataChannel(.closed): "The voice data channel was lost."
+        case .dataChannel: nil
         case let .leaseRenewalFailed(message): "The voice lease heartbeat failed: \(message)"
         }
     }
