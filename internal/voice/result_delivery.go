@@ -35,10 +35,78 @@ func (s *Service) resultDispatcher() {
 	for {
 		select {
 		case <-t.C:
+			s.consumeResultEvents(context.Background())
 			s.dispatchResults(context.Background())
 		case <-s.reaperStop:
 			return
 		}
+	}
+}
+
+// consumeResultEvents is the voice-owned boundary between control events and delivery rows.
+// Unknown tasks are durably recorded as failed so the cursor can advance without blocking later events.
+func (s *Service) consumeResultEvents(ctx context.Context) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	var last int64
+	if err = tx.QueryRowContext(ctx, `SELECT last_cursor FROM voice_result_cursor WHERE id=1`).Scan(&last); err != nil {
+		return
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT cursor,event_id,workspace_id,aggregate_id,payload FROM events WHERE event_type='task.assistant_message' AND cursor>? ORDER BY cursor LIMIT 25`, last)
+	if err != nil {
+		return
+	}
+	type event struct {
+		cursor                               int64
+		eventID, workspace, task, entry, run string
+	}
+	var events []event
+	for rows.Next() {
+		var e event
+		var payload []byte
+		if rows.Scan(&e.cursor, &e.eventID, &e.workspace, &e.task, &payload) != nil {
+			rows.Close()
+			return
+		}
+		var p struct {
+			Payload struct {
+				EntryID string `json:"entry_id"`
+				RunID   string `json:"run_id"`
+				TaskID  string `json:"task_id"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(payload, &p) != nil {
+			rows.Close()
+			return
+		}
+		e.entry, e.run = p.Payload.EntryID, p.Payload.RunID
+		if p.Payload.TaskID != "" {
+			e.task = p.Payload.TaskID
+		}
+		events = append(events, e)
+	}
+	rows.Close()
+	for _, e := range events {
+		var subject string
+		err := tx.QueryRowContext(ctx, `SELECT owner_subject_id FROM tasks WHERE id=? AND workspace_id=?`, e.task, e.workspace).Scan(&subject)
+		at := s.now().UTC().Format(time.RFC3339Nano)
+		if err == sql.ErrNoRows {
+			_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_result_deliveries(entry_id,workspace_id,task_id,run_id,subject_id,status,last_error_code,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,'','failed','task_unknown',?,?,?)`, e.entry, e.workspace, e.task, e.run, at, at, at)
+		} else if err == nil {
+			_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_result_deliveries(entry_id,workspace_id,task_id,run_id,subject_id,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,?,?)`, e.entry, e.workspace, e.task, e.run, subject, at, at, at)
+		}
+		if err != nil {
+			return
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE voice_result_cursor SET last_cursor=? WHERE id=1 AND last_cursor<?`, e.cursor, e.cursor); err != nil {
+			return
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return
 	}
 }
 

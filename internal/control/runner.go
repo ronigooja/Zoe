@@ -1193,24 +1193,6 @@ func appendEventTx(ctx context.Context, tx *sql.Tx, e contracts.Event) error {
 	if err != nil {
 		return err
 	}
-	if e.Type == "task.assistant_message" {
-		var p struct {
-			TaskID  string `json:"task_id"`
-			RunID   string `json:"run_id"`
-			EntryID string `json:"entry_id"`
-		}
-		if err := json.Unmarshal(e.Payload, &p); err != nil {
-			return err
-		}
-		var subject string
-		if err := tx.QueryRowContext(ctx, `SELECT owner_subject_id FROM tasks WHERE id=? AND workspace_id=?`, p.TaskID, e.WorkspaceID).Scan(&subject); err != nil {
-			return err
-		}
-		at := e.OccurredAt.UTC().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_result_deliveries(entry_id,workspace_id,task_id,run_id,subject_id,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,?,?)`, p.EntryID, e.WorkspaceID, p.TaskID, p.RunID, subject, at, at, at); err != nil {
-			return err
-		}
-	}
 	return enqueueEventNotification(ctx, tx, e)
 }
 func sameHash(a, b []byte) bool {

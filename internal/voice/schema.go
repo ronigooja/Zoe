@@ -152,7 +152,10 @@ ALTER TABLE voice_sessions ADD COLUMN gateway_context_chars INTEGER NOT NULL DEF
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-CREATE INDEX voice_result_deliveries_due ON voice_result_deliveries(status,next_attempt_at,created_at);`)
+
+ CREATE INDEX voice_result_deliveries_due ON voice_result_deliveries(status,next_attempt_at,created_at);
+ CREATE TABLE voice_result_cursor (id INTEGER PRIMARY KEY CHECK(id=1), last_cursor INTEGER NOT NULL);
+ INSERT INTO voice_result_cursor(id,last_cursor) VALUES(1,0);`)
 		return err
 	}}); err != nil {
 		return err

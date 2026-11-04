@@ -203,6 +203,38 @@ func TestVoiceHeartbeatTimeoutIsClamped(t *testing.T) {
 	}
 }
 
+func TestResultConsumerEnqueuesFromEventAndAdvancesCursor(t *testing.T) {
+	store, svc := newVoiceTestService(t, Config{Now: func() time.Time { return time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC) }})
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.DB().Exec(`INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('device-1','default','subject-1','test','approved',?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`INSERT INTO command_receipts(command_id,workspace_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES('cmd-1','default','subject-1','key',X'01','{}',?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,result,error,created_by_device_id,command_id,owner_subject_id) VALUES('task-1','default','title','goal','user','default','queued',1,?,?, '', '', 'device-1','cmd-1','subject-1')`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('event-1','default',1,1,'task.assistant_message',?,'task','task-1',1,?)`, now, `{"payload":{"task_id":"task-1","run_id":"run-1","entry_id":"entry-1"}}`); err != nil {
+		t.Fatal(err)
+	}
+	svc.consumeResultEvents(context.Background())
+	var status string
+	if err := store.DB().QueryRow(`SELECT status FROM voice_result_deliveries WHERE entry_id='entry-1'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" {
+		t.Fatalf("status=%q", status)
+	}
+	var cursor int64
+	if err := store.DB().QueryRow(`SELECT last_cursor FROM voice_result_cursor WHERE id=1`).Scan(&cursor); err != nil {
+		t.Fatal(err)
+	}
+	if cursor != 1 {
+		t.Fatalf("cursor=%d", cursor)
+	}
+}
+
 func TestVoiceTurnCommitRequiresConfirmationAndDeduplicatesStableRevision(t *testing.T) {
 	ctx := context.Background()
 	store, svc := newVoiceTestService(t, Config{})
