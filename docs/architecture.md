@@ -2,6 +2,10 @@
 
 This document records the current architecture and its boundaries. It describes responsibility and required behavior; it is not an implementation or delivery claim—see the [acceptance evidence register](acceptance/evidence.md) and [master plan](master-plan.md). [Product requirements](product.md) define the full scope. Archived research is historical provenance rather than a competing current design.
 
+## Result delivery
+
+Assistant task results are durably enqueued with their authoritative event and dispatched to the owner's active voice session as a bounded, sanitized context append. Without a live call they remain available through the existing notification path. Whether the voice model actually SPEAKS the appended text is UNVERIFIED pending a live-call experiment.
+
 ## System and authority
 
 Zoe is a private, self-hosted Linux Go control server with an independent Linux runner, SQLite WAL with `synchronous=FULL`, and native SwiftUI clients for macOS, iPhone, and iPad. The first release is single-instance and multi-project with one fixed owner principal. User/workspace boundaries remain explicit for future evolution.

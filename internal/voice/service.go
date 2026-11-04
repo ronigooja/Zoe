@@ -22,36 +22,40 @@ import (
 )
 
 type Config struct {
-	GatewayURL            string
-	GatewayAPIKey         string
-	HTTPClient            *http.Client
-	MaxOfferBytes         int64
-	AccountMediaLifecycle AccountMediaLifecycle
-	HeartbeatTimeout      time.Duration
-	Now                   func() time.Time
-	ContextAssembler      control.ContextAssembler
-	OpeningContextBudget  int
-	ContextCharBudget     int
-	OutcomeWriter         func(context.Context, contracts.Principal, string, string, string) error
-	UpstreamRoute         string
+	GatewayURL             string
+	GatewayAPIKey          string
+	HTTPClient             *http.Client
+	MaxOfferBytes          int64
+	AccountMediaLifecycle  AccountMediaLifecycle
+	HeartbeatTimeout       time.Duration
+	Now                    func() time.Time
+	ContextAssembler       control.ContextAssembler
+	OpeningContextBudget   int
+	ContextCharBudget      int
+	OutcomeWriter          func(context.Context, contracts.Principal, string, string, string) error
+	UpstreamRoute          string
+	ResultDeliveryEnabled  bool
+	ResultDeliveryInterval time.Duration
 }
 
 type Service struct {
-	db                *sql.DB
-	base              *url.URL
-	key               string
-	client            *http.Client
-	maxSDP            int64
-	accountMedia      AccountMediaLifecycle
-	heartbeatTimeout  time.Duration
-	now               func() time.Time
-	contextAssembler  control.ContextAssembler
-	openingBudget     int
-	contextCharBudget int
-	outcomeWriter     func(context.Context, contracts.Principal, string, string, string) error
-	upstreamRoute     string
-	reaperStop        chan struct{}
-	reaperDone        chan struct{}
+	db                     *sql.DB
+	base                   *url.URL
+	key                    string
+	client                 *http.Client
+	maxSDP                 int64
+	accountMedia           AccountMediaLifecycle
+	heartbeatTimeout       time.Duration
+	now                    func() time.Time
+	contextAssembler       control.ContextAssembler
+	openingBudget          int
+	contextCharBudget      int
+	outcomeWriter          func(context.Context, contracts.Principal, string, string, string) error
+	upstreamRoute          string
+	resultDeliveryEnabled  bool
+	resultDeliveryInterval time.Duration
+	reaperStop             chan struct{}
+	reaperDone             chan struct{}
 }
 
 type gatewayRequestIDContextKey struct{}
@@ -303,7 +307,11 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if route != "avas" {
 		route = "wm"
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	interval := cfg.ResultDeliveryInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func (s *Service) writeOutcome(ctx context.Context, p contracts.Principal, sessionID, summary, outcome string) error {
@@ -345,7 +353,12 @@ func (s *Service) rotateIfOverBudget(ctx context.Context, p contracts.Principal)
 	return err
 }
 
-func (s *Service) Start() { go s.reaper() }
+func (s *Service) Start() {
+	go s.reaper()
+	if s.resultDeliveryEnabled {
+		go s.resultDispatcher()
+	}
+}
 
 func (s *Service) Stop() {
 	select {

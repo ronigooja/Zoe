@@ -15,6 +15,7 @@ import (
 
 func composeControlServer(store *storage.Store, controlConfig control.Config, voiceConfig voice.Config, capabilityConfig capabilities.Config, memoryConfig memory.DerivedConfig) (*control.Server, error) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("ZOE_VOICE_ACCOUNT_MEDIA_ENABLED")), "true") {
+		voiceConfig.ResultDeliveryEnabled = true
 		adapter, err := voice.NewSpaceAccountMediaAdapter(voiceConfig.GatewayURL, voiceConfig.GatewayAPIKey, voiceConfig.HTTPClient)
 		if err != nil {
 			return nil, err
