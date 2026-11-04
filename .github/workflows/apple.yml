@@ -263,7 +263,7 @@ jobs:
           done
 
   release:
-    if: github.event_name == 'workflow_dispatch' && inputs.release && (inputs.platform == 'all' || inputs.platform == 'macos')
+    if: github.event_name == 'workflow_dispatch' && inputs.release && (inputs.platform == 'all' || inputs.platform == 'macos' || inputs.platform == 'ios')
     needs: [apple-checks]
     runs-on: macos-15
     timeout-minutes: 30
@@ -288,13 +288,14 @@ jobs:
           } > "$CI_OUTPUT/logs/environment.txt" 2>&1
 
       - name: Download successful macOS build
+        if: inputs.platform == 'all' || inputs.platform == 'macos'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: apple-macos-build-${{ github.sha }}
           path: ${{ env.CI_OUTPUT }}/artifacts
 
       - name: Download successful iOS build
-        if: inputs.platform == 'all'
+        if: inputs.platform == 'all' || inputs.platform == 'ios'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: apple-ios-build-${{ github.sha }}
@@ -307,14 +308,18 @@ jobs:
           trap 'status=$?; tail -n 80 "$CI_OUTPUT/logs/package.log" >&2; exit "$status"' ERR
           (
             mkdir -p "$CI_OUTPUT/artifacts"
-            if [[ "${{ inputs.platform }}" == all ]]; then
+            platform="${{ inputs.platform }}"
+            if [[ "$platform" == all || "$platform" == ios ]]; then
               tar -xf "$CI_OUTPUT/ios-build/ios-build.tar" -C "$CI_OUTPUT/ios-build"
               ditto -c -k --sequesterRsrc --keepParent \
                 "$CI_OUTPUT/ios-build/ZoeMobile.app" "$CI_OUTPUT/artifacts/ZoeMobile-unsigned.app.zip"
             fi
             cd "$CI_OUTPUT/artifacts"
-            shasum -a 256 *.dmg > SHA256SUMS
-            if [[ "${{ inputs.platform }}" == all ]]; then
+            : > SHA256SUMS
+            if [[ "$platform" == all || "$platform" == macos ]]; then
+              shasum -a 256 *.dmg >> SHA256SUMS
+            fi
+            if [[ "$platform" == all || "$platform" == ios ]]; then
               shasum -a 256 *.zip >> SHA256SUMS
             fi
           ) > "$CI_OUTPUT/logs/package.log" 2>&1

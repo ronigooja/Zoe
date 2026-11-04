@@ -58,7 +58,7 @@ gh workflow run apple.yml --ref main -f release=true
 gh workflow run linux.yml --ref main -f release=true
 ```
 
-The Apple release defaults to `platform=macos` and packages `ZoeMac-unsigned.dmg` with `SHA256SUMS`; `-f platform=all` also packages the iOS app.
+The Apple release defaults to `platform=macos` and packages `ZoeMac-unsigned.dmg` with `SHA256SUMS`; `-f platform=ios` packages only `ZoeMobile-unsigned.app.zip`; `-f platform=all` packages both.
 
 Without `release=true`, those manual workflows perform full platform checks
 without release packages. Apple artifacts remain unsigned; artifact creation does
