@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -294,6 +295,151 @@ func TestVoiceTaskAdmissionBindsStableTurnAcrossRevisions(t *testing.T) {
 	var apiErr *control.APIError
 	if !errors.As(err, &apiErr) || apiErr.Code != "voice_turn_already_dispatched" {
 		t.Fatalf("later revision created another task for stable turn: err=%v", err)
+	}
+}
+
+func handoffHTTPServer(t *testing.T) (*httptest.Server, *storage.Store, string) {
+	t.Helper()
+	ctx := context.Background()
+	store, err := storage.Open(ctx, storage.Config{Path: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = storage.RegisterCoreMigrations(store); err != nil {
+		t.Fatal(err)
+	}
+	if err = control.RegisterInstanceMaintenanceMigration(store); err != nil {
+		t.Fatal(err)
+	}
+	// Voice migrations are registered by Register below; the schema must exist
+	// before the authenticated server starts serving the production route.
+	key := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	server, err := control.NewServer(store, control.Config{Profiles: map[string]control.RuntimeProfile{
+		"zoe-steward": {ID: "zoe-steward", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "steward", IsolationPolicy: "opencode-workspace-write-v1", PermissionTier: "read_only_research"},
+	}, DefaultProfileID: "zoe-steward"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = Register(server, store, Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = control.InitializeInstanceAuth(ctx, store, key); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(server.Handler())
+	t.Cleanup(func() { ts.Close(); server.Shutdown(); _ = store.Close() })
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err = store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('handoff-session','default','owner','instance','request',X'01',1,'active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	return ts, store, key
+}
+
+func handoffCommand(t *testing.T, client *http.Client, base, key, idempotency, kind string, payload any) (int, contracts.CommandReceipt, string) {
+	t.Helper()
+	body, _ := json.Marshal(contracts.CommandRequest{Kind: kind, Payload: mustJSON(payload)})
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/commands", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Idempotency-Key", idempotency)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	var receipt contracts.CommandReceipt
+	_ = json.Unmarshal(raw, &receipt)
+	return resp.StatusCode, receipt, string(raw)
+}
+
+func mustJSON(value any) json.RawMessage {
+	raw, _ := json.Marshal(value)
+	return raw
+}
+
+func TestVoiceHandoffHTTPRejectsReplayConflictAndStaleGeneration(t *testing.T) {
+	ts, store, key := handoffHTTPServer(t)
+	content := "research the current release notes"
+	hash := sha256.Sum256([]byte(content))
+	_, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "commit-1", "voice.turn.commit", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "turn-1", "revision": 1, "content": content, "user_confirmed": true})
+	if strings.Contains(raw, `"status":"accepted"`) == false {
+		t.Fatalf("commit failed: %s", raw)
+	}
+	payload := map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "turn-1", "revision": 1, "content_hash": fmt.Sprintf("%x", hash[:])}
+	status, first, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-1", "voice.turn.handoff", payload)
+	if status != http.StatusOK || first.ResourceID == "" {
+		t.Fatalf("handoff failed: status=%d body=%s", status, raw)
+	}
+	status, second, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-1", "voice.turn.handoff", payload)
+	if status != http.StatusOK || second.ResourceID != first.ResourceID {
+		t.Fatalf("idempotent replay changed receipt: status=%d body=%s", status, raw)
+	}
+	payload["content_hash"] = strings.Repeat("0", 64)
+	if status, _, _ = handoffCommand(t, ts.Client(), ts.URL, key, "handoff-conflict", "voice.turn.handoff", payload); status != http.StatusConflict {
+		t.Fatalf("conflicting hash status=%d, want 409", status)
+	}
+	_, _ = store.DB().Exec(`UPDATE voice_sessions SET state='ended',generation=2 WHERE id='handoff-session'`)
+	payload["generation"] = 1
+	payload["content_hash"] = fmt.Sprintf("%x", hash[:])
+	if status, _, _ = handoffCommand(t, ts.Client(), ts.URL, key, "handoff-stale", "voice.turn.handoff", payload); status != http.StatusConflict {
+		t.Fatalf("stale generation status=%d, want 409", status)
+	}
+}
+
+func TestVoiceHandoffHTTPLowImpactUsesStewardTaskAdmission(t *testing.T) {
+	ts, store, key := handoffHTTPServer(t)
+	content := "research the current release notes"
+	hash := sha256.Sum256([]byte(content))
+	if status, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "commit-low", "voice.turn.commit", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "turn-low", "revision": 1, "content": content, "user_confirmed": true}); status != http.StatusOK {
+		t.Fatalf("commit status=%d body=%s", status, raw)
+	}
+	status, receipt, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-low", "voice.turn.handoff", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "turn-low", "revision": 1, "content_hash": fmt.Sprintf("%x", hash[:])})
+	if status != http.StatusOK {
+		t.Fatalf("handoff status=%d body=%s", status, raw)
+	}
+	var source, profile, taskStatus string
+	if err := store.DB().QueryRow(`SELECT source,profile_id,status FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&source, &profile, &taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if source != "voice" || profile != "zoe-steward" || taskStatus != "queued" {
+		t.Fatalf("task admission source=%q profile=%q status=%q", source, profile, taskStatus)
+	}
+}
+
+func TestVoiceHandoffHTTPFailClosedForHighImpactAndAmbiguousRequests(t *testing.T) {
+	for _, tc := range []struct{ name, text string }{{"high", "delete the old project"}, {"ambiguous", "please handle this"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, store, key := handoffHTTPServer(t)
+			hash := sha256.Sum256([]byte(tc.text))
+			if status, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "commit-"+tc.name, "voice.turn.commit", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "turn-" + tc.name, "revision": 1, "content": tc.text, "user_confirmed": true}); status != http.StatusOK {
+				t.Fatalf("commit status=%d body=%s", status, raw)
+			}
+			status, receipt, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-"+tc.name, "voice.turn.handoff", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "turn-" + tc.name, "revision": 1, "content_hash": fmt.Sprintf("%x", hash[:])})
+			if status != http.StatusOK {
+				t.Fatalf("handoff status=%d body=%s", status, raw)
+			}
+			var taskStatus, interaction string
+			if err := store.DB().QueryRow(`SELECT status,interaction_state FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&taskStatus, &interaction); err != nil {
+				t.Fatal(err)
+			}
+			if taskStatus != "waiting" || interaction != "explicit_confirmation" {
+				t.Fatalf("request bypassed confirmation: status=%q interaction=%q", taskStatus, interaction)
+			}
+			appendStatus, _, appendRaw := handoffCommand(t, ts.Client(), ts.URL, key, "append-"+tc.name, "task.append", map[string]any{"task_id": receipt.ResourceID, "content": "yes, proceed"})
+			if appendStatus != http.StatusConflict || !strings.Contains(appendRaw, `"code":"confirmation_invalid"`) {
+				t.Fatalf("ordinary task.append bypassed scoped confirmation: status=%d body=%s", appendStatus, appendRaw)
+			}
+			var entryCount int
+			if err := store.DB().QueryRow(`SELECT count(*) FROM task_entries WHERE task_id=? AND content='yes, proceed'`, receipt.ResourceID).Scan(&entryCount); err != nil {
+				t.Fatal(err)
+			}
+			if entryCount != 0 {
+				t.Fatalf("rejected confirmation append persisted %d entry/entries", entryCount)
+			}
+		})
 	}
 }
 

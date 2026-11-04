@@ -342,6 +342,98 @@ type commitTurnPayload struct {
 	UserConfirmed   bool   `json:"user_confirmed"`
 }
 
+type handoffPayload struct {
+	SessionID   string `json:"session_id"`
+	Generation  int64  `json:"generation"`
+	TurnID      string `json:"turn_id"`
+	Revision    int64  `json:"revision"`
+	ContentHash string `json:"content_hash"`
+}
+
+// commandHandoff is the server-owned boundary between a stable voice turn and
+// Steward. It deliberately does not accept an impact level or routing decision
+// from the caller. Low-impact research is admitted as a zoe-steward task;
+// high-impact or unknown requests are durably held for a later server-owned
+// confirmation flow and never become runnable work.
+func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest, server *control.Server) (contracts.CommandResult, []contracts.Event, error) {
+	if !control.HasScope(cmd.Principal, "client:command") && !control.HasScope(cmd.Principal, "voice:turn:commit") {
+		return contracts.CommandResult{}, nil, apiError(http.StatusForbidden, "forbidden", "voice handoff scope is required", nil)
+	}
+	var p handoffPayload
+	if err := decodePayload(req.Payload, &p); err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	if p.SessionID == "" || p.Generation < 1 || p.TurnID == "" || p.Revision < 1 || len(p.ContentHash) != sha256.Size*2 {
+		return contracts.CommandResult{}, nil, apiError(http.StatusBadRequest, "invalid_request", "session, generation, turn revision, and content hash are required", nil)
+	}
+	var owner, device, state string
+	var generation int64
+	if err := tx.QueryRowContext(ctx, `SELECT owner_id,device_id,state,generation FROM voice_sessions WHERE workspace_id=? AND id=?`, cmd.Principal.WorkspaceID, p.SessionID).Scan(&owner, &device, &state, &generation); errors.Is(err, sql.ErrNoRows) {
+		return contracts.CommandResult{}, nil, apiError(http.StatusNotFound, "voice_session_not_found", "voice session was not found", nil)
+	} else if err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	if owner != cmd.Principal.SubjectID || device != cmd.Principal.DeviceID {
+		return contracts.CommandResult{}, nil, apiError(http.StatusForbidden, "invalid_source", "voice turn belongs to another subject or device", nil)
+	}
+	if state != "active" || generation != p.Generation {
+		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_generation_stale", "voice handoff belongs to an inactive media generation", nil)
+	}
+	var taskID, content string
+	var storedHash []byte
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(l.task_id,''),v.content,v.content_hash FROM voice_turns v LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&taskID, &content, &storedHash); errors.Is(err, sql.ErrNoRows) {
+		return contracts.CommandResult{}, nil, apiError(http.StatusNotFound, "voice_turn_not_found", "confirmed voice turn revision was not found", nil)
+	} else if err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	providedHash, err := hex.DecodeString(p.ContentHash)
+	if err != nil || !bytes.Equal(storedHash, providedHash) {
+		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "turn_content_conflict", "handoff content hash does not match the committed turn", nil)
+	}
+	if taskID != "" {
+		return contracts.CommandResult{ResourceType: "task", ResourceID: taskID}, nil, nil
+	}
+	content = strings.TrimSpace(content)
+	impact := classifyHandoff(content)
+	ref, _ := json.Marshal(voiceTaskSourceReference{Kind: "voice_turn", SessionID: p.SessionID, Generation: p.Generation, TurnID: p.TurnID, Revision: p.Revision, ContentHash: p.ContentHash})
+	admission, err := server.AdmitTaskTx(ctx, tx, control.AdmissionContext{Principal: cmd.Principal, Source: "voice", SourceRef: ref, IdempotencyKey: cmd.CommandID, ProfileID: "zoe-steward", Title: content, Goal: content, InitialMessage: content, AcceptedAt: cmd.AcceptedAt})
+	if err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	events := admission.Events
+	status := "queued"
+	if impact != "low" {
+		status = "waiting"
+		// This is deliberately an incomplete explicit-confirmation context:
+		// there is no real run or proposed action yet, so inventing either would
+		// grant authority. task.append rejects this state with confirmation_invalid
+		// before inserting an entry or changing the task status. A future
+		// server-owned command must create the scoped run/action/expiry context.
+		question := "This spoken request needs a server-owned scoped confirmation before any high-impact action can run."
+		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status='waiting',interaction_state='explicit_confirmation',interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, question, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), admission.Task.ID, cmd.Principal.WorkspaceID); err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
+	}
+	handoffEvent, _ := json.Marshal(map[string]any{"task_id": admission.Task.ID, "turn_id": p.TurnID, "revision": p.Revision, "content_hash": p.ContentHash, "profile_id": "zoe-steward", "impact": impact, "status": status})
+	events = append(events, contracts.Event{Type: "voice.turn.handoff", AggregateType: "voice_session", AggregateID: p.SessionID, AggregateVersion: p.Generation, Payload: handoffEvent})
+	return contracts.CommandResult{ResourceType: "task", ResourceID: admission.Task.ID, ResourceVersion: admission.Task.Version}, events, nil
+}
+
+func classifyHandoff(content string) string {
+	lower := strings.ToLower(content)
+	for _, marker := range []string{"delete", "send", "spend", "deploy", "permission", "删除", "发送", "付款", "部署", "权限"} {
+		if strings.Contains(lower, marker) {
+			return "high"
+		}
+	}
+	for _, marker := range []string{"research", "summarize", "summary", "查找", "研究", "总结", "调研"} {
+		if strings.Contains(lower, marker) {
+			return "low"
+		}
+	}
+	return "ambiguous"
+}
+
 func (s *Service) commandCommitTurn(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
 	if !control.HasScope(cmd.Principal, "client:command") && !control.HasScope(cmd.Principal, "voice:turn:commit") {
 		return contracts.CommandResult{}, nil, apiError(http.StatusForbidden, "forbidden", "voice turn commit scope is required", nil)
@@ -493,11 +585,12 @@ type linkTaskPayload struct {
 }
 
 type voiceTaskSourceReference struct {
-	Kind       string `json:"kind"`
-	SessionID  string `json:"voice_session_id"`
-	Generation int64  `json:"generation"`
-	TurnID     string `json:"turn_id"`
-	Revision   int64  `json:"revision"`
+	Kind        string `json:"kind"`
+	SessionID   string `json:"voice_session_id"`
+	Generation  int64  `json:"generation"`
+	TurnID      string `json:"turn_id"`
+	Revision    int64  `json:"revision"`
+	ContentHash string `json:"content_hash,omitempty"`
 }
 
 // admitVoiceTask binds a confirmed stable turn to the task inside the same
