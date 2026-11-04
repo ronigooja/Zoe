@@ -263,7 +263,7 @@ jobs:
           done
 
   release:
-    if: github.event_name == 'workflow_dispatch' && inputs.release && (inputs.platform == 'all' || inputs.platform == 'macos' || inputs.platform == 'ios')
+    if: always() && needs.apple-checks.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.release && (inputs.platform == 'all' || inputs.platform == 'macos' || inputs.platform == 'ios')
     needs: [apple-checks]
     runs-on: macos-15
     timeout-minutes: 30
