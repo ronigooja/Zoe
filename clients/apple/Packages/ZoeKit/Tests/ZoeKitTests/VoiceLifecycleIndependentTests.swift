@@ -43,6 +43,13 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
     }
 
     @MainActor
+    private func wiredTransport(for model: ZoeAppModel, mediaEpoch: UInt64) throws -> LibWebRTCTransport {
+        let transport = try LibWebRTCTransport()
+        model.wireVoiceTransportForTesting(transport, mediaEpoch: mediaEpoch)
+        return transport
+    }
+
+    @MainActor
     func testContinuousVoicePreferenceDefaultsOffAndPersists() throws {
         let suite = UserDefaults(suiteName: UUID().uuidString)!
         let first = ZoeAppModel(defaults: suite)
@@ -128,8 +135,12 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let api = try voiceAPI(installationID: installationID)
         let session = VoiceSessionResponse(voiceSessionId: "closed-session", generation: 1, state: "active", answerSdp: "")
         let epoch = model.installVoiceSessionForTesting(session, api: api)
-        await model.receiveDataChannelStateForTesting(.closed, mediaEpoch: epoch)
-        await model.receiveDataChannelStateForTesting(.closed, mediaEpoch: epoch)
+        let transport = try wiredTransport(for: model, mediaEpoch: epoch)
+        transport.driveDataChannelStateForTesting(.closed)
+        for _ in 0..<20 {
+            if case .interrupted = model.voiceStatus { break }
+            await Task.yield()
+        }
         let events = try await recordedDiagnostics(for: installationID)
         XCTAssertEqual(events.filter { $0.phase == "voice_media_loss" }.count, 1)
         XCTAssertEqual(events.first?.errorType, "data_channel")
@@ -141,8 +152,10 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
     func testOpenAndConnectingDataChannelStatesDoNothing() async throws {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let epoch = model.beginVoiceAttemptForTesting()
-        await model.receiveDataChannelStateForTesting(.connecting, mediaEpoch: epoch)
-        await model.receiveDataChannelStateForTesting(.open, mediaEpoch: epoch)
+        let transport = try wiredTransport(for: model, mediaEpoch: epoch)
+        transport.driveDataChannelStateForTesting(.connecting)
+        transport.driveDataChannelStateForTesting(.open)
+        await Task.yield()
         XCTAssertEqual(model.voiceStatus, .connecting)
         XCTAssertTrue(model.canContinueVoiceAttemptForTesting(epoch))
     }
@@ -155,7 +168,9 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let session = VoiceSessionResponse(voiceSessionId: "stale-session", generation: 1, state: "active", answerSdp: "")
         let staleEpoch = model.installVoiceSessionForTesting(session, api: api)
         _ = model.beginVoiceAttemptForTesting()
-        await model.receiveDataChannelStateForTesting(.closed, mediaEpoch: staleEpoch)
+        let transport = try wiredTransport(for: model, mediaEpoch: staleEpoch)
+        transport.driveDataChannelStateForTesting(.closed)
+        await Task.yield()
         XCTAssertEqual(model.voiceStatus, .connecting)
         let events = try await recordedDiagnostics(for: installationID)
         XCTAssertTrue(events.isEmpty)
@@ -168,7 +183,12 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let api = try voiceAPI(installationID: installationID)
         let session = VoiceSessionResponse(voiceSessionId: "failed-session", generation: 1, state: "active", answerSdp: "")
         let epoch = model.installVoiceSessionForTesting(session, api: api)
-        await model.receiveConnectionStateForTesting(.failed, mediaEpoch: epoch)
+        let transport = try wiredTransport(for: model, mediaEpoch: epoch)
+        transport.driveConnectionStateForTesting(.failed)
+        for _ in 0..<20 {
+            if case .interrupted = model.voiceStatus { break }
+            await Task.yield()
+        }
         let events = try await recordedDiagnostics(for: installationID)
         XCTAssertEqual(events.filter { $0.phase == "voice_media_loss" }.count, 1)
         XCTAssertEqual(events.first?.errorType, "connection")
@@ -183,11 +203,15 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         model.setContinuousVoiceEnabled(true)
         let epoch = model.installVoiceSessionForTesting(session, api: api)
         var observedReconnecting = false
+        model.voiceStatusObserverForTesting = { status in
+            if case .reconnecting = status { observedReconnecting = true }
+        }
         model.voiceHangupOverrideForTesting = { _ in
-            if case .reconnecting = model.voiceStatus { observedReconnecting = true }
             return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
         }
-        await model.receiveDataChannelStateForTesting(.closing, mediaEpoch: epoch)
+        let transport = try wiredTransport(for: model, mediaEpoch: epoch)
+        transport.driveDataChannelStateForTesting(.closing)
+        await Task.yield()
         XCTAssertTrue(observedReconnecting)
     }
 

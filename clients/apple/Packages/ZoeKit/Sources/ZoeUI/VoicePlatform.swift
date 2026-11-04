@@ -40,6 +40,9 @@ public final class LibWebRTCTransport: NSObject, WebRTCTransport, @unchecked Sen
     private let dataChannel: RTCDataChannel
     private let lock = NSLock()
     private var isClosed = false
+#if DEBUG
+    private var dataChannelStateOverrideForTesting: RTCDataChannelState?
+#endif
 
     public var onDataMessage: (@Sendable (Data) -> Void)?
     public var onConnectionState: (@Sendable (RTCPeerConnectionState) -> Void)?
@@ -195,8 +198,24 @@ extension LibWebRTCTransport: RTCPeerConnectionDelegate {
 
 extension LibWebRTCTransport: RTCDataChannelDelegate {
     public func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
+        #if DEBUG
+        onDataChannelState?(dataChannelStateOverrideForTesting ?? dataChannel.readyState)
+        #else
         onDataChannelState?(dataChannel.readyState)
+        #endif
     }
+
+#if DEBUG
+    func driveDataChannelStateForTesting(_ state: RTCDataChannelState) {
+        dataChannelStateOverrideForTesting = state
+        dataChannelDidChangeState(dataChannel)
+        dataChannelStateOverrideForTesting = nil
+    }
+
+    func driveConnectionStateForTesting(_ state: RTCPeerConnectionState) {
+        peerConnection(self.peerConnection, didChange: state)
+    }
+#endif
     public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
         onDataMessage?(buffer.data)
     }

@@ -90,6 +90,7 @@ public final class ZoeAppModel: ObservableObject {
     var snapshotFetchOverrideForTesting: (() async throws -> Snapshot)?
     var pendingCommandReadOverrideForTesting: (() async throws -> [PendingCommand])?
     var voiceLocalMediaStopObserverForTesting: (() -> Void)?
+    var voiceStatusObserverForTesting: ((VoiceIntegrationStatus) -> Void)?
     var voiceHangupOverrideForTesting: ((String) async throws -> VoiceOperationResponse)?
 
     func setCapabilityDeploymentsForTesting(_ deployments: [CapabilityDeployment]) {
@@ -175,12 +176,8 @@ public final class ZoeAppModel: ObservableObject {
         await handleVoiceMediaLoss(loss, mediaEpoch: mediaEpoch)
     }
 
-    func receiveDataChannelStateForTesting(_ state: RTCDataChannelState, mediaEpoch: UInt64) async {
-        await receiveDataChannelState(state, mediaEpoch: mediaEpoch)
-    }
-
-    func receiveConnectionStateForTesting(_ state: RTCPeerConnectionState, mediaEpoch: UInt64) async {
-        await receiveConnectionState(state, mediaEpoch: mediaEpoch)
+    func wireVoiceTransportForTesting(_ transport: LibWebRTCTransport, mediaEpoch: UInt64) {
+        wireVoiceTransport(transport, mediaEpoch: mediaEpoch)
     }
 
     var voiceHeartbeatActiveForTesting: Bool { voiceHeartbeat.isActive }
@@ -908,19 +905,7 @@ public final class ZoeAppModel: ObservableObject {
             diagnosticPhase = "webrtc_offer"
             transport = try LibWebRTCTransport(iceServers: iceServers, dataChannelLabel: config.webRTC.dataChannel.label)
             voiceTransport = transport
-            transport?.onDataMessage = { [weak self] data in
-                Task { @MainActor in self?.receiveVoiceData(data, generation: generation, mediaEpoch: mediaEpoch) }
-            }
-            transport?.onConnectionState = { [weak self] state in
-                Task { @MainActor in
-                    await self?.receiveConnectionState(state, mediaEpoch: mediaEpoch)
-                }
-            }
-            transport?.onDataChannelState = { [weak self] state in
-                Task { @MainActor in
-                    await self?.receiveDataChannelState(state, mediaEpoch: mediaEpoch)
-                }
-            }
+            wireVoiceTransport(transport!, generation: generation, mediaEpoch: mediaEpoch)
             let offer = try await transport!.createOffer()
             guard generation == connectionGeneration.value, mediaEpoch == voiceMediaEpoch else { throw CancellationError() }
             diagnosticPhase = "session_create"
@@ -1192,7 +1177,12 @@ public final class ZoeAppModel: ObservableObject {
             reason = uiText(rawReason)
         }
         if let session = voiceSession, let api = voiceAPI, voiceSessionMediaEpoch == mediaEpoch {
-            if continuousVoiceEnabled { voiceStatus = .reconnecting(reason: reason) }
+            if continuousVoiceEnabled {
+                voiceStatus = .reconnecting(reason: reason)
+                #if DEBUG
+                voiceStatusObserverForTesting?(voiceStatus)
+                #endif
+            }
             await finishVoiceSession(session, api: api, mediaEpoch: mediaEpoch, lossReason: reason)
             if continuousVoiceEnabled {
                 Task { @MainActor [weak self] in
@@ -1205,6 +1195,22 @@ public final class ZoeAppModel: ObservableObject {
         voiceStartMediaLoss = (mediaEpoch, reason)
         voiceStatus = .interrupted(reason: uiFormat("%@ Stopping voice setup and releasing local media.", reason))
         await closeVoiceLocalMedia(mediaEpoch: mediaEpoch)
+    }
+
+    private func wireVoiceTransport(_ transport: LibWebRTCTransport, generation: UInt64 = 0, mediaEpoch: UInt64) {
+        transport.onDataMessage = { [weak self] data in
+            Task { @MainActor in self?.receiveVoiceData(data, generation: generation, mediaEpoch: mediaEpoch) }
+        }
+        transport.onConnectionState = { [weak self] state in
+            Task { @MainActor in
+                await self?.receiveConnectionState(state, mediaEpoch: mediaEpoch)
+            }
+        }
+        transport.onDataChannelState = { [weak self] state in
+            Task { @MainActor in
+                await self?.receiveDataChannelState(state, mediaEpoch: mediaEpoch)
+            }
+        }
     }
 
     private static func voiceConnectionStateName(_ state: RTCPeerConnectionState) -> String {
