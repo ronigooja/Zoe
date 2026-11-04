@@ -93,6 +93,13 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
     }
 
     @MainActor
+    private func waitForVoiceDraftCleared(_ model: ZoeAppModel) async {
+        for _ in 0..<2000 where !model.voiceDraft.isEmpty {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
+
+    @MainActor
     func testAuthoritativeUserAudioTurnFinalCommitsAndHandsOffExactlyOnce() async throws {
         VoiceFinalURLProtocol.requests = []
         VoiceFinalURLProtocol.responseHandler = { request in
@@ -104,6 +111,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let event = Data(#"{"type":"user_audio_turn.final","turn_id":"turn-1","revision":1,"transcript":"  research Zoe  "}"#.utf8)
         await model.receiveVoiceDataForTesting(event, mediaEpoch: epoch)
         await waitForVoiceFinalRequests(2)
+        await waitForVoiceDraftCleared(model)
         await model.receiveVoiceDataForTesting(event, mediaEpoch: epoch)
         await Task.yield()
         XCTAssertEqual(VoiceFinalURLProtocol.requests.filter { $0.httpMethod == "POST" }.count, 2)
