@@ -425,8 +425,19 @@ func TestVoiceHandoffHTTPFailClosedForHighImpactAndAmbiguousRequests(t *testing.
 			if err := store.DB().QueryRow(`SELECT status,interaction_state FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&taskStatus, &interaction); err != nil {
 				t.Fatal(err)
 			}
-			if taskStatus != "waiting" || interaction != "awaiting_message" {
+			if taskStatus != "waiting" || interaction != "explicit_confirmation" {
 				t.Fatalf("request bypassed confirmation: status=%q interaction=%q", taskStatus, interaction)
+			}
+			appendStatus, _, appendRaw := handoffCommand(t, ts.Client(), ts.URL, key, "append-"+tc.name, "task.append", map[string]any{"task_id": receipt.ResourceID, "content": "yes, proceed"})
+			if appendStatus != http.StatusConflict || !strings.Contains(appendRaw, `"code":"confirmation_invalid"`) {
+				t.Fatalf("ordinary task.append bypassed scoped confirmation: status=%d body=%s", appendStatus, appendRaw)
+			}
+			var entryCount int
+			if err := store.DB().QueryRow(`SELECT count(*) FROM task_entries WHERE task_id=? AND content='yes, proceed'`, receipt.ResourceID).Scan(&entryCount); err != nil {
+				t.Fatal(err)
+			}
+			if entryCount != 0 {
+				t.Fatalf("rejected confirmation append persisted %d entry/entries", entryCount)
 			}
 		})
 	}

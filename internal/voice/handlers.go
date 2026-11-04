@@ -404,8 +404,13 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	status := "queued"
 	if impact != "low" {
 		status = "waiting"
-		question := "This spoken request needs explicit server confirmation before any high-impact action can run."
-		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status='waiting',interaction_state='awaiting_message',interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, question, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), admission.Task.ID, cmd.Principal.WorkspaceID); err != nil {
+		// This is deliberately an incomplete explicit-confirmation context:
+		// there is no real run or proposed action yet, so inventing either would
+		// grant authority. task.append rejects this state with confirmation_invalid
+		// before inserting an entry or changing the task status. A future
+		// server-owned command must create the scoped run/action/expiry context.
+		question := "This spoken request needs a server-owned scoped confirmation before any high-impact action can run."
+		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status='waiting',interaction_state='explicit_confirmation',interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, question, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), admission.Task.ID, cmd.Principal.WorkspaceID); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 	}
