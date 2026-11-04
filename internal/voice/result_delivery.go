@@ -13,6 +13,9 @@ import (
 
 const resultDeliveryMaxAttempts = 3
 
+// resultDeliveryLease bounds how long a claimed delivery is hidden from other dispatchers.
+const resultDeliveryLease = 30 * time.Second
+
 func boundedResultText(text string) string {
 	var b strings.Builder
 	for _, r := range text {
@@ -116,18 +119,33 @@ func (s *Service) dispatchResults(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	defer rows.Close()
+	// Collect due rows and release the cursor before delivering: deliverResult
+	// writes through the same pool, and an open result set would hold the only
+	// SQLite connection and deadlock the dispatcher.
+	type due struct {
+		id, workspace, task, run, subject string
+		attempts                          int
+	}
+	var batch []due
 	for rows.Next() {
-		var id, ws, task, run, subject string
-		var attempts int
-		if rows.Scan(&id, &ws, &task, &run, &subject, &attempts) == nil {
-			s.deliverResult(ctx, id, ws, task, run, subject, attempts)
+		var d due
+		if rows.Scan(&d.id, &d.workspace, &d.task, &d.run, &d.subject, &d.attempts) == nil {
+			batch = append(batch, d)
 		}
+	}
+	rows.Close()
+	for _, d := range batch {
+		s.deliverResult(ctx, d.id, d.workspace, d.task, d.run, d.subject, d.attempts)
 	}
 }
 
 func (s *Service) deliverResult(ctx context.Context, id, workspace, task, run, subject string, attempts int) {
-	res, err := s.db.ExecContext(ctx, `UPDATE voice_result_deliveries SET attempts=attempts+1,updated_at=? WHERE entry_id=? AND status='pending' AND attempts=?`, s.now().UTC().Format(time.RFC3339Nano), id, attempts)
+	// Claim the row with a short lease: attempts is the compare-and-set token and
+	// next_attempt_at moves into the future, so a concurrent dispatcher that
+	// already read this row can no longer win it and, if this process dies mid
+	// send, the row becomes due again after the lease.
+	now := s.now().UTC()
+	res, err := s.db.ExecContext(ctx, `UPDATE voice_result_deliveries SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE entry_id=? AND status='pending' AND attempts=? AND next_attempt_at<=?`, now.Add(resultDeliveryLease).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts, now.Format(time.RFC3339Nano))
 	if err != nil {
 		return
 	}
