@@ -33,7 +33,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
     }
 
     private func recordedDiagnostics(for installationID: String) async throws -> [DiagnosticEvent] {
-        let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: URL(string: "https://voice-independent.example")!, installationID: installationID))
+        let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: try voiceAPI(installationID: installationID).serverURL, installationID: installationID))
         for _ in 0..<20 {
             let events = await queue.take(limit: 20)
             if !events.isEmpty { return events }
@@ -145,6 +145,10 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         XCTAssertEqual(events.filter { $0.phase == "voice_media_loss" }.count, 1)
         XCTAssertEqual(events.first?.errorType, "data_channel")
         XCTAssertEqual(events.first?.errorSummary, "closed")
+        XCTAssertEqual(events.first?.voiceSessionID, "closed-session")
+        XCTAssertEqual(events.first?.voiceGeneration, 1)
+        XCTAssertEqual(events.first?.voiceMediaEpoch, epoch)
+        XCTAssertEqual(events.first?.voiceDataChannelState, "closed")
         guard case .interrupted = model.voiceStatus else { return XCTFail("closed data channel must stop voice") }
     }
 
@@ -225,4 +229,5 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let other = RedactedDiagnostic(NSError(domain: "NSCocoaErrorDomain", code: 4, userInfo: [NSLocalizedDescriptionKey: "file /private/x"]))
         XCTAssertEqual(other.errorSummary, "NSCocoaErrorDomain#4")
     }
+
 }

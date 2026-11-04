@@ -384,6 +384,20 @@ CREATE TABLE client_policy (
 	}}); err != nil {
 		return err
 	}
+	if err := s.RegisterMigration(Migration{Namespace: "core", Version: 15, Name: "client_diagnostic_identity_and_voice_context", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+ALTER TABLE client_diagnostic_events ADD COLUMN build_version TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE client_diagnostic_events ADD COLUMN source_revision TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE client_diagnostic_events ADD COLUMN voice_session_id TEXT;
+ALTER TABLE client_diagnostic_events ADD COLUMN voice_generation INTEGER;
+ALTER TABLE client_diagnostic_events ADD COLUMN voice_media_epoch INTEGER;
+ALTER TABLE client_diagnostic_events ADD COLUMN voice_peer_state TEXT;
+ALTER TABLE client_diagnostic_events ADD COLUMN voice_data_channel_state TEXT;
+`)
+		return err
+	}}); err != nil {
+		return err
+	}
 	if err := s.RegisterMigration(Migration{Namespace: "core", Version: 11, Name: "server_owned_task_interaction", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 ALTER TABLE tasks ADD COLUMN interaction_state TEXT NOT NULL DEFAULT 'none' CHECK(interaction_state IN ('none','awaiting_message','explicit_confirmation','approval_required'));

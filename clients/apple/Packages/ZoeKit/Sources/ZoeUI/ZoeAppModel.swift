@@ -208,6 +208,7 @@ public final class ZoeAppModel: ObservableObject {
     private var voiceStartInProgress = false
     private var voiceHangupInFlightSessionID: String?
     private var voiceAPI: APIClient?
+    private var recordedVoiceMediaLosses = Set<String>()
     private var voiceHangupRetryTask: Task<Void, Never>?
     #if os(macOS)
     private var terminationObserver: NSObjectProtocol?
@@ -1030,6 +1031,7 @@ public final class ZoeAppModel: ObservableObject {
                 api.recordDiagnostic(phase: "voice_hangup", requestPath: "/v1/voice/sessions/hangup", errorType: "pool_blocked", errorSummary: "release_unconfirmed")
                 scheduleVoiceHangupRetry(session, api: api, phase: "hangup")
             }
+            await api.uploadDiagnosticsIfPossible()
             guard voiceSession?.voiceSessionId == session.voiceSessionId, voiceSessionMediaEpoch == mediaEpoch else { return }
             let latestPool = result.poolBlocked == true ? try? await api.voicePoolStatus() : nil
             guard voiceSession?.voiceSessionId == session.voiceSessionId, voiceSessionMediaEpoch == mediaEpoch else { return }
@@ -1055,6 +1057,7 @@ public final class ZoeAppModel: ObservableObject {
             savePendingVoiceHangup(session, api: api)
             let redacted = RedactedDiagnostic(error)
             api.recordDiagnostic(phase: "voice_hangup", requestPath: "/v1/voice/sessions/hangup", httpStatus: redacted.httpStatus, errorType: redacted.errorType, errorSummary: redacted.errorSummary)
+            await api.uploadDiagnosticsIfPossible()
             scheduleVoiceHangupRetry(session, api: api, phase: "hangup")
             voiceStatus = .interrupted(reason: uiFormat("Local media is closed, but server hangup is unconfirmed; the session remains fenced. %@%@", lossReason.map { $0 + " " } ?? "", ""))
         }
@@ -1156,6 +1159,18 @@ public final class ZoeAppModel: ObservableObject {
     private func handleVoiceMediaLoss(_ loss: VoiceMediaLoss, mediaEpoch: UInt64) async {
         guard mediaEpoch == voiceMediaEpoch else { return }
         guard let rawReason = loss.message else { return }
+        let reason: String
+        if case let .leaseRenewalFailed(message) = loss {
+            reason = uiFormat("The voice lease heartbeat failed: %@", message)
+        } else {
+            reason = uiText(rawReason)
+        }
+        if continuousVoiceEnabled {
+            voiceStatus = .reconnecting(reason: reason)
+            #if DEBUG
+            voiceStatusObserverForTesting?(voiceStatus)
+            #endif
+        }
         if let api = voiceAPI {
             let (errorType, errorSummary): (String, String) = switch loss {
             case let .connection(state): ("connection", Self.voiceConnectionStateName(state))
@@ -1163,18 +1178,23 @@ public final class ZoeAppModel: ObservableObject {
             case let .dataChannel(state): ("data_channel", Self.voiceDataChannelStateName(state))
             case .leaseRenewalFailed: ("lease", "lease_renewal_failed")
             }
-            api.recordDiagnostic(
-                phase: "voice_media_loss",
-                requestPath: "/v1/voice/media",
-                errorType: errorType,
-                errorSummary: String(errorSummary.prefix(64))
-            )
-        }
-        let reason: String
-        if case let .leaseRenewalFailed(message) = loss {
-            reason = uiFormat("The voice lease heartbeat failed: %@", message)
-        } else {
-            reason = uiText(rawReason)
+            let key = "\(mediaEpoch):\(errorType):\(errorSummary)"
+            if recordedVoiceMediaLosses.insert(key).inserted {
+                let session = voiceSession
+                let peerState = errorType == "connection" ? errorSummary : nil
+                let dataChannelState = errorType == "data_channel" ? errorSummary : nil
+                await api.recordDiagnosticAndWait(
+                    phase: "voice_media_loss",
+                    requestPath: "/v1/voice/media",
+                    errorType: errorType,
+                    errorSummary: String(errorSummary.prefix(64)),
+                    voiceSessionID: session?.voiceSessionId,
+                    voiceGeneration: session?.generation,
+                    voiceMediaEpoch: mediaEpoch,
+                    voicePeerState: peerState,
+                    voiceDataChannelState: dataChannelState
+                )
+            }
         }
         if let session = voiceSession, let api = voiceAPI, voiceSessionMediaEpoch == mediaEpoch {
             if continuousVoiceEnabled {
