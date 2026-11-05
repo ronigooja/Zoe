@@ -190,5 +190,11 @@ CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at
 	}}); err != nil {
 		return err
 	}
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 210, Name: "voice_fast_reply_intent", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_fast_replies ADD COLUMN intent_kind TEXT NOT NULL DEFAULT 'progress'`)
+		return err
+	}}); err != nil {
+		return err
+	}
 	return nil
 }

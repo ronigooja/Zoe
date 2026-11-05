@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -60,6 +61,8 @@ type Service struct {
 	resultDeliveryEnabled  bool
 	resultDeliveryInterval time.Duration
 	classifier             Classifier
+	triageMu               sync.RWMutex
+	triage                 map[string]string
 	reaperStop             chan struct{}
 	reaperDone             chan struct{}
 }
@@ -322,7 +325,11 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if interval <= 0 {
 		interval = time.Second
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, triage: make(map[string]string), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+}
+
+func triageKey(session string, generation int64, turn string, revision int64) string {
+	return fmt.Sprintf("%s:%d:%s:%d", session, generation, turn, revision)
 }
 
 func (s *Service) writeOutcome(ctx context.Context, p contracts.Principal, sessionID, summary, outcome string) error {

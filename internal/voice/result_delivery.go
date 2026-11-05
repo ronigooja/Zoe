@@ -39,7 +39,6 @@ func (s *Service) resultDispatcher() {
 	for {
 		select {
 		case <-t.C:
-			s.classifyCommittedTurns(context.Background())
 			s.consumeResultEvents(context.Background())
 			s.dispatchResults(context.Background())
 			s.dispatchFastReplies(context.Background())
@@ -67,13 +66,7 @@ func (s *Service) classifyCommittedTurns(ctx context.Context) {
 	}
 	rows.Close()
 	for _, t := range turns {
-		classCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-		category, callErr := s.classifier.Classify(classCtx, t.content)
-		cancel()
-		if callErr != nil || !validCategory(category) {
-			continue
-		}
-		_, _ = s.db.ExecContext(ctx, `UPDATE voice_turns SET triage_category=? WHERE id=? AND triage_category IS NULL`, category, t.id)
+		s.classifyCommittedTurn(t.id)
 	}
 }
 
@@ -83,6 +76,25 @@ func validCategory(category string) bool {
 		return true
 	}
 	return false
+}
+
+func (s *Service) ensureClassified(ctx context.Context, workspace, session string, generation int64, turn string, revision int64) string {
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	key := triageKey(session, generation, turn, revision)
+	for time.Now().Before(deadline) {
+		s.triageMu.RLock()
+		category := s.triage[key]
+		s.triageMu.RUnlock()
+		if category != "" {
+			return category
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	return ""
 }
 
 // consumeResultEvents is the voice-owned boundary between control events and delivery rows.
@@ -180,29 +192,29 @@ func (s *Service) dispatchResults(ctx context.Context) {
 
 func (s *Service) dispatchFastReplies(ctx context.Context) {
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT id,workspace_id,session_id,generation,text,attempts FROM voice_fast_replies WHERE status='pending' AND next_attempt_at<=? ORDER BY created_at LIMIT 25`, now)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,workspace_id,session_id,generation,text,intent_kind,attempts FROM voice_fast_replies WHERE status='pending' AND next_attempt_at<=? ORDER BY created_at LIMIT 25`, now)
 	if err != nil {
 		return
 	}
 	type due struct {
-		id, workspace, session, text string
-		generation                   int64
-		attempts                     int
+		id, workspace, session, text, intent string
+		generation                           int64
+		attempts                             int
 	}
 	var batch []due
 	for rows.Next() {
 		var d due
-		if rows.Scan(&d.id, &d.workspace, &d.session, &d.generation, &d.text, &d.attempts) == nil {
+		if rows.Scan(&d.id, &d.workspace, &d.session, &d.generation, &d.text, &d.intent, &d.attempts) == nil {
 			batch = append(batch, d)
 		}
 	}
 	rows.Close()
 	for _, d := range batch {
-		s.deliverFastReply(ctx, d.id, d.workspace, d.session, d.generation, d.text, d.attempts)
+		s.deliverFastReply(ctx, d.id, d.workspace, d.session, d.generation, d.text, d.intent, d.attempts)
 	}
 }
 
-func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session string, generation int64, text string, attempts int) {
+func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session string, generation int64, text, intent string, attempts int) {
 	now := s.now().UTC()
 	res, err := s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=? AND next_attempt_at<=?`, now.Add(fastReplyLease).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts, now.Format(time.RFC3339Nano))
 	if err != nil {
@@ -226,6 +238,12 @@ func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session s
 			s.retryFastReply(id, attempts+1, "session_lookup")
 		}
 		return
+	}
+	if intent == "progress" {
+		var owner string
+		if err := s.db.QueryRowContext(ctx, `SELECT owner_id FROM voice_sessions WHERE id=? AND workspace_id=?`, session, workspace).Scan(&owner); err == nil {
+			text = s.progressReply(ctx, workspace, owner, session)
+		}
 	}
 	body, _ := json.Marshal(map[string]string{"text": boundedResultText(text)})
 	resp, _, callErr := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions/"+url.PathEscape(gateway)+"/context", body)
