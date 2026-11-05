@@ -159,7 +159,7 @@ func (s *Service) buildOpeningContext(ctx context.Context, p contracts.Principal
 		c.Items = append(c.Items, openingContextItem{Role: "user", Text: text})
 		used += cost
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT title,goal FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND status IN ('queued','running','awaiting_user') ORDER BY updated_at DESC LIMIT 8`, p.WorkspaceID, p.SubjectID)
+	rows, err := s.db.QueryContext(ctx, `SELECT title,goal FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND status IN ('queued','running') ORDER BY updated_at DESC LIMIT 8`, p.WorkspaceID, p.SubjectID)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {

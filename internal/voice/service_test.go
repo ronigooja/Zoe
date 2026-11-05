@@ -634,6 +634,57 @@ func TestVoiceOpeningContextCharacterBudgetIsDeterministicAndOwnerScoped(t *test
 	_ = store
 }
 
+func TestVoiceOpeningContextIncludesOnlyQueuedAndRunningTasksForOwner(t *testing.T) {
+	store, svc := newVoiceTestService(t, Config{
+		OpeningContextBudget: 1000,
+		ContextAssembler: func(context.Context, contracts.Principal, string, string, string, int) (contracts.MemoryContext, error) {
+			return contracts.MemoryContext{Items: []contracts.MemoryContextItem{{Subject: "owner", Key: "rule", Content: "context"}}}, nil
+		},
+	})
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.DB().Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatal(err)
+	}
+	for _, owner := range []string{"user-1", "user-2"} {
+		if _, err := store.DB().Exec(`INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES(?,?,?,?,?,?)`, "device-"+owner, "default", owner, owner, "approved", now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, task := range []struct {
+		id, title, goal, status, owner string
+	}{
+		{"running-task", "running title", "running goal", "running", "user-1"},
+		{"awaiting-task", "awaiting title", "awaiting goal", "awaiting_user", "user-1"},
+		{"other-task", "other title", "other goal", "running", "user-2"},
+	} {
+		if _, err := store.DB().Exec(`INSERT INTO command_receipts(command_id,workspace_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES(?,?,?,?,X'01','{}',?)`, "cmd-"+task.id, "default", task.owner, "key-"+task.id, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, task.id, "default", task.title, task.goal, "voice", "default", task.status, 1, now, now, "device-"+task.owner, "cmd-"+task.id, task.owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	opening := svc.buildOpeningContext(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"})
+	if opening == nil {
+		t.Fatal("opening context is nil")
+	}
+	texts := make([]string, 0, len(opening.Items))
+	for _, item := range opening.Items {
+		texts = append(texts, item.Text)
+	}
+	joined := strings.Join(texts, "\n")
+	if !strings.Contains(joined, "active task: running title — running goal") {
+		t.Fatalf("running task missing from opening context: %q", joined)
+	}
+	if strings.Contains(joined, "awaiting title") {
+		t.Fatalf("awaiting_user task appeared in opening context: %q", joined)
+	}
+	if strings.Contains(joined, "other title") {
+		t.Fatalf("another owner's task appeared in opening context: %q", joined)
+	}
+}
+
 func TestVoiceOpeningContextResumedUsesDeltaAndNewUsesFull(t *testing.T) {
 	var requests []openingContext
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
