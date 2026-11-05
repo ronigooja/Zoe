@@ -379,9 +379,9 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if state != "active" || generation != p.Generation {
 		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_generation_stale", "voice handoff belongs to an inactive media generation", nil)
 	}
-	var taskID, content string
+	var taskID, content, category string
 	var storedHash []byte
-	if err := tx.QueryRowContext(ctx, `SELECT coalesce(l.task_id,''),v.content,v.content_hash FROM voice_turns v LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&taskID, &content, &storedHash); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(l.task_id,''),v.content,v.content_hash,coalesce(v.triage_category,'') FROM voice_turns v LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&taskID, &content, &storedHash, &category); errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(http.StatusNotFound, "voice_turn_not_found", "confirmed voice turn revision was not found", nil)
 	} else if err != nil {
 		return contracts.CommandResult{}, nil, err
@@ -395,6 +395,17 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	}
 	content = strings.TrimSpace(content)
 	impact := classifyHandoff(content)
+	if category == "progress" && impact != "high" {
+		text, err := s.progressReplyTx(ctx, tx, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.SessionID, p.TurnID, cmd.AcceptedAt)
+		if err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?, ?,?,?)`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, text, "pending", cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
+		handoffEvent, _ := json.Marshal(map[string]any{"route": "fast", "category": category, "turn_id": p.TurnID, "revision": p.Revision})
+		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, []contracts.Event{{Type: "voice.turn.handoff", AggregateType: "voice_session", AggregateID: p.SessionID, AggregateVersion: p.Generation, Payload: handoffEvent}}, nil
+	}
 	ref, _ := json.Marshal(voiceTaskSourceReference{Kind: "voice_turn", SessionID: p.SessionID, Generation: p.Generation, TurnID: p.TurnID, Revision: p.Revision, ContentHash: p.ContentHash})
 	admission, err := server.AdmitTaskTx(ctx, tx, control.AdmissionContext{Principal: cmd.Principal, Source: "voice", SourceRef: ref, IdempotencyKey: cmd.CommandID, ProfileID: "zoe-steward", Title: content, Goal: content, InitialMessage: content, AcceptedAt: cmd.AcceptedAt})
 	if err != nil {
@@ -414,9 +425,36 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 			return contracts.CommandResult{}, nil, err
 		}
 	}
-	handoffEvent, _ := json.Marshal(map[string]any{"task_id": admission.Task.ID, "turn_id": p.TurnID, "revision": p.Revision, "content_hash": p.ContentHash, "profile_id": "zoe-steward", "impact": impact, "status": status})
+	handoffEvent, _ := json.Marshal(map[string]any{"task_id": admission.Task.ID, "turn_id": p.TurnID, "revision": p.Revision, "content_hash": p.ContentHash, "profile_id": "zoe-steward", "impact": impact, "status": status, "route": "slow", "category": category})
 	events = append(events, contracts.Event{Type: "voice.turn.handoff", AggregateType: "voice_session", AggregateID: p.SessionID, AggregateVersion: p.Generation, Payload: handoffEvent})
 	return contracts.CommandResult{ResourceType: "task", ResourceID: admission.Task.ID, ResourceVersion: admission.Task.Version}, events, nil
+}
+
+func (s *Service) progressReplyTx(ctx context.Context, tx *sql.Tx, workspace, owner, session, turn string, now time.Time) (string, error) {
+	cutoff := now.Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
+	var status, started, created string
+	err := tx.QueryRowContext(ctx, `SELECT t.status,coalesce(t.started_at,''),t.created_at FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND t.status IN ('active','queued','waiting') ORDER BY coalesce(t.started_at,t.created_at) DESC LIMIT 1`, workspace, owner).Scan(&status, &started, &created)
+	if err == nil && (status == "active" || status == "queued" || status == "waiting") {
+		stamp := started
+		if stamp == "" {
+			stamp = created
+		}
+		at, parseErr := time.Parse(time.RFC3339Nano, stamp)
+		if parseErr != nil {
+			return "现在没有在处理的任务。", nil
+		}
+		seconds := int(now.Sub(at).Seconds())
+		if seconds < 0 {
+			seconds = 0
+		}
+		return fmt.Sprintf("还在处理,已经%d秒了。", seconds), nil
+	}
+	var recentStatus string
+	err = tx.QueryRowContext(ctx, `SELECT t.status FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND t.status IN ('awaiting_user','complete') AND coalesce(t.updated_at,t.created_at)>=? ORDER BY coalesce(t.updated_at,t.created_at) DESC LIMIT 1`, workspace, owner, cutoff).Scan(&recentStatus)
+	if err == nil {
+		return "结果已经给你了,或者已经准备好了。", nil
+	}
+	return "现在没有在处理的任务。", nil
 }
 
 func classifyHandoff(content string) string {

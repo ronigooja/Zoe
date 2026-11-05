@@ -1,6 +1,6 @@
 # ADR 0012: Zoe-owned conversation layer for real-time voice
 
-Status: proposed direction; nothing here is implemented or accepted. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
+Status: implementation in progress; progress-only triage routing is accepted for this change, with all other categories failing safe to the existing slow path. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
 
 ## Context
 

@@ -166,5 +166,29 @@ ALTER TABLE voice_sessions ADD COLUMN gateway_context_chars INTEGER NOT NULL DEF
 	}}); err != nil {
 		return err
 	}
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 209, Name: "voice_triage_fast_replies", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN triage_category TEXT;
+CREATE TABLE voice_fast_replies (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  turn_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','delivered','failed','skipped')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT NOT NULL,
+  last_error_code TEXT NOT NULL DEFAULT '',
+  voice_session_id TEXT NOT NULL DEFAULT '',
+  voice_generation INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(session_id,generation,turn_id)
+);
+CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at,created_at);`)
+		return err
+	}}); err != nil {
+		return err
+	}
 	return nil
 }
