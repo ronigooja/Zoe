@@ -156,7 +156,7 @@ func TestTriageChatStyleParsesMessageContentAndIgnoresReasoningContent(t *testin
 }
 
 func TestTriageChatStyleRejectsEmptyAndLengthTruncated(t *testing.T) {
-	for _, response := range []string{`{"choices":[{"message":{"content":""},"finish_reason":"stop"}]}`, `{"choices":[{"message":{"content":"task"},"finish_reason":"length"}]}`} {
+	for _, response := range []string{`{"choices":[{"message":{"content":""},"finish_reason":"stop"}]}`} {
 		t.Run(response, func(t *testing.T) {
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(response)) }))
 			defer s.Close()
@@ -184,6 +184,55 @@ func TestTriageChatStyleThinkingFieldSentOnlyWhenConfigured(t *testing.T) {
 				t.Fatalf("thinking=%v body=%v", thinking, body)
 			}
 		})
+	}
+}
+
+func TestTriageChatStyleSendsLargeEnoughTokenBudget(t *testing.T) {
+	var body map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(chatResponse("task")))
+	}))
+	defer s.Close()
+	c := clientFromTestEnv(t, s, map[string]string{"ZOE_TRIAGE_API_STYLE": "chat"})
+	if _, err := c.Classify(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	if body["max_tokens"].(float64) < 1024 {
+		t.Fatalf("max_tokens=%v", body["max_tokens"])
+	}
+}
+
+func TestTriageChatStyleAcceptsValidWordWhenFinishReasonIsLength(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"progress"},"finish_reason":"length"}]}`))
+	}))
+	defer s.Close()
+	c := clientFromTestEnv(t, s, map[string]string{"ZOE_TRIAGE_API_STYLE": "chat"})
+	if got, err := c.Classify(context.Background(), "x"); err != nil || got != Progress {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+}
+
+func TestTriageChatStyleRejectsEmptyContentWhenFinishReasonIsLength(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":""},"finish_reason":"length"}]}`))
+	}))
+	defer s.Close()
+	c := clientFromTestEnv(t, s, map[string]string{"ZOE_TRIAGE_API_STYLE": "chat"})
+	if _, err := c.Classify(context.Background(), "x"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestTriageChatStyleRejectsInvalidWordWhenFinishReasonIsLength(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"maybe"},"finish_reason":"length"}]}`))
+	}))
+	defer s.Close()
+	c := clientFromTestEnv(t, s, map[string]string{"ZOE_TRIAGE_API_STYLE": "chat"})
+	if _, err := c.Classify(context.Background(), "x"); err == nil {
+		t.Fatal("expected error")
 	}
 }
 

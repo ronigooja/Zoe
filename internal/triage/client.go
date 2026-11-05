@@ -181,7 +181,7 @@ func (c *Client) call(ctx context.Context, style, text string) (Category, []byte
 	if style == "chat" {
 		path = "/chat/completions"
 		request["messages"] = []map[string]string{{"role": "system", "content": instructions}, {"role": "user", "content": text}}
-		request["max_tokens"] = 64
+		request["max_tokens"] = 1024
 		request["stream"] = false
 		if c.reasoningEffort != "" {
 			request["reasoning_effort"] = c.reasoningEffort
@@ -280,10 +280,20 @@ func parseChatResponse(body []byte) (Category, error) {
 	if err := json.Unmarshal(body, &response); err != nil {
 		return "", errors.New("invalid triage response")
 	}
-	if len(response.Choices) == 0 || response.Choices[0].FinishReason == "length" {
+	if len(response.Choices) == 0 {
 		return "", errors.New("triage response was incomplete")
 	}
-	return parseCategory(response.Choices[0].Message.Content)
+	category, err := parseCategory(response.Choices[0].Message.Content)
+	if err != nil {
+		if response.Choices[0].FinishReason == "length" {
+			return "", errors.New("triage response was incomplete")
+		}
+		return "", err
+	}
+	if response.Choices[0].FinishReason != "" && response.Choices[0].FinishReason != "stop" && response.Choices[0].FinishReason != "length" {
+		return "", errors.New("triage response was incomplete")
+	}
+	return category, nil
 }
 
 func parseCategory(output string) (Category, error) {
