@@ -57,6 +57,39 @@ private actor AsyncTestGate {
 }
 
 final class ClientContractTests: XCTestCase {
+    func testMemoryInputValidationTrimsAndRejectsEmptyOrOverLengthFields() {
+        XCTAssertEqual(MemoryInputValidation.validate(subject: " Subject ", key: " Key\n", content: " Content "), MemoryInput(subject: "Subject", key: "Key", content: "Content"))
+        XCTAssertNil(MemoryInputValidation.validate(subject: " ", key: "key", content: "content"))
+        XCTAssertNil(MemoryInputValidation.validate(subject: String(repeating: "s", count: 81), key: "key", content: "content"))
+        XCTAssertNil(MemoryInputValidation.validate(subject: "subject", key: String(repeating: "k", count: 81), content: "content"))
+        XCTAssertNil(MemoryInputValidation.validate(subject: "subject", key: "key", content: String(repeating: "c", count: 2001)))
+    }
+
+    @MainActor
+    func testRememberPersonalScopeSendsUserNotePayload() async throws {
+        var postedPayload: [String: Any]?
+        ExportURLProtocol.responseHandler = { request in
+            if request.httpMethod == "POST" {
+                postedPayload = (try? JSONSerialization.jsonObject(with: Self.requestBody(request) ?? Data())) as? [String: Any]
+                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: request.value(forHTTPHeaderField: "Idempotency-Key") ?? "", kind: "memory.remember", workspaceID: "workspace-1", resourceID: "memory-1", resourceType: "memory"))
+            }
+            return (500, [:], Data())
+        }
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
+        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let emptySnapshot = conversationSnapshot([])
+        await model.preparePendingCheckForTesting(api: api, journal: try CommandJournal(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)), snapshot: emptySnapshot)
+        model.snapshotFetchOverrideForTesting = { emptySnapshot }
+        model.memorySearchOverrideForTesting = { _ in MemorySearchResult(items: [], missing: [], conflicts: []) }
+
+        XCTAssertTrue(await model.remember(scope: "personal", scopeID: nil, subject: "subject", key: "key", content: "content"))
+        let payload = try XCTUnwrap(postedPayload?["payload"] as? [String: Any])
+        XCTAssertEqual((payload["scope"] as? [String: Any])?["kind"] as? String, "personal")
+        XCTAssertEqual(payload["subject"] as? String, "subject")
+        XCTAssertEqual(payload["key"] as? String, "key")
+        XCTAssertEqual(payload["content"] as? String, "content")
+        XCTAssertEqual(payload["source_kind"] as? String, "user_note")
+    }
     private func exportSession() -> URLSession {
         ExportURLProtocol.failureHandler = nil
         let configuration = URLSessionConfiguration.ephemeral
