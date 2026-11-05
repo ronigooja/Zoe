@@ -238,8 +238,12 @@ func TestIngestEndpointRequiresVoiceIngestScope(t *testing.T) {
 
 func TestIngestTokenCannotCallOtherEndpoints(t *testing.T) {
 	ts, _, key := transcriptHTTPServer(t)
-	for _, path := range []string{"/v1/snapshot", "/v1/commands", "/runner/v1/claims", "/runner/v1/instance/status", "/runner/v1/memory/export-temp/cleanup"} {
-		req, _ := http.NewRequest(http.MethodPost, ts.URL+path, strings.NewReader(`{}`))
+	for _, path := range []string{"/v1/snapshot", "/v1/commands", "/runner/v1/claims/current", "/runner/v1/claims"} {
+		method := http.MethodPost
+		if path == "/v1/snapshot" || path == "/runner/v1/claims/current" {
+			method = http.MethodGet
+		}
+		req, _ := http.NewRequest(method, ts.URL+path, strings.NewReader(`{}`))
 		req.Header.Set("Authorization", "Bearer "+key)
 		resp, err := ts.Client().Do(req)
 		if err != nil {

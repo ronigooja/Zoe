@@ -16,6 +16,9 @@ func loadVoiceIngestCredentialFromEnv() (memoryRunnerCredential, error) {
 		return memoryRunnerCredential{}, nil
 	}
 	contents, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return memoryRunnerCredential{}, nil
+	}
 	if err != nil {
 		return memoryRunnerCredential{}, fmt.Errorf("read voice ingest token file: %w", err)
 	}
