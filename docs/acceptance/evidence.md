@@ -210,6 +210,19 @@ Environment: the voice gateway host, one-off probes against a copy of the accoun
 - Not established: `delegation.created` for ordinary spoken requests (two synthetic utterances produced none), non-empty transcript text, recall of `initial_items`, media through an IPv6-egress account proxy, per-plan entitlement of pool accounts.
 - Limitations: synthetic speech only, one account, no failure injection. No product milestone is accepted by these probes.
 
+## Live voice call, AVAS route — 2026-11-05
+
+Environment: production gateway image from gateway source `82aed1b` (`VOICE_UPSTREAM_ROUTE=avas`) and Zoe `16a8675`, one real call from the Mac client, one pool account. Observed in gateway logs and the Zoe database; no audio was recorded.
+
+- Verified once: spoken request, gateway `delegation.created` → `user_audio_turn.final`, Zoe `zoe-steward` task, Steward answer (`awaiting_user`), `voice_result_deliveries` `delivered`, gateway `POST /v1/voice/sessions/{id}/context` 200, upstream spoke a summary of the answer (about 2 minutes from task creation to the Steward answer, about 19 s more until speech).
+- Verified once: hangup ended the Zoe session (`ended`), the gateway recorded `terminated` media evidence and released the account lease, and the voice pool stayed unblocked.
+- Verified once: after the gateway fix `79ca0ed`, sideband events reach the AVAS delegation mapper. The earlier silent call was caused by the observer never seeing sideband events.
+- The result reached the call through `/context`, not sideband `delegation.context.append`. Whether upstream speaks `speakable` delegation content remains unverified.
+- The spoken summary understated rain ("very low probability") against the Steward answer (peak probability 100%, heavy morning rain); the upstream rewrites results and Zoe does not control the wording.
+- `POST /v1/voice/sessions/{id}/opening-context` returned 501 at call start; cause not investigated, so opening context was not delivered.
+- Not exercised: the gateway 422 `upstream_rejected` path, account fallback, `GET /v1/voice/requests/{id}/outcome` against Zoe attestation, and the recovery sweep. The pool lock was cleared with one operator `voice.pool.reconcile` for session `1b086abb` (cause of the earlier upstream rejection unproven; the gateway logs of that call were purged).
+- Limits: one call, one account, one request. No product milestone is accepted by this record.
+
 Open measurements tied to [ADR 0009](../architecture/decisions/0009-voice-steward-impact-policy.md): steward latency and cost against the run ceiling, metering of OpenCode internal sub-agents, handoff event behavior with real speech, and transcript availability.
 
 ## Per-run permission probe on the live host — 2026-11-02
