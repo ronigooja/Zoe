@@ -609,6 +609,7 @@ func triageTestOperation(args []string, _ io.Reader, out, errOut io.Writer) erro
 	fs := flag.NewFlagSet("triage test", flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	root := fs.String("root", "/etc/zoe", "deployment configuration root")
+	text := fs.String("text", "好了吗", "spoken sentence to classify")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -625,7 +626,7 @@ func triageTestOperation(args []string, _ io.Reader, out, errOut io.Writer) erro
 	if err != nil {
 		return err
 	}
-	r, testErr := ops.TestTriage(ctx, cfg, nil)
+	r, testErr := ops.TestTriage(ctx, cfg, nil, *text)
 	class := "FAIL"
 	if testErr == nil {
 		class = "PASS"

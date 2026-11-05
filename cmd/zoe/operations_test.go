@@ -44,6 +44,60 @@ func fakeServices(t *testing.T, failReload bool) *[]string {
 	t.Cleanup(func() { opsManager = old })
 	return &calls
 }
+
+func TestTriageTestTextFlagClassifiesGivenSentence(t *testing.T) {
+	fakeServices(t, false)
+	var input string
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		input, _ = body["input"].(string)
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"task"}]}]}`))
+	}))
+	defer s.Close()
+	root := t.TempDir()
+	key := filepath.Join(root, "key")
+	if err := os.WriteFile(key, []byte("key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL=\""+s.URL+"/v1\"\nZOE_TRIAGE_MODEL=\"m\"\nZOE_TRIAGE_API_KEY_FILE=\""+key+"\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := triageTestOperation([]string{"--root", root, "--text", "查查今天新闻"}, nil, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if input != "查查今天新闻" {
+		t.Fatalf("input=%q", input)
+	}
+}
+
+func TestTriageTestDefaultSentenceUnchanged(t *testing.T) {
+	fakeServices(t, false)
+	var input string
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		input, _ = body["input"].(string)
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"progress"}]}]}`))
+	}))
+	defer s.Close()
+	root := t.TempDir()
+	key := filepath.Join(root, "key")
+	if err := os.WriteFile(key, []byte("key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL=\""+s.URL+"/v1\"\nZOE_TRIAGE_MODEL=\"m\"\nZOE_TRIAGE_API_KEY_FILE=\""+key+"\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := triageTestOperation([]string{"--root", root}, nil, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if input != "好了吗" {
+		t.Fatalf("input=%q", input)
+	}
+}
 func TestProviderConfigureTestStatusUsePersistedDeployment(t *testing.T) {
 	fakeServices(t, false)
 	token := "private-provider-token"

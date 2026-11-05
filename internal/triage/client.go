@@ -23,7 +23,13 @@ const (
 	Chat     Category = "chat"
 )
 
-const instructions = "Classify the sentence into exactly one word: progress, recall, memory, task, or chat. Reply with exactly one of those five words and nothing else."
+const instructions = `Classify one spoken sentence for a voice assistant. The input is speech-to-text and may contain typos, filler words, or no punctuation.
+progress: asks about the state, duration, or result of work already requested.
+recall: asks what was said or done earlier in past conversations or calls.
+memory: asks to store, update, or retrieve a stable personal fact or preference.
+task: asks for new work or lookup requiring tools, research, files, devices, or the web. High-impact or destructive requests are task.
+chat: social talk, including greetings, thanks, small talk, or opinions, that needs no lookup.
+If a request could be both progress and a new task, or you are unsure, choose task. Reply with exactly one lowercase word: progress, recall, memory, task, or chat. Output nothing else and do not explain.`
 
 func reasoningModel(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))

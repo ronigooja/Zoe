@@ -148,7 +148,7 @@ type TriageProbeResult struct {
 }
 
 // TestTriage performs exactly one minimal classifier request.
-func TestTriage(ctx context.Context, c TriageConfig, client *http.Client) (TriageProbeResult, error) {
+func TestTriage(ctx context.Context, c TriageConfig, client *http.Client, text ...string) (TriageProbeResult, error) {
 	c, err := c.Normalized()
 	if err != nil {
 		return TriageProbeResult{}, err
@@ -175,7 +175,11 @@ func TestTriage(ctx context.Context, c TriageConfig, client *http.Client) (Triag
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
 	clientImpl.SetHTTPClient(client)
-	category, err := clientImpl.Classify(ctx, "好了吗")
+	input := "好了吗"
+	if len(text) > 0 {
+		input = text[0]
+	}
+	category, err := clientImpl.Classify(ctx, input)
 	latency := time.Since(start)
 	if err != nil {
 		result := TriageProbeResult{Latency: latency}
