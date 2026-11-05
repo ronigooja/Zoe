@@ -236,7 +236,7 @@ func TestTriageChatStyleRejectsInvalidWordWhenFinishReasonIsLength(t *testing.T)
 	}
 }
 
-func TestTriageResponsesStyleIgnoresThinking(t *testing.T) {
+func TestTriageResponsesStyleOmitsChatThinkingField(t *testing.T) {
 	var body map[string]any
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)

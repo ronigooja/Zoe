@@ -75,7 +75,7 @@ func menuModel(m ConfigureMenuIO, triage bool) error {
 		return err
 	}
 	for {
-		effort, err = menuValue(m, "Reasoning effort (low/medium/high; empty keeps default)", effort)
+		effort, err = menuValue(m, "Reasoning effort (none/low/medium/high/max; empty keeps default)", effort)
 		if err != nil {
 			return err
 		}

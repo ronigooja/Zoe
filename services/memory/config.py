@@ -9,7 +9,7 @@ MODEL_REVISION = "faf4aa4225822f3bc6376869cb1164e8e3feedd0"
 MODEL_ONNX_REPOSITORY = "Qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q"
 EMBEDDING_DIMENSIONS = 384
 MODEL_CODEC = "paraphrase_multilingual_minilm_l12_384_faf4aa42"
-_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
+_REASONING_EFFORTS = {"none", "low", "medium", "high", "max"}
 
 
 def _required(name: str) -> str:
@@ -52,7 +52,7 @@ class WorkerConfig:
             raise ValueError("ZOE_MEM0_LLM_PROVIDER must be openai; other providers are not yet accounted")
         reasoning_effort = os.environ.get("ZOE_MEM0_LLM_REASONING_EFFORT", "").strip()
         if reasoning_effort and reasoning_effort not in _REASONING_EFFORTS:
-            raise ValueError("ZOE_MEM0_LLM_REASONING_EFFORT must be one of minimal, low, medium, high, or empty")
+            raise ValueError("ZOE_MEM0_LLM_REASONING_EFFORT must be one of none, low, medium, high, max, or empty")
         return cls(
             control_url=_required("ZOE_CONTROL_URL").rstrip("/"),
             runner_token=_required("ZOE_RUNNER_TOKEN"),

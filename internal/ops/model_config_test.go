@@ -68,6 +68,15 @@ func TestTriageConfigureRejectsUnknownEffort(t *testing.T) {
 	}
 }
 
+func TestModelConfigurationAcceptsNoneAndMaxEffort(t *testing.T) {
+	for _, effort := range []string{"", "none", "low", "medium", "high", "max"} {
+		c := TriageConfig{BaseURL: "https://gateway.example", Model: "deepseek-flash", SecretPath: "/key", ReasoningEffort: effort}
+		if _, err := c.Normalized(); err != nil {
+			t.Errorf("effort=%q: %v", effort, err)
+		}
+	}
+}
+
 func TestTriageAPIStyleAndThinkingPreservedAcrossUpdate(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
 	c := TriageConfig{APIStyle: "chat", BaseURL: "https://gateway.example", Model: "m", ReasoningEffort: "high", Thinking: "disabled", SecretPath: "/key"}
