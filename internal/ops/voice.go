@@ -14,7 +14,7 @@ func WritePrivateFile(path string, data []byte) error {
 	if len(data) == 0 || strings.ContainsAny(string(data), "\r\x00") {
 		return errors.New("private value is empty or invalid")
 	}
-	return writeFileAtomicOwnedWithChown(path, data, 0600, memoryWorkerUID, memoryWorkerGID, hostPrepChown, hostPrepEUID)
+	return writeFileAtomicOwnedWithChown(path, data, 0600, memoryWorkerUID, memoryWorkerGID, ModelKeyChown, effectiveUID)
 }
 
 func WriteVoiceEnvAtomic(path, baseURL, secretPath string, accountMedia bool) error {

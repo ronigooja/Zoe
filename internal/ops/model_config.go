@@ -20,6 +20,11 @@ const DefaultTriageSecretPath = "/etc/zoe/secrets/triage-api-key"
 
 const DefaultTriageReasoningEffort = "low"
 
+// ModelKeyChown and ModelKeyStat apply to model/private credential files. Tests
+// may replace these OS boundaries to simulate container ownership without root.
+var ModelKeyChown = func(path string, uid, gid int) error { return chownFile(path, uid, gid) }
+var ModelKeyStat = os.Stat
+
 var validReasoningEfforts = map[string]bool{"low": true, "medium": true, "high": true}
 
 func ValidateReasoningEffort(value string) error {
@@ -43,13 +48,13 @@ func WriteModelKeyAtomic(path string, secret []byte) error {
 	if !validToken(strings.TrimSpace(string(secret))) {
 		return errors.New("key is empty or contains whitespace/control characters")
 	}
-	return writeFileAtomicOwned(path, secret, 0600, ContainerUID, ContainerGID)
+	return writeFileAtomicOwnedWithChown(path, secret, 0600, ContainerUID, ContainerGID, ModelKeyChown, effectiveUID)
 }
 
 // ValidateModelKeyReadable applies to bind-mounted model keys, independently of
 // the operator's privileges. It checks POSIX file ownership/mode, not ACLs.
 func ValidateModelKeyReadable(path string) error {
-	info, err := os.Stat(path)
+	info, err := ModelKeyStat(path)
 	if err == nil && info.Mode().IsRegular() {
 		if st, ok := info.Sys().(*syscall.Stat_t); ok {
 			read := info.Mode().Perm() & 0004

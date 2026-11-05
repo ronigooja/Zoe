@@ -7,14 +7,13 @@ import (
 )
 
 func TestWritePrivateFileUsesContainerOwnerAndPrivateMode(t *testing.T) {
-	oldEUID, oldChown := hostPrepEUID, hostPrepChown
+	oldChown := ModelKeyChown
 	var owners [][2]int
-	hostPrepEUID = func() int { return 0 }
-	hostPrepChown = func(path string, uid, gid int) error {
+	ModelKeyChown = func(path string, uid, gid int) error {
 		owners = append(owners, [2]int{uid, gid})
 		return nil
 	}
-	t.Cleanup(func() { hostPrepEUID, hostPrepChown = oldEUID, oldChown })
+	t.Cleanup(func() { ModelKeyChown = oldChown })
 
 	path := filepath.Join(t.TempDir(), "voice-key")
 	if err := WritePrivateFile(path, []byte("voice-secret\n")); err != nil {
