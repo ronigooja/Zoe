@@ -23,68 +23,10 @@ type ConfigureMenuIO struct {
 	PromptSecret func(io.Writer) ([]byte, error)
 }
 
-func configureOperation(args []string, in io.Reader, out, errOut io.Writer) error {
-	if len(args) != 0 {
-		return errors.New("zoe configure takes no arguments")
-	}
-	return runConfigureMenu(ConfigureMenuIO{In: in, Out: out, ErrOut: errOut, PromptSecret: func(w io.Writer) ([]byte, error) {
-		b, err := readToken(in, w)
-		if err != nil && err.Error() == "API token is required" {
-			return nil, nil
-		}
-		return b, err
-	}})
-}
-
-func runConfigureMenu(m ConfigureMenuIO) error {
-	if m.Root == "" {
-		m.Root = "/etc/zoe"
-	}
-	if m.PromptSecret == nil {
-		m.PromptSecret = func(w io.Writer) ([]byte, error) { return readToken(m.In, w) }
-	}
-	for {
-		fmt.Fprintln(m.Out, "\nZoe configuration")
-		fmt.Fprintln(m.Out, "  1) Memory model")
-		fmt.Fprintln(m.Out, "  2) Triage model")
-		fmt.Fprintln(m.Out, "  3) Voice gateway")
-		fmt.Fprintln(m.Out, "  4) Provider")
-		fmt.Fprintln(m.Out, "  5) Show current configuration")
-		fmt.Fprintln(m.Out, "  6) Test a model")
-		fmt.Fprintln(m.Out, "  0) Quit")
-		fmt.Fprint(m.Out, "Select an option: ")
-		choice, err := inputLine(sharedInput(m.In))
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		switch strings.TrimSpace(choice) {
-		case "0", "q", "quit":
-			return nil
-		case "1":
-			if err := menuModel(m, false); err != nil && !errors.Is(err, io.EOF) {
-				fmt.Fprintln(m.ErrOut, safeLabel(err.Error()))
-			}
-		case "2":
-			if err := menuModel(m, true); err != nil && !errors.Is(err, io.EOF) {
-				fmt.Fprintln(m.ErrOut, safeLabel(err.Error()))
-			}
-		case "3":
-			fmt.Fprintln(m.Out, "Run: zoe voice configure")
-		case "4":
-			fmt.Fprintln(m.Out, "Run: zoe provider configure")
-		case "5":
-			_ = statusOperation([]string{"--root", m.Root}, m.In, m.Out, m.ErrOut)
-		case "6":
-			if err := menuTest(m); err != nil {
-				fmt.Fprintln(m.ErrOut, safeLabel(err.Error()))
-			}
-		default:
-			fmt.Fprintln(m.ErrOut, "Please choose a number from 0 to 6.")
-		}
-	}
+func configureMenuIO(root string, in io.Reader, out, errOut io.Writer) ConfigureMenuIO {
+	return ConfigureMenuIO{Root: root, In: in, Out: out, ErrOut: errOut, PromptSecret: func(w io.Writer) ([]byte, error) {
+		return readToken(in, w)
+	}}
 }
 
 func menuModel(m ConfigureMenuIO, triage bool) error {
@@ -257,16 +199,4 @@ func menuSaveMemory(m ConfigureMenuIO, d ops.Deployment, base, model, keyPath st
 	}
 	fmt.Fprintln(m.Out, "Apply with: zoe update")
 	return nil
-}
-
-func menuTest(m ConfigureMenuIO) error {
-	fmt.Fprint(m.Out, "Test model (memory/triage): ")
-	kind, err := inputLine(sharedInput(m.In))
-	if err != nil {
-		return err
-	}
-	if strings.EqualFold(strings.TrimSpace(kind), "triage") {
-		return triageTestOperation([]string{"--root", m.Root}, m.In, m.Out, m.ErrOut)
-	}
-	return memoryTestOperation([]string{"--root", m.Root}, m.In, m.Out, m.ErrOut)
 }

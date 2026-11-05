@@ -108,7 +108,7 @@ After the stack starts, steps 1 and 2 may be done in either order; step 3 comes 
    installation and process readiness; model execution, memory processing, and
 end-to-end task completion require a separate acceptance run.
 
-Use `zoe configure` for the numbered operator menu, or configure endpoints directly with
+Use `zoe` with no arguments for the numbered operator menu, or configure endpoints directly with
 `zoe memory configure` and `zoe triage configure`. Both model endpoints require an `/v1`
 base URL; use `--key-stdin` to install a mode-0600 key without placing it in shell history.
 Triage is disabled when `ZOE_TRIAGE_BASE_URL` is empty. Apply a saved change with `zoe update`.

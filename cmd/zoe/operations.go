@@ -23,7 +23,6 @@ import (
 
 func init() {
 	_ = RegisterOperation("setup", setupOperation)
-	_ = RegisterOperation("configure", configureOperation)
 	_ = RegisterOperation("provider configure", providerConfigureOperation)
 	_ = RegisterOperation("provider test", providerTestOperation)
 	_ = RegisterOperation("memory configure", memoryConfigureOperation)

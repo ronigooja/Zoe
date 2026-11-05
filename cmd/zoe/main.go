@@ -18,7 +18,6 @@ type operation func(args []string, in io.Reader, out, errOut io.Writer) error
 // menu while remaining usable from scripts.
 var operations = map[string]operation{
 	"setup":              unavailable("setup"),
-	"configure":          unavailable("configure"),
 	"triage configure":   unavailable("triage configure"),
 	"triage test":        unavailable("triage test"),
 	"provider configure": unavailable("provider configure"),
@@ -104,10 +103,14 @@ func normalizeCommand(value string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: zoe [setup|configure|install|update|uninstall|provider configure|provider test|memory configure|memory test|triage configure|triage test|key init|key rotate|status|voice configure|voice test|voice status|client-policy show|client-policy set]")
+	return errors.New("usage: zoe [setup|install|update|uninstall|provider configure|provider test|memory configure|memory test|triage configure|triage test|key init|key rotate|status|voice configure|voice test|voice status|client-policy show|client-policy set]")
 }
 
 func menu(in io.Reader, out, errOut io.Writer) error {
+	return menuWithRoot(in, out, errOut, "/etc/zoe")
+}
+
+func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 	in = sharedInput(in)
 	for {
 		fmt.Fprintln(out)
@@ -124,16 +127,18 @@ func menu(in io.Reader, out, errOut io.Writer) error {
 		fmt.Fprintln(out, "  7) Test task model")
 		fmt.Fprintln(out, "  8) Configure memory model")
 		fmt.Fprintln(out, "  9) Test memory model")
+		fmt.Fprintln(out, "  10) Configure triage model")
+		fmt.Fprintln(out, "  11) Test triage model")
 		fmt.Fprintln(out, "Voice:")
-		fmt.Fprintln(out, "  10) Configure voice gateway")
-		fmt.Fprintln(out, "  11) Test voice gateway")
-		fmt.Fprintln(out, "  12) Show voice gateway status")
+		fmt.Fprintln(out, "  12) Configure voice gateway")
+		fmt.Fprintln(out, "  13) Test voice gateway")
+		fmt.Fprintln(out, "  14) Show voice gateway status")
 		fmt.Fprintln(out, "Access:")
-		fmt.Fprintln(out, "  13) Create instance key")
-		fmt.Fprintln(out, "  14) Rotate instance key")
+		fmt.Fprintln(out, "  15) Create instance key")
+		fmt.Fprintln(out, "  16) Rotate instance key")
 		fmt.Fprintln(out, "Client policy:")
-		fmt.Fprintln(out, "  15) Show client policy")
-		fmt.Fprintln(out, "  16) Set client policy")
+		fmt.Fprintln(out, "  17) Show client policy")
+		fmt.Fprintln(out, "  18) Set client policy")
 		fmt.Fprintln(out, "  0) Exit")
 		fmt.Fprint(out, "Select an option: ")
 		line, err := inputLine(in)
@@ -147,9 +152,23 @@ func menu(in io.Reader, out, errOut io.Writer) error {
 		if choice == "0" || strings.EqualFold(choice, "q") || strings.EqualFold(choice, "quit") || strings.EqualFold(choice, "exit") {
 			return nil
 		}
-		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "8": "memory configure", "9": "memory test", "10": "voice configure", "11": "voice test", "12": "voice status", "13": "key init", "14": "key rotate", "15": "client-policy show", "16": "client-policy set"}[choice]
+		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "9": "memory test", "12": "voice configure", "13": "voice test", "14": "voice status", "15": "key init", "16": "key rotate", "17": "client-policy show", "18": "client-policy set"}[choice]
 		if !ok {
-			fmt.Fprintln(errOut, "Please choose a number from 0 to 16.")
+			if choice == "8" || choice == "10" {
+				err := menuModel(configureMenuIO(root, in, out, errOut), choice == "10")
+				if err != nil && !errors.Is(err, io.EOF) {
+					fmt.Fprintln(errOut, "Error:", err)
+				}
+				continue
+			}
+			if choice == "11" {
+				err := triageTestOperation([]string{"--root", root}, in, out, errOut)
+				if err != nil {
+					fmt.Fprintln(errOut, "Error:", err)
+				}
+				continue
+			}
+			fmt.Fprintln(errOut, "Please choose a number from 0 to 18.")
 			continue
 		}
 		if err := operations[name](nil, in, out, errOut); err != nil {
