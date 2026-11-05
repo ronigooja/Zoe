@@ -94,8 +94,12 @@ func TestMaintenanceMenuTriagePromptsForThinkingAndWritesIt(t *testing.T) {
 func TestMaintenanceMenuTriageDoesNotAskForAPIStyle(t *testing.T) {
 	menuManager(t)
 	root := t.TempDir()
+	keyPath := filepath.Join(root, "key")
+	old := terminalEcho
+	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
+	t.Cleanup(func() { terminalEcho = old })
 	var out, errOut bytes.Buffer
-	_ = menuWithRoot(strings.NewReader("0\n"), &out, &errOut, root)
+	_ = menuWithRoot(strings.NewReader("10\nhttps://gateway.example\nm\nlow\n\n"+keyPath+"\nsecret\nn\n0\n"), &out, &errOut, root)
 	if strings.Contains(out.String(), "API style") {
 		t.Fatal(out.String())
 	}
