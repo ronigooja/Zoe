@@ -90,6 +90,9 @@ type InspectConfig struct {
 	MemoryBaseURL        string
 	MemoryModel          string
 	MemoryLastCheck      string
+	TriageBaseURL        string
+	TriageModel          string
+	TriageSecretPath     string
 }
 
 func DetectMode() Mode {

@@ -23,10 +23,13 @@ import (
 
 func init() {
 	_ = RegisterOperation("setup", setupOperation)
+	_ = RegisterOperation("configure", configureOperation)
 	_ = RegisterOperation("provider configure", providerConfigureOperation)
 	_ = RegisterOperation("provider test", providerTestOperation)
 	_ = RegisterOperation("memory configure", memoryConfigureOperation)
 	_ = RegisterOperation("memory test", memoryTestOperation)
+	_ = RegisterOperation("triage configure", triageConfigureOperation)
+	_ = RegisterOperation("triage test", triageTestOperation)
 	_ = RegisterOperation("key init", keyInitOperation)
 	_ = RegisterOperation("key rotate", keyRotateOperation)
 	_ = RegisterOperation("status", statusOperation)
@@ -364,11 +367,15 @@ func memoryConfigureOperationWithSkip(args []string, in io.Reader, out, errOut i
 	fs.SetOutput(errOut)
 	root := fs.String("root", "/etc/zoe", "deployment configuration root")
 	base := fs.String("url", "", "override memory model gateway URL")
+	baseAlias := fs.String("base-url", "", "override memory model gateway URL")
 	model := fs.String("model", "", "override memory model")
 	secretPath := fs.String("secret", ops.DefaultMemorySecretPath, "private memory credential file")
 	secretFileAlias := fs.String("secret-file", "", "compatibility alias for --secret")
 	token := fs.String("token", "", "compatibility token input; shell history and process arguments may retain it (prefer prompt)")
 	tokenFile := fs.String("token-file", "", "read a private memory credential file")
+	keyFile := fs.String("key-file", "", "record an existing private memory key file")
+	keyStdin := fs.Bool("key-stdin", false, "read the private memory key from stdin")
+	disable := fs.Bool("disable", false, "disable memory model")
 	nonInteractive := fs.Bool("non-interactive", false, "require all memory values without prompts")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -376,11 +383,23 @@ func memoryConfigureOperationWithSkip(args []string, in io.Reader, out, errOut i
 	if fs.NArg() != 0 {
 		return errors.New("unexpected arguments")
 	}
+	if *keyFile != "" {
+		if *tokenFile != "" {
+			return errors.New("use only one of --key-file and --token-file")
+		}
+		*tokenFile = *keyFile
+	}
+	if *keyStdin && (*tokenFile != "" || *token != "") {
+		return errors.New("use only one key input")
+	}
 	if *secretFileAlias != "" {
 		if *secretPath != ops.DefaultMemorySecretPath {
 			return errors.New("use only one of --secret and --secret-file")
 		}
 		*secretPath = *secretFileAlias
+	}
+	if *base == "" {
+		*base = *baseAlias
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -399,6 +418,16 @@ func memoryConfigureOperationWithSkip(args []string, in io.Reader, out, errOut i
 		cfg.Model = *model
 	}
 	cfg.SecretPath = *secretPath
+	if *disable {
+		cfg.BaseURL = ""
+		cfg.Model = ""
+		if err := ops.WriteMemoryEnvAtomic(d.StackEnv, cfg); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "Memory model disabled.")
+		fmt.Fprintln(out, "Apply with: zoe update")
+		return nil
+	}
 	provider, err := d.ProviderConfig()
 	if err != nil {
 		return err
@@ -440,6 +469,15 @@ func memoryConfigureOperationWithSkip(args []string, in io.Reader, out, errOut i
 	}
 	if *token != "" {
 		cfg.Secret = strings.TrimSpace(*token)
+	} else if *keyStdin {
+		secret, readErr := io.ReadAll(in)
+		if readErr != nil {
+			return errors.New("cannot read key from stdin")
+		}
+		cfg.Secret = strings.TrimSpace(string(secret))
+		for i := range secret {
+			secret[i] = 0
+		}
 	} else if *tokenFile == "" {
 		if *nonInteractive {
 			return errors.New("--token-file or --token is required for non-interactive configure")
@@ -462,6 +500,11 @@ func memoryConfigureOperationWithSkip(args []string, in io.Reader, out, errOut i
 			secret[i] = 0
 		}
 	}
+	if *tokenFile != "" && *keyStdin == false {
+		if err := ops.ValidateKeyFile(*tokenFile); err != nil {
+			return err
+		}
+	}
 	if filepath.Clean(cfg.SecretPath) == filepath.Clean(provider.SecretPath) {
 		return errors.New("memory secret path must be distinct from the task-model secret path")
 	}
@@ -473,6 +516,134 @@ func memoryConfigureOperationWithSkip(args []string, in io.Reader, out, errOut i
 	}
 	fmt.Fprintln(out, "Memory model configured, checked and memory worker reloaded.")
 	return nil
+}
+
+func triageConfigureOperation(args []string, in io.Reader, out, errOut io.Writer) error {
+	fs := flag.NewFlagSet("triage configure", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	root := fs.String("root", "/etc/zoe", "deployment configuration root")
+	base := fs.String("base-url", "", "triage model base URL")
+	legacyURL := fs.String("url", "", "triage model base URL")
+	model := fs.String("model", "", "triage model")
+	keyFile := fs.String("key-file", "", "existing private triage key file")
+	secretFile := fs.String("secret-file", "", "private triage key destination")
+	keyStdin := fs.Bool("key-stdin", false, "read the private triage key from stdin")
+	disable := fs.Bool("disable", false, "disable triage without deleting other values")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("unexpected arguments")
+	}
+	if *base == "" {
+		*base = *legacyURL
+	}
+	if *keyFile != "" && *secretFile != "" {
+		return errors.New("use only one of --key-file and --secret-file")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	d, err := ops.DiscoverDeployment(ctx, opsManager(), *root)
+	if err != nil {
+		return err
+	}
+	cfg, err := d.TriageConfig()
+	if err != nil {
+		return err
+	}
+	if *base != "" {
+		cfg.BaseURL = *base
+	}
+	if *model != "" {
+		cfg.Model = *model
+	}
+	if *keyFile != "" {
+		cfg.SecretPath = *keyFile
+	}
+	if *secretFile != "" {
+		cfg.SecretPath = *secretFile
+	}
+	if cfg.SecretPath == "" {
+		cfg.SecretPath = filepath.Join(*root, "secrets", "triage-api-key")
+	}
+	if *disable {
+		if err := ops.WriteTriageEnvAtomic(d.StackEnv, cfg, true); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "Triage model disabled.")
+		fmt.Fprintln(out, "Apply with: zoe update")
+		return nil
+	}
+	if err := ops.ValidateModelBaseURL(cfg.BaseURL); err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.Model) == "" {
+		return errors.New("triage model is required")
+	}
+	if *keyStdin {
+		secret, readErr := io.ReadAll(in)
+		if readErr != nil {
+			return errors.New("cannot read key from stdin")
+		}
+		defer func() {
+			for i := range secret {
+				secret[i] = 0
+			}
+		}()
+		if err := ops.WriteTriageSecretAtomic(cfg.SecretPath, secret); err != nil {
+			return err
+		}
+	} else {
+		if err := ops.ValidateKeyFile(cfg.SecretPath); err != nil {
+			return err
+		}
+	}
+	if err := ops.WriteTriageEnvAtomic(d.StackEnv, cfg, false); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Triage model configured: model=%s base-url-host=%s key-file-present=yes\n", safeLabel(cfg.Model), safeHost(cfg.BaseURL))
+	fmt.Fprintln(out, "Apply with: zoe update")
+	return nil
+}
+
+func triageTestOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
+	fs := flag.NewFlagSet("triage test", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	root := fs.String("root", "/etc/zoe", "deployment configuration root")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("unexpected arguments")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	d, err := ops.DiscoverDeployment(ctx, opsManager(), *root)
+	if err != nil {
+		return err
+	}
+	cfg, err := d.TriageConfig()
+	if err != nil {
+		return err
+	}
+	r, testErr := ops.TestTriage(ctx, cfg, nil)
+	class := "FAIL"
+	if testErr == nil {
+		class = "PASS"
+	}
+	fmt.Fprintf(out, "%s HTTP %dxx latency=%dms category=%s\n", class, r.HTTPStatus/100, r.Latency.Milliseconds(), safeLabel(r.Category))
+	if testErr != nil {
+		fmt.Fprintln(errOut, safeLabel(testErr.Error()))
+	}
+	return testErr
+}
+
+func safeHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 func memoryTestOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
@@ -826,6 +997,13 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	inspect.MemorySecretPath = memory.SecretPath
 	inspect.MemoryBaseURL = memory.BaseURL
 	inspect.MemoryModel = memory.Model
+	triage, triageErr := d.TriageConfig()
+	if triageErr != nil {
+		return triageErr
+	}
+	inspect.TriageBaseURL = triage.BaseURL
+	inspect.TriageModel = triage.Model
+	inspect.TriageSecretPath = triage.SecretPath
 	status := opsManager().Inspect(ctx, inspect)
 	fmt.Fprintf(out, "Deployment: %s\n", status.Mode)
 	keyState := "pending (run zoe key init)"
@@ -851,6 +1029,18 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 		memoryHost = u.Hostname()
 	}
 	fmt.Fprintf(out, "Memory: host=%s model=%s secret-file=%s mode-0600=%t last-check=%s\n", safeLabel(memoryHost), safeLabel(status.Memory.Model), safeLabel(status.Memory.Secret.Path), status.Memory.Secret.Exists && status.Memory.Secret.Mode == "0600", safeLabel(status.Memory.LastCheck))
+	triageHost := safeHost(inspect.TriageBaseURL)
+	triagePresent := false
+	if inspect.TriageSecretPath != "" {
+		if info, statErr := os.Stat(inspect.TriageSecretPath); statErr == nil && info.Mode().IsRegular() {
+			triagePresent = true
+		}
+	}
+	triageState := "disabled"
+	if inspect.TriageBaseURL != "" {
+		triageState = "enabled"
+	}
+	fmt.Fprintf(out, "Triage: %s host=%s model=%s key-file-present=%t\n", triageState, safeLabel(triageHost), safeLabel(inspect.TriageModel), triagePresent)
 	current := filepath.Join(*optRoot, "releases", "current")
 	if revision, readErr := os.ReadFile(filepath.Join(current, "SOURCE_REVISION")); readErr == nil {
 		fmt.Fprintf(out, "Release: source-revision=%s\n", safeLabel(strings.TrimSpace(string(revision))))
