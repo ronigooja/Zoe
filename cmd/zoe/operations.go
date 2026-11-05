@@ -1089,6 +1089,9 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 		style = "auto"
 	}
 	fmt.Fprintf(out, "Triage: %s style=%s host=%s model=%s effort=%s thinking=%s key-file-present=%t\n", triageState, safeLabel(style), safeLabel(triageHost), safeLabel(inspect.TriageModel), safeLabel(triage.ReasoningEffort), safeLabel(triage.Thinking), triagePresent)
+	if err := printRecallStatus(d, out); err != nil {
+		return err
+	}
 	current := filepath.Join(*optRoot, "releases", "current")
 	if revision, readErr := os.ReadFile(filepath.Join(current, "SOURCE_REVISION")); readErr == nil {
 		fmt.Fprintf(out, "Release: source-revision=%s\n", safeLabel(strings.TrimSpace(string(revision))))
