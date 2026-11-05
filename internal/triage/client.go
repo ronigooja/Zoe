@@ -117,8 +117,9 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 		return "", err
 	}
 	var response struct {
-		Status string `json:"status"`
-		Output []struct {
+		Status     string `json:"status"`
+		OutputText string `json:"output_text"`
+		Output     []struct {
 			Type    string `json:"type"`
 			Content []struct {
 				Type string `json:"type"`
@@ -146,6 +147,9 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 		if output != "" {
 			break
 		}
+	}
+	if output == "" {
+		output = response.OutputText
 	}
 	word := strings.ToLower(strings.Trim(strings.TrimSpace(output), ".,!?;:\"'`"))
 	if strings.ContainsAny(word, " \t\r\n") {
