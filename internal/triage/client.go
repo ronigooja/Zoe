@@ -25,6 +25,11 @@ const (
 
 const instructions = "Classify the sentence into exactly one word: progress, recall, memory, task, or chat. Reply with exactly one of those five words and nothing else."
 
+func reasoningModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(model, "gpt-6") || strings.HasPrefix(model, "gpt-5.6") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3")
+}
+
 type Client struct {
 	baseURL string
 	model   string
@@ -77,14 +82,19 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 	if c == nil || c.http == nil || c.baseURL == "" || c.model == "" || c.apiKey == "" {
 		return "", errors.New("triage client is not configured")
 	}
-	body, err := json.Marshal(map[string]any{
+	request := map[string]any{
 		"model":             c.model,
 		"instructions":      instructions,
 		"input":             text,
-		"max_output_tokens": 16,
-		"temperature":       0,
+		"max_output_tokens": 256,
 		"store":             false,
-	})
+	}
+	if reasoningModel(c.model) {
+		request["reasoning"] = map[string]string{"effort": "low"}
+	} else {
+		request["temperature"] = 0
+	}
+	body, err := json.Marshal(request)
 	if err != nil {
 		return "", err
 	}
@@ -107,9 +117,11 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 		return "", err
 	}
 	var response struct {
-		OutputText string `json:"output_text"`
-		Output     []struct {
+		Status string `json:"status"`
+		Output []struct {
+			Type    string `json:"type"`
 			Content []struct {
+				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"content"`
 		} `json:"output"`
@@ -117,18 +129,22 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 	if err := json.Unmarshal(responseBody, &response); err != nil {
 		return "", errors.New("invalid triage response")
 	}
-	output := response.OutputText
-	if output == "" {
-		for _, item := range response.Output {
-			for _, content := range item.Content {
-				if content.Text != "" {
-					output = content.Text
-					break
-				}
-			}
-			if output != "" {
+	if response.Status == "incomplete" {
+		return "", errors.New("triage response was incomplete")
+	}
+	var output string
+	for _, item := range response.Output {
+		if item.Type != "message" {
+			continue
+		}
+		for _, content := range item.Content {
+			if content.Type == "output_text" && content.Text != "" {
+				output = content.Text
 				break
 			}
+		}
+		if output != "" {
+			break
 		}
 	}
 	word := strings.ToLower(strings.Trim(strings.TrimSpace(output), ".,!?;:\"'`"))
