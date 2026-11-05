@@ -23,6 +23,25 @@ type Summary struct {
 	FirstSeq int    `json:"first_seq"`
 	LastSeq  int    `json:"last_seq"`
 }
+
+// UnmarshalJSON requires all four fields, including zero-valued sequence numbers.
+func (s *Summary) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Topic    *string `json:"topic"`
+		Summary  *string `json:"summary"`
+		FirstSeq *int    `json:"first_seq"`
+		LastSeq  *int    `json:"last_seq"`
+	}
+	if err := modelclient.Decode(string(data), &wire); err != nil {
+		return err
+	}
+	if wire.Topic == nil || wire.Summary == nil || wire.FirstSeq == nil || wire.LastSeq == nil {
+		return errors.New("summary requires topic, summary, first_seq, and last_seq")
+	}
+	*s = Summary{Topic: *wire.Topic, Summary: *wire.Summary, FirstSeq: *wire.FirstSeq, LastSeq: *wire.LastSeq}
+	return nil
+}
+
 type Client struct{ *modelclient.Client }
 
 func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) (*Client, error) {
