@@ -125,6 +125,29 @@ Responses requests never send the chat `thinking` field. Explicit thinking setti
 
 [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode) defaults to enabled with effort `high`; its Responses `none` disables thinking. DeepSeek maps `minimal` to `low`, `medium` and `xhigh` to `high`, and supports `max`; Zoe accepts `medium` but rejects `minimal` and `xhigh` for gateway compatibility. See its [Responses API guide](https://api-docs.deepseek.com/guides/responses_api). Memory effort validation uses the same accepted values; its existing empty-effort fallback remains `medium`.
 
+### Call-recall model endpoints
+
+For call-history recall, configure independent endpoints through the existing Models
+menu or `zoe summary configure` and `zoe answer configure`. Both accept `--base-url`,
+`--model`, `--effort` (empty, low, medium, high), `--thinking` (empty, enabled,
+disabled), `--key-stdin`, and `--disable`. Keys are written atomically with mode
+0600 to `/etc/zoe/secrets/summary-api-key` and `/etc/zoe/secrets/answer-api-key`.
+Empty base URLs disable each endpoint independently; updates preserve their settings.
+Environment names and secret references are in the [stack example](../../deploy/linux/zoe-stack.env.example).
+The summary timeout defaults to 120000 ms (range 5000–600000); the answer timeout
+defaults to 8000 ms (range 500–30000). Both use Responses first and remember a
+Chat Completions fallback after HTTP 404, 405, or 501. Thinking is sent only to Chat
+Completions, matching triage. `zoe summary test` and `zoe answer test` invoke runtime
+clients with synthetic evidence and report PASS/FAIL, API style, and latency;
+`zoe status` reports configuration without credential contents. Apply with `zoe update`.
+
+The summary client groups a full numbered call transcript into validated contiguous
+topic ranges. The answer client uses candidate summaries first and requests known
+transcript IDs only for missing wording or detail. These clients are integration
+building blocks: this configuration does not schedule post-call work or connect
+live recall to voice. Synthetic probes do not establish live-provider quality,
+latency, deployment, or end-to-end acceptance.
+
 The complete host installation therefore includes the Zoe-owned OpenCode runtime image,
 Zoe server image, trusted runner, memory worker image, Qdrant service, Docker,
 and the three Zoe systemd services. An external model gateway is not installed
