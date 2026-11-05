@@ -625,8 +625,12 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	// The gateway owns account selection and returns only its opaque sticky
 	// session handle. Zoe never receives or records an account credential/id.
 	gatewayBody, _ := json.Marshal(gatewaySessionRequest{OfferSDP: req.OfferSDP, Voice: req.Voice, VoiceMode: req.VoiceMode, LanguageCode: req.LanguageCode, OpeningContext: opening})
-	response, gatewayRequestID, callErr := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions", gatewayBody)
-	_ = s.persistGatewayRequestID(ctx, id, gatewayRequestID)
+	gatewayRequestID := uuid.NewString()
+	if err := s.persistGatewayRequestID(ctx, id, gatewayRequestID); err != nil {
+		_ = s.markSession(context.WithoutCancel(ctx), id, "failed", "gateway_request_id_persist_failed", nil, "")
+		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_unavailable", "voice gateway request could not be durably prepared", nil)
+	}
+	response, _, callErr := s.callGateway(withGatewayRequestID(ctx, gatewayRequestID), http.MethodPost, "/v1/voice/sessions", gatewayBody)
 	if callErr != nil {
 		_ = s.markSession(ctx, id, "quarantined", "gateway_outcome_unknown", nil, "")
 		if s.queryGatewayOutcome(ctx, gatewayRequestID) == "never_established" {
@@ -741,10 +745,14 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 }
 
 func (s *Service) persistGatewayRequestID(ctx context.Context, sessionID, requestID string) error {
-	if strings.TrimSpace(requestID) == "" {
-		return nil
+	result, err := s.db.ExecContext(context.WithoutCancel(ctx), `UPDATE voice_sessions SET gateway_request_id=?,updated_at=? WHERE id=? AND state='allocating'`, requestID, s.now().UTC().Format(time.RFC3339Nano), sessionID)
+	if err == nil {
+		if changed, rowsErr := result.RowsAffected(); rowsErr != nil {
+			err = rowsErr
+		} else if changed != 1 {
+			err = fmt.Errorf("voice gateway request id was not persisted for allocating session %s", sessionID)
+		}
 	}
-	_, err := s.db.ExecContext(context.WithoutCancel(ctx), `UPDATE voice_sessions SET gateway_request_id=?,updated_at=? WHERE id=? AND state='allocating'`, requestID, s.now().UTC().Format(time.RFC3339Nano), sessionID)
 	return err
 }
 

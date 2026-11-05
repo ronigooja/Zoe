@@ -960,9 +960,17 @@ func TestUnknownMediaOutcomeBlocksWholePoolUntilOperatorReconciliation(t *testin
 
 func TestVoiceCreateGatewayAttestationNeverEstablishedReleasesPool(t *testing.T) {
 	var requestID string
+	var store *storage.Store
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/v1/voice/sessions" {
 			requestID = r.Header.Get("X-Request-ID")
+			var persisted string
+			if err := store.DB().QueryRow(`SELECT gateway_request_id FROM voice_sessions WHERE request_id='request-attest'`).Scan(&persisted); err != nil {
+				t.Fatalf("read persisted gateway request id: %v", err)
+			}
+			if persisted != requestID || requestID == "" {
+				t.Fatalf("persisted request id=%q, header=%q", persisted, requestID)
+			}
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
@@ -974,16 +982,25 @@ func TestVoiceCreateGatewayAttestationNeverEstablishedReleasesPool(t *testing.T)
 		http.NotFound(w, r)
 	}))
 	defer server.Close()
-	store, svc := newVoiceTestService(t, Config{GatewayURL: server.URL, GatewayAPIKey: "key", HTTPClient: server.Client()})
-	_, _ = svc.create(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}, createRequest{RequestID: "request-attest", OfferSDP: "v=0"})
+	var svc *Service
+	store, svc = newVoiceTestService(t, Config{GatewayURL: server.URL, GatewayAPIKey: "key", HTTPClient: server.Client()})
+	if _, err := svc.create(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}, createRequest{RequestID: "request-attest", OfferSDP: "v=0"}); err == nil {
+		t.Fatal("create unexpectedly succeeded")
+	}
 	var state, code string
 	var blocked, reconciliations, events int
 	if err := store.DB().QueryRow(`SELECT state,last_error_code FROM voice_sessions`).Scan(&state, &code); err != nil {
 		t.Fatal(err)
 	}
-	_ = store.DB().QueryRow(`SELECT blocked FROM voice_pool_state`).Scan(&blocked)
-	_ = store.DB().QueryRow(`SELECT COUNT(*) FROM voice_pool_reconciliations WHERE method='gateway_attestation'`).Scan(&reconciliations)
-	_ = store.DB().QueryRow(`SELECT COUNT(*) FROM events WHERE event_type='voice.pool.reconciled'`).Scan(&events)
+	if err := store.DB().QueryRow(`SELECT blocked FROM voice_pool_state`).Scan(&blocked); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM voice_pool_reconciliations WHERE method='gateway_attestation'`).Scan(&reconciliations); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM events WHERE event_type='voice.pool.reconciled'`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
 	if state != "failed" || code != "gateway_never_established" || blocked != 0 || reconciliations != 1 || events != 1 {
 		t.Fatalf("state=%s code=%s blocked=%d reconciliations=%d events=%d", state, code, blocked, reconciliations, events)
 	}
@@ -997,11 +1014,17 @@ func TestVoiceCreate422AlreadyUnblocksNegotiationFence(t *testing.T) {
 	}))
 	defer server.Close()
 	store, svc := newVoiceTestService(t, Config{GatewayURL: server.URL, GatewayAPIKey: "key", HTTPClient: server.Client()})
-	_, _ = svc.create(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}, createRequest{RequestID: "request-422", OfferSDP: "v=0"})
+	if _, err := svc.create(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}, createRequest{RequestID: "request-422", OfferSDP: "v=0"}); err == nil {
+		t.Fatal("create unexpectedly succeeded")
+	}
 	var state, code string
 	var blocked int
-	_ = store.DB().QueryRow(`SELECT state,last_error_code FROM voice_sessions`).Scan(&state, &code)
-	_ = store.DB().QueryRow(`SELECT blocked FROM voice_pool_state`).Scan(&blocked)
+	if err := store.DB().QueryRow(`SELECT state,last_error_code FROM voice_sessions`).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRow(`SELECT blocked FROM voice_pool_state`).Scan(&blocked); err != nil {
+		t.Fatal(err)
+	}
 	if state != "failed" || code != "gateway_rejected" || blocked != 0 {
 		t.Fatalf("state=%s code=%s blocked=%d", state, code, blocked)
 	}
@@ -1035,7 +1058,9 @@ func TestQueryGatewayOutcomeLeavesNonNeverEstablishedUnresolved(t *testing.T) {
 				t.Fatalf("outcome=%q, want %q", got, tc.want)
 			}
 			var count int
-			_ = store.DB().QueryRow(`SELECT COUNT(*) FROM voice_pool_reconciliations`).Scan(&count)
+			if err := store.DB().QueryRow(`SELECT COUNT(*) FROM voice_pool_reconciliations`).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
 			if count != 0 {
 				t.Fatalf("query created %d reconciliation rows", count)
 			}
@@ -1057,15 +1082,25 @@ func TestGatewayAttestationSweepResolvesOldAllocatingOnlyOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, _ = store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,reason_code='negotiation_in_progress',source_session_id='old' WHERE id=1`)
+	if _, err := store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,reason_code='negotiation_in_progress',source_session_id='old' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
 	svc.attestStaleCreates(context.Background())
 	svc.attestStaleCreates(context.Background())
 	var oldState, youngState string
 	var blocked, rows int
-	_ = store.DB().QueryRow(`SELECT state FROM voice_sessions WHERE id='old'`).Scan(&oldState)
-	_ = store.DB().QueryRow(`SELECT state FROM voice_sessions WHERE id='young'`).Scan(&youngState)
-	_ = store.DB().QueryRow(`SELECT blocked FROM voice_pool_state`).Scan(&blocked)
-	_ = store.DB().QueryRow(`SELECT COUNT(*) FROM voice_pool_reconciliations WHERE method='gateway_attestation'`).Scan(&rows)
+	if err := store.DB().QueryRow(`SELECT state FROM voice_sessions WHERE id='old'`).Scan(&oldState); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRow(`SELECT state FROM voice_sessions WHERE id='young'`).Scan(&youngState); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRow(`SELECT blocked FROM voice_pool_state`).Scan(&blocked); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM voice_pool_reconciliations WHERE method='gateway_attestation'`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
 	if oldState != "failed" || youngState != "allocating" || blocked != 0 || rows != 1 {
 		t.Fatalf("old=%s young=%s blocked=%d reconciliations=%d", oldState, youngState, blocked, rows)
 	}
@@ -1079,16 +1114,24 @@ func TestGatewayAttestationDoesNotOverwriteConcurrentStateChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,reason_code='negotiation_in_progress',source_session_id='race' WHERE id=1`)
+	if _, err := store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,reason_code='negotiation_in_progress',source_session_id='race' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
 	svc.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		_, _ = store.DB().Exec(`UPDATE voice_sessions SET state='active' WHERE id='race'`)
+		if _, err := store.DB().Exec(`UPDATE voice_sessions SET state='active' WHERE id='race'`); err != nil {
+			t.Fatalf("concurrent state change: %v", err)
+		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"request_id":"req-race","outcome":"never_established"}`)), Header: make(http.Header)}, nil
 	})}
 	svc.attestStaleCreates(context.Background())
 	var state string
 	var rows int
-	_ = store.DB().QueryRow(`SELECT state FROM voice_sessions WHERE id='race'`).Scan(&state)
-	_ = store.DB().QueryRow(`SELECT COUNT(*) FROM voice_pool_reconciliations`).Scan(&rows)
+	if err := store.DB().QueryRow(`SELECT state FROM voice_sessions WHERE id='race'`).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM voice_pool_reconciliations`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
 	if state != "active" || rows != 0 {
 		t.Fatalf("state=%s reconciliations=%d", state, rows)
 	}
@@ -1101,18 +1144,89 @@ func TestGatewayAttestationRequiresMatchingPoolSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = store.DB().Exec(`UPDATE voice_sessions SET last_error_code='gateway_outcome_unknown' WHERE id='attested'`)
-	_, _ = store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,reason_code='gateway_outcome_unknown',source_session_id='other' WHERE id=1`)
+	if _, err := store.DB().Exec(`UPDATE voice_sessions SET last_error_code='gateway_outcome_unknown' WHERE id='attested'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,reason_code='gateway_outcome_unknown',source_session_id='other' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
 	if err := svc.resolveGatewayNeverEstablished(context.Background(), "attested", 1, "quarantined"); err != nil {
 		t.Fatal(err)
 	}
 	var state string
 	var blocked, rows int
-	_ = store.DB().QueryRow(`SELECT state FROM voice_sessions WHERE id='attested'`).Scan(&state)
-	_ = store.DB().QueryRow(`SELECT blocked FROM voice_pool_state`).Scan(&blocked)
-	_ = store.DB().QueryRow(`SELECT COUNT(*) FROM voice_pool_reconciliations`).Scan(&rows)
+	if err := store.DB().QueryRow(`SELECT state FROM voice_sessions WHERE id='attested'`).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRow(`SELECT blocked FROM voice_pool_state`).Scan(&blocked); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM voice_pool_reconciliations`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
 	if state != "failed" || blocked != 1 || rows != 0 {
 		t.Fatalf("state=%s blocked=%d reconciliations=%d", state, blocked, rows)
+	}
+	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('other','default','other-owner','device','other-request',X'01',1,'quarantined',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(reconcilePoolPayload{SessionID: "other", Generation: 1, Reason: "Verified no upstream media remains", ConfirmedOutOfBandTermination: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.DB().BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = svc.commandReconcilePool(context.Background(), tx, control.CommandContext{Principal: contracts.Principal{SubjectID: "operator", Scopes: []string{"voice:pool:reconcile"}}, AcceptedAt: time.Now().UTC()}, contracts.CommandRequest{Payload: payload})
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("source session remained unreconcilable: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGatewayAttestationSweepLeavesNonNeverEstablishedOutcomesUntouched(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{name: "open", status: http.StatusOK, body: `{"request_id":"req-sweep","outcome":"open"}`},
+		{name: "released", status: http.StatusOK, body: `{"request_id":"req-sweep","outcome":"released"}`},
+		{name: "unknown", status: http.StatusOK, body: `{"request_id":"req-sweep","outcome":"unknown"}`},
+		{name: "not found", status: http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+			store, svc := newVoiceTestService(t, Config{Now: func() time.Time { return now }, GatewayURL: "https://gateway.test", GatewayAPIKey: "key"})
+			at := now.Add(-3 * time.Minute).Format(time.RFC3339Nano)
+			if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_request_id) VALUES('sweep','default','owner','device','sweep-request',X'01',1,'allocating',?,?,?)`, at, at, "req-sweep"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,reason_code='negotiation_in_progress',source_session_id='sweep' WHERE id=1`); err != nil {
+				t.Fatal(err)
+			}
+			svc.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body)), Header: make(http.Header)}, nil
+			})}
+			svc.attestStaleCreates(context.Background())
+			var state, reason string
+			var blocked, rows int
+			if err := store.DB().QueryRow(`SELECT state,last_error_code FROM voice_sessions WHERE id='sweep'`).Scan(&state, &reason); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.DB().QueryRow(`SELECT blocked FROM voice_pool_state`).Scan(&blocked); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.DB().QueryRow(`SELECT COUNT(*) FROM voice_pool_reconciliations`).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if state != "allocating" || reason != "" || blocked != 1 || rows != 0 {
+				t.Fatalf("state=%s reason=%s blocked=%d reconciliations=%d", state, reason, blocked, rows)
+			}
+		})
 	}
 }
 
