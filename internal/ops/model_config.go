@@ -18,12 +18,12 @@ const DefaultTriageSecretPath = "/etc/zoe/secrets/triage-api-key"
 
 const DefaultTriageReasoningEffort = "low"
 
-var validReasoningEfforts = map[string]bool{"low": true, "medium": true, "high": true}
+var validReasoningEfforts = map[string]bool{"none": true, "low": true, "medium": true, "high": true, "max": true}
 
 func ValidateReasoningEffort(value string) error {
 	value = strings.TrimSpace(value)
 	if value != "" && !validReasoningEfforts[value] {
-		return errors.New("reasoning effort must be one of low, medium, high, or empty")
+		return errors.New("reasoning effort must be one of none, low, medium, high, max, or empty")
 	}
 	return nil
 }

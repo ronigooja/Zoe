@@ -108,8 +108,8 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 		timeout = time.Duration(ms) * time.Millisecond
 	}
 	effort := strings.TrimSpace(getenv("ZOE_TRIAGE_REASONING_EFFORT"))
-	if effort != "" && effort != "low" && effort != "medium" && effort != "high" {
-		return nil, errors.New("ZOE_TRIAGE_REASONING_EFFORT must be one of low, medium, high, or empty")
+	if effort != "" && effort != "none" && effort != "low" && effort != "medium" && effort != "high" && effort != "max" {
+		return nil, errors.New("ZOE_TRIAGE_REASONING_EFFORT must be one of none, low, medium, high, max, or empty")
 	}
 	apiStyle := strings.TrimSpace(getenv("ZOE_TRIAGE_API_STYLE"))
 	if apiStyle != "" && apiStyle != "responses" && apiStyle != "chat" {
@@ -195,12 +195,16 @@ func (c *Client) call(ctx context.Context, style, text string) (Category, []byte
 		request["max_output_tokens"] = 256
 		request["store"] = false
 	}
-	if style == "responses" && reasoningModel(c.model) {
+	if style == "responses" && (reasoningModel(c.model) || c.thinking != "") {
 		effort := c.reasoningEffort
-		if effort == "" {
+		if c.thinking == "disabled" {
+			effort = "none"
+		} else if effort == "" && c.thinking == "" {
 			effort = "low"
 		}
-		request["reasoning"] = map[string]string{"effort": effort}
+		if effort != "" {
+			request["reasoning"] = map[string]string{"effort": effort}
+		}
 	} else {
 		request["temperature"] = 0
 	}

@@ -110,8 +110,20 @@ end-to-end task completion require a separate acceptance run.
 
 Use `zoe` with no arguments for the numbered operator menu, or configure endpoints directly with
 `zoe memory configure` and `zoe triage configure`. Triage accepts an HTTPS (or local HTTP) base URL; it first tries `/responses` and falls back to `/chat/completions` when that route is unavailable.
-base URL; use `--key-stdin` to install a mode-0600 key without placing it in shell history.
+Use `--key-stdin` to install a mode-0600 key without placing it in shell history.
 Triage is disabled when `ZOE_TRIAGE_BASE_URL` is empty. Apply a saved change with `zoe update`.
+
+For triage requests, `ZOE_TRIAGE_THINKING` and `ZOE_TRIAGE_REASONING_EFFORT` (CLI `--thinking` and `--effort`) control the following wire fields. Effort accepts `none`, `low`, `medium`, `high`, `max`, or empty; `minimal` is rejected by the configured OpenAI-style gateway. Values are sent unchanged, not mapped locally.
+
+| Thinking value | `/responses` | `/chat/completions` |
+| --- | --- | --- |
+| `disabled` | Sends `{"reasoning":{"effort":"none"}}` for every model, overriding configured effort. | Sends `{"thinking":{"type":"disabled"}}`; separately sends top-level `reasoning_effort` when configured. |
+| `enabled` | Sends `{"reasoning":{"effort":"<configured effort>"}}` for every model when effort is set; otherwise omits `reasoning` and uses the provider default. | Sends `{"thinking":{"type":"enabled"}}`; separately sends top-level `reasoning_effort` when configured. |
+| Empty | Keeps existing model detection: names starting with `gpt-6`, `gpt-5.6`, `o1`, or `o3` send configured effort, or `low` when empty; other models omit `reasoning`. | Omits `thinking`; sends top-level `reasoning_effort` only when configured. |
+
+Responses requests never send the chat `thinking` field. Explicit thinking settings suppress `temperature` on Responses; otherwise existing model-based temperature behavior remains unchanged. Chat requests retain `temperature: 0`. An explicit effort of `none` is still sent unchanged with `enabled`, so avoid that combination when enabling thinking is intended.
+
+[DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode) defaults to enabled with effort `high`; its Responses `none` disables thinking. DeepSeek maps `minimal` to `low`, `medium` and `xhigh` to `high`, and supports `max`; Zoe accepts `medium` but rejects `minimal` and `xhigh` for gateway compatibility. See its [Responses API guide](https://api-docs.deepseek.com/guides/responses_api). Memory effort validation uses the same accepted values; its existing empty-effort fallback remains `medium`.
 
 The complete host installation therefore includes the Zoe-owned OpenCode runtime image,
 Zoe server image, trusted runner, memory worker image, Qdrant service, Docker,
