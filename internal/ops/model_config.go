@@ -2,10 +2,7 @@ package ops
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ronigooja/Zoe/internal/triage"
 )
 
 const DefaultTriageSecretPath = "/etc/zoe/secrets/triage-api-key"
@@ -154,70 +153,43 @@ func TestTriage(ctx context.Context, c TriageConfig, client *http.Client) (Triag
 	if err != nil {
 		return TriageProbeResult{}, err
 	}
-	secret, err := os.ReadFile(c.SecretPath)
-	if err != nil || !validToken(strings.TrimSpace(string(secret))) {
-		return TriageProbeResult{}, errors.New("key file is unavailable or invalid")
-	}
-	payload := map[string]any{"model": c.Model, "input": "Classify this sentence as exactly one category word: billing, technical, or other. Sentence: The app crashes when I open settings."}
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/responses", strings.NewReader(string(body)))
-	if err != nil {
-		return TriageProbeResult{}, errors.New("cannot create triage request")
-	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(secret)))
-	req.Header.Set("Content-Type", "application/json")
-	bounded := &http.Client{Timeout: 10 * time.Second}
-	if client != nil {
-		*bounded = *client
-		if bounded.Timeout <= 0 || bounded.Timeout > 10*time.Second {
-			bounded.Timeout = 10 * time.Second
-		}
-	}
 	start := time.Now()
-	resp, err := bounded.Do(req)
+	clientImpl, err := triage.FromEnv(func(name string) string {
+		switch name {
+		case "ZOE_TRIAGE_BASE_URL":
+			return c.BaseURL
+		case "ZOE_TRIAGE_MODEL":
+			return c.Model
+		case "ZOE_TRIAGE_API_KEY_FILE":
+			return c.SecretPath
+		}
+		return ""
+	}, os.ReadFile)
+	if err != nil {
+		return TriageProbeResult{}, err
+	}
+	if clientImpl == nil {
+		return TriageProbeResult{}, errors.New("triage is disabled")
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	clientImpl.SetHTTPClient(client)
+	category, err := clientImpl.Classify(ctx, "好了吗")
 	latency := time.Since(start)
 	if err != nil {
+		result := TriageProbeResult{Latency: latency}
+		var httpErr *triage.HTTPError
+		if errors.As(err, &httpErr) {
+			result.HTTPStatus = httpErr.StatusCode
+		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return TriageProbeResult{Latency: latency}, errors.New("triage request timed out")
+			return result, errors.New("triage request timed out")
 		}
-		return TriageProbeResult{Latency: latency}, errors.New("triage request failed")
-	}
-	defer resp.Body.Close()
-	result := TriageProbeResult{HTTPStatus: resp.StatusCode, Latency: latency}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return result, errors.New("key rejected by endpoint")
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return result, fmt.Errorf("triage endpoint returned HTTP %d", resp.StatusCode)
-	}
-	var raw struct {
-		Output []struct {
-			Content []struct {
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"output"`
-		Category string `json:"category"`
-		Text     string `json:"text"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&raw); err != nil {
-		return result, errors.New("triage endpoint returned invalid JSON")
-	}
-	if words := strings.Fields(raw.Category); len(words) > 0 {
-		result.Category = words[0]
-	}
-	if result.Category == "" {
-		if words := strings.Fields(raw.Text); len(words) > 0 {
-			result.Category = words[0]
+		if httpErr != nil && httpErr.StatusCode == http.StatusUnauthorized {
+			return result, errors.New("key rejected by endpoint")
 		}
+		return result, err
 	}
-	if result.Category == "" && len(raw.Output) > 0 && len(raw.Output[0].Content) > 0 {
-		words := strings.Fields(raw.Output[0].Content[0].Text)
-		if len(words) > 0 {
-			result.Category = strings.Trim(words[0], ".,:;!?\"'")
-		}
-	}
-	if result.Category == "" {
-		return result, errors.New("triage endpoint returned no category")
-	}
-	return result, nil
+	return TriageProbeResult{HTTPStatus: http.StatusOK, Category: string(category), Latency: latency}, nil
 }

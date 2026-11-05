@@ -37,6 +37,20 @@ type Client struct {
 	http    *http.Client
 }
 
+// SetHTTPClient is used by bounded operator probes and tests.
+func (c *Client) SetHTTPClient(client *http.Client) {
+	if c != nil && client != nil {
+		c.http = client
+	}
+}
+
+// HTTPError reports an unsuccessful HTTP response without exposing response data.
+type HTTPError struct{ StatusCode int }
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("triage request returned HTTP %d", e.StatusCode)
+}
+
 func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) (*Client, error) {
 	if getenv == nil || readFile == nil {
 		return nil, errors.New("triage configuration functions are required")
@@ -110,7 +124,7 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("triage request returned HTTP %d", resp.StatusCode)
+		return "", &HTTPError{StatusCode: resp.StatusCode}
 	}
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
