@@ -36,6 +36,11 @@ type Config struct {
 	UpstreamRoute          string
 	ResultDeliveryEnabled  bool
 	ResultDeliveryInterval time.Duration
+	Classifier             Classifier
+}
+
+type Classifier interface {
+	Classify(context.Context, string) (string, error)
 }
 
 type Service struct {
@@ -54,6 +59,7 @@ type Service struct {
 	upstreamRoute          string
 	resultDeliveryEnabled  bool
 	resultDeliveryInterval time.Duration
+	classifier             Classifier
 	reaperStop             chan struct{}
 	reaperDone             chan struct{}
 }
@@ -316,7 +322,7 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if interval <= 0 {
 		interval = time.Second
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func (s *Service) writeOutcome(ctx context.Context, p contracts.Principal, sessionID, summary, outcome string) error {
@@ -360,7 +366,7 @@ func (s *Service) rotateIfOverBudget(ctx context.Context, p contracts.Principal)
 
 func (s *Service) Start() {
 	go s.reaper()
-	if s.resultDeliveryEnabled {
+	if s.resultDeliveryEnabled || s.classifier != nil {
 		go s.resultDispatcher()
 	}
 }

@@ -12,6 +12,7 @@ import (
 )
 
 const resultDeliveryMaxAttempts = 3
+const fastReplyLease = 30 * time.Second
 
 // resultDeliveryLease bounds how long a claimed delivery is hidden from other dispatchers.
 const resultDeliveryLease = 30 * time.Second
@@ -38,12 +39,50 @@ func (s *Service) resultDispatcher() {
 	for {
 		select {
 		case <-t.C:
+			s.classifyCommittedTurns(context.Background())
 			s.consumeResultEvents(context.Background())
 			s.dispatchResults(context.Background())
+			s.dispatchFastReplies(context.Background())
 		case <-s.reaperStop:
 			return
 		}
 	}
+}
+
+func (s *Service) classifyCommittedTurns(ctx context.Context) {
+	if s.classifier == nil {
+		return
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,content FROM voice_turns WHERE triage_category IS NULL ORDER BY confirmed_at LIMIT 25`)
+	if err != nil {
+		return
+	}
+	type turn struct{ id, content string }
+	var turns []turn
+	for rows.Next() {
+		var t turn
+		if rows.Scan(&t.id, &t.content) == nil {
+			turns = append(turns, t)
+		}
+	}
+	rows.Close()
+	for _, t := range turns {
+		classCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		category, callErr := s.classifier.Classify(classCtx, t.content)
+		cancel()
+		if callErr != nil || !validCategory(category) {
+			continue
+		}
+		_, _ = s.db.ExecContext(ctx, `UPDATE voice_turns SET triage_category=? WHERE id=? AND triage_category IS NULL`, category, t.id)
+	}
+}
+
+func validCategory(category string) bool {
+	switch category {
+	case "progress", "recall", "memory", "task", "chat":
+		return true
+	}
+	return false
 }
 
 // consumeResultEvents is the voice-owned boundary between control events and delivery rows.
@@ -137,6 +176,84 @@ func (s *Service) dispatchResults(ctx context.Context) {
 	for _, d := range batch {
 		s.deliverResult(ctx, d.id, d.workspace, d.task, d.run, d.subject, d.attempts)
 	}
+}
+
+func (s *Service) dispatchFastReplies(ctx context.Context) {
+	now := s.now().UTC().Format(time.RFC3339Nano)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,workspace_id,session_id,generation,text,attempts FROM voice_fast_replies WHERE status='pending' AND next_attempt_at<=? ORDER BY created_at LIMIT 25`, now)
+	if err != nil {
+		return
+	}
+	type due struct {
+		id, workspace, session, text string
+		generation                   int64
+		attempts                     int
+	}
+	var batch []due
+	for rows.Next() {
+		var d due
+		if rows.Scan(&d.id, &d.workspace, &d.session, &d.generation, &d.text, &d.attempts) == nil {
+			batch = append(batch, d)
+		}
+	}
+	rows.Close()
+	for _, d := range batch {
+		s.deliverFastReply(ctx, d.id, d.workspace, d.session, d.generation, d.text, d.attempts)
+	}
+}
+
+func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session string, generation int64, text string, attempts int) {
+	now := s.now().UTC()
+	res, err := s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=? AND next_attempt_at<=?`, now.Add(fastReplyLease).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts, now.Format(time.RFC3339Nano))
+	if err != nil {
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return
+	}
+	var gateway string
+	var current int64
+	err = s.db.QueryRowContext(ctx, `SELECT gateway_session_id,generation FROM voice_sessions WHERE id=? AND workspace_id=? AND owner_id=(SELECT owner_id FROM voice_sessions WHERE id=?) AND state='active'`, session, workspace, session).Scan(&gateway, &current)
+	if err == sql.ErrNoRows || gateway == "" {
+		s.finishFastReply(id, "skipped", "")
+		return
+	}
+	if err != nil || current != generation || gateway == "" {
+		if attempts+1 >= resultDeliveryMaxAttempts {
+			s.finishFastReply(id, "failed", "session_lookup")
+		} else {
+			s.retryFastReply(id, attempts+1, "session_lookup")
+		}
+		return
+	}
+	body, _ := json.Marshal(map[string]string{"text": boundedResultText(text)})
+	resp, _, callErr := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions/"+url.PathEscape(gateway)+"/context", body)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if callErr == nil && resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		_, _ = s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET status='delivered',voice_session_id=?,voice_generation=?,updated_at=? WHERE id=? AND status='pending'`, session, generation, s.now().UTC().Format(time.RFC3339Nano), id)
+		return
+	}
+	code := "gateway_failed"
+	if resp != nil && resp.StatusCode == http.StatusNotImplemented {
+		s.finishFastReply(id, "failed", "route_unsupported")
+		return
+	}
+	s.retryFastReply(id, attempts+1, code)
+}
+
+func (s *Service) finishFastReply(id, status, code string) {
+	_, _ = s.db.Exec(`UPDATE voice_fast_replies SET status=?,last_error_code=?,updated_at=? WHERE id=? AND status='pending'`, status, code, s.now().UTC().Format(time.RFC3339Nano), id)
+}
+func (s *Service) retryFastReply(id string, attempt int, code string) {
+	if attempt >= resultDeliveryMaxAttempts {
+		s.finishFastReply(id, "failed", code)
+		return
+	}
+	d := time.Duration(1<<uint(attempt-1)) * time.Second
+	_, _ = s.db.Exec(`UPDATE voice_fast_replies SET next_attempt_at=?,last_error_code=?,updated_at=? WHERE id=? AND status='pending'`, s.now().Add(d).UTC().Format(time.RFC3339Nano), code, s.now().UTC().Format(time.RFC3339Nano), id)
 }
 
 func (s *Service) deliverResult(ctx context.Context, id, workspace, task, run, subject string, attempts int) {
