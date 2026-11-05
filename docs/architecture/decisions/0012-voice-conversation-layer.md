@@ -44,7 +44,7 @@ The recall date resolver exists in `internal/recall/dates`; weeks start on Monda
 
 Prerequisites not yet met:
 
-- Recall needs stored history. Zoe persists only the turns delegated to it (about 10 voice turns) and task entries; upstream-answered turns are never forwarded. `RecordVoiceOutcome` stores a summary source without date or subject. There is no date resolver; the server timezone is `Asia/Shanghai`.
+- Recall needs stored history. Zoe persists only the turns delegated to it (about 10 voice turns) and task entries; upstream-answered turns are never forwarded. `RecordVoiceOutcome` stores a summary source without date or subject; the server timezone is `Asia/Shanghai`.
 - Semantic recall needs working extraction. The memory model key is currently rejected (HTTP 401 "Invalid API key" from the configured endpoint), `memory_model_calls` is 0, and both Qdrant collections hold 0 points. Qdrant retrieval is not wired into `Repository.Search`, which is SQLite keyword scoring.
 
 The stateless `zoe-triage` classifier is a configurable, startup-loaded client only; it is not wired into voice behavior. When enabled, it classifies one sentence through the configured Responses endpoint and callers retain the slow-path fallback on any failure.
