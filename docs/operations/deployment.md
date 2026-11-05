@@ -64,7 +64,7 @@ OpenCode runs in the dedicated host-installed service. The runner uses its authe
 
 Runs rotated by releases before this fix are rebound on recovery from the journal chain.
 
-Use the [Linux deployment templates](../../deploy/linux/) and [release workflow](../../.github/workflows/server-release.yml) for the server/runner release. The reviewed release must contain `bin/zoe-secret-entrypoint` and `deploy-linux/` with the Compose and systemd files. Do not compile on the control host.
+Use the [Linux deployment templates](../../deploy/linux/) and [release workflow](../../.github/workflows/server-release.yml) for the server/runner release. The reviewed release must contain `bin/zoe`, `bin/zoe-secret-entrypoint`, and `deploy-linux/` with the Compose and systemd files. The embedded CLI source revision must match `SOURCE_REVISION`; do not compile on the control host.
 
 The operator release installation procedure below installs only the maintenance CLI. It does not install server images or configure a complete deployment. Run `zoe status` before `zoe setup`, `zoe provider configure`, `zoe provider test`, `zoe memory configure`, or `zoe memory test`; these operations are also available from the grouped interactive menu. The memory model key is a separate credential issued by the model gateway and entered through `zoe`; Zoe never creates it. For an already deployed external voice gateway, use `zoe voice configure --url HTTPS_URL --token-file PRIVATE_KEY_FILE`, then `zoe voice test` and `zoe voice status`. This writes only the Zoe-side endpoint and secret reference; it does not deploy or modify the gateway. Follow [the CLI implementation](../../cmd/zoe/) for current flags and [deployment configuration](../../internal/ops/deployment_config.go) for detection and rollback behavior.
 
@@ -163,7 +163,11 @@ model-backed task execution.
 
 Use `zoe update --release /path/to/release` to stage and pull
 the new release, switch `current`, restart Compose and the runner, and verify
-health; it also prepares missing OpenCode state and credentials before rendering
+health; after health succeeds it also atomically switches the host CLI to the
+release's immutable `bin/zoe` when present. A release without `bin/zoe` prints
+`CLI not updated: release has no bin/zoe` and does not fail the server update.
+If CLI switching fails, the healthy server remains updated, the old CLI remains
+in place, and the command exits non-zero. It also prepares missing OpenCode state and credentials before rendering
 the units. Update refreshes release-owned environment keys, including image
 references and paths derived from the configured roots, while preserving
 operator-owned keys and unknown lines. A failed update restores the prior

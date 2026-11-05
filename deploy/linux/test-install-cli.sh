@@ -7,9 +7,9 @@ export ZOE_BIN_DIR="$task_root/path/bin"
 export ZOE_RELEASES_DIR="$task_root/releases"
 for release in first second; do
   mkdir -p "$task_root/$release/bin"
-  printf '#!/bin/sh\nprintf "%%s\\n" "%s"\n' "$release" > "$task_root/$release/bin/zoe"
-  chmod 0755 "$task_root/$release/bin/zoe"
   if [[ "$release" == first ]]; then revision=0123456789abcdef0123456789abcdef01234567; else revision=abcdef0123456789abcdef0123456789abcdef01; fi
+  printf '#!/bin/sh\ncase "$1" in --source-revision) printf "%%s\\n" "%s";; *) printf "%%s\\n" "%s";; esac\n' "$revision" "$release" > "$task_root/$release/bin/zoe"
+  chmod 0755 "$task_root/$release/bin/zoe"
   printf '%s\n' "$revision" > "$task_root/$release/SOURCE_REVISION"
   (cd "$task_root/$release" && sha256sum bin/zoe > SHA256SUMS)
   (cd "$task_root/$release" && tar -czf "$task_root/$release.tar.gz" bin SOURCE_REVISION SHA256SUMS)

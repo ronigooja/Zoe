@@ -450,7 +450,7 @@ func newUpdateFixture(t *testing.T) updateFixture {
 		"bin/zoe-secret-entrypoint":         []byte("entrypoint\n"),
 		"bin/zoe-server":                    []byte("server\n"),
 		"bin/zoe-runner":                    []byte("runner\n"),
-		"bin/zoe":                           []byte("cli\n"),
+		"bin/zoe":                           []byte("#!/bin/sh\nif [ \"$1\" = --source-revision ]; then printf '%s\\n' '" + strings.Repeat("b", 40) + "'; fi\n"),
 		"deploy-linux/docker-compose.yml":   []byte("services: {}\n"),
 		"deploy-linux/zoe-compose.service":  []byte("[Service]\n"),
 		"deploy-linux/zoe-runner.service":   []byte("[Service]\n"),
@@ -483,7 +483,156 @@ func newUpdateFixture(t *testing.T) updateFixture {
 	if err := os.WriteFile(filepath.Join(f.release, "release-manifest.json"), manifestData, 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(f.release, "SOURCE_REVISION"), []byte(f.revision+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(f.release, "bin", "zoe"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	return f
+}
+
+func (f updateFixture) cliOptions(out io.Writer) LifecycleOptions {
+	o := f.options(out)
+	o.CLIBin = filepath.Join(f.root, "bin", "zoe")
+	o.CLIReleasesDir = filepath.Join(f.opt, "cli-releases")
+	return o
+}
+
+func TestUpdateInstallsReleaseCLIAndSwitchesSymlinkAtomically(t *testing.T) {
+	f := newUpdateFixture(t)
+	runner := &updateRunner{}
+	closeServers := fixedUpdateServers(t, filepath.Join(f.data, "opencode", "password"), false, true)
+	defer closeServers()
+	if err := NewManager(runner.run).Update(context.Background(), f.cliOptions(nil)); err != nil {
+		t.Fatal(err)
+	}
+	link, err := os.Readlink(filepath.Join(f.root, "bin", "zoe"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(link, filepath.Join("zoe-cli-"+f.revision[:12], "bin", "zoe")) {
+		t.Fatalf("CLI link = %q", link)
+	}
+	if _, err := os.Stat(filepath.Join(f.opt, "releases", f.revision)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpdateWithoutCLIInReleaseStillSucceedsAndSaysSo(t *testing.T) {
+	f := newUpdateFixture(t)
+	if err := os.Remove(filepath.Join(f.release, "bin", "zoe")); err != nil {
+		t.Fatal(err)
+	}
+	removeArtifactFromManifest(t, f.release, "bin/zoe")
+	var out bytes.Buffer
+	closeServers := fixedUpdateServers(t, filepath.Join(f.data, "opencode", "password"), false, true)
+	defer closeServers()
+	if err := NewManager((&updateRunner{}).run).Update(context.Background(), f.cliOptions(&out)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "CLI not updated: release has no bin/zoe") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestUpdateRefusesCLIWithMismatchedSourceRevision(t *testing.T) {
+	f := newUpdateFixture(t)
+	data := []byte("#!/bin/sh\nprintf '%s\\n' cccccccccccccccccccccccccccccccccccccccc\n")
+	if err := os.WriteFile(filepath.Join(f.release, "bin", "zoe"), data, 0755); err != nil {
+		t.Fatal(err)
+	}
+	updateArtifactHash(t, f.release, "bin/zoe", data)
+	old := filepath.Join(f.root, "old-cli")
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(f.root, "bin", "zoe")), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(old, filepath.Join(f.root, "bin", "zoe")); err != nil {
+		t.Fatal(err)
+	}
+	closeServers := fixedUpdateServers(t, filepath.Join(f.data, "opencode", "password"), false, true)
+	defer closeServers()
+	err := NewManager((&updateRunner{}).run).Update(context.Background(), f.cliOptions(nil))
+	if err == nil || !strings.Contains(err.Error(), "source revision mismatch") {
+		t.Fatalf("error = %v", err)
+	}
+	if got, _ := os.Readlink(filepath.Join(f.root, "bin", "zoe")); got != old {
+		t.Fatalf("old CLI link = %q", got)
+	}
+}
+
+func updateArtifactHash(t *testing.T, dir, path string, data []byte) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "release-manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m ReleaseManifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	for i := range m.Artifacts {
+		if m.Artifacts[i].Path == path {
+			m.Artifacts[i].SHA256 = hex.EncodeToString(sum[:])
+		}
+	}
+	b, err = json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "release-manifest.json"), b, 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpdateCLIInstallFailureKeepsOldCLIAndExitsNonZeroWithoutRollingBackServer(t *testing.T) {
+	f := newUpdateFixture(t)
+	cliBin := filepath.Join(f.root, "bin", "zoe")
+	if err := os.MkdirAll(filepath.Dir(cliBin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cliBin, []byte("old"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	closeServers := fixedUpdateServers(t, filepath.Join(f.data, "opencode", "password"), false, true)
+	defer closeServers()
+	err := NewManager((&updateRunner{}).run).Update(context.Background(), f.cliOptions(nil))
+	if err == nil || !strings.Contains(err.Error(), "non-symlink") {
+		t.Fatalf("error = %v", err)
+	}
+	if got, _ := os.ReadFile(cliBin); string(got) != "old" {
+		t.Fatalf("CLI changed: %q", got)
+	}
+	if current, _ := os.Readlink(filepath.Join(f.opt, "releases", "current")); current != f.revision {
+		t.Fatalf("server rolled back to %q", current)
+	}
+}
+
+func removeArtifactFromManifest(t *testing.T, dir, path string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "release-manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m ReleaseManifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	filtered := m.Artifacts[:0]
+	for _, a := range m.Artifacts {
+		if a.Path != path {
+			filtered = append(filtered, a)
+		}
+	}
+	m.Artifacts = filtered
+	b, err = json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "release-manifest.json"), b, 0644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPrepareHostCreatesFreshLayoutAndIsIdempotent(t *testing.T) {
@@ -852,7 +1001,7 @@ func (r *updateRunner) run(_ context.Context, name string, args ...string) ([]by
 }
 
 func (f updateFixture) options(out io.Writer) LifecycleOptions {
-	return LifecycleOptions{Root: f.root, OptRoot: f.opt, DataRoot: f.data, Release: f.release, OpenCodeBinary: f.binary, HealthTimeout: 2 * time.Second, Out: out}
+	return LifecycleOptions{Root: f.root, OptRoot: f.opt, DataRoot: f.data, Release: f.release, OpenCodeBinary: f.binary, CLIBin: filepath.Join(f.root, "bin", "zoe"), CLIReleasesDir: filepath.Join(f.opt, "cli-releases"), HealthTimeout: 2 * time.Second, Out: out}
 }
 
 func fixedUpdateServers(t *testing.T, passwordPath string, sessions bool, infoOK bool) (close func()) {

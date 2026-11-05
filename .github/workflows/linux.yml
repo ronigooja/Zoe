@@ -283,7 +283,7 @@ jobs:
             printf 'GOOS=%s GOARCH=%s CGO_ENABLED=%s\n' "$GOOS" "$GOARCH" "$CGO_ENABLED"
           } > "$output/logs/environment.txt"
           printf '%s\n' "CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH go build -trimpath -buildvcs=false -ldflags='-s -w' -o bin/zoe ./cmd/zoe" > "$output/logs/build.command"
-          go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$output/artifacts/bin/zoe" ./cmd/zoe > "$output/logs/build.log" 2>&1
+           go build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceRevision=$(git rev-parse HEAD)" -o "$output/artifacts/bin/zoe" ./cmd/zoe > "$output/logs/build.log" 2>&1
           status=$?
           echo "$status" > "$output/logs/build.exit"
           if [[ "$status" -ne 0 ]]; then

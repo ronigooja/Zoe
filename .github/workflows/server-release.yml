@@ -51,11 +51,18 @@ jobs:
             docker version
           } > "$RUNNER_TEMP/zoe-release/logs/environment.txt"
           set +e
+          mkdir -p "$RUNNER_TEMP/zoe-release/artifacts/bin" "$RUNNER_TEMP/zoe-release/artifacts/deploy-linux"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w' \
             -o "$RUNNER_TEMP/zoe-release/artifacts/zoe-server" ./cmd/zoe-server \
             2>&1 | tee "$RUNNER_TEMP/zoe-release/logs/binary-build.log"
           status=$?
           echo "$status" > "$RUNNER_TEMP/zoe-release/logs/binary-build.exit"
+          test "$status" -eq 0 || exit "$status"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceRevision=$GITHUB_SHA" \
+            -o "$RUNNER_TEMP/zoe-release/artifacts/bin/zoe" ./cmd/zoe \
+            2>&1 | tee "$RUNNER_TEMP/zoe-release/logs/operator-build.log"
+          status=$?
+          echo "$status" > "$RUNNER_TEMP/zoe-release/logs/operator-build.exit"
           test "$status" -eq 0 || exit "$status"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w' \
             -o "$RUNNER_TEMP/zoe-release/artifacts/zoe-runner" ./cmd/zoe-runner \
@@ -69,8 +76,7 @@ jobs:
           status=$?
           echo "$status" > "$RUNNER_TEMP/zoe-release/logs/secret-entrypoint-build.exit"
           test "$status" -eq 0 || exit "$status"
-          mkdir -p "$RUNNER_TEMP/zoe-release/artifacts/deploy-linux"
-          cp deploy/linux/docker-compose.yml deploy/linux/zoe-compose.service deploy/linux/zoe-runner.service deploy/linux/zoe-opencode.service deploy/linux/zoe-runner-tmpfiles.conf \
+          cp deploy/linux/docker-compose.yml deploy/linux/zoe-compose.service deploy/linux/zoe-runner.service deploy/linux/zoe-opencode.service deploy/linux/zoe-runner-tmpfiles.conf deploy/linux/install-cli.sh \
             "$RUNNER_TEMP/zoe-release/artifacts/deploy-linux/"
           cp deploy/linux/opencode-release.json "$RUNNER_TEMP/zoe-release/artifacts/opencode-release.json"
           docker buildx build --push --platform linux/amd64 --cache-from "type=gha,scope=server-${GITHUB_REF_NAME}" --cache-to "type=gha,mode=max,scope=server-${GITHUB_REF_NAME}" -f deploy/linux/Dockerfile.server \
@@ -106,7 +112,7 @@ jobs:
           set -e
           cd "$RUNNER_TEMP/zoe-release/artifacts"
           printf '%s\n' "$GITHUB_SHA" > SOURCE_REVISION
-          sha256sum zoe-server zoe-runner zoe-secret-entrypoint opencode-release.json SOURCE_REVISION IMAGE_REFERENCES deploy-linux/docker-compose.yml deploy-linux/zoe-compose.service deploy-linux/zoe-runner.service deploy-linux/zoe-opencode.service deploy-linux/zoe-runner-tmpfiles.conf > SHA256SUMS
+          sha256sum bin/zoe zoe-server zoe-runner zoe-secret-entrypoint opencode-release.json SOURCE_REVISION IMAGE_REFERENCES deploy-linux/docker-compose.yml deploy-linux/zoe-compose.service deploy-linux/zoe-runner.service deploy-linux/zoe-opencode.service deploy-linux/zoe-runner-tmpfiles.conf deploy-linux/install-cli.sh > SHA256SUMS
           python3 - <<'PYJSON'
           import hashlib, json, os, pathlib
           root = pathlib.Path(".")
