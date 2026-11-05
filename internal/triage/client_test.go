@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode"
 )
 
 func testClient(t *testing.T, handler http.Handler) (*Client, *httptest.Server) {
@@ -92,7 +93,7 @@ func response(word string) string {
 	return `{"output":[{"type":"message","content":[{"type":"output_text","text":"` + word + `"}]}]}`
 }
 
-func TestClassifySendsOnlySystemInstructionAndSingleSentence(t *testing.T) {
+func TestClassifySendsTheNewInstruction(t *testing.T) {
 	client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/responses" || r.Method != http.MethodPost {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
@@ -110,7 +111,7 @@ func TestClassifySendsOnlySystemInstructionAndSingleSentence(t *testing.T) {
 		if _, ok := body["history"]; ok || strings.Contains(string(mustJSON(body)), "first sentence") {
 			t.Errorf("request contained history: %#v", body)
 		}
-		if _, ok := body["instructions"]; !ok {
+		if body["instructions"] != instructions {
 			t.Error("missing system instruction")
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -119,6 +120,36 @@ func TestClassifySendsOnlySystemInstructionAndSingleSentence(t *testing.T) {
 	defer server.Close()
 	if got, err := client.Classify(context.Background(), "one sentence"); err != nil || got != Task {
 		t.Fatalf("classify = %q, %v", got, err)
+	}
+}
+
+func TestInstructionDefinesAllFiveCategoriesWithoutExamples(t *testing.T) {
+	for _, category := range []string{"progress", "recall", "memory", "task", "chat"} {
+		if !strings.Contains(instructions, category+": ") {
+			t.Errorf("instruction has no definition for %s", category)
+		}
+	}
+	for _, phrase := range []string{"state, duration, or result", "past conversations or calls", "stable personal fact or preference", "requiring tools, research, files, devices, or the web", "needs no lookup"} {
+		if !strings.Contains(instructions, phrase) {
+			t.Errorf("instruction lacks definition phrase %q", phrase)
+		}
+	}
+	if !strings.Contains(instructions, "unsure, choose task") || !strings.Contains(instructions, "exactly one lowercase word") {
+		t.Fatalf("instruction lacks fallback or output rule: %s", instructions)
+	}
+	for _, r := range instructions {
+		if unicode.Is(unicode.Han, r) {
+			t.Fatalf("instruction contains CJK text: %s", instructions)
+		}
+	}
+	if strings.ContainsAny(instructions, "\"'“”‘’") {
+		t.Fatalf("instruction contains an example or CJK text: %s", instructions)
+	}
+}
+
+func TestInstructionStaysCompact(t *testing.T) {
+	if len([]byte(instructions)) > 2500 {
+		t.Fatalf("instruction is %d bytes", len([]byte(instructions)))
 	}
 }
 

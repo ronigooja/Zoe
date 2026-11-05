@@ -130,6 +130,50 @@ func TestTriageTestReportsCategoryAndLatencyAgainstFakeEndpoint(t *testing.T) {
 	}
 }
 
+func TestTriageTestTextFlagClassifiesGivenSentence(t *testing.T) {
+	var input string
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		input, _ = body["input"].(string)
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"task"}]}]}`))
+	}))
+	defer s.Close()
+	p := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "m", SecretPath: p}, nil, "帮我查查新闻"); err != nil {
+		t.Fatal(err)
+	}
+	if input != "帮我查查新闻" {
+		t.Fatalf("input=%q", input)
+	}
+}
+
+func TestTriageTestDefaultSentenceUnchanged(t *testing.T) {
+	var input string
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		input, _ = body["input"].(string)
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"progress"}]}]}`))
+	}))
+	defer s.Close()
+	p := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "m", SecretPath: p}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if input != "好了吗" {
+		t.Fatalf("input=%q", input)
+	}
+}
+
 func TestTriageTestUsesTheRuntimeRequestShape(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
