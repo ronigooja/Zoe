@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -164,6 +165,12 @@ func menuRecallModel(m ConfigureMenuIO, kind string) error {
 			}
 			return nil
 		}},
+		{"Key file (Enter uses current)", &c.SecretPath, func(v string) error {
+			if !filepath.IsAbs(v) {
+				return errors.New("key file must be absolute")
+			}
+			return nil
+		}},
 	} {
 		for {
 			*field.value, err = menuValue(m, field.label, *field.value)
@@ -177,7 +184,7 @@ func menuRecallModel(m ConfigureMenuIO, kind string) error {
 			break
 		}
 	}
-	// Recall credentials have independent fixed destinations under the deployment root.
+	// Recall credentials default to independent destinations under the deployment root.
 	if _, err = c.Normalized(kind); err != nil {
 		fmt.Fprintln(m.ErrOut, "Nothing was saved.")
 		return err
