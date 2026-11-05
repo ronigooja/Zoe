@@ -226,6 +226,14 @@ func (s *Server) runnerAuth(next http.Handler) http.Handler {
 			writeError(w, apiError(http.StatusUnauthorized, "unauthenticated", "runner credential is not recognized", nil))
 			return
 		}
+		// A voice ingest service credential is never a general runner credential,
+		// including routes which otherwise only filter rows rather than deny.
+		for _, scope := range p.Scopes {
+			if scope == "voice:turn:ingest" && (r.Method != http.MethodPost || r.URL.Path != "/runner/v1/voice/turns") {
+				writeError(w, apiError(http.StatusForbidden, "forbidden", "voice ingest credential is restricted to transcript ingestion", nil))
+				return
+			}
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), runnerPrincipalKey{}, p)))
 	})
 }

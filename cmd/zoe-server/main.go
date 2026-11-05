@@ -53,6 +53,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	voiceIngest, err := loadVoiceIngestCredentialFromEnv()
+	if err != nil {
+		return err
+	}
 	instanceKey := strings.TrimSpace(os.Getenv("ZOE_INSTANCE_KEY"))
 	runnerToken := os.Getenv("ZOE_RUNNER_TOKEN")
 	if runnerToken != "" && !validBearer(runnerToken) {
@@ -103,7 +107,7 @@ func run() error {
 	if triageClient != nil {
 		triageClassifier = triageAdapter{triageClient}
 	}
-	server, err := composeControlServer(store, cfg, voice.Config{Classifier: triageClassifier, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	server, err := composeControlServer(store, cfg, voice.Config{IngestEnabled: voiceIngest.Enabled, Classifier: triageClassifier, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	}, memory.DerivedConfig{BackupDeleteManifestPath: strings.TrimSpace(os.Getenv("ZOE_BACKUP_DELETE_MANIFEST_PATH"))})
@@ -131,6 +135,11 @@ func run() error {
 	}
 	if memoryRunner.Enabled {
 		if err = registerMemoryRunnerCredential(ctx, store, memoryRunner); err != nil {
+			return err
+		}
+	}
+	if voiceIngest.Enabled {
+		if err = registerVoiceIngestCredential(ctx, store, voiceIngest); err != nil {
 			return err
 		}
 	}

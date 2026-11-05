@@ -46,19 +46,21 @@ func RegisterExportRoutes(s *Server) error {
 }
 
 type exportCounter struct {
-	Projects     int64 `json:"projects"`
-	Tasks        int64 `json:"tasks"`
-	Dependencies int64 `json:"task_dependencies"`
-	TaskEntries  int64 `json:"task_entries"`
-	Approvals    int64 `json:"approvals"`
-	Runs         int64 `json:"runs"`
-	Evidence     int64 `json:"evidence"`
-	Memories     int64 `json:"memories"`
-	Revisions    int64 `json:"memory_revisions"`
-	Sources      int64 `json:"memory_sources"`
-	VoiceLinks   int64 `json:"voice_associations"`
-	VoiceResults int64 `json:"voice_result_deliveries"`
-	Capabilities int64 `json:"capability_authorizations"`
+	Projects         int64 `json:"projects"`
+	Tasks            int64 `json:"tasks"`
+	Dependencies     int64 `json:"task_dependencies"`
+	TaskEntries      int64 `json:"task_entries"`
+	Approvals        int64 `json:"approvals"`
+	Runs             int64 `json:"runs"`
+	Evidence         int64 `json:"evidence"`
+	Memories         int64 `json:"memories"`
+	Revisions        int64 `json:"memory_revisions"`
+	Sources          int64 `json:"memory_sources"`
+	VoiceLinks       int64 `json:"voice_associations"`
+	VoiceResults     int64 `json:"voice_result_deliveries"`
+	VoiceTranscripts int64 `json:"voice_transcript_turns"`
+	VoiceSummaries   int64 `json:"voice_call_summaries"`
+	Capabilities     int64 `json:"capability_authorizations"`
 }
 
 type exportFile struct {
@@ -412,11 +414,11 @@ func buildExportManifest(id string, p contracts.Principal, scope string, cursor 
 			"export_audit_event_cursor": strconv.FormatInt(cursor+1, 10), "export_audit_event_id": id,
 			"export_audit_event_type": "data.export.prepared", "source": "sqlite_authority",
 		},
-		"content":     map[string]any{"inventory": []string{"projects", "tasks", "task_dependencies", "task_entries", "approvals", "runs", "evidence", "memory_claims", "memory_revisions", "memory_sources", "voice_associations", "voice_result_deliveries", "capability_authorizations"}, "counts": counts},
+		"content":     map[string]any{"inventory": []string{"projects", "tasks", "task_dependencies", "task_entries", "approvals", "runs", "evidence", "memory_claims", "memory_revisions", "memory_sources", "voice_associations", "voice_result_deliveries", "voice_transcript_turns", "voice_call_summaries", "capability_authorizations"}, "counts": counts},
 		"permissions": map[string]any{"scope": scope, "row_visibility": "principal_authorized", "secret_values": "excluded"},
 		"artifacts":   map[string]any{"bytes": "referenced_not_included", "voice_audio_bytes": "omitted"},
 		"derived":     map[string]any{"mem0": "not_included_rebuildable", "qdrant": "not_included_rebuildable", "cache": "not_included"},
-		"omissions":   []string{"backup_credentials_external_volume", "service_configuration_secret_values", "large_artifact_bytes", "voice_audio_bytes", "raw_voice_turn_transcripts"},
+		"omissions":   []string{"backup_credentials_external_volume", "service_configuration_secret_values", "large_artifact_bytes", "voice_audio_bytes", "legacy_voice_turn_delegation_records"},
 		"integrity":   map[string]any{"data_bytes": dataBytes, "data_sha256": dataHash},
 		"streaming":   map[string]any{"memory_threshold_bytes": int64(64 << 20), "archive_hard_limit_bytes": maxScopedArchiveBytes, "max_field_bytes": maxScopedExportFieldBytes},
 	}
@@ -428,6 +430,9 @@ var errExportFieldTooLarge = errors.New("export field exceeds configured size li
 // scalar lengths. This runs before json_object or Go JSON encoding can copy a
 // large field into an intermediate value.
 func validateExportFieldBounds(ctx context.Context, tx *sql.Tx, p contracts.Principal, scope string) error {
+	if err := validateVoiceTranscriptExportBounds(ctx, tx, p); err != nil {
+		return err
+	}
 	visible := exportVisibilityPredicate()
 	queries := []struct {
 		sql  string
@@ -715,6 +720,9 @@ func writeExportDocument(ctx context.Context, tx *sql.Tx, out io.Writer, p contr
 			return err
 		}
 	} else if err := writeRows(ctx, tx, out, &counts.VoiceResults, `SELECT json_object('entry_id',d.entry_id,'task_id',d.task_id,'run_id',d.run_id,'status',d.status,'attempts',d.attempts,'last_error_code',d.last_error_code,'voice_session_id',d.voice_session_id,'generation',d.generation,'created_at',d.created_at,'updated_at',d.updated_at) FROM voice_result_deliveries d JOIN tasks t ON t.workspace_id=d.workspace_id AND t.id=d.task_id WHERE d.workspace_id=?1 AND `+visible.taskOnT+` ORDER BY d.created_at,d.entry_id`, append([]any(nil), args...)); err != nil {
+		return err
+	}
+	if err := writeVoiceTranscriptExport(ctx, tx, out, p, counts); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(out, `,"capability_authorizations":`); err != nil {

@@ -196,5 +196,32 @@ CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at
 	}}); err != nil {
 		return err
 	}
-	return nil
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 211, Name: "voice_transcripts_and_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_transcript_turns (
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  session_id TEXT NOT NULL REFERENCES voice_sessions(id),
+  seq INTEGER NOT NULL CHECK(seq >= 0),
+  role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+  text TEXT NOT NULL,
+  at TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  PRIMARY KEY(session_id,seq)
+);
+CREATE INDEX voice_transcript_turns_workspace ON voice_transcript_turns(workspace_id,session_id,seq);
+CREATE TABLE voice_call_summaries (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  session_id TEXT NOT NULL REFERENCES voice_sessions(id),
+  topic TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT NOT NULL,
+  first_seq INTEGER NOT NULL,
+  last_seq INTEGER NOT NULL,
+  summary TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  model_call_id TEXT
+);
+CREATE INDEX voice_call_summaries_workspace_started ON voice_call_summaries(workspace_id,started_at);`)
+		return err
+	}})
 }

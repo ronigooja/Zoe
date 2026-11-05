@@ -1024,6 +1024,8 @@ func isOperatorOwnedEnvKey(key string) bool {
 		return true
 	case "ZOE_SCRAPLING_MODE", "ZOE_SCRAPLING_URL", "ZOE_SCRAPLING_TOKEN_FILE", "ZOE_VOICE_UPSTREAM_ROUTE":
 		return true
+	case "ZOE_VOICE_INGEST_TOKEN_FILE", "ZOE_VOICE_INGEST_ID", "ZOE_VOICE_INGEST_WORKSPACES":
+		return true
 	case "ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_TRIAGE_API_STYLE", "ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_REASONING_EFFORT", "ZOE_TRIAGE_THINKING", "ZOE_TRIAGE_TIMEOUT_MS", "ZOE_TRIAGE_API_KEY_FILE":
 		return true
 	default:
@@ -1064,6 +1066,8 @@ func validOperatorEnvValue(key, value string) bool {
 		return true
 	case "ZOE_VOICE_UPSTREAM_ROUTE":
 		return value == "wm" || value == "avas"
+	case "ZOE_VOICE_INGEST_TOKEN_FILE", "ZOE_VOICE_INGEST_ID", "ZOE_VOICE_INGEST_WORKSPACES":
+		return true
 	case "ZOE_AGENT_CONTEXT_WINDOW_RATIO":
 		n, err := strconv.ParseFloat(value, 64)
 		return err == nil && n > 0 && n < 1
