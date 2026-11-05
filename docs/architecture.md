@@ -127,4 +127,5 @@ These records capture selected decisions, not new scope or acceptance claims:
 - [0008 — Ambient macOS screen client](architecture/decisions/0008-ambient-screen-client.md)
 - [0009 — Voice front desk, steward routing, and impact-level authorization](architecture/decisions/0009-voice-steward-impact-policy.md)
 - [0011 — Profiles, per-run permissions, waiting runs, and bounded context](architecture/decisions/0011-profiles-permissions-and-context-hygiene.md)
+- [0012 — Zoe-owned conversation layer for real-time voice (proposed)](architecture/decisions/0012-voice-conversation-layer.md)
 Scrapling is an optional web-access MCP dependency configured as remote HTTP or host-local stdio; its token remains a deployment secret reference.

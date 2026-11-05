@@ -223,6 +223,15 @@ Environment: production gateway image from gateway source `82aed1b` (`VOICE_UPST
 - Not exercised: the gateway 422 `upstream_rejected` path, account fallback, `GET /v1/voice/requests/{id}/outcome` against Zoe attestation, and the recovery sweep. The pool lock was cleared with one operator `voice.pool.reconcile` for session `1b086abb` (cause of the earlier upstream rejection unproven; the gateway logs of that call were purged).
 - Limits: one call, one account, one request. No product milestone is accepted by this record.
 
+## Speakable probe, AVAS route — 2026-11-06
+
+Environment: temporary gateway image from branch `probe/speakable-v1` (head `ad18459`, not merged), one real call, one pool account. With the probe switch set, the gateway answered each client-target `delegation.created` with one fixed `speakable` `delegation.context.append` and did not hand the turn to Zoe.
+
+- Verified once: upstream acknowledged the append (`delegation.context.appended`) 139 ms after `delegation.created`.
+- Verified once: upstream spoke the fixed sentence verbatim, preceded by its own lead-in sentence; asked again, it quoted the same sentence verbatim.
+- Not measured: time to first audio (frame timing only), long content, suppressing the lead-in, several delegations per call, barge-in. Playback of the roughly 30-character sentence took about 6 s of transcript frames; that is speaking time, not delay.
+- The probe image replaced the previous gateway image and the Zoe handoff was inactive while it ran. Design consequences are in [ADR 0012](../architecture/decisions/0012-voice-conversation-layer.md).
+
 Open measurements tied to [ADR 0009](../architecture/decisions/0009-voice-steward-impact-policy.md): steward latency and cost against the run ceiling, metering of OpenCode internal sub-agents, handoff event behavior with real speech, and transcript availability.
 
 ## Per-run permission probe on the live host — 2026-11-02
