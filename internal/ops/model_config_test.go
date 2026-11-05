@@ -45,10 +45,13 @@ func TestKeyStdinWritesSecretFileMode0600AndNeverEchoesKey(t *testing.T) {
 }
 
 func TestConfigureRejectsBadURLsModelsAndWorldReadableKeyFile(t *testing.T) {
-	for _, raw := range []string{"http://remote/v1", "https://gateway", "https://user:pass@gateway/v1", "https://gateway/v1?x=1"} {
+	for _, raw := range []string{"http://remote/v1", "https://user:pass@gateway/v1", "https://gateway/v1?x=1"} {
 		if err := ValidateModelBaseURL(raw); err == nil {
 			t.Fatalf("accepted %q", raw)
 		}
+	}
+	if err := ValidateTriageBaseURL("https://gateway", ""); err != nil {
+		t.Fatal(err)
 	}
 	p := filepath.Join(t.TempDir(), "key")
 	if err := os.WriteFile(p, []byte("x"), 0644); err != nil {
@@ -60,8 +63,26 @@ func TestConfigureRejectsBadURLsModelsAndWorldReadableKeyFile(t *testing.T) {
 }
 
 func TestTriageConfigureRejectsUnknownEffort(t *testing.T) {
-	if err := ValidateReasoningEffort("extreme"); err == nil || !strings.Contains(err.Error(), "minimal, low, medium, high") {
+	if err := ValidateReasoningEffort("minimal"); err == nil || !strings.Contains(err.Error(), "low, medium, high") {
 		t.Fatal(err)
+	}
+}
+
+func TestTriageAPIStyleAndThinkingPreservedAcrossUpdate(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "env")
+	c := TriageConfig{APIStyle: "chat", BaseURL: "https://gateway.example", Model: "m", ReasoningEffort: "high", Thinking: "disabled", SecretPath: "/key"}
+	if err := WriteTriageEnvAtomic(p, c, false); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	for _, want := range []string{"ZOE_TRIAGE_API_STYLE=\"chat\"", "ZOE_TRIAGE_THINKING=\"disabled\""} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("env=%s", text)
+		}
 	}
 }
 

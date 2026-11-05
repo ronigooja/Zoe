@@ -142,7 +142,7 @@ func TestStatusShowsModelAndEffortWithoutSecrets(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "zoe-runner.env"), []byte("ZOE_OPENCODE_MODEL=task-model\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_MEM0_LLM_MODEL=memory-model\nZOE_MEM0_LLM_REASONING_EFFORT=high\nZOE_TRIAGE_BASE_URL=https://gateway.example/v1\nZOE_TRIAGE_MODEL=triage-model\nZOE_TRIAGE_REASONING_EFFORT=low\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_MEM0_LLM_MODEL=memory-model\nZOE_MEM0_LLM_REASONING_EFFORT=high\nZOE_TRIAGE_BASE_URL=https://gateway.example\nZOE_TRIAGE_MODEL=triage-model\nZOE_TRIAGE_REASONING_EFFORT=low\nZOE_TRIAGE_API_STYLE=chat\nZOE_TRIAGE_THINKING=disabled\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	fakeServices(t, false)
@@ -151,13 +151,43 @@ func TestStatusShowsModelAndEffortWithoutSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, want := range []string{"model=task-model effort=unsupported", "model=memory-model effort=high", "model=triage-model effort=low"} {
+	for _, want := range []string{"model=task-model effort=unsupported", "model=memory-model effort=high", "model=triage-model effort=low", "style=chat", "thinking=disabled"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("status=%s", got)
 		}
 	}
 	if strings.Contains(got, "secret") && strings.Contains(got, "token") {
 		t.Fatalf("possible secret leak: %s", got)
+	}
+}
+
+func TestStatusShowsStyleAndThinkingWithoutSecrets(t *testing.T) {
+	t.Run("status", func(t *testing.T) { TestStatusShowsModelAndEffortWithoutSecrets(t) })
+}
+
+func TestTriageTestReportsWhichStyleWorked(t *testing.T) {
+	root := t.TempDir()
+	key := filepath.Join(root, "key")
+	if err := os.WriteFile(key, []byte("secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"task"},"finish_reason":"stop"}]}`))
+	}))
+	defer s.Close()
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL="+s.URL+"\nZOE_TRIAGE_MODEL=m\nZOE_TRIAGE_API_KEY_FILE="+key+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if err := triageTestOperation([]string{"--root", root}, nil, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "style=chat") {
+		t.Fatalf("out=%s err=%s", out.String(), errOut.String())
 	}
 }
 

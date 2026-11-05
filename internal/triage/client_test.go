@@ -8,11 +8,218 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 	"unicode"
 )
+
+func clientFromTestEnv(t *testing.T, server *httptest.Server, extra map[string]string) *Client {
+	t.Helper()
+	key := filepathTemp(t, "key")
+	values := map[string]string{"ZOE_TRIAGE_BASE_URL": server.URL, "ZOE_TRIAGE_MODEL": "deepseek-flash", "ZOE_TRIAGE_API_KEY_FILE": key}
+	for k, v := range extra {
+		values[k] = v
+	}
+	c, err := FromEnv(func(name string) string { return values[name] }, os.ReadFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func chatResponse(word string) string {
+	return `{"choices":[{"message":{"content":"` + word + `","reasoning_content":"ignore"},"finish_reason":"stop"}]}`
+}
+
+func TestTriageFallsBackToChatCompletionsWhen404OnResponses(t *testing.T) {
+	var responses, chats atomic.Int32
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/responses" {
+			responses.Add(1)
+			http.NotFound(w, r)
+			return
+		}
+		chats.Add(1)
+		_, _ = w.Write([]byte(chatResponse("task")))
+	}))
+	defer s.Close()
+	c := clientFromTestEnv(t, s, nil)
+	if got, err := c.Classify(context.Background(), "x"); err != nil || got != Task {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+	if responses.Load() != 1 || chats.Load() != 1 {
+		t.Fatalf("responses=%d chats=%d", responses.Load(), chats.Load())
+	}
+}
+
+func TestTriageRemembersChatStyleAfterFallback(t *testing.T) {
+	var responses, chats atomic.Int32
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/responses" {
+			responses.Add(1)
+			http.NotFound(w, r)
+			return
+		}
+		chats.Add(1)
+		_, _ = w.Write([]byte(chatResponse("task")))
+	}))
+	defer s.Close()
+	c := clientFromTestEnv(t, s, nil)
+	_, _ = c.Classify(context.Background(), "one")
+	_, _ = c.Classify(context.Background(), "two")
+	if responses.Load() != 1 || chats.Load() != 2 {
+		t.Fatalf("responses=%d chats=%d", responses.Load(), chats.Load())
+	}
+}
+
+func TestTriageDoesNotFallBackOn401Or429Or5xx(t *testing.T) {
+	for _, status := range []int{401, 429, 500} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var paths []string
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.URL.Path)
+				http.Error(w, "no", status)
+			}))
+			defer s.Close()
+			c := clientFromTestEnv(t, s, nil)
+			if _, err := c.Classify(context.Background(), "x"); err == nil {
+				t.Fatal("expected error")
+			}
+			if len(paths) != 1 || paths[0] != "/responses" {
+				t.Fatalf("paths=%v", paths)
+			}
+		})
+	}
+}
+
+func TestTriageFallbackIsConcurrencySafe(t *testing.T) {
+	var responses, chats atomic.Int32
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/responses" {
+			responses.Add(1)
+			http.NotFound(w, r)
+			return
+		}
+		chats.Add(1)
+		_, _ = w.Write([]byte(chatResponse("task")))
+	}))
+	defer s.Close()
+	c := clientFromTestEnv(t, s, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.Classify(context.Background(), "x"); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if responses.Load() != 1 || chats.Load() != 20 {
+		t.Fatalf("responses=%d chats=%d", responses.Load(), chats.Load())
+	}
+}
+
+func TestTriageChatStyleSendsChatCompletionsRequestShape(t *testing.T) {
+	var body map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Errorf("path=%s", r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(chatResponse("task")))
+	}))
+	defer s.Close()
+	c := clientFromTestEnv(t, s, map[string]string{"ZOE_TRIAGE_API_STYLE": "chat", "ZOE_TRIAGE_REASONING_EFFORT": "high"})
+	if _, err := c.Classify(context.Background(), "sentence"); err != nil {
+		t.Fatal(err)
+	}
+	if body["input"] != nil || body["instructions"] != nil || body["reasoning_effort"] != "high" {
+		t.Fatalf("body=%v", body)
+	}
+	messages := body["messages"].([]any)
+	if len(messages) != 2 || messages[0].(map[string]any)["content"] != instructions || messages[1].(map[string]any)["content"] != "sentence" {
+		t.Fatalf("messages=%v", messages)
+	}
+}
+
+func TestTriageChatStyleParsesMessageContentAndIgnoresReasoningContent(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(chatResponse("recall"))) }))
+	defer s.Close()
+	c := clientFromTestEnv(t, s, map[string]string{"ZOE_TRIAGE_API_STYLE": "chat"})
+	if got, err := c.Classify(context.Background(), "x"); err != nil || got != Recall {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+}
+
+func TestTriageChatStyleRejectsEmptyAndLengthTruncated(t *testing.T) {
+	for _, response := range []string{`{"choices":[{"message":{"content":""},"finish_reason":"stop"}]}`, `{"choices":[{"message":{"content":"task"},"finish_reason":"length"}]}`} {
+		t.Run(response, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(response)) }))
+			defer s.Close()
+			c := clientFromTestEnv(t, s, map[string]string{"ZOE_TRIAGE_API_STYLE": "chat"})
+			if _, err := c.Classify(context.Background(), "x"); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+func TestTriageChatStyleThinkingFieldSentOnlyWhenConfigured(t *testing.T) {
+	for _, thinking := range []string{"", "disabled", "enabled"} {
+		t.Run(thinking, func(t *testing.T) {
+			var body map[string]any
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				_, _ = w.Write([]byte(chatResponse("task")))
+			}))
+			defer s.Close()
+			c := clientFromTestEnv(t, s, map[string]string{"ZOE_TRIAGE_API_STYLE": "chat", "ZOE_TRIAGE_THINKING": thinking})
+			_, _ = c.Classify(context.Background(), "x")
+			_, ok := body["thinking"]
+			if (thinking != "") != ok {
+				t.Fatalf("thinking=%v body=%v", thinking, body)
+			}
+		})
+	}
+}
+
+func TestTriageResponsesStyleIgnoresThinking(t *testing.T) {
+	var body map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(response("task")))
+	}))
+	defer s.Close()
+	c := clientFromTestEnv(t, s, map[string]string{"ZOE_TRIAGE_API_STYLE": "responses", "ZOE_TRIAGE_THINKING": "enabled"})
+	_, _ = c.Classify(context.Background(), "x")
+	if _, ok := body["thinking"]; ok {
+		t.Fatalf("body=%v", body)
+	}
+}
+
+func TestTriageRejectsMinimalEffort(t *testing.T) {
+	s := httptest.NewServer(http.NotFoundHandler())
+	defer s.Close()
+	_, err := FromEnv(func(k string) string {
+		return map[string]string{"ZOE_TRIAGE_BASE_URL": s.URL, "ZOE_TRIAGE_MODEL": "m", "ZOE_TRIAGE_API_KEY_FILE": filepathTemp(t, "k"), "ZOE_TRIAGE_REASONING_EFFORT": "minimal"}[k]
+	}, os.ReadFile)
+	if err == nil {
+		t.Fatal("expected minimal rejection")
+	}
+}
+
+func TestTriageBaseURLWithoutV1IsAccepted(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(response("task"))) }))
+	defer s.Close()
+	c := clientFromTestEnv(t, s, nil)
+	if _, err := c.Classify(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func testClient(t *testing.T, handler http.Handler) (*Client, *httptest.Server) {
 	t.Helper()
@@ -28,7 +235,7 @@ func testClient(t *testing.T, handler http.Handler) (*Client, *httptest.Server) 
 }
 
 func TestTriageClientSendsConfiguredEffortForReasoningModels(t *testing.T) {
-	for _, effort := range []string{"minimal", "low", "medium", "high"} {
+	for _, effort := range []string{"low", "medium", "high"} {
 		t.Run(effort, func(t *testing.T) {
 			var got map[string]any
 			client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +312,7 @@ func TestClassifySendsTheNewInstruction(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body["model"] != "triage-model" || body["input"] != "one sentence" {
+		if body["model"] != "gpt-6-triage-model" || body["input"] != "one sentence" {
 			t.Errorf("body = %#v", body)
 		}
 		if _, ok := body["history"]; ok || strings.Contains(string(mustJSON(body)), "first sentence") {

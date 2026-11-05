@@ -160,6 +160,7 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 		_, body, status, err = c.call(ctx, "chat", text)
 		if err == nil {
 			c.apiStyle = "chat"
+			style = "chat"
 		}
 	}
 	if err != nil {

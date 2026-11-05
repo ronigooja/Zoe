@@ -49,7 +49,7 @@ func TestMaintenanceMenuTriageFlowPromptsModelAndEffortAndWritesBoth(t *testing.
 	old := terminalEcho
 	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
 	t.Cleanup(func() { terminalEcho = old })
-	input := strings.NewReader("10\n" + s.URL + "/v1\ntriage\n\n" + keyPath + "\nsecret-value\ny\n0\n")
+	input := strings.NewReader("10\n" + s.URL + "\ntriage\n\n\n" + keyPath + "\nsecret-value\ny\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(input, &out, &errOut, root); err != nil {
 		t.Fatal(err)
@@ -67,6 +67,80 @@ func TestMaintenanceMenuTriageFlowPromptsModelAndEffortAndWritesBoth(t *testing.
 	}
 	if strings.Contains(out.String()+errOut.String(), "secret-value") {
 		t.Fatalf("secret leaked: out=%s err=%s", out.String(), errOut.String())
+	}
+}
+
+func TestMaintenanceMenuTriagePromptsForThinkingAndWritesIt(t *testing.T) {
+	menuManager(t)
+	root := t.TempDir()
+	keyPath := filepath.Join(root, "key")
+	old := terminalEcho
+	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
+	t.Cleanup(func() { terminalEcho = old })
+	input := strings.NewReader("10\nhttps://gateway.example\nm\nlow\ndisabled\n" + keyPath + "\nsecret\nn\n0\n")
+	var out, errOut bytes.Buffer
+	if err := menuWithRoot(input, &out, &errOut, root); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Thinking (Enter = provider default, disabled = faster, enabled)") {
+		t.Fatal(out.String())
+	}
+	b, _ := os.ReadFile(filepath.Join(root, "zoe-stack.env"))
+	if !strings.Contains(string(b), `ZOE_TRIAGE_THINKING="disabled"`) {
+		t.Fatalf("env=%s", b)
+	}
+}
+
+func TestMaintenanceMenuTriageDoesNotAskForAPIStyle(t *testing.T) {
+	menuManager(t)
+	root := t.TempDir()
+	var out, errOut bytes.Buffer
+	_ = menuWithRoot(strings.NewReader("0\n"), &out, &errOut, root)
+	if strings.Contains(out.String(), "API style") {
+		t.Fatal(out.String())
+	}
+}
+
+func TestMaintenanceMenuTriageValidationErrorSaysNothingSavedAndReprompts(t *testing.T) {
+	menuManager(t)
+	root := t.TempDir()
+	keyPath := filepath.Join(root, "key")
+	old := terminalEcho
+	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
+	t.Cleanup(func() { terminalEcho = old })
+	in := strings.NewReader("10\nhttp://remote.invalid\nhttps://gateway.example\nm\nlow\n\n" + keyPath + "\nsecret\nn\n0\n")
+	var out, errOut bytes.Buffer
+	if err := menuWithRoot(in, &out, &errOut, root); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(errOut.String(), "Nothing was saved.") != 1 || !strings.HasSuffix(strings.TrimSpace(out.String()), "Select an option:") {
+		t.Fatalf("out=%s err=%s", out.String(), errOut.String())
+	}
+}
+
+func TestMaintenanceMenuTriageRejectsUnknownThinkingAndSaysNothingSaved(t *testing.T) {
+	menuManager(t)
+	root := t.TempDir()
+	keyPath := filepath.Join(root, "key")
+	old := terminalEcho
+	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
+	t.Cleanup(func() { terminalEcho = old })
+	in := strings.NewReader("10\nhttps://gateway.example\nm\nlow\ninvalid\ndisabled\n" + keyPath + "\nsecret\nn\n0\n")
+	var out, errOut bytes.Buffer
+	if err := menuWithRoot(in, &out, &errOut, root); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut.String(), "Nothing was saved.") {
+		t.Fatal(errOut.String())
+	}
+}
+
+func TestMaintenanceMenuTriageEOFSaysCancelled(t *testing.T) {
+	menuManager(t)
+	var out, errOut bytes.Buffer
+	_ = menuWithRoot(strings.NewReader("10\n"), &out, &errOut, t.TempDir())
+	if !strings.Contains(out.String(), "Cancelled. Nothing was saved.") {
+		t.Fatal(out.String())
 	}
 }
 
@@ -88,7 +162,7 @@ func TestMaintenanceMenuTestTriageReportsPass(t *testing.T) {
 	if err := menuWithRoot(strings.NewReader("11\n0\n"), &out, &errOut, root); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "PASS HTTP 2xx") {
+	if !strings.Contains(out.String(), "PASS style=responses HTTP 2xx") {
 		t.Fatalf("out=%s err=%s", out.String(), errOut.String())
 	}
 }
