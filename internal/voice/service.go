@@ -23,6 +23,7 @@ import (
 )
 
 type Config struct {
+	IngestEnabled          bool
 	GatewayURL             string
 	GatewayAPIKey          string
 	HTTPClient             *http.Client
@@ -275,6 +276,13 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 	}
 	if err := server.RegisterCommand("voice.pool.reconcile", svc.commandReconcilePool); err != nil {
 		return err
+	}
+	if cfg.IngestEnabled {
+		if err := server.RegisterRunnerRoutes(func(mux *http.ServeMux) {
+			mux.HandleFunc("POST /runner/v1/voice/turns", svc.handleTranscript)
+		}); err != nil {
+			return err
+		}
 	}
 	return server.RegisterAuthenticatedRoutes(func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /v1/voice/pool/status", svc.handlePoolStatus)

@@ -33,6 +33,9 @@ services:
       ZOE_MEMORY_RUNNER_WORKSPACES: ${ZOE_MEMORY_RUNNER_WORKSPACES:-default}
       ZOE_MEMORY_RUNNER_SCOPES: memory:jobs:claim,memory:jobs:complete,memory:propose
       ZOE_VOICE_GATEWAY_URL: ${ZOE_VOICE_GATEWAY_URL:-}
+      ZOE_VOICE_INGEST_TOKEN_FILE: /run/secrets/voice_ingest_token
+      ZOE_VOICE_INGEST_ID: ${ZOE_VOICE_INGEST_ID:-voice-gateway}
+      ZOE_VOICE_INGEST_WORKSPACES: ${ZOE_VOICE_INGEST_WORKSPACES:-default}
       ZOE_VOICE_ACCOUNT_MEDIA_ENABLED: ${ZOE_VOICE_ACCOUNT_MEDIA_ENABLED:-false}
       ZOE_TRIAGE_BASE_URL: ${ZOE_TRIAGE_BASE_URL:-}
       ZOE_TRIAGE_API_STYLE: ${ZOE_TRIAGE_API_STYLE:-responses}
@@ -55,6 +58,8 @@ services:
         target: memory_runner_token
       - source: voice_gateway_api_key
         target: voice_gateway_api_key
+      - source: voice_ingest_token
+        target: voice_ingest_token
       - source: triage_api_key
         target: triage_api_key
     networks:
@@ -129,5 +134,7 @@ secrets:
     file: ${ZOE_MEM0_LLM_API_KEY_FILE:?set a deployment-provided provider secret file path}
   voice_gateway_api_key:
     file: ${ZOE_VOICE_GATEWAY_API_KEY_FILE:-/dev/null}
+  voice_ingest_token:
+    file: ${ZOE_VOICE_INGEST_TOKEN_FILE:-/dev/null}
   triage_api_key:
     file: ${ZOE_TRIAGE_API_KEY_FILE:-/dev/null}
