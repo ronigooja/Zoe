@@ -39,6 +39,7 @@ func TestMaintenanceMenuListsTriageModelItems(t *testing.T) {
 }
 
 func TestMaintenanceMenuTriageFlowPromptsModelAndEffortAndWritesBoth(t *testing.T) {
+	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +72,7 @@ func TestMaintenanceMenuTriageFlowPromptsModelAndEffortAndWritesBoth(t *testing.
 }
 
 func TestMaintenanceMenuTriagePromptsForThinkingAndWritesIt(t *testing.T) {
+	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
 	keyPath := filepath.Join(root, "key")
@@ -92,6 +94,7 @@ func TestMaintenanceMenuTriagePromptsForThinkingAndWritesIt(t *testing.T) {
 }
 
 func TestMaintenanceMenuTriageDoesNotAskForAPIStyle(t *testing.T) {
+	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
 	keyPath := filepath.Join(root, "key")
@@ -106,6 +109,7 @@ func TestMaintenanceMenuTriageDoesNotAskForAPIStyle(t *testing.T) {
 }
 
 func TestMaintenanceMenuTriageValidationErrorSaysNothingSavedAndReprompts(t *testing.T) {
+	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
 	keyPath := filepath.Join(root, "key")
@@ -123,6 +127,7 @@ func TestMaintenanceMenuTriageValidationErrorSaysNothingSavedAndReprompts(t *tes
 }
 
 func TestMaintenanceMenuTriageRejectsUnknownThinkingAndSaysNothingSaved(t *testing.T) {
+	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
 	keyPath := filepath.Join(root, "key")
@@ -149,6 +154,7 @@ func TestMaintenanceMenuTriageEOFSaysCancelled(t *testing.T) {
 }
 
 func TestMaintenanceMenuTestTriageReportsPass(t *testing.T) {
+	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

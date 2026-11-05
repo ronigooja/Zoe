@@ -46,6 +46,7 @@ func fakeServices(t *testing.T, failReload bool) *[]string {
 }
 
 func TestTriageTestTextFlagClassifiesGivenSentence(t *testing.T) {
+	containerKeyFixture(t)
 	fakeServices(t, false)
 	var input string
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +60,7 @@ func TestTriageTestTextFlagClassifiesGivenSentence(t *testing.T) {
 	defer s.Close()
 	root := t.TempDir()
 	key := filepath.Join(root, "key")
-	if err := os.WriteFile(key, []byte("key"), 0644); err != nil {
+	if err := os.WriteFile(key, []byte("key"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL=\""+s.URL+"/v1\"\nZOE_TRIAGE_MODEL=\"m\"\nZOE_TRIAGE_API_KEY_FILE=\""+key+"\"\n"), 0600); err != nil {
@@ -74,6 +75,7 @@ func TestTriageTestTextFlagClassifiesGivenSentence(t *testing.T) {
 }
 
 func TestTriageTestDefaultSentenceUnchanged(t *testing.T) {
+	containerKeyFixture(t)
 	fakeServices(t, false)
 	var input string
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +87,7 @@ func TestTriageTestDefaultSentenceUnchanged(t *testing.T) {
 	defer s.Close()
 	root := t.TempDir()
 	key := filepath.Join(root, "key")
-	if err := os.WriteFile(key, []byte("key"), 0644); err != nil {
+	if err := os.WriteFile(key, []byte("key"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL=\""+s.URL+"/v1\"\nZOE_TRIAGE_MODEL=\"m\"\nZOE_TRIAGE_API_KEY_FILE=\""+key+"\"\n"), 0600); err != nil {
@@ -166,9 +168,10 @@ func TestStatusShowsStyleAndThinkingWithoutSecrets(t *testing.T) {
 }
 
 func TestTriageTestReportsWhichStyleWorked(t *testing.T) {
+	containerKeyFixture(t)
 	root := t.TempDir()
 	key := filepath.Join(root, "key")
-	if err := os.WriteFile(key, []byte("secret\n"), 0644); err != nil {
+	if err := os.WriteFile(key, []byte("secret\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +223,7 @@ func TestStatusUsesConfiguredServerPortForReadiness(t *testing.T) {
 }
 
 func TestMemoryConfigureConsumesCRLFAnswersFromSingleChunk(t *testing.T) {
+	containerKeyFixture(t)
 	root := t.TempDir()
 	compose := filepath.Join(root, "compose.yml")
 	if err := os.WriteFile(compose, []byte("services: {}\n"), 0600); err != nil {
@@ -259,6 +263,7 @@ func TestMemoryConfigureConsumesCRLFAnswersFromSingleChunk(t *testing.T) {
 }
 
 func TestVoiceConfigureAndStatus(t *testing.T) {
+	containerKeyFixture(t)
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_COMPOSE_FILE=/tmp/zoe-compose.yaml\nCOMPOSE_PROJECT_NAME=zoe\n"), 0600)
 	oldMode := os.Getenv("ZOE_DEPLOYMENT_MODE")
@@ -283,6 +288,7 @@ func TestVoiceConfigureAndStatus(t *testing.T) {
 }
 
 func TestVoiceConfigureSystemdModeUsesComposeAndContainerOwnedSecret(t *testing.T) {
+	containerKeyFixture(t)
 	root := t.TempDir()
 	compose := filepath.Join(root, "compose.yml")
 	stack := filepath.Join(root, "zoe-stack.env")
