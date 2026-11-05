@@ -2,6 +2,7 @@ package ops
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -60,7 +61,7 @@ func TestConfigureRejectsBadURLsModelsAndWorldReadableKeyFile(t *testing.T) {
 
 func TestTriageTestReportsCategoryAndLatencyAgainstFakeEndpoint(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"output":[{"content":[{"text":"technical"}]}]}`))
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"task"}]}]}`))
 	}))
 	defer s.Close()
 	p := filepath.Join(t.TempDir(), "key")
@@ -68,8 +69,54 @@ func TestTriageTestReportsCategoryAndLatencyAgainstFakeEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "m", SecretPath: p}, nil)
-	if err != nil || r.Category != "technical" || r.HTTPStatus != 200 || r.Latency < 0 {
+	if err != nil || r.Category != "task" || r.HTTPStatus != 200 || r.Latency < 0 {
 		t.Fatalf("result=%+v err=%v", r, err)
+	}
+}
+
+func TestTriageTestUsesTheRuntimeRequestShape(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		instruction, ok := body["instructions"].(string)
+		if !ok || !strings.Contains(instruction, "progress, recall, memory, task, or chat") {
+			t.Fatalf("instructions=%v", body["instructions"])
+		}
+		if body["max_output_tokens"].(float64) < 128 {
+			t.Fatalf("tokens=%v", body["max_output_tokens"])
+		}
+		if body["reasoning"] == nil {
+			t.Fatal("missing reasoning")
+		}
+		if _, ok := body["temperature"]; ok {
+			t.Fatal("temperature present")
+		}
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"chat"}]}]}`))
+	}))
+	defer s.Close()
+	p := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "gpt-6.1-sol", SecretPath: p}, nil)
+	if err != nil || r.Category != "chat" {
+		t.Fatalf("result=%+v err=%v", r, err)
+	}
+}
+
+func TestTriageTestFailsWhenModelAnswersOutsideTheFiveCategories(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Sure"}]}]}`))
+	}))
+	defer s.Close()
+	p := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "gpt-6.1-sol", SecretPath: p}, nil); err == nil {
+		t.Fatal("unexpected success for invalid category")
 	}
 }
 
