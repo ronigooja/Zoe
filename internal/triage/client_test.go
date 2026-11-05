@@ -35,7 +35,9 @@ func filepathTemp(t *testing.T, value string) string {
 	return path
 }
 
-func response(word string) string { return `{"output_text":"` + word + `"}` }
+func response(word string) string {
+	return `{"output":[{"type":"message","content":[{"type":"output_text","text":"` + word + `"}]}]}`
+}
 
 func TestClassifySendsOnlySystemInstructionAndSingleSentence(t *testing.T) {
 	client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +177,85 @@ func TestClassifyReusesConnection(t *testing.T) {
 	}
 	if connections.Load() >= 5 {
 		t.Fatalf("new connections = %d", connections.Load())
+	}
+}
+
+func TestClassifyOmitsTemperatureAndSendsReasoningForReasoningModels(t *testing.T) {
+	models := []struct {
+		model     string
+		reasoning bool
+	}{{"gpt-6.1-sol", true}, {"gpt-5.6-x", true}, {"o3-mini", true}, {"gpt-4o-mini", false}}
+	for _, tc := range models {
+		t.Run(tc.model, func(t *testing.T) {
+			var body map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				_, _ = w.Write([]byte(response("chat")))
+			}))
+			defer server.Close()
+			key := filepathTemp(t, "key")
+			client, err := FromEnv(func(name string) string {
+				return map[string]string{"ZOE_TRIAGE_BASE_URL": server.URL + "/v1", "ZOE_TRIAGE_MODEL": tc.model, "ZOE_TRIAGE_API_KEY_FILE": key}[name]
+			}, os.ReadFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Classify(context.Background(), "sentence"); err != nil {
+				t.Fatal(err)
+			}
+			_, hasTemperature := body["temperature"]
+			_, hasReasoning := body["reasoning"]
+			if hasTemperature == tc.reasoning || hasReasoning != tc.reasoning {
+				t.Fatalf("request = %#v", body)
+			}
+			if tc.reasoning && body["max_output_tokens"].(float64) < 128 {
+				t.Fatalf("max_output_tokens = %v", body["max_output_tokens"])
+			}
+		})
+	}
+}
+
+func TestClassifyParsesMessageItemAfterReasoningItem(t *testing.T) {
+	client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"output":[{"type":"reasoning","content":[{"type":"summary_text","text":"not a category"}]},{"type":"message","content":[{"type":"output_text","text":"task"}]}]}`))
+	}))
+	defer server.Close()
+	if got, err := client.Classify(context.Background(), "sentence"); err != nil || got != Task {
+		t.Fatalf("classify = %q, %v", got, err)
+	}
+}
+
+func TestClassifyRejectsIncompleteResponse(t *testing.T) {
+	client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"incomplete","output":[{"type":"message","content":[{"type":"output_text","text":"task"}]}]}`))
+	}))
+	defer server.Close()
+	if got, err := client.Classify(context.Background(), "sentence"); err == nil || got != "" {
+		t.Fatalf("classify = %q, %v", got, err)
+	}
+}
+
+func TestClassifyOutputTokenBudgetLeavesRoomForReasoning(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(response("chat")))
+	}))
+	defer server.Close()
+	key := filepathTemp(t, "key")
+	client, err := FromEnv(func(name string) string {
+		return map[string]string{"ZOE_TRIAGE_BASE_URL": server.URL + "/v1", "ZOE_TRIAGE_MODEL": "gpt-6.1-sol", "ZOE_TRIAGE_API_KEY_FILE": key}[name]
+	}, os.ReadFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Classify(context.Background(), "sentence"); err != nil {
+		t.Fatal(err)
+	}
+	if body["max_output_tokens"].(float64) < 128 {
+		t.Fatalf("max_output_tokens = %v", body["max_output_tokens"])
 	}
 }
 
