@@ -34,6 +34,10 @@ services:
       ZOE_MEMORY_RUNNER_SCOPES: memory:jobs:claim,memory:jobs:complete,memory:propose
       ZOE_VOICE_GATEWAY_URL: ${ZOE_VOICE_GATEWAY_URL:-}
       ZOE_VOICE_ACCOUNT_MEDIA_ENABLED: ${ZOE_VOICE_ACCOUNT_MEDIA_ENABLED:-false}
+      ZOE_TRIAGE_BASE_URL: ${ZOE_TRIAGE_BASE_URL:-}
+      ZOE_TRIAGE_MODEL: ${ZOE_TRIAGE_MODEL:-}
+      ZOE_TRIAGE_TIMEOUT_MS: ${ZOE_TRIAGE_TIMEOUT_MS:-}
+      ZOE_TRIAGE_API_KEY_FILE: /run/secrets/triage_api_key
       ZOE_SECRET_FILE_MAP: ZOE_RUNNER_TOKEN=/run/secrets/runner_token${ZOE_VOICE_SECRET_MAP:-}
     entrypoint: ["/usr/local/bin/zoe-secret-entrypoint"]
     command: ["/usr/local/bin/zoe-server"]
@@ -48,6 +52,8 @@ services:
         target: memory_runner_token
       - source: voice_gateway_api_key
         target: voice_gateway_api_key
+      - source: triage_api_key
+        target: triage_api_key
     networks:
       - default
 
@@ -119,3 +125,5 @@ secrets:
     file: ${ZOE_MEM0_LLM_API_KEY_FILE:?set a deployment-provided provider secret file path}
   voice_gateway_api_key:
     file: ${ZOE_VOICE_GATEWAY_API_KEY_FILE:-/dev/null}
+  triage_api_key:
+    file: ${ZOE_TRIAGE_API_KEY_FILE:-/dev/null}

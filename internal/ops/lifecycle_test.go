@@ -365,6 +365,48 @@ func TestUpdateRollbackReportsFailingStepAndCommandOutput(t *testing.T) {
 	}
 }
 
+func TestWriteDeploymentFilesIncludesConfiguredTriageEntriesOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		configured bool
+	}{
+		{name: "configured", configured: true},
+		{name: "absent", configured: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, opt, data := t.TempDir(), t.TempDir(), t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "zoe-runner.env"), []byte("ZOE_OPENCODE_MODEL=provider/model\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			stack := "ZOE_SERVER_PORT=8787\n"
+			if tc.configured {
+				stack += "ZOE_TRIAGE_BASE_URL=https://gateway.example/v1\nZOE_TRIAGE_MODEL=triage-model\nZOE_TRIAGE_TIMEOUT_MS=500\nZOE_TRIAGE_API_KEY_FILE=/etc/zoe/secrets/triage-api-key\n"
+			}
+			if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte(stack), 0600); err != nil {
+				t.Fatal(err)
+			}
+			mfest := ReleaseManifest{Images: map[string]ReleaseImage{
+				"zoe-server":        {Ref: "ghcr.io/test/server", Digest: "sha256:" + strings.Repeat("1", 64)},
+				"zoe-memory-worker": {Ref: "ghcr.io/test/memory", Digest: "sha256:" + strings.Repeat("2", 64)},
+			}}
+			o := LifecycleOptions{Root: root, OptRoot: opt, DataRoot: data}
+			if err := (Manager{}).writeDeploymentFiles(o, mfest); err != nil {
+				t.Fatal(err)
+			}
+			values, err := readEnv(filepath.Join(root, "zoe-stack.env"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_TIMEOUT_MS", "ZOE_TRIAGE_API_KEY_FILE"} {
+				_, present := values[key]
+				if present != tc.configured {
+					t.Errorf("%s present=%v, want %v", key, present, tc.configured)
+				}
+			}
+		})
+	}
+}
+
 type updateFixture struct {
 	root, opt, data, release, binary string
 	previous, revision               string
