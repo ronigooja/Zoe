@@ -63,6 +63,9 @@ func TestProviderConfigureTestStatusUsePersistedDeployment(t *testing.T) {
 	if err := providerConfigureOperation(args, strings.NewReader(""), &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_MEM0_LLM_MODEL=memory-model\nZOE_MEM0_LLM_REASONING_EFFORT=high\nZOE_TRIAGE_MODEL=triage-model\nZOE_TRIAGE_REASONING_EFFORT=low\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := providerTestOperation([]string{"--root", root}, nil, &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +80,30 @@ func TestProviderConfigureTestStatusUsePersistedDeployment(t *testing.T) {
 	}
 	if strings.Contains(out.String()+errOut.String(), token) {
 		t.Fatal("token leaked to command output")
+	}
+}
+
+func TestStatusShowsModelAndEffortWithoutSecrets(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "zoe-runner.env"), []byte("ZOE_OPENCODE_MODEL=task-model\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_MEM0_LLM_MODEL=memory-model\nZOE_MEM0_LLM_REASONING_EFFORT=high\nZOE_TRIAGE_BASE_URL=https://gateway.example/v1\nZOE_TRIAGE_MODEL=triage-model\nZOE_TRIAGE_REASONING_EFFORT=low\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fakeServices(t, false)
+	var out, errOut bytes.Buffer
+	if err := statusOperation([]string{"--root", root}, nil, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"model=task-model effort=unsupported", "model=memory-model effort=high", "model=triage-model effort=low"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status=%s", got)
+		}
+	}
+	if strings.Contains(got, "secret") && strings.Contains(got, "token") {
+		t.Fatalf("possible secret leak: %s", got)
 	}
 }
 

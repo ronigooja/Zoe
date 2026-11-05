@@ -162,6 +162,7 @@ func (d Deployment) MemoryConfig() (MemoryConfig, error) {
 	}
 	c.BaseURL = v["ZOE_MEM0_LLM_BASE_URL"]
 	c.Model = v["ZOE_MEM0_LLM_MODEL"]
+	c.ReasoningEffort = v["ZOE_MEM0_LLM_REASONING_EFFORT"]
 	if v["ZOE_MEM0_LLM_API_KEY_FILE"] != "" {
 		c.SecretPath = v["ZOE_MEM0_LLM_API_KEY_FILE"]
 	}
@@ -179,6 +180,7 @@ func (d Deployment) TriageConfig() (TriageConfig, error) {
 	}
 	c.BaseURL = v["ZOE_TRIAGE_BASE_URL"]
 	c.Model = v["ZOE_TRIAGE_MODEL"]
+	c.ReasoningEffort = v["ZOE_TRIAGE_REASONING_EFFORT"]
 	c.SecretPath = v["ZOE_TRIAGE_API_KEY_FILE"]
 	return c, nil
 }
@@ -491,9 +493,10 @@ func WriteMemoryEnvAtomic(path string, c MemoryConfig) error {
 		return err
 	}
 	updates := map[string]string{
-		"ZOE_MEM0_LLM_BASE_URL":     c.BaseURL,
-		"ZOE_MEM0_LLM_MODEL":        c.Model,
-		"ZOE_MEM0_LLM_API_KEY_FILE": c.SecretPath,
+		"ZOE_MEM0_LLM_BASE_URL":         c.BaseURL,
+		"ZOE_MEM0_LLM_MODEL":            c.Model,
+		"ZOE_MEM0_LLM_REASONING_EFFORT": c.ReasoningEffort,
+		"ZOE_MEM0_LLM_API_KEY_FILE":     c.SecretPath,
 	}
 	lines := strings.Split(string(old), "\n")
 	kept := make([]string, 0, len(lines)+3)
@@ -509,7 +512,7 @@ func WriteMemoryEnvAtomic(path string, c MemoryConfig) error {
 	for len(kept) > 0 && kept[len(kept)-1] == "" {
 		kept = kept[:len(kept)-1]
 	}
-	for _, key := range []string{"ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_API_KEY_FILE"} {
+	for _, key := range []string{"ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_MEM0_LLM_API_KEY_FILE"} {
 		kept = append(kept, key+"="+strconv.Quote(updates[key]))
 	}
 	return writeFileAtomic(path, []byte(strings.Join(kept, "\n")+"\n"), 0600)

@@ -16,6 +16,18 @@ import (
 
 const DefaultTriageSecretPath = "/etc/zoe/secrets/triage-api-key"
 
+const DefaultTriageReasoningEffort = "low"
+
+var validReasoningEfforts = map[string]bool{"minimal": true, "low": true, "medium": true, "high": true}
+
+func ValidateReasoningEffort(value string) error {
+	value = strings.TrimSpace(value)
+	if value != "" && !validReasoningEfforts[value] {
+		return errors.New("reasoning effort must be one of minimal, low, medium, high, or empty")
+	}
+	return nil
+}
+
 func WriteTriageSecretAtomic(path string, secret []byte) error {
 	if path == "" || !filepath.IsAbs(path) {
 		return errors.New("key file path must be absolute")
@@ -28,15 +40,20 @@ func WriteTriageSecretAtomic(path string, secret []byte) error {
 
 // TriageConfig is the stateless classifier endpoint configuration.
 type TriageConfig struct {
-	BaseURL    string
-	Model      string
-	SecretPath string
-	Secret     string
+	BaseURL         string
+	Model           string
+	ReasoningEffort string
+	SecretPath      string
+	Secret          string
 }
 
 func (c TriageConfig) Normalized() (TriageConfig, error) {
 	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	c.Model = strings.TrimSpace(c.Model)
+	c.ReasoningEffort = strings.TrimSpace(c.ReasoningEffort)
+	if err := ValidateReasoningEffort(c.ReasoningEffort); err != nil {
+		return TriageConfig{}, err
+	}
 	c.SecretPath = strings.TrimSpace(c.SecretPath)
 	if c.SecretPath == "" {
 		return TriageConfig{}, errors.New("triage key file is required")
@@ -108,9 +125,10 @@ func WriteTriageEnvAtomic(path string, c TriageConfig, disabled bool) error {
 		return err
 	}
 	updates := map[string]string{
-		"ZOE_TRIAGE_BASE_URL":     c.BaseURL,
-		"ZOE_TRIAGE_MODEL":        c.Model,
-		"ZOE_TRIAGE_API_KEY_FILE": c.SecretPath,
+		"ZOE_TRIAGE_BASE_URL":         c.BaseURL,
+		"ZOE_TRIAGE_MODEL":            c.Model,
+		"ZOE_TRIAGE_REASONING_EFFORT": c.ReasoningEffort,
+		"ZOE_TRIAGE_API_KEY_FILE":     c.SecretPath,
 	}
 	lines := strings.Split(string(old), "\n")
 	kept := make([]string, 0, len(lines)+3)
@@ -126,7 +144,7 @@ func WriteTriageEnvAtomic(path string, c TriageConfig, disabled bool) error {
 	for len(kept) > 0 && kept[len(kept)-1] == "" {
 		kept = kept[:len(kept)-1]
 	}
-	for _, key := range []string{"ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_API_KEY_FILE"} {
+	for _, key := range []string{"ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_REASONING_EFFORT", "ZOE_TRIAGE_API_KEY_FILE"} {
 		if updates[key] != "" {
 			kept = append(kept, key+"="+quoteEnv(updates[key]))
 		}
@@ -162,6 +180,8 @@ func TestTriage(ctx context.Context, c TriageConfig, client *http.Client) (Triag
 			return c.Model
 		case "ZOE_TRIAGE_API_KEY_FILE":
 			return c.SecretPath
+		case "ZOE_TRIAGE_REASONING_EFFORT":
+			return c.ReasoningEffort
 		}
 		return ""
 	}, os.ReadFile)

@@ -61,10 +61,10 @@ type SecretStatus struct {
 	Mode   string
 	Owner  string
 }
-type ProviderStatus struct{ BaseURL, Model, ConfigSource, LastCheck string }
+type ProviderStatus struct{ BaseURL, Model, ReasoningEffort, ConfigSource, LastCheck string }
 type MemoryStatus struct {
-	BaseURL, Model, SecretPath, LastCheck string
-	Secret                                SecretStatus
+	BaseURL, Model, ReasoningEffort, SecretPath, LastCheck string
+	Secret                                                 SecretStatus
 }
 type Status struct {
 	Mode     Mode
@@ -75,24 +75,26 @@ type Status struct {
 }
 
 type InspectConfig struct {
-	Mode                 Mode
-	Services             []string
-	ComposeProject       string
-	ComposeFile          string
-	ComposeEnv           string
-	ComposeOverride      string
-	SecretPath           string
-	ProviderBaseURL      string
-	ProviderModel        string
-	ProviderConfigSource string
-	ProviderLastCheck    string
-	MemorySecretPath     string
-	MemoryBaseURL        string
-	MemoryModel          string
-	MemoryLastCheck      string
-	TriageBaseURL        string
-	TriageModel          string
-	TriageSecretPath     string
+	Mode                    Mode
+	Services                []string
+	ComposeProject          string
+	ComposeFile             string
+	ComposeEnv              string
+	ComposeOverride         string
+	SecretPath              string
+	ProviderBaseURL         string
+	ProviderModel           string
+	ProviderReasoningEffort string
+	ProviderConfigSource    string
+	ProviderLastCheck       string
+	MemorySecretPath        string
+	MemoryBaseURL           string
+	MemoryModel             string
+	MemoryReasoningEffort   string
+	MemoryLastCheck         string
+	TriageBaseURL           string
+	TriageModel             string
+	TriageSecretPath        string
 }
 
 func DetectMode() Mode {
@@ -117,7 +119,7 @@ func (m Manager) Inspect(ctx context.Context, cfg InspectConfig) Status {
 	if len(services) == 0 {
 		services = []string{"zoe-compose.service", "zoe-runner.service"}
 	}
-	result := Status{Mode: mode, Provider: ProviderStatus{BaseURL: redactURL(cfg.ProviderBaseURL), Model: safeModel(cfg.ProviderModel), ConfigSource: cfg.ProviderConfigSource, LastCheck: cfg.ProviderLastCheck}, Memory: MemoryStatus{BaseURL: redactURL(cfg.MemoryBaseURL), Model: safeModel(cfg.MemoryModel), SecretPath: cfg.MemorySecretPath, LastCheck: cfg.MemoryLastCheck}}
+	result := Status{Mode: mode, Provider: ProviderStatus{BaseURL: redactURL(cfg.ProviderBaseURL), Model: safeModel(cfg.ProviderModel), ReasoningEffort: cfg.ProviderReasoningEffort, ConfigSource: cfg.ProviderConfigSource, LastCheck: cfg.ProviderLastCheck}, Memory: MemoryStatus{BaseURL: redactURL(cfg.MemoryBaseURL), Model: safeModel(cfg.MemoryModel), ReasoningEffort: cfg.MemoryReasoningEffort, SecretPath: cfg.MemorySecretPath, LastCheck: cfg.MemoryLastCheck}}
 	for _, name := range services {
 		result.Services = append(result.Services, m.service(ctx, mode, name, cfg))
 	}

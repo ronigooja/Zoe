@@ -38,7 +38,7 @@ func TestMaintenanceMenuListsTriageModelItems(t *testing.T) {
 	}
 }
 
-func TestMaintenanceMenuTriageConfigureFlowWritesEnvAndSecret(t *testing.T) {
+func TestMaintenanceMenuTriageFlowPromptsModelAndEffortAndWritesBoth(t *testing.T) {
 	menuManager(t)
 	root := t.TempDir()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +49,7 @@ func TestMaintenanceMenuTriageConfigureFlowWritesEnvAndSecret(t *testing.T) {
 	old := terminalEcho
 	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
 	t.Cleanup(func() { terminalEcho = old })
-	input := strings.NewReader("10\n" + s.URL + "/v1\ntriage\n" + keyPath + "\nsecret-value\ny\n0\n")
+	input := strings.NewReader("10\n" + s.URL + "/v1\ntriage\n\n" + keyPath + "\nsecret-value\ny\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(input, &out, &errOut, root); err != nil {
 		t.Fatal(err)

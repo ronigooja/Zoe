@@ -59,6 +59,62 @@ func TestConfigureRejectsBadURLsModelsAndWorldReadableKeyFile(t *testing.T) {
 	}
 }
 
+func TestTriageConfigureRejectsUnknownEffort(t *testing.T) {
+	if err := ValidateReasoningEffort("extreme"); err == nil || !strings.Contains(err.Error(), "minimal, low, medium, high") {
+		t.Fatal(err)
+	}
+}
+
+func TestTriageEffortSurvivesUpdateEnvPreservation(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "stack.env")
+	if err := os.WriteFile(p, []byte("KEEP=yes\nZOE_TRIAGE_REASONING_EFFORT=high\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTriageEnvAtomic(p, TriageConfig{BaseURL: "https://gateway.example/v1", Model: "triage", ReasoningEffort: "high", SecretPath: "/key"}, false); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	if !strings.Contains(string(b), "ZOE_TRIAGE_REASONING_EFFORT=\"high\"") || !strings.Contains(string(b), "KEEP=yes") {
+		t.Fatalf("env=%s", b)
+	}
+}
+
+func TestTriageTestUsesSavedEffort(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		reasoning, ok := body["reasoning"].(map[string]any)
+		if !ok || reasoning["effort"] != "high" {
+			t.Fatalf("request=%v", body)
+		}
+		_, _ = w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"task"}]}]}`))
+	}))
+	defer s.Close()
+	p := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "gpt-6.1-sol", ReasoningEffort: "high", SecretPath: p}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMemoryEffortWrittenAndPreservedAcrossUpdate(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "stack.env")
+	if err := os.WriteFile(p, []byte("KEEP=yes\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteMemoryEnvAtomic(p, MemoryConfig{BaseURL: "https://gateway.example/v1", Model: "memory", ReasoningEffort: "high", SecretPath: "/key"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	if !strings.Contains(string(b), "ZOE_MEM0_LLM_REASONING_EFFORT=\"high\"") || !strings.Contains(string(b), "KEEP=yes") {
+		t.Fatalf("env=%s", b)
+	}
+}
+
 func TestTriageTestReportsCategoryAndLatencyAgainstFakeEndpoint(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"task"}]}]}`))
@@ -100,7 +156,7 @@ func TestTriageTestUsesTheRuntimeRequestShape(t *testing.T) {
 	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	r, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "gpt-6.1-sol", SecretPath: p}, nil)
+	r, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "gpt-6.1-sol", ReasoningEffort: "high", SecretPath: p}, nil)
 	if err != nil || r.Category != "chat" {
 		t.Fatalf("result=%+v err=%v", r, err)
 	}

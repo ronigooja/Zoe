@@ -49,15 +49,20 @@ type ProviderConfig struct {
 // Secret is held only while staging a configuration and is never rendered into
 // a deployment environment file or a probe result.
 type MemoryConfig struct {
-	BaseURL    string
-	Model      string
-	SecretPath string
-	Secret     string
+	BaseURL         string
+	Model           string
+	ReasoningEffort string
+	SecretPath      string
+	Secret          string
 }
 
 func (c MemoryConfig) Normalized() (MemoryConfig, error) {
 	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	c.Model = strings.TrimSpace(c.Model)
+	c.ReasoningEffort = strings.TrimSpace(c.ReasoningEffort)
+	if err := ValidateReasoningEffort(c.ReasoningEffort); err != nil {
+		return MemoryConfig{}, err
+	}
 	c.SecretPath = strings.TrimSpace(c.SecretPath)
 	if c.SecretPath == "" {
 		c.SecretPath = DefaultMemorySecretPath

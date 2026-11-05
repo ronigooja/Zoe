@@ -18,12 +18,65 @@ func testClient(t *testing.T, handler http.Handler) (*Client, *httptest.Server) 
 	server := httptest.NewServer(handler)
 	key := filepathTemp(t, " secret-key \n")
 	client, err := FromEnv(func(name string) string {
-		return map[string]string{"ZOE_TRIAGE_BASE_URL": server.URL + "/v1", "ZOE_TRIAGE_MODEL": "triage-model", "ZOE_TRIAGE_API_KEY_FILE": key}[name]
+		return map[string]string{"ZOE_TRIAGE_BASE_URL": server.URL + "/v1", "ZOE_TRIAGE_MODEL": "gpt-6-triage-model", "ZOE_TRIAGE_API_KEY_FILE": key}[name]
 	}, os.ReadFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return client, server
+}
+
+func TestTriageClientSendsConfiguredEffortForReasoningModels(t *testing.T) {
+	for _, effort := range []string{"minimal", "low", "medium", "high"} {
+		t.Run(effort, func(t *testing.T) {
+			var got map[string]any
+			client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&got)
+				_, _ = w.Write([]byte(response("task")))
+			}))
+			defer server.Close()
+			client.reasoningEffort = effort
+			if _, err := client.Classify(context.Background(), "x"); err != nil {
+				t.Fatal(err)
+			}
+			reasoning, ok := got["reasoning"].(map[string]any)
+			if !ok || reasoning["effort"] != effort {
+				t.Fatalf("reasoning=%v", got["reasoning"])
+			}
+		})
+	}
+}
+
+func TestTriageClientEmptyEffortKeepsLowDefault(t *testing.T) {
+	client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var got map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		if got["reasoning"].(map[string]any)["effort"] != "low" {
+			t.Fatalf("body=%v", got)
+		}
+		_, _ = w.Write([]byte(response("task")))
+	}))
+	defer server.Close()
+	if _, err := client.Classify(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTriageClientDoesNotSendEffortForNonReasoningModel(t *testing.T) {
+	client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var got map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		if _, ok := got["reasoning"]; ok {
+			t.Fatalf("body=%v", got)
+		}
+		_, _ = w.Write([]byte(response("task")))
+	}))
+	defer server.Close()
+	client.model = "gpt-4o"
+	client.reasoningEffort = "high"
+	if _, err := client.Classify(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func filepathTemp(t *testing.T, value string) string {

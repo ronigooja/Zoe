@@ -37,13 +37,13 @@ func menuModel(m ConfigureMenuIO, triage bool) error {
 	if err != nil {
 		return err
 	}
-	var base, model, keyPath string
+	var base, model, effort, keyPath string
 	if triage {
 		c, e := d.TriageConfig()
 		if e != nil {
 			return e
 		}
-		base, model, keyPath = c.BaseURL, c.Model, c.SecretPath
+		base, model, effort, keyPath = c.BaseURL, c.Model, c.ReasoningEffort, c.SecretPath
 		if keyPath == "" {
 			keyPath = filepath.Join(root, "secrets", "triage-api-key")
 		}
@@ -52,7 +52,7 @@ func menuModel(m ConfigureMenuIO, triage bool) error {
 		if e != nil {
 			return e
 		}
-		base, model, keyPath = c.BaseURL, c.Model, c.SecretPath
+		base, model, effort, keyPath = c.BaseURL, c.Model, c.ReasoningEffort, c.SecretPath
 	}
 	kind := "Memory"
 	if triage {
@@ -67,6 +67,15 @@ func menuModel(m ConfigureMenuIO, triage bool) error {
 	if err != nil {
 		return err
 	}
+	effort, err = menuValue(m, "Reasoning effort (minimal/low/medium/high; empty keeps default)", effort)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(effort) != "" {
+		if err := ops.ValidateReasoningEffort(effort); err != nil {
+			return err
+		}
+	}
 	keyChoice, err := menuValue(m, "Key file (Enter uses current)", keyPath)
 	if err != nil {
 		return err
@@ -75,9 +84,9 @@ func menuModel(m ConfigureMenuIO, triage bool) error {
 		keyPath = keyChoice
 	}
 	if triage {
-		return menuSaveTriage(m, d, base, model, keyPath)
+		return menuSaveTriage(m, d, base, model, effort, keyPath)
 	}
-	return menuSaveMemory(m, d, base, model, keyPath)
+	return menuSaveMemory(m, d, base, model, effort, keyPath)
 }
 
 func menuValue(m ConfigureMenuIO, label, current string) (string, error) {
@@ -96,7 +105,10 @@ func menuValue(m ConfigureMenuIO, label, current string) (string, error) {
 	return strings.TrimSpace(v), nil
 }
 
-func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, keyPath string) error {
+func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, effort, keyPath string) error {
+	if err := ops.ValidateReasoningEffort(effort); err != nil {
+		return err
+	}
 	if err := ops.ValidateModelBaseURL(base); err != nil {
 		return err
 	}
@@ -118,7 +130,7 @@ func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, keyPath st
 	} else if err := ops.ValidateKeyFile(keyPath); err != nil {
 		return err
 	}
-	c := ops.TriageConfig{BaseURL: base, Model: model, SecretPath: keyPath}
+	c := ops.TriageConfig{BaseURL: base, Model: model, ReasoningEffort: effort, SecretPath: keyPath}
 	if err := ops.WriteTriageEnvAtomic(d.StackEnv, c, false); err != nil {
 		return err
 	}
@@ -142,7 +154,10 @@ func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, keyPath st
 	return nil
 }
 
-func menuSaveMemory(m ConfigureMenuIO, d ops.Deployment, base, model, keyPath string) error {
+func menuSaveMemory(m ConfigureMenuIO, d ops.Deployment, base, model, effort, keyPath string) error {
+	if err := ops.ValidateReasoningEffort(effort); err != nil {
+		return err
+	}
 	if err := ops.ValidateModelBaseURL(base); err != nil {
 		return err
 	}
@@ -158,7 +173,7 @@ func menuSaveMemory(m ConfigureMenuIO, d ops.Deployment, base, model, keyPath st
 	if err != nil {
 		return err
 	}
-	cfg := ops.MemoryConfig{BaseURL: base, Model: model, SecretPath: keyPath}
+	cfg := ops.MemoryConfig{BaseURL: base, Model: model, ReasoningEffort: effort, SecretPath: keyPath}
 	if len(secret) > 0 {
 		cfg.Secret = strings.TrimSpace(string(secret))
 		for i := range secret {

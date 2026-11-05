@@ -31,10 +31,11 @@ func reasoningModel(model string) bool {
 }
 
 type Client struct {
-	baseURL string
-	model   string
-	apiKey  string
-	http    *http.Client
+	baseURL         string
+	model           string
+	reasoningEffort string
+	apiKey          string
+	http            *http.Client
 }
 
 // SetHTTPClient is used by bounded operator probes and tests.
@@ -83,12 +84,17 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 		}
 		timeout = time.Duration(ms) * time.Millisecond
 	}
+	effort := strings.TrimSpace(getenv("ZOE_TRIAGE_REASONING_EFFORT"))
+	if effort != "" && effort != "minimal" && effort != "low" && effort != "medium" && effort != "high" {
+		return nil, errors.New("ZOE_TRIAGE_REASONING_EFFORT must be one of minimal, low, medium, high, or empty")
+	}
 	transport := &http.Transport{MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}
 	return &Client{
-		baseURL: baseURL,
-		model:   model,
-		apiKey:  key,
-		http:    &http.Client{Transport: transport, Timeout: timeout},
+		baseURL:         baseURL,
+		model:           model,
+		reasoningEffort: effort,
+		apiKey:          key,
+		http:            &http.Client{Transport: transport, Timeout: timeout},
 	}, nil
 }
 
@@ -104,7 +110,11 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 		"store":             false,
 	}
 	if reasoningModel(c.model) {
-		request["reasoning"] = map[string]string{"effort": "low"}
+		effort := c.reasoningEffort
+		if effort == "" {
+			effort = "low"
+		}
+		request["reasoning"] = map[string]string{"effort": effort}
 	} else {
 		request["temperature"] = 0
 	}

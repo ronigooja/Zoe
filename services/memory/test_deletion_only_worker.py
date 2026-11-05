@@ -28,6 +28,7 @@ class DeletionOnlyWorkerTests(unittest.TestCase):
             llm_model="",
             llm_base_url=None,
             llm_api_key=None,
+            reasoning_effort="",
             poll_seconds=0.1,
             batch_size=1,
             extractor_version="fixture",

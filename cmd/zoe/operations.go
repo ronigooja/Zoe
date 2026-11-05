@@ -286,18 +286,24 @@ func providerConfigureOperation(args []string, in io.Reader, out, errOut io.Writ
 	fmt.Fprintf(out, "Deployment: %s\nDatabase: %s\nRunner config: %s\nRunner service: %s\n", d.Mode, d.DatabasePath, d.RunnerEnv, d.RunnerService)
 	in = sharedInput(in)
 	prompt := func(label string, value *string) error {
-		if strings.TrimSpace(*value) != "" {
-			return nil
-		}
 		if *nonInteractive {
+			if strings.TrimSpace(*value) != "" {
+				return nil
+			}
 			return fmt.Errorf("%s is required", label)
 		}
-		fmt.Fprintf(out, "%s: ", label)
+		if strings.TrimSpace(*value) != "" {
+			fmt.Fprintf(out, "%s [%s]: ", label, safeLabel(*value))
+		} else {
+			fmt.Fprintf(out, "%s: ", label)
+		}
 		v, err := inputLine(in)
 		if err != nil {
 			return err
 		}
-		*value = v
+		if strings.TrimSpace(v) != "" {
+			*value = v
+		}
 		return nil
 	}
 	if err := prompt("CLIProxyAPI URL", &cfg.BaseURL); err != nil {
@@ -368,6 +374,7 @@ func memoryConfigureOperationWithSkip(args []string, in io.Reader, out, errOut i
 	base := fs.String("url", "", "override memory model gateway URL")
 	baseAlias := fs.String("base-url", "", "override memory model gateway URL")
 	model := fs.String("model", "", "override memory model")
+	effort := fs.String("effort", "", "override reasoning effort (minimal, low, medium, high, or empty)")
 	secretPath := fs.String("secret", ops.DefaultMemorySecretPath, "private memory credential file")
 	secretFileAlias := fs.String("secret-file", "", "compatibility alias for --secret")
 	token := fs.String("token", "", "compatibility token input; shell history and process arguments may retain it (prefer prompt)")
@@ -416,6 +423,9 @@ func memoryConfigureOperationWithSkip(args []string, in io.Reader, out, errOut i
 	if *model != "" {
 		cfg.Model = *model
 	}
+	if hasFlag(args, "--effort") {
+		cfg.ReasoningEffort = *effort
+	}
 	cfg.SecretPath = *secretPath
 	if *disable {
 		cfg.BaseURL = ""
@@ -463,6 +473,9 @@ func memoryConfigureOperationWithSkip(args []string, in io.Reader, out, errOut i
 			return err
 		}
 	}
+	if err := ops.ValidateReasoningEffort(cfg.ReasoningEffort); err != nil {
+		return err
+	}
 	if *token != "" && *tokenFile != "" {
 		return errors.New("use only one of --token and --token-file")
 	}
@@ -499,6 +512,9 @@ func memoryConfigureOperationWithSkip(args []string, in io.Reader, out, errOut i
 			secret[i] = 0
 		}
 	}
+	if err := ops.ValidateReasoningEffort(cfg.ReasoningEffort); err != nil {
+		return err
+	}
 	if *tokenFile != "" && *keyStdin == false {
 		if err := ops.ValidateKeyFile(*tokenFile); err != nil {
 			return err
@@ -524,6 +540,7 @@ func triageConfigureOperation(args []string, in io.Reader, out, errOut io.Writer
 	base := fs.String("base-url", "", "triage model base URL")
 	legacyURL := fs.String("url", "", "triage model base URL")
 	model := fs.String("model", "", "triage model")
+	effort := fs.String("effort", "", "reasoning effort (minimal, low, medium, high, or empty)")
 	keyFile := fs.String("key-file", "", "existing private triage key file")
 	secretFile := fs.String("secret-file", "", "private triage key destination")
 	keyStdin := fs.Bool("key-stdin", false, "read the private triage key from stdin")
@@ -556,6 +573,9 @@ func triageConfigureOperation(args []string, in io.Reader, out, errOut io.Writer
 	if *model != "" {
 		cfg.Model = *model
 	}
+	if hasFlag(args, "--effort") {
+		cfg.ReasoningEffort = *effort
+	}
 	if *keyFile != "" {
 		cfg.SecretPath = *keyFile
 	}
@@ -578,6 +598,9 @@ func triageConfigureOperation(args []string, in io.Reader, out, errOut io.Writer
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
 		return errors.New("triage model is required")
+	}
+	if err := ops.ValidateReasoningEffort(cfg.ReasoningEffort); err != nil {
+		return err
 	}
 	if *keyStdin {
 		secret, readErr := io.ReadAll(in)
@@ -643,6 +666,15 @@ func safeHost(raw string) string {
 		return ""
 	}
 	return u.Hostname()
+}
+
+func hasFlag(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == name || strings.HasPrefix(arg, name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 func memoryTestOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
@@ -989,6 +1021,7 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	inspect.SecretPath = cfg.SecretPath
 	inspect.ProviderBaseURL = cfg.BaseURL
 	inspect.ProviderModel = cfg.Model
+	inspect.ProviderReasoningEffort = "unsupported"
 	memory, memoryErr := d.MemoryConfig()
 	if memoryErr != nil {
 		return memoryErr
@@ -996,6 +1029,7 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	inspect.MemorySecretPath = memory.SecretPath
 	inspect.MemoryBaseURL = memory.BaseURL
 	inspect.MemoryModel = memory.Model
+	inspect.MemoryReasoningEffort = memory.ReasoningEffort
 	triage, triageErr := d.TriageConfig()
 	if triageErr != nil {
 		return triageErr
@@ -1021,13 +1055,13 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	for _, service := range status.Services {
 		fmt.Fprintf(out, "%s: %s (%s)\n", safeLabel(service.Name), safeLabel(service.State), safeLabel(service.Source))
 	}
-	fmt.Fprintf(out, "Provider: %s model=%s source=%s last-check=%s\n", safeLabel(status.Provider.BaseURL), safeLabel(status.Provider.Model), safeLabel(status.Provider.ConfigSource), safeLabel(ops.LastProviderCheck(d)))
+	fmt.Fprintf(out, "Provider: %s model=%s effort=%s source=%s last-check=%s\n", safeLabel(status.Provider.BaseURL), safeLabel(status.Provider.Model), safeLabel(status.Provider.ReasoningEffort), safeLabel(status.Provider.ConfigSource), safeLabel(ops.LastProviderCheck(d)))
 	fmt.Fprintf(out, "Secret: %s exists=%t mode=%s owner=%s\n", safeLabel(status.Secret.Path), status.Secret.Exists, safeLabel(status.Secret.Mode), safeLabel(status.Secret.Owner))
 	memoryHost := ""
 	if u, parseErr := url.Parse(status.Memory.BaseURL); parseErr == nil {
 		memoryHost = u.Hostname()
 	}
-	fmt.Fprintf(out, "Memory: host=%s model=%s secret-file=%s mode-0600=%t last-check=%s\n", safeLabel(memoryHost), safeLabel(status.Memory.Model), safeLabel(status.Memory.Secret.Path), status.Memory.Secret.Exists && status.Memory.Secret.Mode == "0600", safeLabel(status.Memory.LastCheck))
+	fmt.Fprintf(out, "Memory: host=%s model=%s effort=%s secret-file=%s mode-0600=%t last-check=%s\n", safeLabel(memoryHost), safeLabel(status.Memory.Model), safeLabel(status.Memory.ReasoningEffort), safeLabel(status.Memory.Secret.Path), status.Memory.Secret.Exists && status.Memory.Secret.Mode == "0600", safeLabel(status.Memory.LastCheck))
 	triageHost := safeHost(inspect.TriageBaseURL)
 	triagePresent := false
 	if inspect.TriageSecretPath != "" {
@@ -1039,7 +1073,7 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	if inspect.TriageBaseURL != "" {
 		triageState = "enabled"
 	}
-	fmt.Fprintf(out, "Triage: %s host=%s model=%s key-file-present=%t\n", triageState, safeLabel(triageHost), safeLabel(inspect.TriageModel), triagePresent)
+	fmt.Fprintf(out, "Triage: %s host=%s model=%s effort=%s key-file-present=%t\n", triageState, safeLabel(triageHost), safeLabel(inspect.TriageModel), safeLabel(triage.ReasoningEffort), triagePresent)
 	current := filepath.Join(*optRoot, "releases", "current")
 	if revision, readErr := os.ReadFile(filepath.Join(current, "SOURCE_REVISION")); readErr == nil {
 		fmt.Fprintf(out, "Release: source-revision=%s\n", safeLabel(strings.TrimSpace(string(revision))))

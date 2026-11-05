@@ -34,6 +34,7 @@ class _ResponsesClient:
         return self
 
     def create(self, **kwargs: Any) -> Any:
+        self.last_request = kwargs
         self.calls += 1
         if self.error is not None:
             raise self.error
@@ -56,6 +57,20 @@ class ModelCallAccountingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unaccounted dispatch"):
             adapter.generate_response([{"role": "user", "content": "synthetic"}])
         self.assertEqual(client.calls, 0)
+
+    def test_configured_reasoning_effort_reaches_request_and_empty_keeps_medium(self) -> None:
+        for configured, expected in (("high", "high"), ("", "medium")):
+            api = _ControlAPI()
+            client = _ResponsesClient(SimpleNamespace(id="resp", output_text="", output=[], usage=SimpleNamespace(input_tokens=1, output_tokens=1)))
+            adapter = _adapter(client)
+            adapter.config.reasoning_effort = configured
+            token = set_model_call_context(api, {"id": "job-1", "attempt": 1})
+            try:
+                adapter.generate_response([{"role": "user", "content": "synthetic"}])
+            finally:
+                reset_model_call_context(token)
+            request = getattr(client, "last_request", None)
+            self.assertEqual(request["reasoning"]["effort"], expected)
 
     def test_reserves_before_one_physical_call_and_records_provider_usage(self) -> None:
         api = _ControlAPI()

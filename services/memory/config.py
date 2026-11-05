@@ -9,6 +9,7 @@ MODEL_REVISION = "faf4aa4225822f3bc6376869cb1164e8e3feedd0"
 MODEL_ONNX_REPOSITORY = "Qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q"
 EMBEDDING_DIMENSIONS = 384
 MODEL_CODEC = "paraphrase_multilingual_minilm_l12_384_faf4aa42"
+_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
 
 
 def _required(name: str) -> str:
@@ -32,6 +33,7 @@ class WorkerConfig:
     llm_model: str
     llm_base_url: str | None
     llm_api_key: str | None
+    reasoning_effort: str
     poll_seconds: float
     batch_size: int
     extractor_version: str
@@ -48,6 +50,9 @@ class WorkerConfig:
         provider = os.environ.get("ZOE_MEM0_LLM_PROVIDER", "openai").strip().lower()
         if not deletion_only and provider != "openai":
             raise ValueError("ZOE_MEM0_LLM_PROVIDER must be openai; other providers are not yet accounted")
+        reasoning_effort = os.environ.get("ZOE_MEM0_LLM_REASONING_EFFORT", "").strip()
+        if reasoning_effort and reasoning_effort not in _REASONING_EFFORTS:
+            raise ValueError("ZOE_MEM0_LLM_REASONING_EFFORT must be one of minimal, low, medium, high, or empty")
         return cls(
             control_url=_required("ZOE_CONTROL_URL").rstrip("/"),
             runner_token=_required("ZOE_RUNNER_TOKEN"),
@@ -61,6 +66,7 @@ class WorkerConfig:
             llm_model="" if deletion_only else _required("ZOE_MEM0_LLM_MODEL"),
             llm_base_url=os.environ.get("ZOE_MEM0_LLM_BASE_URL") or None,
             llm_api_key=os.environ.get("ZOE_MEM0_LLM_API_KEY") or None,
+            reasoning_effort=reasoning_effort,
             poll_seconds=max(0.1, min(float(os.environ.get("ZOE_MEMORY_POLL_SECONDS", "2")), 60.0)),
             batch_size=max(1, min(int(os.environ.get("ZOE_MEMORY_BATCH_SIZE", "10")), 100)),
             extractor_version=os.environ.get("ZOE_MEMORY_EXTRACTOR_VERSION", "mem0-controlled-v1"),

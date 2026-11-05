@@ -86,6 +86,8 @@ class ControlledMem0:
                 "temperature": 0.1,
             },
         }
+        if config.reasoning_effort:
+            llm_config["config"]["reasoning_effort"] = config.reasoning_effort
         history_path = Path(os.environ.get("ZOE_MEM0_HISTORY_DB", "/var/lib/zoe/memory/mem0-history.sqlite"))
         history_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.memory = Memory.from_config(

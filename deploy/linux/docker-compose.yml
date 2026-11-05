@@ -36,6 +36,7 @@ services:
       ZOE_VOICE_ACCOUNT_MEDIA_ENABLED: ${ZOE_VOICE_ACCOUNT_MEDIA_ENABLED:-false}
       ZOE_TRIAGE_BASE_URL: ${ZOE_TRIAGE_BASE_URL:-}
       ZOE_TRIAGE_MODEL: ${ZOE_TRIAGE_MODEL:-}
+      ZOE_TRIAGE_REASONING_EFFORT: ${ZOE_TRIAGE_REASONING_EFFORT:-}
       ZOE_TRIAGE_TIMEOUT_MS: ${ZOE_TRIAGE_TIMEOUT_MS:-}
       ZOE_TRIAGE_API_KEY_FILE: /run/secrets/triage_api_key
       ZOE_SECRET_FILE_MAP: ZOE_RUNNER_TOKEN=/run/secrets/runner_token${ZOE_VOICE_SECRET_MAP:-}
@@ -95,6 +96,7 @@ services:
       ZOE_MEM0_COLLECTION: zoe_mem0_v1
       ZOE_MEM0_LLM_PROVIDER: ${ZOE_MEM0_LLM_PROVIDER:-openai}
       ZOE_MEM0_LLM_MODEL: ${ZOE_MEM0_LLM_MODEL:?set a deployment-selected memory model}
+      ZOE_MEM0_LLM_REASONING_EFFORT: ${ZOE_MEM0_LLM_REASONING_EFFORT:-}
       ZOE_MEM0_LLM_BASE_URL: ${ZOE_MEM0_LLM_BASE_URL:?set the existing external model gateway URL}
       ZOE_MEMORY_MODEL_CACHE: /var/lib/zoe/memory/models
       ZOE_MEM0_HISTORY_DB: /var/lib/zoe/memory/mem0-history.sqlite
