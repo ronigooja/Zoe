@@ -36,6 +36,10 @@ The concise-error/automatic-diagnostic rule is an approved product and architect
 
 ## Component verification
 
+Gateway creation-outcome attestation is implemented and unit-tested in the voice package; tests use an HTTP fake gateway.
+The tests cover `never_established`, non-quarantine outcomes, 422 rejection, sweep idempotence, and source-session fencing.
+This evidence does not verify the implementation against a real gateway or establish production voice acceptance.
+
 | Area | Source/environment and observed checks | Acceptance limits |
 |---|---|---|
 | Control plane and runner | The integrated source, fixture, and independent capability checks passed at the recorded checkpoints; the live historical runtime attempt remains uncertain and production deployment, migration fencing, and complete scenario acceptance remain open. See the [full evidence record](evidence/control-plane-and-runner.md). | A successful real OpenCode task chain with provider/tool/artifact evidence and confirmed termination; recovery against a real OpenCode deployment; provider-side usage/cost evidence; production deployment and cross-host migration fencing; complete scenario acceptance. |

@@ -160,5 +160,11 @@ ALTER TABLE voice_sessions ADD COLUMN gateway_context_chars INTEGER NOT NULL DEF
 	}}); err != nil {
 		return err
 	}
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 208, Name: "voice_gateway_request_id", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN gateway_request_id TEXT NOT NULL DEFAULT ''`)
+		return err
+	}}); err != nil {
+		return err
+	}
 	return nil
 }
