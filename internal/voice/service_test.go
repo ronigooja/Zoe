@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +28,25 @@ type testAccountMedia struct {
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
+
+type fakeClassifier struct {
+	category string
+	err      error
+	delay    time.Duration
+	calls    atomic.Int32
+}
+
+func (f *fakeClassifier) Classify(ctx context.Context, text string) (string, error) {
+	f.calls.Add(1)
+	if f.delay > 0 {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(f.delay):
+		}
+	}
+	return f.category, f.err
+}
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
@@ -331,6 +351,10 @@ func TestVoiceTaskAdmissionBindsStableTurnAcrossRevisions(t *testing.T) {
 }
 
 func handoffHTTPServer(t *testing.T) (*httptest.Server, *storage.Store, string) {
+	return handoffHTTPServerWithConfig(t, Config{})
+}
+
+func handoffHTTPServerWithConfig(t *testing.T, voiceCfg Config) (*httptest.Server, *storage.Store, string) {
 	t.Helper()
 	ctx := context.Background()
 	store, err := storage.Open(ctx, storage.Config{Path: ":memory:"})
@@ -352,7 +376,7 @@ func handoffHTTPServer(t *testing.T) (*httptest.Server, *storage.Store, string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = Register(server, store, Config{}); err != nil {
+	if err = Register(server, store, voiceCfg); err != nil {
 		t.Fatal(err)
 	}
 	if err = store.Migrate(ctx); err != nil {
@@ -473,6 +497,193 @@ func TestVoiceHandoffHTTPFailClosedForHighImpactAndAmbiguousRequests(t *testing.
 			}
 		})
 	}
+}
+
+func commitAndHandoff(t *testing.T, ts *httptest.Server, key, id, content string) contracts.CommandReceipt {
+	return commitAndHandoffSession(t, ts, key, "handoff-session", id, content)
+}
+
+func commitAndHandoffSession(t *testing.T, ts *httptest.Server, key, session, id, content string) contracts.CommandReceipt {
+	t.Helper()
+	hash := sha256.Sum256([]byte(content))
+	if status, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "commit-"+id, "voice.turn.commit", map[string]any{"session_id": session, "generation": 1, "turn_id": id, "revision": 1, "content": content, "user_confirmed": true}); status != http.StatusOK {
+		t.Fatalf("commit status=%d body=%s", status, raw)
+	}
+	status, receipt, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-"+id, "voice.turn.handoff", map[string]any{"session_id": session, "generation": 1, "turn_id": id, "revision": 1, "content_hash": fmt.Sprintf("%x", hash[:])})
+	if status != http.StatusOK {
+		t.Fatalf("handoff status=%d body=%s", status, raw)
+	}
+	return receipt
+}
+
+func TestHandoffProgressCategoryCreatesNoTaskAndDeliversPlainReply(t *testing.T) {
+	classifier := &fakeClassifier{category: "progress"}
+	posts := atomic.Int32{}
+	gateway := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if strings.Contains(body["text"], "Zoe result") {
+			t.Errorf("wrapper leaked: %q", body["text"])
+		}
+		if body["text"] != "现在没有在处理的任务。" {
+			t.Errorf("text=%q", body["text"])
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer gateway.Close()
+	ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier, GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client()})
+	if _, err := store.DB().Exec(`UPDATE voice_sessions SET gateway_session_id='gateway-handoff' WHERE id='handoff-session'`); err != nil {
+		t.Fatal(err)
+	}
+	commitAndHandoff(t, ts, key, "progress-order", "is it done yet")
+	var tasks, replies int
+	_ = store.DB().QueryRow(`SELECT count(*) FROM tasks`).Scan(&tasks)
+	_ = store.DB().QueryRow(`SELECT count(*) FROM voice_fast_replies`).Scan(&replies)
+	if tasks != 0 || replies != 1 {
+		t.Fatalf("tasks=%d replies=%d", tasks, replies)
+	}
+	newService(store.DB(), Config{GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), Now: time.Now}).dispatchFastReplies(context.Background())
+	if posts.Load() != 1 {
+		t.Fatalf("gateway posts=%d", posts.Load())
+	}
+}
+
+func TestHandoffProgressReportsRunningTaskSecondsFromTaskTable(t *testing.T) {
+	now := time.Date(2026, 11, 6, 1, 0, 10, 0, time.UTC)
+	classifier := &fakeClassifier{category: "progress"}
+	ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier, Now: func() time.Time { return now }})
+	at := now.Add(-10 * time.Second).Format(time.RFC3339Nano)
+	_, _ = store.DB().Exec(`INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('task-device','default','owner','task','approved',?)`, at)
+	_, _ = store.DB().Exec(`INSERT INTO command_receipts(command_id,workspace_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES('task-cmd','default','owner','task-key',X'01','{}',?)`, at)
+	_, _ = store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,started_at,created_by_device_id,command_id,owner_subject_id) VALUES('running','default','running','running','voice','zoe-steward','active',1,?,?,?,?,?,?)`, at, at, at, "task-device", "task-cmd", "owner")
+	_, _ = store.DB().Exec(`INSERT INTO voice_task_links(workspace_id,session_id,generation,turn_id,turn_revision,task_id,linked_by_device_id,command_id,linked_at) VALUES('default','handoff-session',1,'old',1,'running','instance','task-cmd',?)`, at)
+	commitAndHandoff(t, ts, key, "progress-running", "is it done")
+	var text string
+	if err := store.DB().QueryRow(`SELECT text FROM voice_fast_replies`).Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	if text != "还在处理,已经10秒了。" {
+		t.Fatalf("text=%q", text)
+	}
+}
+
+func TestHandoffProgressWithoutRecentTaskSaysNothingRunning(t *testing.T) {
+	classifier := &fakeClassifier{category: "progress"}
+	ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier})
+	commitAndHandoff(t, ts, key, "progress-none", "is it done")
+	var text string
+	_ = store.DB().QueryRow(`SELECT text FROM voice_fast_replies`).Scan(&text)
+	if text != "现在没有在处理的任务。" {
+		t.Fatalf("text=%q", text)
+	}
+}
+
+func TestHandoffTaskRecallMemoryChatAndUnknownCategoriesStillCreateStewardTask(t *testing.T) {
+	for _, category := range []string{"task", "recall", "memory", "chat", "unknown"} {
+		t.Run(category, func(t *testing.T) {
+			classifier := &fakeClassifier{category: category}
+			ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier})
+			receipt := commitAndHandoff(t, ts, key, "category-"+category, "please handle this")
+			var count int
+			_ = store.DB().QueryRow(`SELECT count(*) FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&count)
+			if count != 1 {
+				t.Fatalf("tasks=%d", count)
+			}
+		})
+	}
+}
+
+func TestHandoffClassifierErrorOrTimeoutFallsBackToSlowPath(t *testing.T) {
+	for i, classifier := range []*fakeClassifier{{err: errors.New("classifier failed")}, {delay: 2 * time.Second, category: "progress"}} {
+		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
+			ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier})
+			receipt := commitAndHandoff(t, ts, key, fmt.Sprintf("classifier-failure-%d", i), "please handle this")
+			var count int
+			_ = store.DB().QueryRow(`SELECT count(*) FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&count)
+			if count != 1 {
+				t.Fatalf("tasks=%d", count)
+			}
+		})
+	}
+}
+
+func TestHandoffWithoutClassifierBehavesAsBefore(t *testing.T) {
+	ts, store, key := handoffHTTPServer(t)
+	receipt := commitAndHandoff(t, ts, key, "no-classifier", "is it done")
+	var count int
+	_ = store.DB().QueryRow(`SELECT count(*) FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&count)
+	if count != 1 {
+		t.Fatalf("tasks=%d", count)
+	}
+}
+
+func TestFailedClassificationIsNotRetriedEveryTick(t *testing.T) {
+	classifier := &fakeClassifier{err: errors.New("no")}
+	ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier})
+	commitAndHandoff(t, ts, key, "failed-once", "please handle this")
+	var category string
+	_ = store.DB().QueryRow(`SELECT triage_category FROM voice_turns WHERE turn_id='failed-once'`).Scan(&category)
+	if category != "unclassified" || classifier.calls.Load() != 1 {
+		t.Fatalf("category=%q calls=%d", category, classifier.calls.Load())
+	}
+	newService(store.DB(), Config{Classifier: classifier}).classifyCommittedTurns(context.Background())
+	if classifier.calls.Load() != 1 {
+		t.Fatalf("failed classification retried: calls=%d", classifier.calls.Load())
+	}
+}
+
+func TestHandoffHighImpactIgnoresClassifier(t *testing.T) {
+	classifier := &fakeClassifier{category: "progress"}
+	ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier})
+	receipt := commitAndHandoff(t, ts, key, "high-impact", "delete all files")
+	var status, interaction string
+	_ = store.DB().QueryRow(`SELECT status,interaction_state FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&status, &interaction)
+	if status != "waiting" || interaction != "explicit_confirmation" {
+		t.Fatalf("status=%q interaction=%q", status, interaction)
+	}
+	var replies int
+	_ = store.DB().QueryRow(`SELECT count(*) FROM voice_fast_replies`).Scan(&replies)
+	if replies != 0 {
+		t.Fatalf("fast replies=%d", replies)
+	}
+}
+
+func TestHandoffReplayIsIdempotentAcrossRoutes(t *testing.T) {
+	t.Run("progress", func(t *testing.T) {
+		classifier := &fakeClassifier{category: "progress"}
+		posts := atomic.Int32{}
+		gateway := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { posts.Add(1); w.WriteHeader(http.StatusOK) }))
+		defer gateway.Close()
+		ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier, GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client()})
+		_, _ = store.DB().Exec(`UPDATE voice_sessions SET gateway_session_id='gateway-replay' WHERE id='handoff-session'`)
+		receipt := commitAndHandoff(t, ts, key, "replay-progress", "is it done")
+		status, second, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-replay-progress", "voice.turn.handoff", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "replay-progress", "revision": 1, "content_hash": fmt.Sprintf("%x", sha256.Sum256([]byte("is it done")))})
+		if status != http.StatusOK || second.ResourceID != receipt.ResourceID {
+			t.Fatalf("progress replay status=%d raw=%s", status, raw)
+		}
+		newService(store.DB(), Config{GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), Now: time.Now}).dispatchFastReplies(context.Background())
+		var replies int
+		_ = store.DB().QueryRow(`SELECT count(*) FROM voice_fast_replies`).Scan(&replies)
+		if replies != 1 || posts.Load() != 1 {
+			t.Fatalf("replies=%d posts=%d", replies, posts.Load())
+		}
+	})
+	t.Run("task", func(t *testing.T) {
+		ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: &fakeClassifier{category: "task"}})
+		content := "research this"
+		receipt := commitAndHandoff(t, ts, key, "replay-task", content)
+		hash := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
+		status, second, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-replay-task", "voice.turn.handoff", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "replay-task", "revision": 1, "content_hash": hash})
+		if status != http.StatusOK || second.ResourceID != receipt.ResourceID {
+			t.Fatalf("task replay status=%d raw=%s", status, raw)
+		}
+		var tasks int
+		_ = store.DB().QueryRow(`SELECT count(*) FROM tasks`).Scan(&tasks)
+		if tasks != 1 {
+			t.Fatalf("tasks=%d", tasks)
+		}
+	})
 }
 
 func TestVoiceSessionRequiresConfiguredSpaceGateway(t *testing.T) {

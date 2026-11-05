@@ -351,3 +351,68 @@ func TestResultCursorAdvancesMonotonicallyAndSurvivesRestart(t *testing.T) {
 		t.Fatalf("restarted service must pick up new events, posts=%d", r.posts.Load())
 	}
 }
+
+func TestFastReplySkippedWhenNoActiveCall(t *testing.T) {
+	r := newDeliveryRig(t)
+	at := r.now().Format(time.RFC3339Nano)
+	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-none','default','missing',1,'turn','现在没有在处理的任务。','progress','pending',?,?,?)`, at, at, at)
+	r.svc.dispatchFastReplies(context.Background())
+	var status string
+	if err := r.store.DB().QueryRow(`SELECT status FROM voice_fast_replies WHERE id='fast-none'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "skipped" || r.posts.Load() != 0 {
+		t.Fatalf("status=%q posts=%d", status, r.posts.Load())
+	}
+}
+
+func TestFastReplyDeliveryRetriesThenFails(t *testing.T) {
+	r := newDeliveryRig(t)
+	r.code.Store(503)
+	r.seedCall(t, "s-fast", "user-1", 1)
+	at := r.now().Format(time.RFC3339Nano)
+	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-fail','default','s-fast',1,'turn','hello','progress','pending',?,?,?)`, at, at, at)
+	for i := 0; i < 4; i++ {
+		r.svc.dispatchFastReplies(context.Background())
+		r.advance(10 * time.Second)
+	}
+	var status string
+	var attempts int
+	_ = r.store.DB().QueryRow(`SELECT status,attempts FROM voice_fast_replies WHERE id='fast-fail'`).Scan(&status, &attempts)
+	if status != "failed" || attempts != resultDeliveryMaxAttempts || r.posts.Load() != resultDeliveryMaxAttempts {
+		t.Fatalf("status=%q attempts=%d posts=%d", status, attempts, r.posts.Load())
+	}
+}
+
+func TestFastReplyRecomputesSecondsOnRetry(t *testing.T) {
+	r := newDeliveryRig(t)
+	r.seedCall(t, "s-fast", "user-1", 1)
+	at := r.now().Add(-5 * time.Second).Format(time.RFC3339Nano)
+	r.seedTask(t, "task-fast", "user-1")
+	r.exec(t, `UPDATE tasks SET status='active',started_at=?,updated_at=? WHERE id='task-fast'`, at, at)
+	r.exec(t, `INSERT INTO voice_task_links(workspace_id,session_id,generation,turn_id,turn_revision,task_id,linked_by_device_id,command_id,linked_at) VALUES('default','s-fast',1,'old',1,'task-fast','device-1','cmd-fast',?)`, at)
+	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-recompute','default','s-fast',1,'turn','stale','progress','pending',?,?,?)`, r.now().Format(time.RFC3339Nano), at, at)
+	r.svc.dispatchFastReplies(context.Background())
+	if !strings.Contains(r.texts[0], "已经5秒") {
+		t.Fatalf("first text=%q", r.texts[0])
+	}
+}
+
+func TestClassifierAndGatewayAreNeverCalledInsideATransaction(t *testing.T) {
+	r := newDeliveryRig(t)
+	classifier := &fakeClassifier{category: "progress", delay: 20 * time.Millisecond}
+	svc := newService(r.store.DB(), Config{Classifier: classifier, Now: r.now})
+	at := r.now().Format(time.RFC3339Nano)
+	r.seedCall(t, "s-lock", "user-1", 1)
+	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('turn-lock','default','s-lock',1,'turn',1,'is it done',X'01',?, 'cmd')`, at)
+	done := make(chan struct{})
+	go func() { svc.classifyCommittedTurn("turn-lock"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("classifier blocked")
+	}
+	if _, err := r.store.DB().Exec(`UPDATE voice_turns SET content=content WHERE id='turn-lock'`); err != nil {
+		t.Fatal(err)
+	}
+}
