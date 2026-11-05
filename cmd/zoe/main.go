@@ -11,6 +11,10 @@ import (
 	"strings"
 )
 
+// sourceRevision is set by release builds and is used by the host updater to
+// prove that the operator binary belongs to the reviewed server release.
+var sourceRevision = "development"
+
 type operation func(args []string, in io.Reader, out, errOut io.Writer) error
 
 // Operations are registered by the command implementations. Keeping the
@@ -60,6 +64,10 @@ func RegisterOperation(name string, fn func([]string, io.Reader, io.Writer, io.W
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--source-revision" {
+		fmt.Println(sourceRevision)
+		return
+	}
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "zoe:", err)
 		os.Exit(1)

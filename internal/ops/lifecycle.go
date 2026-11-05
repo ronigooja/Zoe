@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -58,6 +59,7 @@ type ReleaseImage struct {
 }
 type LifecycleOptions struct {
 	Root, OptRoot, DataRoot, Release, OpenCodeImage, OpenCodeBinary string
+	CLIBin, CLIReleasesDir                                          string
 	NonInteractive, Yes, PurgeData, PurgeCredentials, Start         bool
 	HealthURL                                                       string
 	HealthTimeout                                                   time.Duration
@@ -398,10 +400,112 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if err = waitAllHealth(ctx, o, m, o.HealthURL, o.HealthTimeout); err != nil {
 		return rollback(err)
 	}
+	if err = installReleaseCLI(ctx, o, manifest.SourceRevision); err != nil {
+		if o.Out != nil {
+			fmt.Fprintf(o.Out, "CLI install failed: %v\n", err)
+		}
+		return err
+	}
 	if err = pruneReleases(filepath.Join(o.OptRoot, "releases"), previous, manifest.SourceRevision); err != nil {
 		return rollback(err)
 	}
 	return nil
+}
+
+func installReleaseCLI(ctx context.Context, o LifecycleOptions, revision string) error {
+	cli := filepath.Join(o.Release, "bin", "zoe")
+	if _, err := os.Stat(cli); os.IsNotExist(err) {
+		if o.Out != nil {
+			fmt.Fprintln(o.Out, "CLI not updated: release has no bin/zoe")
+		}
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect release CLI: %w", err)
+	}
+	st, err := os.Stat(cli)
+	if err != nil || !st.Mode().IsRegular() || st.Mode()&0111 == 0 {
+		return fmt.Errorf("release CLI is not executable: %s", cli)
+	}
+	revision = strings.TrimSpace(revision)
+	cmd := exec.CommandContext(ctx, cli, "--source-revision")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("read CLI source revision: %w", err)
+	}
+	if strings.TrimSpace(string(output)) != revision {
+		return fmt.Errorf("CLI source revision mismatch: embedded=%s, release=%s", strings.TrimSpace(string(output)), revision)
+	}
+	if o.CLIReleasesDir == "" {
+		o.CLIReleasesDir = filepath.Join(o.OptRoot, "releases")
+	}
+	if o.CLIBin == "" {
+		o.CLIBin = "/usr/local/bin/zoe"
+	}
+	if err := os.MkdirAll(o.CLIReleasesDir, 0755); err != nil {
+		return fmt.Errorf("create CLI releases directory: %w", err)
+	}
+	target := filepath.Join(o.CLIReleasesDir, "zoe-cli-"+revision[:12])
+	if _, err := os.Stat(target); os.IsNotExist(err) {
+		stage, err := os.MkdirTemp(o.CLIReleasesDir, ".zoe-cli-")
+		if err != nil {
+			return fmt.Errorf("stage CLI release: %w", err)
+		}
+		defer os.RemoveAll(stage)
+		if err := copyTree(filepath.Join(o.Release, "bin"), filepath.Join(stage, "bin")); err != nil {
+			return fmt.Errorf("stage CLI release: %w", err)
+		}
+		source, err := os.ReadFile(filepath.Join(o.Release, "SOURCE_REVISION"))
+		if err != nil {
+			return fmt.Errorf("stage CLI revision: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(stage, "SOURCE_REVISION"), source, 0644); err != nil {
+			return fmt.Errorf("stage CLI revision: %w", err)
+		}
+		if err := os.Rename(stage, target); err != nil {
+			return fmt.Errorf("publish CLI release: %w", err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(o.CLIBin), 0755); err != nil {
+		return fmt.Errorf("create CLI bin directory: %w", err)
+	}
+	if info, err := os.Lstat(o.CLIBin); err == nil && info.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("refusing to replace non-symlink CLI %s", o.CLIBin)
+	}
+	linkTarget := filepath.Join(target, "bin", "zoe")
+	tmp := o.CLIBin + ".tmp"
+	_ = os.Remove(tmp)
+	if err := os.Symlink(linkTarget, tmp); err != nil {
+		return fmt.Errorf("stage CLI link: %w", err)
+	}
+	if err := os.Rename(tmp, o.CLIBin); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("switch CLI link: %w", err)
+	}
+	if o.Out != nil {
+		fmt.Fprintf(o.Out, "Installed %s -> %s\n", o.CLIBin, linkTarget)
+	}
+	return nil
+}
+
+func copyTree(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		out := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(out, info.Mode().Perm())
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(out, data, info.Mode().Perm())
+	})
 }
 
 func rollbackUpdateBeforeClosure(ctx context.Context, m Manager, o LifecycleOptions, selector, previous string, stack, runner fileSnapshot, prep, saved []fileSnapshot, cause error) error {
