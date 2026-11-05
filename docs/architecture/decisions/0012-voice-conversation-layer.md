@@ -25,6 +25,8 @@ The problem is control, not speed: the upstream model leads the conversation and
 6. Authority is unchanged: voice and the conversation layer create no commands directly. Impact-level rules of [ADR 0009](0009-voice-steward-impact-policy.md) apply to the slow path only; the fast path is read-only.
 7. The gateway stays transport-only (media, accounts, sideband). It carries no conversation logic.
 
+The stateless `zoe-triage` classifier is a configurable, startup-loaded client only; it is not wired into voice behavior. When enabled, it classifies one sentence through the configured Responses endpoint and callers retain the slow-path fallback on any failure.
+
 ## Open questions (to measure before implementation)
 
 - Fast-path time to first audio end to end, not only upstream acknowledgement.
