@@ -37,13 +37,13 @@ func menuModel(m ConfigureMenuIO, triage bool) error {
 	if err != nil {
 		return err
 	}
-	var base, model, effort, keyPath string
+	var base, model, effort, thinking, keyPath string
 	if triage {
 		c, e := d.TriageConfig()
 		if e != nil {
 			return e
 		}
-		base, model, effort, keyPath = c.BaseURL, c.Model, c.ReasoningEffort, c.SecretPath
+		base, model, effort, thinking, keyPath = c.BaseURL, c.Model, c.ReasoningEffort, c.Thinking, c.SecretPath
 		if keyPath == "" {
 			keyPath = filepath.Join(root, "secrets", "triage-api-key")
 		}
@@ -59,21 +59,45 @@ func menuModel(m ConfigureMenuIO, triage bool) error {
 		kind = "Triage"
 	}
 	fmt.Fprintf(m.Out, "%s model configuration (Enter keeps current value)\n", kind)
-	base, err = menuValue(m, "Base URL", base)
-	if err != nil {
-		return err
+	for {
+		base, err = menuValue(m, "Base URL", base)
+		if err != nil {
+			return err
+		}
+		if err = ops.ValidateTriageBaseURL(base, ""); err != nil && triage {
+			fmt.Fprintf(m.ErrOut, "%s Nothing was saved.\n", err)
+			continue
+		}
+		break
 	}
 	model, err = menuValue(m, "Model", model)
 	if err != nil {
 		return err
 	}
-	effort, err = menuValue(m, "Reasoning effort (minimal/low/medium/high; empty keeps default)", effort)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(effort) != "" {
-		if err := ops.ValidateReasoningEffort(effort); err != nil {
+	for {
+		effort, err = menuValue(m, "Reasoning effort (low/medium/high; empty keeps default)", effort)
+		if err != nil {
 			return err
+		}
+		if strings.TrimSpace(effort) != "" {
+			if err := ops.ValidateReasoningEffort(effort); err != nil {
+				fmt.Fprintf(m.ErrOut, "%s Nothing was saved.\n", err)
+				continue
+			}
+		}
+		break
+	}
+	if triage {
+		for {
+			thinking, err = menuValue(m, "Thinking (Enter = provider default, disabled = faster, enabled)", thinking)
+			if err != nil {
+				return err
+			}
+			if thinking != "" && thinking != "disabled" && thinking != "enabled" {
+				fmt.Fprintf(m.ErrOut, "thinking must be disabled, enabled, or empty. Nothing was saved.\n")
+				continue
+			}
+			break
 		}
 	}
 	keyChoice, err := menuValue(m, "Key file (Enter uses current)", keyPath)
@@ -84,7 +108,11 @@ func menuModel(m ConfigureMenuIO, triage bool) error {
 		keyPath = keyChoice
 	}
 	if triage {
-		return menuSaveTriage(m, d, base, model, effort, keyPath)
+		if err := menuSaveTriage(m, d, base, model, effort, thinking, keyPath); err != nil {
+			fmt.Fprintf(m.ErrOut, "%s Nothing was saved.\n", err)
+			return err
+		}
+		return nil
 	}
 	return menuSaveMemory(m, d, base, model, effort, keyPath)
 }
@@ -97,6 +125,9 @@ func menuValue(m ConfigureMenuIO, label, current string) (string, error) {
 	}
 	v, err := inputLine(sharedInput(m.In))
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			fmt.Fprintln(m.Out, "Cancelled. Nothing was saved.")
+		}
 		return "", err
 	}
 	if strings.TrimSpace(v) == "" {
@@ -105,11 +136,11 @@ func menuValue(m ConfigureMenuIO, label, current string) (string, error) {
 	return strings.TrimSpace(v), nil
 }
 
-func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, effort, keyPath string) error {
+func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, effort, thinking, keyPath string) error {
 	if err := ops.ValidateReasoningEffort(effort); err != nil {
 		return err
 	}
-	if err := ops.ValidateModelBaseURL(base); err != nil {
+	if err := ops.ValidateTriageBaseURL(base, ""); err != nil {
 		return err
 	}
 	if strings.TrimSpace(model) == "" {
@@ -130,11 +161,11 @@ func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, effort, ke
 	} else if err := ops.ValidateKeyFile(keyPath); err != nil {
 		return err
 	}
-	c := ops.TriageConfig{BaseURL: base, Model: model, ReasoningEffort: effort, SecretPath: keyPath}
+	c := ops.TriageConfig{BaseURL: base, Model: model, ReasoningEffort: effort, Thinking: thinking, SecretPath: keyPath}
 	if err := ops.WriteTriageEnvAtomic(d.StackEnv, c, false); err != nil {
 		return err
 	}
-	fmt.Fprintln(m.Out, "Triage model configured.")
+	fmt.Fprintln(m.Out, "Saved.")
 	fmt.Fprint(m.Out, "Test now? [Y/n]: ")
 	answer, err := inputLine(sharedInput(m.In))
 	if err != nil {
@@ -147,7 +178,7 @@ func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, effort, ke
 		if testErr != nil {
 			fmt.Fprintf(m.ErrOut, "FAIL HTTP %dxx latency=%dms: %s\n", r.HTTPStatus/100, r.Latency.Milliseconds(), safeLabel(testErr.Error()))
 		} else {
-			fmt.Fprintf(m.Out, "PASS HTTP %dxx latency=%dms category=%s\n", r.HTTPStatus/100, r.Latency.Milliseconds(), safeLabel(r.Category))
+			fmt.Fprintf(m.Out, "PASS style=%s HTTP %dxx latency=%dms category=%s\n", safeLabel(r.Style), r.HTTPStatus/100, r.Latency.Milliseconds(), safeLabel(r.Category))
 		}
 	}
 	fmt.Fprintln(m.Out, "Apply with: zoe update")

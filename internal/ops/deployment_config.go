@@ -179,8 +179,10 @@ func (d Deployment) TriageConfig() (TriageConfig, error) {
 		return c, err
 	}
 	c.BaseURL = v["ZOE_TRIAGE_BASE_URL"]
+	c.APIStyle = v["ZOE_TRIAGE_API_STYLE"]
 	c.Model = v["ZOE_TRIAGE_MODEL"]
 	c.ReasoningEffort = v["ZOE_TRIAGE_REASONING_EFFORT"]
+	c.Thinking = v["ZOE_TRIAGE_THINKING"]
 	c.SecretPath = v["ZOE_TRIAGE_API_KEY_FILE"]
 	return c, nil
 }

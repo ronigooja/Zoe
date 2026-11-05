@@ -540,7 +540,8 @@ func triageConfigureOperation(args []string, in io.Reader, out, errOut io.Writer
 	base := fs.String("base-url", "", "triage model base URL")
 	legacyURL := fs.String("url", "", "triage model base URL")
 	model := fs.String("model", "", "triage model")
-	effort := fs.String("effort", "", "reasoning effort (minimal, low, medium, high, or empty)")
+	effort := fs.String("effort", "", "reasoning effort (low, medium, high, or empty)")
+	thinking := fs.String("thinking", "", "chat thinking mode (enabled, disabled, or empty)")
 	keyFile := fs.String("key-file", "", "existing private triage key file")
 	secretFile := fs.String("secret-file", "", "private triage key destination")
 	keyStdin := fs.Bool("key-stdin", false, "read the private triage key from stdin")
@@ -576,6 +577,12 @@ func triageConfigureOperation(args []string, in io.Reader, out, errOut io.Writer
 	if hasFlag(args, "--effort") {
 		cfg.ReasoningEffort = *effort
 	}
+	if hasFlag(args, "--thinking") {
+		cfg.Thinking = *thinking
+		if cfg.Thinking != "" && cfg.Thinking != "enabled" && cfg.Thinking != "disabled" {
+			return errors.New("triage thinking must be enabled, disabled, or empty")
+		}
+	}
 	if *keyFile != "" {
 		cfg.SecretPath = *keyFile
 	}
@@ -593,7 +600,7 @@ func triageConfigureOperation(args []string, in io.Reader, out, errOut io.Writer
 		fmt.Fprintln(out, "Apply with: zoe update")
 		return nil
 	}
-	if err := ops.ValidateModelBaseURL(cfg.BaseURL); err != nil {
+	if err := ops.ValidateTriageBaseURL(cfg.BaseURL, ""); err != nil {
 		return err
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
@@ -654,7 +661,7 @@ func triageTestOperation(args []string, _ io.Reader, out, errOut io.Writer) erro
 	if testErr == nil {
 		class = "PASS"
 	}
-	fmt.Fprintf(out, "%s HTTP %dxx latency=%dms category=%s\n", class, r.HTTPStatus/100, r.Latency.Milliseconds(), safeLabel(r.Category))
+	fmt.Fprintf(out, "%s style=%s HTTP %dxx latency=%dms category=%s\n", class, safeLabel(r.Style), r.HTTPStatus/100, r.Latency.Milliseconds(), safeLabel(r.Category))
 	if testErr != nil {
 		fmt.Fprintln(errOut, safeLabel(testErr.Error()))
 	}
@@ -1074,7 +1081,11 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	if inspect.TriageBaseURL != "" {
 		triageState = "enabled"
 	}
-	fmt.Fprintf(out, "Triage: %s host=%s model=%s effort=%s key-file-present=%t\n", triageState, safeLabel(triageHost), safeLabel(inspect.TriageModel), safeLabel(triage.ReasoningEffort), triagePresent)
+	style := triage.APIStyle
+	if style == "" {
+		style = "auto"
+	}
+	fmt.Fprintf(out, "Triage: %s style=%s host=%s model=%s effort=%s thinking=%s key-file-present=%t\n", triageState, safeLabel(style), safeLabel(triageHost), safeLabel(inspect.TriageModel), safeLabel(triage.ReasoningEffort), safeLabel(triage.Thinking), triagePresent)
 	current := filepath.Join(*optRoot, "releases", "current")
 	if revision, readErr := os.ReadFile(filepath.Join(current, "SOURCE_REVISION")); readErr == nil {
 		fmt.Fprintf(out, "Release: source-revision=%s\n", safeLabel(strings.TrimSpace(string(revision))))

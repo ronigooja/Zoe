@@ -109,7 +109,7 @@ After the stack starts, steps 1 and 2 may be done in either order; step 3 comes 
 end-to-end task completion require a separate acceptance run.
 
 Use `zoe` with no arguments for the numbered operator menu, or configure endpoints directly with
-`zoe memory configure` and `zoe triage configure`. Both model endpoints require an `/v1`
+`zoe memory configure` and `zoe triage configure`. Triage accepts an HTTPS (or local HTTP) base URL; it first tries `/responses` and falls back to `/chat/completions` when that route is unavailable.
 base URL; use `--key-stdin` to install a mode-0600 key without placing it in shell history.
 Triage is disabled when `ZOE_TRIAGE_BASE_URL` is empty. Apply a saved change with `zoe update`.
 

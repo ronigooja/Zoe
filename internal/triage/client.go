@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -40,8 +42,23 @@ type Client struct {
 	baseURL         string
 	model           string
 	reasoningEffort string
+	apiStyle        string // empty means auto
+	thinking        string
+	styleMu         sync.RWMutex
 	apiKey          string
 	http            *http.Client
+}
+
+func (c *Client) Style() string {
+	if c == nil {
+		return ""
+	}
+	c.styleMu.RLock()
+	defer c.styleMu.RUnlock()
+	if c.apiStyle == "" {
+		return "auto"
+	}
+	return c.apiStyle
 }
 
 // SetHTTPClient is used by bounded operator probes and tests.
@@ -91,31 +108,93 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 		timeout = time.Duration(ms) * time.Millisecond
 	}
 	effort := strings.TrimSpace(getenv("ZOE_TRIAGE_REASONING_EFFORT"))
-	if effort != "" && effort != "minimal" && effort != "low" && effort != "medium" && effort != "high" {
-		return nil, errors.New("ZOE_TRIAGE_REASONING_EFFORT must be one of minimal, low, medium, high, or empty")
+	if effort != "" && effort != "low" && effort != "medium" && effort != "high" {
+		return nil, errors.New("ZOE_TRIAGE_REASONING_EFFORT must be one of low, medium, high, or empty")
+	}
+	apiStyle := strings.TrimSpace(getenv("ZOE_TRIAGE_API_STYLE"))
+	if apiStyle != "" && apiStyle != "responses" && apiStyle != "chat" {
+		return nil, errors.New("ZOE_TRIAGE_API_STYLE must be responses or chat")
+	}
+	if err := validateBaseURL(baseURL); err != nil {
+		return nil, err
+	}
+	thinking := strings.TrimSpace(getenv("ZOE_TRIAGE_THINKING"))
+	if thinking != "" && thinking != "enabled" && thinking != "disabled" {
+		return nil, errors.New("ZOE_TRIAGE_THINKING must be enabled, disabled, or empty")
 	}
 	transport := &http.Transport{MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}
 	return &Client{
 		baseURL:         baseURL,
 		model:           model,
 		reasoningEffort: effort,
+		apiStyle:        apiStyle,
+		thinking:        thinking,
 		apiKey:          key,
 		http:            &http.Client{Transport: transport, Timeout: timeout},
 	}, nil
+}
+
+func validateBaseURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("base URL must be an absolute URL without credentials, query, or fragment")
+	}
+	if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1")) {
+		return errors.New("base URL must use HTTPS or local HTTP")
+	}
+	return nil
 }
 
 func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 	if c == nil || c.http == nil || c.baseURL == "" || c.model == "" || c.apiKey == "" {
 		return "", errors.New("triage client is not configured")
 	}
-	request := map[string]any{
-		"model":             c.model,
-		"instructions":      instructions,
-		"input":             text,
-		"max_output_tokens": 256,
-		"store":             false,
+	c.styleMu.Lock()
+	defer c.styleMu.Unlock()
+	style := c.apiStyle
+	if style == "" {
+		style = "responses"
 	}
-	if reasoningModel(c.model) {
+	_, body, status, err := c.call(ctx, style, text)
+	if err != nil && c.apiStyle == "" && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusNotImplemented) {
+		_, body, status, err = c.call(ctx, "chat", text)
+		if err == nil {
+			c.apiStyle = "chat"
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+	if style == "responses" && c.apiStyle == "" {
+		c.apiStyle = "responses"
+	}
+	if style == "chat" {
+		return parseChatResponse(body)
+	}
+	return parseResponsesResponse(body)
+}
+
+func (c *Client) call(ctx context.Context, style, text string) (Category, []byte, int, error) {
+	request := map[string]any{"model": c.model}
+	path := "/responses"
+	if style == "chat" {
+		path = "/chat/completions"
+		request["messages"] = []map[string]string{{"role": "system", "content": instructions}, {"role": "user", "content": text}}
+		request["max_tokens"] = 64
+		request["stream"] = false
+		if c.reasoningEffort != "" {
+			request["reasoning_effort"] = c.reasoningEffort
+		}
+		if c.thinking != "" {
+			request["thinking"] = map[string]string{"type": c.thinking}
+		}
+	} else {
+		request["instructions"] = instructions
+		request["input"] = text
+		request["max_output_tokens"] = 256
+		request["store"] = false
+	}
+	if style == "responses" && reasoningModel(c.model) {
 		effort := c.reasoningEffort
 		if effort == "" {
 			effort = "low"
@@ -126,26 +205,30 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
-		return "", err
+		return "", nil, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/responses", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", nil, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return "", nil, 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", &HTTPError{StatusCode: resp.StatusCode}
+		return "", nil, resp.StatusCode, &HTTPError{StatusCode: resp.StatusCode}
 	}
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", nil, resp.StatusCode, err
 	}
+	return "", responseBody, resp.StatusCode, nil
+}
+
+func parseResponsesResponse(responseBody []byte) (Category, error) {
 	var response struct {
 		Status     string `json:"status"`
 		OutputText string `json:"output_text"`
@@ -181,7 +264,32 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 	if output == "" {
 		output = response.OutputText
 	}
+	return parseCategory(output)
+}
+
+func parseChatResponse(body []byte) (Category, error) {
+	var response struct {
+		Choices []struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return "", errors.New("invalid triage response")
+	}
+	if len(response.Choices) == 0 || response.Choices[0].FinishReason == "length" {
+		return "", errors.New("triage response was incomplete")
+	}
+	return parseCategory(response.Choices[0].Message.Content)
+}
+
+func parseCategory(output string) (Category, error) {
 	word := strings.ToLower(strings.Trim(strings.TrimSpace(output), ".,!?;:\"'`"))
+	if word == "" {
+		return "", errors.New("triage response was empty")
+	}
 	if strings.ContainsAny(word, " \t\r\n") {
 		return "", errors.New("triage response was not one word")
 	}

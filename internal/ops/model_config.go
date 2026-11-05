@@ -18,12 +18,12 @@ const DefaultTriageSecretPath = "/etc/zoe/secrets/triage-api-key"
 
 const DefaultTriageReasoningEffort = "low"
 
-var validReasoningEfforts = map[string]bool{"minimal": true, "low": true, "medium": true, "high": true}
+var validReasoningEfforts = map[string]bool{"low": true, "medium": true, "high": true}
 
 func ValidateReasoningEffort(value string) error {
 	value = strings.TrimSpace(value)
 	if value != "" && !validReasoningEfforts[value] {
-		return errors.New("reasoning effort must be one of minimal, low, medium, high, or empty")
+		return errors.New("reasoning effort must be one of low, medium, high, or empty")
 	}
 	return nil
 }
@@ -40,15 +40,25 @@ func WriteTriageSecretAtomic(path string, secret []byte) error {
 
 // TriageConfig is the stateless classifier endpoint configuration.
 type TriageConfig struct {
+	APIStyle        string
 	BaseURL         string
 	Model           string
 	ReasoningEffort string
+	Thinking        string
 	SecretPath      string
 	Secret          string
 }
 
 func (c TriageConfig) Normalized() (TriageConfig, error) {
 	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
+	c.APIStyle = strings.TrimSpace(c.APIStyle)
+	if c.APIStyle != "" && c.APIStyle != "responses" && c.APIStyle != "chat" {
+		return TriageConfig{}, errors.New("triage API style must be responses or chat")
+	}
+	c.Thinking = strings.TrimSpace(c.Thinking)
+	if c.Thinking != "" && c.Thinking != "enabled" && c.Thinking != "disabled" {
+		return TriageConfig{}, errors.New("triage thinking must be enabled, disabled, or empty")
+	}
 	c.Model = strings.TrimSpace(c.Model)
 	c.ReasoningEffort = strings.TrimSpace(c.ReasoningEffort)
 	if err := ValidateReasoningEffort(c.ReasoningEffort); err != nil {
@@ -58,7 +68,7 @@ func (c TriageConfig) Normalized() (TriageConfig, error) {
 	if c.SecretPath == "" {
 		return TriageConfig{}, errors.New("triage key file is required")
 	}
-	if err := ValidateModelBaseURL(c.BaseURL); err != nil {
+	if err := ValidateTriageBaseURL(c.BaseURL, ""); err != nil {
 		return TriageConfig{}, err
 	}
 	if c.Model == "" {
@@ -73,18 +83,19 @@ func (c TriageConfig) Normalized() (TriageConfig, error) {
 	return c, nil
 }
 
-// ValidateModelBaseURL applies the endpoint contract used by memory and triage
+// ValidateModelBaseURL applies the /v1 endpoint contract used by memory and responses triage
 // operator configuration. It intentionally does not log or return the URL.
 func ValidateModelBaseURL(raw string) error {
+	return ValidateTriageBaseURL(raw, "responses")
+}
+
+func ValidateTriageBaseURL(raw, style string) error {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("base URL must be an absolute URL without credentials, query, or fragment")
 	}
 	if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1")) {
 		return errors.New("base URL must use HTTPS or local HTTP")
-	}
-	if strings.TrimRight(u.Path, "/") != "/v1" {
-		return errors.New("base URL must end with /v1")
 	}
 	return nil
 }
@@ -125,9 +136,11 @@ func WriteTriageEnvAtomic(path string, c TriageConfig, disabled bool) error {
 		return err
 	}
 	updates := map[string]string{
+		"ZOE_TRIAGE_API_STYLE":        c.APIStyle,
 		"ZOE_TRIAGE_BASE_URL":         c.BaseURL,
 		"ZOE_TRIAGE_MODEL":            c.Model,
 		"ZOE_TRIAGE_REASONING_EFFORT": c.ReasoningEffort,
+		"ZOE_TRIAGE_THINKING":         c.Thinking,
 		"ZOE_TRIAGE_API_KEY_FILE":     c.SecretPath,
 	}
 	lines := strings.Split(string(old), "\n")
@@ -144,7 +157,7 @@ func WriteTriageEnvAtomic(path string, c TriageConfig, disabled bool) error {
 	for len(kept) > 0 && kept[len(kept)-1] == "" {
 		kept = kept[:len(kept)-1]
 	}
-	for _, key := range []string{"ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_REASONING_EFFORT", "ZOE_TRIAGE_API_KEY_FILE"} {
+	for _, key := range []string{"ZOE_TRIAGE_API_STYLE", "ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_REASONING_EFFORT", "ZOE_TRIAGE_THINKING", "ZOE_TRIAGE_API_KEY_FILE"} {
 		if updates[key] != "" {
 			kept = append(kept, key+"="+quoteEnv(updates[key]))
 		}
@@ -162,6 +175,7 @@ func quoteEnv(value string) string { return strconv.Quote(value) }
 type TriageProbeResult struct {
 	HTTPStatus int
 	Category   string
+	Style      string
 	Latency    time.Duration
 }
 
@@ -182,6 +196,10 @@ func TestTriage(ctx context.Context, c TriageConfig, client *http.Client, text .
 			return c.SecretPath
 		case "ZOE_TRIAGE_REASONING_EFFORT":
 			return c.ReasoningEffort
+		case "ZOE_TRIAGE_API_STYLE":
+			return c.APIStyle
+		case "ZOE_TRIAGE_THINKING":
+			return c.Thinking
 		}
 		return ""
 	}, os.ReadFile)
@@ -215,5 +233,5 @@ func TestTriage(ctx context.Context, c TriageConfig, client *http.Client, text .
 		}
 		return result, err
 	}
-	return TriageProbeResult{HTTPStatus: http.StatusOK, Category: string(category), Latency: latency}, nil
+	return TriageProbeResult{HTTPStatus: http.StatusOK, Category: string(category), Style: clientImpl.Style(), Latency: latency}, nil
 }
