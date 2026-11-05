@@ -633,6 +633,48 @@ func TestFailedClassificationIsNotRetriedEveryTick(t *testing.T) {
 	}
 }
 
+func TestTriageCacheEntryIsRemovedAfterHandoffConsumesIt(t *testing.T) {
+	_, svc := newVoiceTestService(t, Config{Now: func() time.Time { return time.Date(2026, 11, 6, 1, 0, 0, 0, time.UTC) }})
+	key := triageKey("session", 1, "turn", 1)
+	svc.cacheTriage(key, "progress")
+	if got := svc.waitForTriageCache(context.Background(), "session", 1, "turn", 1); got != "progress" {
+		t.Fatalf("category=%q", got)
+	}
+	svc.triageMu.RLock()
+	_, present := svc.triage[key]
+	svc.triageMu.RUnlock()
+	if present {
+		t.Fatal("consumed triage cache entry remains")
+	}
+}
+
+func TestTriageCacheIsBoundedWhenHandoffNeverArrives(t *testing.T) {
+	_, svc := newVoiceTestService(t, Config{})
+	for i := 0; i < triageCacheCap+17; i++ {
+		svc.cacheTriage(fmt.Sprintf("turn-%d", i), "task")
+	}
+	svc.triageMu.RLock()
+	size := len(svc.triage)
+	svc.triageMu.RUnlock()
+	if size != triageCacheCap {
+		t.Fatalf("cache size=%d cap=%d", size, triageCacheCap)
+	}
+}
+
+func TestHandoffUsesPersistedCategoryWhenCacheEntryIsMissing(t *testing.T) {
+	classifier := &fakeClassifier{category: "task"}
+	store, svc := newVoiceTestService(t, Config{Classifier: classifier})
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	_, _ = store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('persisted-session','default','owner','device','persisted-request',X'01',1,'active',?,?)`, at, at)
+	_, _ = store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,triage_category) VALUES('persisted-turn','default','persisted-session',1,'persisted-category',1,'is it done',X'01',?,'cmd','task')`, at)
+	if got := svc.ensureClassified(context.Background(), "default", "persisted-session", 1, "persisted-category", 1); got != "task" {
+		t.Fatalf("persisted category=%q", got)
+	}
+	if classifier.calls.Load() != 0 {
+		t.Fatal("persisted category lookup called classifier")
+	}
+}
+
 func TestHandoffHighImpactIgnoresClassifier(t *testing.T) {
 	classifier := &fakeClassifier{category: "progress"}
 	ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier})

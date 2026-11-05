@@ -83,9 +83,13 @@ func (s *Service) ensureClassified(ctx context.Context, workspace, session strin
 	key := triageKey(session, generation, turn, revision)
 	for time.Now().Before(deadline) {
 		s.triageMu.RLock()
-		category := s.triage[key]
+		entry, cached := s.triage[key]
 		s.triageMu.RUnlock()
-		if category != "" {
+		if cached && entry.category != "" {
+			return s.consumeTriage(key, entry.category)
+		}
+		var category string
+		if err := s.db.QueryRowContext(ctx, `SELECT coalesce(triage_category,'') FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, workspace, session, generation, turn, revision).Scan(&category); err == nil && category != "" {
 			return category
 		}
 		select {
@@ -95,6 +99,32 @@ func (s *Service) ensureClassified(ctx context.Context, workspace, session strin
 		}
 	}
 	return ""
+}
+
+func (s *Service) waitForTriageCache(ctx context.Context, session string, generation int64, turn string, revision int64) string {
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	key := triageKey(session, generation, turn, revision)
+	for time.Now().Before(deadline) {
+		s.triageMu.RLock()
+		entry, cached := s.triage[key]
+		s.triageMu.RUnlock()
+		if cached && entry.category != "" {
+			return s.consumeTriage(key, entry.category)
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	return ""
+}
+
+func (s *Service) consumeTriage(key, category string) string {
+	s.triageMu.Lock()
+	delete(s.triage, key)
+	s.triageMu.Unlock()
+	return category
 }
 
 // consumeResultEvents is the voice-owned boundary between control events and delivery rows.

@@ -369,7 +369,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	// ExecuteCommand begins its transaction before invoking handlers and exposes
 	// no post-commit hook. Classify through the service DB before the handler's
 	// first transaction read; this keeps classifier I/O and its write off tx.
-	category := s.ensureClassified(ctx, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
+	category := s.waitForTriageCache(ctx, p.SessionID, p.Generation, p.TurnID, p.Revision)
 	var owner, device, state string
 	var generation int64
 	if err := tx.QueryRowContext(ctx, `SELECT owner_id,device_id,state,generation FROM voice_sessions WHERE workspace_id=? AND id=?`, cmd.Principal.WorkspaceID, p.SessionID).Scan(&owner, &device, &state, &generation); errors.Is(err, sql.ErrNoRows) {
@@ -566,9 +566,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 		category = "unclassified"
 	}
 	_, _ = s.db.ExecContext(ctx, `UPDATE voice_turns SET triage_category=? WHERE id=? AND triage_category IS NULL`, category, id)
-	s.triageMu.Lock()
-	s.triage[triageKey(session, generation, turn, revision)] = category
-	s.triageMu.Unlock()
+	s.cacheTriage(triageKey(session, generation, turn, revision), category)
 }
 
 func (s *Service) handleTurns(w http.ResponseWriter, r *http.Request) {
