@@ -95,6 +95,7 @@ func TestResolveMonthsAndDayOfMonthWithChineseNumerals(t *testing.T) {
 		{"month_end_three_days", "月底", "2026-11-27T16:00:00Z", "2026-11-30T16:00:00Z", "range"},
 		{"bare_arabic_day", "3号", "2026-11-02T16:00:00Z", "2026-11-03T16:00:00Z", "day"},
 		{"bare_chinese_day", "三号", "2026-11-02T16:00:00Z", "2026-11-03T16:00:00Z", "day"},
+		{"bare_chinese_ri", "三日", "2026-11-02T16:00:00Z", "2026-11-03T16:00:00Z", "day"},
 		{"last_month_fifteenth", "上个月15号", "2026-10-14T16:00:00Z", "2026-10-15T16:00:00Z", "day"},
 		{"month_arabic_ri", "11月3日", "2026-11-02T16:00:00Z", "2026-11-03T16:00:00Z", "day"},
 		{"month_arabic_hao", "11月3号", "2026-11-02T16:00:00Z", "2026-11-03T16:00:00Z", "day"},

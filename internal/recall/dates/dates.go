@@ -62,7 +62,7 @@ func Resolve(text string, now time.Time, loc *time.Location) (Range, bool) {
 	local := now.In(loc)
 	day := midnight(local)
 	// Explicit day-of-month forms have priority over relative month words.
-	if strings.HasSuffix(text, "号") || strings.HasSuffix(text, "日") && strings.Contains(text, "月") {
+	if strings.HasSuffix(text, "号") || strings.HasSuffix(text, "日") && !strings.Contains(text, "周") && !strings.Contains(text, "星期") && !strings.Contains(text, "礼拜") {
 		return resolveMonthDay(text, local)
 	}
 	if r, ok := resolvePart(text, day); ok {
@@ -345,19 +345,33 @@ func parseNum(s string) (int, bool) {
 		return n, true
 	}
 	vals := map[rune]int{'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
-	total, cur := 0, 0
-	for _, r := range s {
-		if r == '十' {
-			if cur == 0 {
-				cur = 1
-			}
-			total += cur * 10
-			cur = 0
-		} else if v, ok := vals[r]; ok {
-			cur = cur*10 + v
-		} else {
+	r := []rune(s)
+	if len(r) == 1 {
+		if r[0] == '十' {
+			return 10, true
+		}
+		v, ok := vals[r[0]]
+		return v, ok && v > 0
+	}
+	tens, ones := 0, 0
+	if len(r) >= 2 && r[0] == '十' {
+		tens = 1
+		r = r[1:]
+	} else if len(r) >= 2 && r[1] == '十' {
+		tens = vals[r[0]]
+		r = r[2:]
+	} else {
+		return 0, false
+	}
+	if tens < 1 || tens > 9 || len(r) > 1 {
+		return 0, false
+	}
+	if len(r) == 1 {
+		v, ok := vals[r[0]]
+		if !ok || v == 0 {
 			return 0, false
 		}
+		ones = v
 	}
-	return total + cur, total+cur > 0
+	return tens*10 + ones, true
 }
