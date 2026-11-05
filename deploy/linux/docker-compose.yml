@@ -41,6 +41,18 @@ services:
       ZOE_TRIAGE_THINKING: ${ZOE_TRIAGE_THINKING:-}
       ZOE_TRIAGE_TIMEOUT_MS: ${ZOE_TRIAGE_TIMEOUT_MS:-}
       ZOE_TRIAGE_API_KEY_FILE: /run/secrets/triage_api_key
+      ZOE_SUMMARY_BASE_URL: ${ZOE_SUMMARY_BASE_URL:-}
+      ZOE_SUMMARY_MODEL: ${ZOE_SUMMARY_MODEL:-}
+      ZOE_SUMMARY_REASONING_EFFORT: ${ZOE_SUMMARY_REASONING_EFFORT:-}
+      ZOE_SUMMARY_THINKING: ${ZOE_SUMMARY_THINKING:-}
+      ZOE_SUMMARY_TIMEOUT_MS: ${ZOE_SUMMARY_TIMEOUT_MS:-120000}
+      ZOE_SUMMARY_API_KEY_FILE: /run/secrets/summary_api_key
+      ZOE_ANSWER_BASE_URL: ${ZOE_ANSWER_BASE_URL:-}
+      ZOE_ANSWER_MODEL: ${ZOE_ANSWER_MODEL:-}
+      ZOE_ANSWER_REASONING_EFFORT: ${ZOE_ANSWER_REASONING_EFFORT:-}
+      ZOE_ANSWER_THINKING: ${ZOE_ANSWER_THINKING:-}
+      ZOE_ANSWER_TIMEOUT_MS: ${ZOE_ANSWER_TIMEOUT_MS:-8000}
+      ZOE_ANSWER_API_KEY_FILE: /run/secrets/answer_api_key
       ZOE_SECRET_FILE_MAP: ZOE_RUNNER_TOKEN=/run/secrets/runner_token${ZOE_VOICE_SECRET_MAP:-}
     entrypoint: ["/usr/local/bin/zoe-secret-entrypoint"]
     command: ["/usr/local/bin/zoe-server"]
@@ -57,6 +69,10 @@ services:
         target: voice_gateway_api_key
       - source: triage_api_key
         target: triage_api_key
+      - source: summary_api_key
+        target: summary_api_key
+      - source: answer_api_key
+        target: answer_api_key
     networks:
       - default
 
@@ -131,3 +147,7 @@ secrets:
     file: ${ZOE_VOICE_GATEWAY_API_KEY_FILE:-/dev/null}
   triage_api_key:
     file: ${ZOE_TRIAGE_API_KEY_FILE:-/dev/null}
+  summary_api_key:
+    file: ${ZOE_SUMMARY_API_KEY_FILE:-/dev/null}
+  answer_api_key:
+    file: ${ZOE_ANSWER_API_KEY_FILE:-/dev/null}
