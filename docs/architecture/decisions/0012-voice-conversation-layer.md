@@ -25,6 +25,7 @@ The problem is control, not speed: the upstream model leads the conversation and
 6. Authority is unchanged: voice and the conversation layer create no commands directly. Impact-level rules of [ADR 0009](0009-voice-steward-impact-policy.md) apply to the slow path only; the fast path is read-only.
 7. The gateway stays transport-only (media, accounts, sideband). It carries no conversation logic.
 
+
 ## Routing: stateless triage (decided 2026-11-06)
 
 Observed on the AVAS route ([evidence](../../acceptance/evidence.md#instruction-and-routing-probes-avas-route--2026-11-06)): an instruction sent at call start controls what upstream says, but not what it puts into `delegation.created`, which is the raw transcript. Upstream cannot label intent, and it delegates every request, including "is it done yet".
@@ -38,6 +39,8 @@ Decision:
 5. Classification and gateway calls never run inside a database transaction.
 6. Fast paths read local data only: `progress` reads the task table; `recall` reads dated call summaries and falls back to a Steward Qdrant search with a spoken holding sentence; `memory` reads memory. Only `progress` is in the first change; `recall` and `memory` are not implemented.
 7. Upstream owns wording: Zoe pushes short instruction-style `speakable` text (including a holding sentence during slow work) and upstream phrases it. Verified once only; see the evidence.
+
+The recall date resolver exists in `internal/recall/dates`; weeks start on Monday and the caller timezone is `Asia/Shanghai`.
 
 Prerequisites not yet met:
 
