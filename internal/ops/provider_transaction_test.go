@@ -233,6 +233,7 @@ func TestMemoryTransactionRollbackLeavesNewFilesAbsent(t *testing.T) {
 }
 
 func TestMemoryTransactionRestoresAfterReloadFailure(t *testing.T) {
+	injectModelKeyChown(t, func(string, int, int) error { return nil }, true)
 	root := t.TempDir()
 	d := Deployment{Root: root, Mode: ModeCompose, StackEnv: filepath.Join(root, "zoe-stack.env"), ComposeProject: "zoe", ComposeFile: filepath.Join(root, "compose.yml")}
 	secret := filepath.Join(root, "memory-token")

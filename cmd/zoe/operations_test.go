@@ -59,7 +59,7 @@ func TestTriageTestTextFlagClassifiesGivenSentence(t *testing.T) {
 	defer s.Close()
 	root := t.TempDir()
 	key := filepath.Join(root, "key")
-	if err := os.WriteFile(key, []byte("key"), 0600); err != nil {
+	if err := os.WriteFile(key, []byte("key"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL=\""+s.URL+"/v1\"\nZOE_TRIAGE_MODEL=\"m\"\nZOE_TRIAGE_API_KEY_FILE=\""+key+"\"\n"), 0600); err != nil {
@@ -85,7 +85,7 @@ func TestTriageTestDefaultSentenceUnchanged(t *testing.T) {
 	defer s.Close()
 	root := t.TempDir()
 	key := filepath.Join(root, "key")
-	if err := os.WriteFile(key, []byte("key"), 0600); err != nil {
+	if err := os.WriteFile(key, []byte("key"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL=\""+s.URL+"/v1\"\nZOE_TRIAGE_MODEL=\"m\"\nZOE_TRIAGE_API_KEY_FILE=\""+key+"\"\n"), 0600); err != nil {
@@ -168,7 +168,7 @@ func TestStatusShowsStyleAndThinkingWithoutSecrets(t *testing.T) {
 func TestTriageTestReportsWhichStyleWorked(t *testing.T) {
 	root := t.TempDir()
 	key := filepath.Join(root, "key")
-	if err := os.WriteFile(key, []byte("secret\n"), 0600); err != nil {
+	if err := os.WriteFile(key, []byte("secret\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
