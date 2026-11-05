@@ -2,6 +2,15 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+realpath_existing() {
+  python3 - "$1" <<'PY'
+import os, sys
+path = sys.argv[1]
+if not os.path.exists(path):
+    raise SystemExit(1)
+print(os.path.realpath(path))
+PY
+}
 input="${1:-$script_dir/..}"
 if [[ $# -gt 1 ]]; then
   echo "usage: $0 [OPERATOR_ARCHIVE.tar.gz|EXTRACTED_RELEASE]" >&2
@@ -15,7 +24,7 @@ cleanup() { [[ -n "$temporary_release" ]] && rm -rf -- "$temporary_release" || t
 trap cleanup EXIT
 
 if [[ "$input" == *.tar.gz ]]; then
-  archive="$(realpath -e -- "$input")"
+  archive="$(realpath_existing "$input")"
   temporary_release="$(mktemp -d "${TMPDIR:-/tmp}/zoe-cli.XXXXXX")"
   tar -xzf "$archive" -C "$temporary_release"
   if [[ -f "$temporary_release/SOURCE_REVISION" ]]; then
@@ -33,7 +42,7 @@ if [[ "$input" == *.tar.gz ]]; then
     exit 1
   fi
 else
-  release_dir="$(realpath -e -- "$input")"
+  release_dir="$(realpath_existing "$input")"
 fi
 if [[ ! -f "$release_dir/SOURCE_REVISION" ]]; then
   echo "release must contain SOURCE_REVISION" >&2
@@ -47,6 +56,11 @@ fi
 short_revision="${revision:0:12}"
 if [[ ! -f "$release_dir/bin/zoe" || ! -x "$release_dir/bin/zoe" ]]; then
   echo "release must contain an executable bin/zoe" >&2
+  exit 1
+fi
+embedded_revision="$($release_dir/bin/zoe --source-revision 2>/dev/null || true)"
+if [[ "$embedded_revision" != "$revision" ]]; then
+  echo "CLI source revision mismatch: embedded=${embedded_revision:-unknown}, release=$revision" >&2
   exit 1
 fi
 install -d -m 0755 -- "$bin_dir" "$releases_dir"
@@ -67,14 +81,17 @@ if [[ -n "$temporary_release" ]]; then
     mv -- "$stage_release" "$target"
   fi
 fi
-target_bin="$(realpath -e -- "$target/bin/zoe")"
-if [[ -L "$bin_dir/zoe" && "$(realpath -e -- "$bin_dir/zoe")" == "$target_bin" ]]; then
+target_bin="$(realpath_existing "$target/bin/zoe")"
+if [[ -L "$bin_dir/zoe" && "$(realpath_existing "$bin_dir/zoe")" == "$target_bin" ]]; then
   echo "zoe CLI already installed at $target_bin"
 else
   stage="$(mktemp -d "$bin_dir/.zoe-install.XXXXXX")"
   trap 'rm -rf -- "$stage"; cleanup' EXIT
   ln -s -- "$target/bin/zoe" "$stage/zoe"
-  mv -Tf -- "$stage/zoe" "$bin_dir/zoe"
+  python3 - "$stage/zoe" "$bin_dir/zoe" <<'PY'
+import os, sys
+os.replace(sys.argv[1], sys.argv[2])
+PY
   echo "Installed $bin_dir/zoe -> $target/bin/zoe"
 fi
 if [[ -n "$temporary_release" ]]; then
