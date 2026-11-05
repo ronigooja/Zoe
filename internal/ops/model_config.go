@@ -3,12 +3,14 @@ package ops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ronigooja/Zoe/internal/triage"
@@ -29,13 +31,52 @@ func ValidateReasoningEffort(value string) error {
 }
 
 func WriteTriageSecretAtomic(path string, secret []byte) error {
+	return WriteModelKeyAtomic(path, []byte(strings.TrimSpace(string(secret))+"\n"))
+}
+
+// WriteModelKeyAtomic applies to all server/memory model credentials. Ownership
+// must succeed before the synced temporary file replaces the existing key.
+func WriteModelKeyAtomic(path string, secret []byte) error {
 	if path == "" || !filepath.IsAbs(path) {
 		return errors.New("key file path must be absolute")
 	}
 	if !validToken(strings.TrimSpace(string(secret))) {
 		return errors.New("key is empty or contains whitespace/control characters")
 	}
-	return writeFileAtomicOwned(path, []byte(strings.TrimSpace(string(secret))+"\n"), 0600, 0, 0)
+	return writeFileAtomicOwned(path, secret, 0600, ContainerUID, ContainerGID)
+}
+
+// ValidateModelKeyReadable applies to bind-mounted model keys, independently of
+// the operator's privileges. It checks POSIX file ownership/mode, not ACLs.
+func ValidateModelKeyReadable(path string) error {
+	info, err := os.Stat(path)
+	if err == nil && info.Mode().IsRegular() {
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			read := info.Mode().Perm() & 0004
+			if int(st.Uid) == ContainerUID {
+				read = info.Mode().Perm() & 0400
+			} else if int(st.Gid) == ContainerGID {
+				read = info.Mode().Perm() & 0040
+			}
+			if read != 0 {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("model key file %q is not readable by server user %d:%d; fix: sudo chown %d:%d -- %q && sudo chmod 0600 -- %q (create the file first if missing)", path, ContainerUID, ContainerGID, ContainerUID, ContainerGID, path, path)
+}
+
+// ModelKeyWarnings applies to configured model endpoints, never to key contents.
+func ModelKeyWarnings(configs ...TriageConfig) []string {
+	var warnings []string
+	for _, c := range configs {
+		if c.BaseURL != "" {
+			if err := ValidateModelKeyReadable(c.SecretPath); err != nil {
+				warnings = append(warnings, "WARNING: "+err.Error())
+			}
+		}
+	}
+	return warnings
 }
 
 // TriageConfig is the stateless classifier endpoint configuration.
@@ -183,6 +224,9 @@ type TriageProbeResult struct {
 func TestTriage(ctx context.Context, c TriageConfig, client *http.Client, text ...string) (TriageProbeResult, error) {
 	c, err := c.Normalized()
 	if err != nil {
+		return TriageProbeResult{}, err
+	}
+	if err := ValidateModelKeyReadable(c.SecretPath); err != nil {
 		return TriageProbeResult{}, err
 	}
 	start := time.Now()

@@ -245,6 +245,24 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if o.HealthTimeout == 0 {
 		o.HealthTimeout = 90 * time.Second
 	}
+	d := Deployment{Root: o.Root, StackEnv: filepath.Join(o.Root, "zoe-stack.env")}
+	triage, triageErr := d.TriageConfig()
+	if triageErr != nil {
+		return triageErr
+	}
+	memory, memoryErr := d.MemoryConfig()
+	if memoryErr != nil {
+		return memoryErr
+	}
+	warnings := ModelKeyWarnings(triage, TriageConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath})
+	for _, warning := range warnings {
+		if o.Out != nil {
+			fmt.Fprintln(o.Out, warning)
+		}
+	}
+	if len(warnings) > 0 {
+		return errors.New("update stopped before service changes: " + strings.Join(warnings, "; "))
+	}
 	manifest, err := ValidateRelease(o.Release)
 	if err != nil {
 		return err
@@ -678,7 +696,7 @@ func prepareLifecycleFiles(o LifecycleOptions) error {
 				return e
 			}
 		}
-		if err := prepareLifecycleSecret(p, 65532, 65532); err != nil {
+		if err := prepareLifecycleSecret(p, ContainerUID, ContainerGID); err != nil {
 			return err
 		}
 	}
@@ -1136,8 +1154,8 @@ func (m Manager) prepareHost(ctx context.Context, o LifecycleOptions) error {
 	}{
 		{o.OptRoot + "/releases", 0755, 0, 0},
 		{o.Root, 0750, 0, zoeGroup}, {o.DataRoot, 0750, 0, zoeGroup},
-		{filepath.Join(o.DataRoot, "server"), 0700, 65532, 65532}, {filepath.Join(o.DataRoot, "server/data"), 0700, 65532, 65532},
-		{filepath.Join(o.DataRoot, "memory"), 0700, 65532, 65532}, {filepath.Join(o.DataRoot, "runner"), 0700, zoeRunner, zoeGroup},
+		{filepath.Join(o.DataRoot, "server"), 0700, ContainerUID, ContainerGID}, {filepath.Join(o.DataRoot, "server/data"), 0700, ContainerUID, ContainerGID},
+		{filepath.Join(o.DataRoot, "memory"), 0700, ContainerUID, ContainerGID}, {filepath.Join(o.DataRoot, "runner"), 0700, zoeRunner, zoeGroup},
 		{filepath.Join(o.DataRoot, "runner/workspaces"), 0700, zoeRunner, zoeGroup},
 		{filepath.Join(o.DataRoot, "runner-authority"), 0700, zoeRunner, zoeGroup}, {filepath.Join(o.Root, "secrets"), 0700, 0, 0},
 		{filepath.Join(o.Root, "runner-secrets"), 0750, 0, zoeGroup}, {filepath.Join(o.DataRoot, "opencode"), 0700, 0, 0},

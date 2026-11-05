@@ -30,6 +30,7 @@ func TestTriageConfigureWritesEnvAtomicallyAndPreservesOtherLines(t *testing.T) 
 }
 
 func TestKeyStdinWritesSecretFileMode0600AndNeverEchoesKey(t *testing.T) {
+	injectModelKeyChown(t, func(string, int, int) error { return nil }, true)
 	p := filepath.Join(t.TempDir(), "key")
 	secret := []byte("private-key")
 	if err := WriteTriageSecretAtomic(p, secret); err != nil {
@@ -114,7 +115,7 @@ func TestTriageTestUsesSavedEffort(t *testing.T) {
 	}))
 	defer s.Close()
 	p := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+	if err := os.WriteFile(p, []byte("key"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "gpt-6.1-sol", ReasoningEffort: "high", SecretPath: p}, nil); err != nil {
@@ -142,7 +143,7 @@ func TestTriageTestReportsCategoryAndLatencyAgainstFakeEndpoint(t *testing.T) {
 	}))
 	defer s.Close()
 	p := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+	if err := os.WriteFile(p, []byte("key"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	r, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "m", SecretPath: p}, nil)
@@ -163,7 +164,7 @@ func TestTriageTestTextFlagClassifiesGivenSentence(t *testing.T) {
 	}))
 	defer s.Close()
 	p := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+	if err := os.WriteFile(p, []byte("key"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "m", SecretPath: p}, nil, "帮我查查新闻"); err != nil {
@@ -184,7 +185,7 @@ func TestTriageTestDefaultSentenceUnchanged(t *testing.T) {
 	}))
 	defer s.Close()
 	p := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+	if err := os.WriteFile(p, []byte("key"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "m", SecretPath: p}, nil); err != nil {
@@ -218,7 +219,7 @@ func TestTriageTestUsesTheRuntimeRequestShape(t *testing.T) {
 	}))
 	defer s.Close()
 	p := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+	if err := os.WriteFile(p, []byte("key"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	r, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "gpt-6.1-sol", ReasoningEffort: "high", SecretPath: p}, nil)
@@ -233,7 +234,7 @@ func TestTriageTestFailsWhenModelAnswersOutsideTheFiveCategories(t *testing.T) {
 	}))
 	defer s.Close()
 	p := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+	if err := os.WriteFile(p, []byte("key"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "gpt-6.1-sol", SecretPath: p}, nil); err == nil {
@@ -245,7 +246,7 @@ func TestTriageTestReports401HintAndNonZeroExit(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
 	defer s.Close()
 	p := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+	if err := os.WriteFile(p, []byte("key"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	_, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "m", SecretPath: p}, nil)
@@ -258,7 +259,7 @@ func TestTriageTestTimeout(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { time.Sleep(200 * time.Millisecond) }))
 	defer s.Close()
 	p := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(p, []byte("key"), 0600); err != nil {
+	if err := os.WriteFile(p, []byte("key"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)

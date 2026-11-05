@@ -1046,6 +1046,9 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	inspect.TriageModel = triage.Model
 	inspect.TriageSecretPath = triage.SecretPath
 	status := opsManager().Inspect(ctx, inspect)
+	for _, warning := range ops.ModelKeyWarnings(triage, ops.TriageConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}) {
+		fmt.Fprintln(out, warning)
+	}
 	fmt.Fprintf(out, "Deployment: %s\n", status.Mode)
 	keyState := "pending (run zoe key init)"
 	probeCtx, probeCancel := context.WithTimeout(ctx, 2*time.Second)

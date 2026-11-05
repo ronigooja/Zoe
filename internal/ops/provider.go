@@ -24,8 +24,11 @@ const DefaultProviderSecretPath = "/etc/zoe/runner-secrets/cliproxyapi-api-key"
 
 const DefaultMemorySecretPath = "/etc/zoe/secrets/mem0-llm-api-key"
 
-const memoryWorkerUID = 65532
-const memoryWorkerGID = 65532
+// ContainerUID and ContainerGID apply to server and memory-worker files.
+const ContainerUID = 65532
+const ContainerGID = 65532
+const memoryWorkerUID = ContainerUID
+const memoryWorkerGID = ContainerGID
 
 var (
 	chownFile    = os.Chown
@@ -129,7 +132,7 @@ func WriteSecretAtomic(path string, secret []byte) error {
 }
 
 func writeMemorySecretAtomic(path string, secret []byte) error {
-	return writeFileAtomicOwned(path, secret, 0o600, memoryWorkerUID, memoryWorkerGID)
+	return WriteModelKeyAtomic(path, secret)
 }
 
 // WriteRunnerEnvAtomic renders runner provider/runtime variables. The token
@@ -177,7 +180,7 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 func writeFileAtomicOwned(path string, data []byte, mode os.FileMode, uid, gid int) error {
 	return writeFileAtomicOwnedWithChown(path, data, mode, uid, gid, chownFile, effectiveUID)
 }
-func writeFileAtomicOwnedWithChown(path string, data []byte, mode os.FileMode, uid, gid int, chown func(string, int, int) error, euid func() int) error {
+func writeFileAtomicOwnedWithChown(path string, data []byte, mode os.FileMode, uid, gid int, chown func(string, int, int) error, _ func() int) error {
 	if path == "" || !filepath.IsAbs(path) {
 		return errors.New("configuration path must be absolute")
 	}
@@ -191,14 +194,14 @@ func writeFileAtomicOwnedWithChown(path string, data []byte, mode os.FileMode, u
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if info, statErr := os.Stat(path); statErr == nil {
+	if info, statErr := os.Stat(path); uid < 0 && statErr == nil {
 		if st, ok := info.Sys().(*syscall.Stat_t); ok {
 			current, statErr := tmp.Stat()
-			currentOwner, currentOK := current.Sys().(*syscall.Stat_t)
 			if statErr != nil {
 				tmp.Close()
 				return statErr
 			}
+			currentOwner, currentOK := current.Sys().(*syscall.Stat_t)
 			if !currentOK || currentOwner.Uid != st.Uid || currentOwner.Gid != st.Gid {
 				if err = chown(tmpName, int(st.Uid), int(st.Gid)); err != nil {
 					tmp.Close()
@@ -215,10 +218,10 @@ func writeFileAtomicOwnedWithChown(path string, data []byte, mode os.FileMode, u
 		}
 		currentOwner, currentOK := current.Sys().(*syscall.Stat_t)
 		needsChown := !currentOK || int(currentOwner.Uid) != uid || int(currentOwner.Gid) != gid
-		if needsChown && euid() == 0 {
+		if needsChown {
 			if err = chown(tmpName, uid, gid); err != nil {
 				tmp.Close()
-				return err
+				return fmt.Errorf("set ownership of %q to %d:%d (run as root): %w", path, uid, gid, err)
 			}
 		}
 	}
