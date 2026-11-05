@@ -237,6 +237,26 @@ func TestClassifyRejectsIncompleteResponse(t *testing.T) {
 	}
 }
 
+func TestClassifyAcceptsTopLevelOutputTextOnlyResponse(t *testing.T) {
+	client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"output_text":"recall"}`))
+	}))
+	defer server.Close()
+	if got, err := client.Classify(context.Background(), "sentence"); err != nil || got != Recall {
+		t.Fatalf("classify = %q, %v", got, err)
+	}
+}
+
+func TestClassifyPrefersMessageItemOverTopLevelOutputText(t *testing.T) {
+	client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"output_text":"memory","output":[{"type":"message","content":[{"type":"output_text","text":"task"}]}]}`))
+	}))
+	defer server.Close()
+	if got, err := client.Classify(context.Background(), "sentence"); err != nil || got != Task {
+		t.Fatalf("classify = %q, %v", got, err)
+	}
+}
+
 func TestClassifyOutputTokenBudgetLeavesRoomForReasoning(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
