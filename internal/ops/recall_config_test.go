@@ -4,11 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/modelclient"
+	"github.com/ronigooja/Zoe/internal/summarize"
 )
 
 func TestSummaryAndAnswerConfigureWriteIndependentEnvAndSecrets(t *testing.T) {
@@ -103,6 +106,12 @@ func TestSummaryAndAnswerSettingsSurviveUpdate(t *testing.T) {
 			}
 		}
 	}
+	for _, kind := range []string{"summary", "answer"} {
+		key, err := os.ReadFile(filepath.Join(f.root, "secrets", kind+"-api-key"))
+		if err != nil || string(key) != kind+"-private\n" {
+			t.Errorf("%s key changed err=%v", kind, err)
+		}
+	}
 }
 
 func TestTimeoutDefaultsAndRanges(t *testing.T) {
@@ -122,6 +131,17 @@ func TestTimeoutDefaultsAndRanges(t *testing.T) {
 				valid := ms >= tc.min && ms <= tc.max
 				if (err == nil) != valid {
 					t.Errorf("timeout=%d err=%v", ms, err)
+				}
+				values := map[string]string{prefix + "_BASE_URL": "https://gateway.example/v1", prefix + "_MODEL": "m", prefix + "_API_KEY_FILE": "/key", prefix + "_TIMEOUT_MS": strconv.Itoa(ms)}
+				get := func(name string) string { return values[name] }
+				read := func(string) ([]byte, error) { return []byte("private"), nil }
+				if tc.kind == "summary" {
+					_, err = summarize.FromEnv(get, read)
+				} else {
+					_, err = answer.FromEnv(get, read)
+				}
+				if (err == nil) != valid {
+					t.Errorf("runtime timeout=%d err=%v", ms, err)
 				}
 			}
 		})

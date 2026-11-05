@@ -44,7 +44,7 @@ func TestMaintenanceMenuAnswerFlowWritesEnvAndSecretAndTests(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"status":"answer","text":"In the January call, the meeting was set for Monday."}`})
 	}))
 	defer s.Close()
-	input := strings.NewReader("14\nhttp://remote.invalid\n" + s.URL + "\n\nfast-answer\nwrong\nlow\nwrong\ndisabled\nmenu-private\ny\n15\n0\n")
+	input := strings.NewReader("14\nhttp://remote.invalid\n" + s.URL + "\n\nfast-answer\nwrong\nlow\nwrong\ndisabled\n\nmenu-private\ny\n15\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(input, &out, &errOut, root); err != nil {
 		t.Fatal(err)

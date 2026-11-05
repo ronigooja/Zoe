@@ -77,7 +77,7 @@ func (d Deployment) RecallModelConfig(kind string) (RecallModelConfig, error) {
 	}
 	if raw := v[prefix+"_TIMEOUT_MS"]; raw != "" {
 		c.TimeoutMS, err = strconv.Atoi(raw)
-		if err != nil {
+		if err != nil || c.TimeoutMS == 0 {
 			return c, errors.New("invalid model timeout")
 		}
 	}

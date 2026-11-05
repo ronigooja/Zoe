@@ -1049,6 +1049,9 @@ func isOperatorOwnedEnvKey(key string) bool {
 }
 
 func validOperatorEnvValue(key, value string) bool {
+	if strings.HasPrefix(key, "ZOE_SUMMARY_") || strings.HasPrefix(key, "ZOE_ANSWER_") {
+		return isOperatorOwnedEnvKey(key)
+	}
 	if value == "" || value == "{}" {
 		return false
 	}

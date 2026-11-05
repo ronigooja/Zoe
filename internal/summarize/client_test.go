@@ -92,6 +92,12 @@ func TestSummarizeRejectsNonJSONAndEmptyFields(t *testing.T) {
 			}
 		})
 	}
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `[{"topic":"Plan","summary":"Agreed."}]`)
+	})
+	if _, err := c.Summarize(context.Background(), []Turn{{Seq: 0, Role: "user", Text: "Agreed."}}); err == nil {
+		t.Fatal("missing sequence fields accepted as zero")
+	}
 }
 
 func TestSummarizeFallsBackToChatCompletions(t *testing.T) {
