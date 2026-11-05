@@ -82,7 +82,8 @@ final class ClientContractTests: XCTestCase {
         model.snapshotFetchOverrideForTesting = { emptySnapshot }
         model.memorySearchOverrideForTesting = { _ in MemorySearchResult(items: [], missing: [], conflicts: []) }
 
-        XCTAssertTrue(await model.remember(scope: "personal", scopeID: nil, subject: "subject", key: "key", content: "content"))
+        let accepted = await model.remember(scope: "personal", scopeID: nil, subject: "subject", key: "key", content: "content")
+        XCTAssertTrue(accepted)
         let payload = try XCTUnwrap(postedPayload?["payload"] as? [String: Any])
         XCTAssertEqual((payload["scope"] as? [String: Any])?["kind"] as? String, "personal")
         XCTAssertEqual(payload["subject"] as? String, "subject")
