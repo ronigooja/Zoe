@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/ronigooja/Zoe/internal/triage"
 	"log"
 	"net"
 	"net/http"
@@ -94,7 +95,15 @@ func run() error {
 		MaxRuns:            maxRuns,
 		WaitLimit:          waitLimit,
 	}
-	server, err := composeControlServer(store, cfg, voice.Config{GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	triageClient, err := triage.FromEnv(os.Getenv, os.ReadFile)
+	if err != nil {
+		log.Fatalf("triage configuration: %v", err)
+	}
+	var triageClassifier voice.Classifier
+	if triageClient != nil {
+		triageClassifier = triageAdapter{triageClient}
+	}
+	server, err := composeControlServer(store, cfg, voice.Config{Classifier: triageClassifier, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	}, memory.DerivedConfig{BackupDeleteManifestPath: strings.TrimSpace(os.Getenv("ZOE_BACKUP_DELETE_MANIFEST_PATH"))})
@@ -304,4 +313,11 @@ func optionalSplitEnv(name string) []string {
 func validBearer(value string) bool {
 	bytes, err := base64.RawURLEncoding.DecodeString(value)
 	return err == nil && len(bytes) == 32 && base64.RawURLEncoding.EncodeToString(bytes) == value
+}
+
+type triageAdapter struct{ client *triage.Client }
+
+func (a triageAdapter) Classify(ctx context.Context, text string) (string, error) {
+	category, err := a.client.Classify(ctx, text)
+	return string(category), err
 }
