@@ -1,6 +1,6 @@
 # ADR 0012: Zoe-owned conversation layer for real-time voice
 
-Status: proposed direction; nothing here is implemented or accepted. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
+Status: proposed direction; routing decision recorded 2026-11-06; nothing here is implemented or accepted. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
 
 ## Context
 
@@ -25,12 +25,30 @@ The problem is control, not speed: the upstream model leads the conversation and
 6. Authority is unchanged: voice and the conversation layer create no commands directly. Impact-level rules of [ADR 0009](0009-voice-steward-impact-policy.md) apply to the slow path only; the fast path is read-only.
 7. The gateway stays transport-only (media, accounts, sideband). It carries no conversation logic.
 
+## Routing: stateless triage (decided 2026-11-06)
+
+Observed on the AVAS route ([evidence](../../acceptance/evidence.md#instruction-and-routing-probes-avas-route--2026-11-06)): an instruction sent at call start controls what upstream says, but not what it puts into `delegation.created`, which is the raw transcript. Upstream cannot label intent, and it delegates every request, including "is it done yet".
+
+Decision:
+
+1. Zoe classifies each client-target delegation itself with `zoe-triage`: a stateless LLM call that receives only the current sentence and returns one word: `progress`, `recall`, `memory`, `task`, or `chat`. No history, no accumulated context.
+2. The model endpoint, model, and key file are configured like the memory model (`ZOE_TRIAGE_BASE_URL`, `ZOE_TRIAGE_MODEL`, `ZOE_TRIAGE_API_KEY_FILE`); empty base URL disables triage. The connection is long-lived and reused; requests are independent.
+3. Any error, timeout (default 2 s, no retry), or unrecognized output means `task`: the existing slow path. Failure never blocks or drops a request.
+4. The impact classification of [ADR 0009](0009-voice-steward-impact-policy.md) stays authoritative. A category never grants authority; high-impact requests keep the waiting/confirmation path regardless of category.
+5. Classification and gateway calls never run inside a database transaction.
+6. Fast paths read local data only: `progress` reads the task table; `recall` reads dated call summaries and falls back to a Steward Qdrant search with a spoken holding sentence; `memory` reads memory. Only `progress` is in the first change; `recall` and `memory` are not implemented.
+7. Upstream owns wording: Zoe pushes short instruction-style `speakable` text (including a holding sentence during slow work) and upstream phrases it. Verified once only; see the evidence.
+
+Prerequisites not yet met:
+
+- Recall needs stored history. Zoe persists only the turns delegated to it (about 10 voice turns) and task entries; upstream-answered turns are never forwarded. `RecordVoiceOutcome` stores a summary source without date or subject. There is no date resolver; the server timezone is `Asia/Shanghai`.
+- Semantic recall needs working extraction. The memory model key is currently rejected (HTTP 401 "Invalid API key" from the configured endpoint), `memory_model_calls` is 0, and both Qdrant collections hold 0 points. Qdrant retrieval is not wired into `Repository.Search`, which is SQLite keyword scoring.
+
 ## Open questions (to measure before implementation)
 
 - Fast-path time to first audio end to end, not only upstream acknowledgement.
 - Whether long `speakable` content is summarized or altered by upstream; whether the lead-in sentence can be suppressed.
 - Behavior with several delegations in one call and with barge-in.
-- Routing rule: rules in Zoe, a model call, or both; cost and failure behavior of each.
 - Which memory reads are allowed on the fast path and their size bound.
 
 ## Consequences

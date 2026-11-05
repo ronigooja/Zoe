@@ -232,6 +232,26 @@ Environment: temporary gateway image from branch `probe/speakable-v1` (head `ad1
 - Not measured: time to first audio (frame timing only), long content, suppressing the lead-in, several delegations per call, barge-in. Playback of the roughly 30-character sentence took about 6 s of transcript frames; that is speaking time, not delay.
 - The probe image replaced the previous gateway image and the Zoe handoff was inactive while it ran. Design consequences are in [ADR 0012](../architecture/decisions/0012-voice-conversation-layer.md).
 
+## Instruction and routing probes, AVAS route — 2026-11-06
+
+Environment: temporary gateway image from branch `probe/instruction-v1` (head `b7f7d83`, not merged), three real calls, one pool account. The gateway sent one session-level `session.context.append` (`speakable`, no delegation) when the sideband came up.
+
+- Verified: upstream follows a fixed-answer instruction. With "answer a progress question with exactly this sentence", it answered "is it done yet" with that sentence twice, without delegating; it answered a greeting itself and delegated a research request.
+- Verified: the same upstream invented progress statements when the instruction did not define the answer ("almost there"). Wording not specified by Zoe is not reliable.
+- Verified: `delegation.created` carries the raw transcript. A tag-prefix instruction ("start the delegation with [progress]") produced no tags in five delegations. Upstream cannot route; Zoe must classify ([ADR 0012](../architecture/decisions/0012-voice-conversation-layer.md)).
+- Observed once, unexplained: on one call an empty-text delegation and an upstream "bye" appeared before the user spoke, and the client data channel closed about 40 s later (`data_channel_failed`, a-to-b). Not reproduced on the next call; cause unknown, client diagnostics not read.
+- Not exercised: pushing text while the user is speaking, several pushes in one call, opening context effect (it is sent as `session.initial_items` at creation; the separate `/opening-context` returns 501 on AVAS by design, and Zoe records `unsupported` without retrying).
+- Limits: three calls, one account, one language. No product milestone is accepted by this record.
+
+## Memory model and Qdrant state — 2026-11-06
+
+Read-only checks on the Zoe host:
+
+- Verified: the memory model endpoint configured for the memory worker rejects its key (HTTP 401, "Invalid API key" on `/models` and `/responses`). `memory_model_calls` is 0 and both Qdrant collections hold 0 points, so extraction has never completed against this endpoint. Cause of the key rejection unknown.
+- Verified: `Repository.Search` and `AssembleContext` use SQLite keyword scoring; they do not query Qdrant.
+- Verified: Zoe persisted 10 voice turns, 28 tasks, and 37 task entries from 2026-11-01; upstream-answered turns are not persisted anywhere.
+- Not established: Qdrant semantic recall quality or latency, and any date-based recall.
+
 Open measurements tied to [ADR 0009](../architecture/decisions/0009-voice-steward-impact-policy.md): steward latency and cost against the run ceiling, metering of OpenCode internal sub-agents, handoff event behavior with real speech, and transcript availability.
 
 ## Per-run permission probe on the live host — 2026-11-02
