@@ -18,6 +18,9 @@ type operation func(args []string, in io.Reader, out, errOut io.Writer) error
 // menu while remaining usable from scripts.
 var operations = map[string]operation{
 	"setup":              unavailable("setup"),
+	"configure":          unavailable("configure"),
+	"triage configure":   unavailable("triage configure"),
+	"triage test":        unavailable("triage test"),
 	"provider configure": unavailable("provider configure"),
 	"provider test":      unavailable("provider test"),
 	"memory configure":   unavailable("memory configure"),
@@ -101,7 +104,7 @@ func normalizeCommand(value string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: zoe [setup|install|update|uninstall|provider configure|provider test|memory configure|memory test|key init|key rotate|status|voice configure|voice test|voice status|client-policy show|client-policy set]")
+	return errors.New("usage: zoe [setup|configure|install|update|uninstall|provider configure|provider test|memory configure|memory test|triage configure|triage test|key init|key rotate|status|voice configure|voice test|voice status|client-policy show|client-policy set]")
 }
 
 func menu(in io.Reader, out, errOut io.Writer) error {

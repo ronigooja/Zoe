@@ -168,6 +168,21 @@ func (d Deployment) MemoryConfig() (MemoryConfig, error) {
 	return c, nil
 }
 
+func (d Deployment) TriageConfig() (TriageConfig, error) {
+	c := TriageConfig{}
+	v, err := readEnv(d.StackEnv)
+	if os.IsNotExist(err) {
+		return c, nil
+	}
+	if err != nil {
+		return c, err
+	}
+	c.BaseURL = v["ZOE_TRIAGE_BASE_URL"]
+	c.Model = v["ZOE_TRIAGE_MODEL"]
+	c.SecretPath = v["ZOE_TRIAGE_API_KEY_FILE"]
+	return c, nil
+}
+
 // ServerPort returns the configured host port for the Zoe server.
 func (d Deployment) ServerPort() int {
 	if value, err := readEnv(d.StackEnv); err == nil {

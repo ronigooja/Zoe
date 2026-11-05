@@ -106,7 +106,12 @@ After the stack starts, steps 1 and 2 may be done in either order; step 3 comes 
    liveness; `/readyz` is `200 {"status":"ready"}` only after the instance-auth
    row exists and otherwise remains `503` pending. These checks establish
    installation and process readiness; model execution, memory processing, and
-   end-to-end task completion require a separate acceptance run.
+end-to-end task completion require a separate acceptance run.
+
+Use `zoe configure` for the numbered operator menu, or configure endpoints directly with
+`zoe memory configure` and `zoe triage configure`. Both model endpoints require an `/v1`
+base URL; use `--key-stdin` to install a mode-0600 key without placing it in shell history.
+Triage is disabled when `ZOE_TRIAGE_BASE_URL` is empty. Apply a saved change with `zoe update`.
 
 The complete host installation therefore includes the Zoe-owned OpenCode runtime image,
 Zoe server image, trusted runner, memory worker image, Qdrant service, Docker,
