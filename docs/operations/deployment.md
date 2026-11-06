@@ -135,6 +135,8 @@ For triage requests, `ZOE_TRIAGE_THINKING` and `ZOE_TRIAGE_REASONING_EFFORT` (CL
 
 Responses requests never send the chat `thinking` field. Explicit thinking settings suppress `temperature` on Responses; otherwise existing model-based temperature behavior remains unchanged. Chat requests retain `temperature: 0`. An explicit effort of `none` is still sent unchanged with `enabled`, so avoid that combination when enabling thinking is intended.
 
+When running `zoe triage test`, only the categories in the [triage routing contract](../architecture/decisions/0012-voice-conversation-layer.md#routing-stateless-triage-decided-2026-11-06) pass; removed or unknown model output reports FAIL. The `chat` API style refers only to Chat Completions transport, not a routing category.
+
 [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode) defaults to enabled with effort `high`; its Responses `none` disables thinking. DeepSeek maps `minimal` to `low`, `medium` and `xhigh` to `high`, and supports `max`; Zoe accepts `medium` but rejects `minimal` and `xhigh` for gateway compatibility. See its [Responses API guide](https://api-docs.deepseek.com/guides/responses_api). Memory effort validation uses the same accepted values; its existing empty-effort fallback remains `medium`.
 
 ### Call-recall model endpoints

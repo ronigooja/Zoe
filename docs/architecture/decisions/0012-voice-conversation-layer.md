@@ -32,7 +32,7 @@ Observed on the AVAS route ([evidence](../../acceptance/evidence.md#instruction-
 
 Decision:
 
-1. Zoe classifies each client-target delegation itself with `zoe-triage`: a stateless LLM call that receives only the current sentence and returns one word: `progress`, `recall`, `memory`, `task`, or `chat`. No history, no accumulated context.
+1. For client-target delegations, the upstream voice model alone decides when to delegate; Zoe does not classify chat. Zoe routes each received delegation with `zoe-triage`: a stateless LLM call that receives only the current sentence and returns one word: `progress`, `recall`, `memory`, or `task`. Any delegation outside the first three categories is `task`. The prompt contains definitions only, without example sentences. No history, no accumulated context.
 2. The model endpoint, model, and key file are configured like the memory model (`ZOE_TRIAGE_BASE_URL`, `ZOE_TRIAGE_MODEL`, `ZOE_TRIAGE_API_KEY_FILE`); empty base URL disables triage. The connection is long-lived and reused; requests are independent.
 3. Any error, timeout (default 2 s, no retry), or unrecognized output means `task`: the existing slow path. Failure never blocks or drops a request.
 4. The impact classification of [ADR 0009](0009-voice-steward-impact-policy.md) stays authoritative. A category never grants authority; high-impact requests keep the waiting/confirmation path regardless of category.
