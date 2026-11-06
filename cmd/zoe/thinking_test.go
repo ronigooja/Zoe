@@ -14,6 +14,7 @@ import (
 
 func TestMaintenanceMenuTriageAcceptsEffortNone(t *testing.T) {
 	menuManager(t)
+	containerKeyFixture(t)
 	root := t.TempDir()
 	keyPath := filepath.Join(root, "key")
 	old := terminalEcho
@@ -35,6 +36,7 @@ func TestMaintenanceMenuTriageAcceptsEffortNone(t *testing.T) {
 
 func TestTriageTestUsesDisabledThinkingEffortNone(t *testing.T) {
 	fakeServices(t, false)
+	containerKeyFixture(t)
 	var body map[string]any
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
