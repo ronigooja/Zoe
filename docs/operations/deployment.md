@@ -74,6 +74,41 @@ OpenCode runs in the dedicated host-installed service. The runner uses its authe
 
 ## Installation and configuration
 
+### Resident Worker permissions
+
+For resident Worker runs, the stable profile and agent ID `zoe-steward` selects
+the `full` tier. Its generated agent configuration and session permissions allow
+all actions and resources without approval prompts, including edits, V2 `shell`
+(legacy `bash`), web fetches, external directories, Code Mode, and every MCP
+tool. MCP checks use `<server>_<tool>` actions (for example
+`scrapling_browser_evaluate`), not the displayed `tools.scrapling.*` name or a
+single `mcp` gate; the final `*` allow covers all current and future servers.
+Only this profile with the resident Worker identity may select `full`; task
+scopes cannot promote other profiles to it. `zoe-worker` and `zoe-super` retain
+`external_paths`, and the rotation summarizer retains deny-all.
+
+For nonresident profiles, `read_only_research` permits reads, HTTP/browser
+research and MCP resource inspection; `workspace_read_write` additionally permits
+edits, shell, subagents, browser actions/evaluation and state persistence.
+`external_paths` additionally permits only explicitly granted external
+directories. All three retain deny-all for unknown tools and MCP servers.
+
+For each run, the runner uses `ZOE_OPENCODE_WORKSPACE_ROOT/<run-id>` when configured,
+otherwise the claim's workspace, as the OpenCode Location. Paths outside that
+Location and its project worktree require `external_directory` as well as read
+or edit permission. Scrapling is reachable only when configured in remote mode
+with a working endpoint/token reference, or local mode with its installed binary;
+permission allows do not install or connect MCP servers.
+
+For the shipped Linux unit, no additional sandbox relaxation is necessary:
+OpenCode already runs as root without `ProtectSystem`, `ReadWritePaths`,
+`ProtectHome`, or `NoNewPrivileges`. Consequently the full Worker can read/write
+root-accessible host files, execute shell processes, use host networking, and
+reach `/etc/zoe/secrets`, the Zoe database, and the Docker socket if present.
+This change adds no unit access grants and does not isolate those resources;
+filesystem permissions, mandatory OS policies, and remote MCP authorization
+still apply. Treat this tier as host-root authority, not a workspace sandbox.
+
 Runs rotated by releases before this fix are rebound on recovery from the journal chain.
 
 Use the [Linux deployment templates](../../deploy/linux/) and [release workflow](../../.github/workflows/server-release.yml) for the server/runner release. The reviewed release must contain `bin/zoe`, `bin/zoe-secret-entrypoint`, and `deploy-linux/` with the Compose and systemd files. The embedded CLI source revision must match `SOURCE_REVISION`; do not compile on the control host.

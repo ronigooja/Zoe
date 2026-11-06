@@ -1088,6 +1088,15 @@ func validateClaim(c contracts.JobClaim) error {
 	if c.Agent == "" || c.PermissionTier == "" {
 		return errors.New("runner claim is missing profile permissions")
 	}
+	if err := profiles.ValidateProfileTier(c.ProfileID, c.PermissionTier); err != nil {
+		return err
+	}
+	if c.Agent == "zoe-steward" && c.ProfileID != "zoe-steward" {
+		return errors.New("profile cannot select the full-permission resident Worker agent")
+	}
+	if c.PermissionTier == profiles.TierFull && (c.Agent != "zoe-steward" || c.Role != "worker") {
+		return errors.New("full tier requires resident Worker identity")
+	}
 	if err := profiles.ValidateRuleset(c.PermissionRules, c.PermissionTier); err != nil {
 		return fmt.Errorf("invalid runner claim permissions: %w", err)
 	}

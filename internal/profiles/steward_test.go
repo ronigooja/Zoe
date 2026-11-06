@@ -4,7 +4,7 @@ import "testing"
 
 func TestStewardExecutorHasWorkerTools(t *testing.T) {
 	p, ok := ByID("zoe-steward")
-	if !ok || p.PermissionTier != TierExternalPaths {
+	if !ok || p.PermissionTier != TierFull {
 		t.Fatalf("worker profile=%+v", p)
 	}
 	rules, _, err := EffectivePermissionSet(p, p.ScopeDefaults, nil)
@@ -12,13 +12,7 @@ func TestStewardExecutorHasWorkerTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tool := range []string{"edit", "shell", "subagent"} {
-		found := false
-		for _, r := range rules {
-			if r.Action == tool && r.Effect == "allow" {
-				found = true
-			}
-		}
-		if !found {
+		if evaluate(rules, tool, "*") != "allow" {
 			t.Errorf("worker tool %s is not allowed", tool)
 		}
 	}
