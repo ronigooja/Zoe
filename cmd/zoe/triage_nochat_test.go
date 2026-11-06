@@ -13,7 +13,7 @@ import (
 
 func TestTriageCommandFourCategoriesOnly(t *testing.T) {
 	containerKeyFixture(t)
-	for _, category := range []string{"progress", "recall", "memory", "task", "chat", "unknown"} {
+	for _, category := range []string{"progress", "recall", "memory", "task", "cancel", "confirm", "decline", "chat", "unknown"} {
 		t.Run(category, func(t *testing.T) {
 			root := t.TempDir()
 			key := filepath.Join(root, "key")
@@ -29,7 +29,7 @@ func TestTriageCommandFourCategoriesOnly(t *testing.T) {
 			}
 			var out, errOut bytes.Buffer
 			err := triageTestOperation([]string{"--root", root}, nil, &out, &errOut)
-			if category == "chat" || category == "unknown" {
+			if category == "chat" || category == "unknown" || category == "confirm" || category == "decline" {
 				if err == nil || !strings.Contains(out.String()+errOut.String(), "FAIL") {
 					t.Fatalf("command must fail for %q: err=%v out=%s stderr=%s", category, err, out.String(), errOut.String())
 				}
