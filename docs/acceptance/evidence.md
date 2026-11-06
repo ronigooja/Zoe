@@ -1,5 +1,13 @@
 # Acceptance evidence register
 
+## Call summary worker component checks — 2026-11-06
+
+Source: `feat/summary-gen`, based on `d444f5b`; local macOS, synthetic transcript/model fixtures only. `nice -n 19 go test -count=1 -p 1 -parallel 2 -timeout 120s ./internal/voice/ -run '^TestSummary'` passed. Coverage includes deduplicated closure/reaper jobs, settle delay, full-transcript sequence mapping, invalid-range rejection/backoff/five-attempt failure, disabled-model storage quiescence, empty calls, one bounded late-turn regeneration (including model-inflight arrival), redacted captured logs, strict invalid-JSON retry via fake HTTP transport, and context cancellation. No model network requests were made.
+
+With migration 212 temporarily replaced by a no-op, every mandatory case failed: enqueue (`summary_test.go:81`), stored ranges (`:89`), invalid-range retry (`:118`), unconfigured model (`:141`), empty call (`:156`), late regeneration (`:164`), redacted failure (`:202`) reported `no such table: voice_summary_jobs`; cancellation (`:230`) reported `worker never entered model`. These are line numbers from that red run, before additional fixtures. Migration was restored before the passing run. This ablation establishes missing infrastructure regression coverage, not independent mutation coverage for each algorithm branch.
+
+`go vet -p 1 ./internal/voice ./cmd/zoe-server`, `gofmt -l` on touched Go files, `git diff --check`, and `python3 tools/check_docs.py` passed. Hosted integration, production migration/restart recovery, real gateway timing, live model quality, and end-to-end recall remain unverified. No deployment, full-suite run, race run, or build was performed.
+
 These retained observations still support current implementation conclusions. Each record retains its source version, environment, result, and limitations; earlier author-reported checks are not newly rerun by this documentation change. The [pre-restructure source record](https://github.com/ronigooja/Zoe/blob/95ee55a5bbd8dccfb7f14af9f9703bb83727da6c/docs/master-plan.md) supplies provenance for local logs and review reports that have no public CI artifact.
 
 ## Current OpenCode acceptance gates
