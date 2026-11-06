@@ -18,18 +18,20 @@ import (
 type Category string
 
 const (
-	Progress Category = "progress"
-	Recall   Category = "recall"
-	Memory   Category = "memory"
-	Task     Category = "task"
+	Progress    Category = "progress"
+	Recall      Category = "recall"
+	MemoryWrite Category = "memory_write"
+	MemoryRead  Category = "memory_read"
+	Task        Category = "task"
 )
 
 const instructions = `Classify one sentence delegated by the upstream voice model. Upstream alone decides when to delegate. The input is speech-to-text and may contain typos, filler words, or no punctuation.
 progress: asks about the state, duration, or result of work already requested.
 recall: asks what was said or done earlier in past conversations or calls.
-memory: asks to store, update, or retrieve a stable personal fact or preference.
-task: any delegated request that is not progress, recall, or memory, including new work or lookup requiring tools, research, files, devices, or the web. High-impact or destructive requests are task.
-If a request could be both progress and a new task, or you are unsure, choose task. Reply with exactly one lowercase word: progress, recall, memory, or task. Output nothing else and do not explain.`
+memory_write: asks to store or update a stable personal fact or preference.
+memory_read: asks to retrieve a saved stable personal fact or preference.
+task: any delegated request that is not progress, recall, memory_write, or memory_read, including new work or lookup requiring tools, research, files, devices, or the web. High-impact or destructive requests are task.
+If a request could be both progress and a new task, or you are unsure, choose task. Reply with exactly one lowercase word: progress, recall, memory_write, memory_read, or task. Output nothing else and do not explain.`
 
 func reasoningModel(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
@@ -326,7 +328,7 @@ func parseCategory(output string) (Category, error) {
 		return "", errors.New("triage response was not one word")
 	}
 	switch Category(word) {
-	case Progress, Recall, Memory, Task:
+	case Progress, Recall, MemoryWrite, MemoryRead, Task:
 		return Category(word), nil
 	default:
 		return "", errors.New("triage response was an unknown category")

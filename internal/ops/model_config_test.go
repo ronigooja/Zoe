@@ -217,7 +217,7 @@ func TestTriageTestUsesTheRuntimeRequestShape(t *testing.T) {
 			t.Fatal(err)
 		}
 		instruction, ok := body["instructions"].(string)
-		if !ok || !strings.Contains(instruction, "progress, recall, memory, or task") {
+		if !ok || !strings.Contains(instruction, "progress, recall, memory_write, memory_read, or task") {
 			t.Fatalf("instructions=%v", body["instructions"])
 		}
 		if body["max_output_tokens"].(float64) < 128 {
