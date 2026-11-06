@@ -483,9 +483,18 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 }
 
 func (s *Service) progressReplyTx(ctx context.Context, tx *sql.Tx, workspace, owner, session, turn string, now time.Time) (string, error) {
+	return s.progressReplyQuery(ctx, tx, workspace, owner, session, now)
+}
+
+type progressQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Service) progressReplyQuery(ctx context.Context, db progressQueryer, workspace, owner, session string, now time.Time) (string, error) {
 	cutoff := now.Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
+	ageCutoff := now.Add(-s.recall.ProgressMaxTaskAge).UTC().Format(time.RFC3339Nano)
 	var status, started, created string
-	err := tx.QueryRowContext(ctx, `SELECT t.status,coalesce(t.started_at,''),t.created_at FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND t.status IN ('active','queued','waiting') ORDER BY coalesce(t.started_at,t.created_at) DESC LIMIT 1`, workspace, owner).Scan(&status, &started, &created)
+	err := db.QueryRowContext(ctx, `SELECT t.status,coalesce(t.started_at,''),t.created_at FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND l.session_id=? AND t.created_at>=? AND t.status IN ('active','queued','waiting') ORDER BY coalesce(t.started_at,t.created_at) DESC LIMIT 1`, workspace, owner, session, ageCutoff).Scan(&status, &started, &created)
 	if err == nil && (status == "active" || status == "queued" || status == "waiting") {
 		stamp := started
 		if stamp == "" {
@@ -501,35 +510,24 @@ func (s *Service) progressReplyTx(ctx context.Context, tx *sql.Tx, workspace, ow
 		}
 		return fmt.Sprintf("还在处理,已经%d秒了。", seconds), nil
 	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
 	var recentStatus string
-	err = tx.QueryRowContext(ctx, `SELECT t.status FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND t.status IN ('awaiting_user','complete') AND coalesce(t.updated_at,t.created_at)>=? ORDER BY coalesce(t.updated_at,t.created_at) DESC LIMIT 1`, workspace, owner, cutoff).Scan(&recentStatus)
+	err = db.QueryRowContext(ctx, `SELECT t.status FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND l.session_id=? AND t.created_at>=? AND t.status IN ('awaiting_user','complete') AND coalesce(t.updated_at,t.created_at)>=? ORDER BY coalesce(t.updated_at,t.created_at) DESC LIMIT 1`, workspace, owner, session, ageCutoff, cutoff).Scan(&recentStatus)
 	if err == nil {
 		return "结果已经给你了,或者已经准备好了。", nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
 	}
 	return "现在没有在处理的任务。", nil
 }
 
 func (s *Service) progressReply(ctx context.Context, workspace, owner, session string) string {
-	cutoff := s.now().Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
-	var status, started, created string
-	err := s.db.QueryRowContext(ctx, `SELECT t.status,coalesce(t.started_at,''),t.created_at FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND t.status IN ('active','queued','waiting') ORDER BY coalesce(t.started_at,t.created_at) DESC LIMIT 1`, workspace, owner).Scan(&status, &started, &created)
+	text, err := s.progressReplyQuery(ctx, s.db, workspace, owner, session, s.now())
 	if err == nil {
-		stamp := started
-		if stamp == "" {
-			stamp = created
-		}
-		at, parseErr := time.Parse(time.RFC3339Nano, stamp)
-		if parseErr == nil {
-			seconds := int(s.now().Sub(at).Seconds())
-			if seconds < 0 {
-				seconds = 0
-			}
-			return fmt.Sprintf("还在处理,已经%d秒了。", seconds)
-		}
-	}
-	var recent string
-	if err = s.db.QueryRowContext(ctx, `SELECT t.status FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND t.status IN ('awaiting_user','complete') AND coalesce(t.updated_at,t.created_at)>=? ORDER BY coalesce(t.updated_at,t.created_at) DESC LIMIT 1`, workspace, owner, cutoff).Scan(&recent); err == nil {
-		return "结果已经给你了,或者已经准备好了。"
+		return text
 	}
 	return "现在没有在处理的任务。"
 }

@@ -493,31 +493,35 @@ func (s *Server) commandTaskAcceptResult(ctx context.Context, tx *sql.Tx, c Comm
 	if p.Decision == "reject" {
 		next = "waiting"
 	}
+	return finalizeTaskResultTx(ctx, tx, c.Principal.WorkspaceID, p.TaskID, p.RunID, version, next, p.Decision, p.Comment, c.AcceptedAt)
+}
+
+// finalizeTaskResultTx applies both ordinary completion and compatibility result
+// acceptance. Its event is also the capability concurrency-release contract.
+// Runner evidence remains runner evidence; verified denotes run finalization.
+func finalizeTaskResultTx(ctx context.Context, tx *sql.Tx, workspace, taskID, runID string, version int64, next, decision, comment string, at time.Time) (contracts.CommandResult, []contracts.Event, error) {
 	version++
-	if !validTaskTransition(status, next) {
-		return contracts.CommandResult{}, nil, apiError(409, "state_conflict", "task transition is not allowed", map[string]any{"from": status, "to": next})
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE tasks SET status=?,version=?,updated_at=?,finished_at=CASE WHEN ?='complete' THEN ? ELSE NULL END WHERE id=? AND workspace_id=?`, next, version, c.AcceptedAt.Format(time.RFC3339Nano), next, c.AcceptedAt.Format(time.RFC3339Nano), p.TaskID, c.Principal.WorkspaceID)
+	_, err := tx.ExecContext(ctx, `UPDATE tasks SET status=?,version=?,updated_at=?,finished_at=CASE WHEN ?='complete' THEN ? ELSE NULL END,interaction_state='none',interaction_expired_kind='',interaction_scope='',interaction_run_id='',interaction_action_digest='',interaction_expires_at=NULL,interaction_expected_version=0,interaction_question='' WHERE id=? AND workspace_id=?`, next, version, at.Format(time.RFC3339Nano), next, at.Format(time.RFC3339Nano), taskID, workspace)
 	if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	if next == "complete" {
-		_, err = tx.ExecContext(ctx, `UPDATE runs SET status='verified' WHERE id=? AND status='verification_pending'`, p.RunID)
+		_, err = tx.ExecContext(ctx, `UPDATE runs SET status='verified' WHERE id=? AND status='verification_pending'`, runID)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		if err = settleDependentChildren(ctx, tx, p.TaskID, "complete", c.AcceptedAt); err != nil {
+		if err = settleDependentChildren(ctx, tx, taskID, "complete", at); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		if err = cancelPendingChildProposals(ctx, tx, p.TaskID, c.AcceptedAt); err != nil {
+		if err = cancelPendingChildProposals(ctx, tx, taskID, at); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE approvals SET status='canceled',version=version+1 WHERE task_id=? AND workspace_id=? AND status='pending'`, p.TaskID, c.Principal.WorkspaceID)
+	_, err = tx.ExecContext(ctx, `UPDATE approvals SET status='canceled',version=version+1 WHERE task_id=? AND workspace_id=? AND status='pending'`, taskID, workspace)
 	if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
-	return contracts.CommandResult{ResourceType: "task", ResourceID: p.TaskID, ResourceVersion: version}, []contracts.Event{event("task.result_decided", "task", p.TaskID, version, map[string]any{"task_id": p.TaskID, "run_id": p.RunID, "decision": p.Decision, "comment": p.Comment, "status": next})}, nil
+	return contracts.CommandResult{ResourceType: "task", ResourceID: taskID, ResourceVersion: version}, []contracts.Event{event("task.result_decided", "task", taskID, version, map[string]any{"task_id": taskID, "run_id": runID, "decision": decision, "comment": comment, "status": next})}, nil
 }
 
 func validTaskTransition(from, to string) bool {

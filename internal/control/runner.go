@@ -818,6 +818,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 	}
 	nextRunStatus := status
 	nextTaskStatus := ""
+	completeResult := false
 	if observation.Kind == "permission_requested" || observation.Kind == "worker_question" {
 		now := time.Now().UTC()
 		if err = tx.QueryRowContext(r.Context(), `SELECT version FROM tasks WHERE id=? AND workspace_id=?`, taskID, workspace).Scan(&taskVersion); err != nil {
@@ -1064,16 +1065,30 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		nextTaskStatus = "canceled"
 	case "runtime_terminated":
 		nextRunStatus = "verification_pending"
-		var resultCount int
-		if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FROM evidence WHERE run_id=? AND kind='agent_result'`, runID).Scan(&resultCount); err != nil {
+		var resultCount, failureCount, pendingCount int
+		if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FROM evidence WHERE run_id=? AND kind='agent_result' AND source='runner' AND verified=0`, runID).Scan(&resultCount); err != nil {
+			writeError(w, err)
+			return
+		}
+		if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FROM runner_observations WHERE run_id=? AND kind='failure'`, runID).Scan(&failureCount); err != nil {
+			writeError(w, err)
+			return
+		}
+		if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FROM pending_runtime_actions WHERE run_id=? AND authorization_used=0`, runID).Scan(&pendingCount); err != nil {
 			writeError(w, err)
 			return
 		}
 		if desired == "stop" {
 			nextRunStatus = "stopped"
 			nextTaskStatus = "canceled"
+		} else if failureCount > 0 {
+			nextRunStatus, nextTaskStatus = "failed", "failed"
+		} else if pendingCount > 0 {
+			// A final-looking output cannot answer a pending runtime question
+			// or grant permission. Preserve its scoped interaction and live run.
+			nextRunStatus = status
 		} else if resultCount > 0 {
-			nextTaskStatus = "awaiting_user"
+			completeResult = true
 		} else {
 			nextRunStatus = "failed"
 			nextTaskStatus = "failed"
@@ -1117,13 +1132,20 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if observation.Kind == "runtime_terminated" && nextTaskStatus == "awaiting_user" {
-		// Ordinary assistant results require conversational follow-up, not result
-		// acceptance. Exceptional approvals use the explicit approval_required
-		// interaction state and are created by their owning policy handler.
-		if _, err = tx.ExecContext(r.Context(), `UPDATE tasks SET interaction_state='awaiting_message',interaction_scope='',interaction_run_id='',interaction_action_digest='',interaction_expires_at=NULL,interaction_expected_version=version WHERE id=? AND workspace_id=?`, taskID, workspace); err != nil {
-			writeError(w, err)
+	if completeResult {
+		result, events, finalizeErr := finalizeTaskResultTx(r.Context(), tx, workspace, taskID, runID, taskVersion, "complete", "accept", "", now)
+		if finalizeErr != nil {
+			writeError(w, finalizeErr)
 			return
+		}
+		taskVersion = result.ResourceVersion
+		nextTaskStatus = "complete"
+		for _, e := range events {
+			e.OccurredAt, e.WorkspaceID = now, workspace
+			if err = appendEventTx(r.Context(), tx, e); err != nil {
+				writeError(w, err)
+				return
+			}
 		}
 	}
 	if err = appendEventTx(r.Context(), tx, contracts.Event{Type: eventKind, OccurredAt: now, WorkspaceID: workspace, SubjectID: "", AggregateType: "run", AggregateID: runID, AggregateVersion: int64(fence), Payload: raw(map[string]any{"run_id": runID, "task_id": taskID, "attempt_id": attempt, "kind": observation.Kind, "task_status": nextTaskStatus, "result": taskResult})}); err != nil {

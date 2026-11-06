@@ -49,6 +49,7 @@ type Config struct {
 	RecallLease            time.Duration
 	RecallSummaryLimit     int
 	RecallHoldingText      string
+	ProgressMaxTaskAge     time.Duration
 }
 
 type Answerer interface {
@@ -98,6 +99,10 @@ type Service struct {
 }
 
 const triageCacheCap = 1024
+
+// DefaultProgressMaxTaskAge bounds current-call progress evidence when no
+// positive Config.ProgressMaxTaskAge override is supplied.
+const DefaultProgressMaxTaskAge = 6 * time.Hour
 
 type triageCacheEntry struct {
 	category string
@@ -328,6 +333,9 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 }
 
 func newService(db *sql.DB, cfg Config) *Service {
+	if cfg.ProgressMaxTaskAge <= 0 {
+		cfg.ProgressMaxTaskAge = DefaultProgressMaxTaskAge
+	}
 	var base *url.URL
 	if raw := strings.TrimSpace(cfg.GatewayURL); raw != "" {
 		base, _ = url.Parse(raw)

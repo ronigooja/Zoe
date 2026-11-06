@@ -3,7 +3,6 @@ package capabilities
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -827,47 +826,41 @@ func TestCapabilityTriggerRunnerOpenCodeResultChain(t *testing.T) {
 		t.Fatalf("OpenCode runtime lifecycle create=%d terminate=%d, want one each", runtime.created, runtime.terminated)
 	}
 	var runStatus, taskStatus string
-	if err := store.DB().QueryRowContext(ctx, `SELECT r.status,t.status FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id=?`, claim.RunID).Scan(&runStatus, &taskStatus); err != nil || runStatus != "verification_pending" || taskStatus != "awaiting_user" {
-		t.Fatalf("runner result did not await user acceptance: run=%q task=%q err=%v", runStatus, taskStatus, err)
+	if err := store.DB().QueryRowContext(ctx, `SELECT r.status,t.status FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id=?`, claim.RunID).Scan(&runStatus, &taskStatus); err != nil || runStatus != "verified" || taskStatus != "complete" {
+		t.Fatalf("runner result did not complete automatically: run=%q task=%q err=%v", runStatus, taskStatus, err)
 	}
 	var toolEvidence int
 	if err := store.DB().QueryRowContext(ctx, `SELECT count(*) FROM evidence WHERE run_id=? AND kind='mcp_tool'`, claim.RunID).Scan(&toolEvidence); err != nil || toolEvidence != 1 {
 		t.Fatalf("runtime tool evidence was not persisted: count=%d err=%v", toolEvidence, err)
 	}
-	postAdmissions()
 	var triggerState string
-	if err := store.DB().QueryRowContext(ctx, `SELECT state FROM capability_trigger_runs WHERE task_id=?`, claim.TaskID).Scan(&triggerState); err != nil || triggerState != "waiting" {
-		t.Fatalf("awaiting_user run mapped to trigger state=%q err=%v", triggerState, err)
-	}
-	postAdmissions()
-	if err = store.DB().QueryRowContext(ctx, `SELECT count(*) FROM capability_trigger_runs WHERE mode='worker' AND state='queued'`).Scan(&queued); err != nil || queued != 1 {
-		t.Fatalf("waiting result released worker trigger slot: queued=%d err=%v", queued, err)
-	}
-	if err = store.DB().QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE source='service'`).Scan(&admitted); err != nil || admitted != 1 {
-		t.Fatalf("waiting result admitted another service task: tasks=%d err=%v", admitted, err)
-	}
-
-	var taskVersion int64
-	if err = store.DB().QueryRowContext(ctx, `SELECT version FROM tasks WHERE id=?`, claim.TaskID).Scan(&taskVersion); err != nil {
-		t.Fatal(err)
-	}
-	acceptRequest := contracts.CommandRequest{Kind: "task.accept_result", ExpectedVersion: &taskVersion, Payload: marshal(map[string]string{"task_id": claim.TaskID, "run_id": claim.RunID, "decision": "accept"})}
-	acceptBytes, _ := json.Marshal(acceptRequest)
-	acceptHash := sha256.Sum256(acceptBytes)
-	acceptPrincipal := contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "instance", Generation: 1, Scopes: []string{"client:command"}}
-	// Direct command fixture establishes the same owner session checked by HTTP.
-	if _, _, err = control.InitializeInstanceAuth(ctx, store, mustCapabilityInstanceKey(t)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = server.ExecuteCommand(ctx, acceptPrincipal, "accept-trigger-result", acceptRequest, acceptHash[:]); err != nil {
-		t.Fatalf("authorized result acceptance: %v", err)
-	}
 	postAdmissions()
 	if err = store.DB().QueryRowContext(ctx, `SELECT state FROM capability_trigger_runs WHERE task_id=?`, claim.TaskID).Scan(&triggerState); err != nil || triggerState != "completed" {
-		t.Fatalf("accepted result did not terminally release trigger: state=%q err=%v", triggerState, err)
+		t.Fatalf("completed result did not terminally release trigger: state=%q err=%v", triggerState, err)
 	}
 	if err = store.DB().QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE source='service'`).Scan(&admitted); err != nil || admitted != 2 {
-		t.Fatalf("authorized acceptance did not free worker slot for second trigger: tasks=%d err=%v", admitted, err)
+		t.Fatalf("automatic completion did not free worker slot for second trigger: tasks=%d err=%v", admitted, err)
+	}
+	// Replay the original terminal observation after slot reconciliation; it
+	// must not emit another release decision or admit a third worker.
+	var terminalJSON []byte
+	if err = store.DB().QueryRowContext(ctx, `SELECT body FROM runner_observations WHERE run_id=? AND kind='runtime_terminated'`, claim.RunID).Scan(&terminalJSON); err != nil {
+		t.Fatal(err)
+	}
+	var terminal contracts.RunnerObservation
+	if err = json.Unmarshal(terminalJSON, &terminal); err != nil {
+		t.Fatal(err)
+	}
+	if err = controlClient.Observe(ctx, claim.RunID, terminal); err != nil {
+		t.Fatal(err)
+	}
+	postAdmissions()
+	var decisions int
+	if err = store.DB().QueryRowContext(ctx, `SELECT count(*) FROM events WHERE event_type='task.result_decided' AND aggregate_id=?`, claim.TaskID).Scan(&decisions); err != nil || decisions != 1 {
+		t.Fatalf("release decisions=%d err=%v", decisions, err)
+	}
+	if err = store.DB().QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE source='service'`).Scan(&admitted); err != nil || admitted != 2 {
+		t.Fatalf("replay admitted extra tasks=%d err=%v", admitted, err)
 	}
 
 }
