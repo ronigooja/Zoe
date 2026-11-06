@@ -164,8 +164,8 @@ func TestLiveHandoffBudgetTimeoutIsRetryableWithoutEffects(t *testing.T) {
 	}
 }
 
-func TestLiveNonTaskRoutingSkipsStewardAndMemoryStaysSlow(t *testing.T) {
-	for _, category := range []string{"progress", "recall", "memory", "task"} {
+func TestLiveNonTaskRoutingSkipsStewardAndMemoryRoutesFast(t *testing.T) {
+	for _, category := range []string{"progress", "recall", "memory_write", "memory_read", "task"} {
 		t.Run(category, func(t *testing.T) {
 			decision := &fakeSteward{decision: steward.Ask}
 			ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: &fakeClassifier{category: category}, Steward: decision})
@@ -186,9 +186,6 @@ func TestLiveNonTaskRoutingSkipsStewardAndMemoryStaysSlow(t *testing.T) {
 					t.Fatalf("non-task Steward calls=%d", decision.calls.Load())
 				}
 				want := "voice_turn"
-				if category == "memory" {
-					want = "task"
-				}
 				if receipt.ResourceType != want {
 					t.Fatalf("route=%s want=%s", receipt.ResourceType, want)
 				}

@@ -54,8 +54,17 @@ func (s *Service) recoverRecall(ctx context.Context, startup bool) {
 	}
 	rows.Close()
 	for _, id := range ids {
-		s.persistRecallRetry(ctx, id, recallSpeech(recallNotFound, nil))
+		s.persistRecallRetry(ctx, id, s.recallFallback(ctx, id))
 	}
+}
+
+func (s *Service) recallFallback(ctx context.Context, id string) string {
+	var intent string
+	_ = s.db.QueryRowContext(ctx, `SELECT h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.id=?`, id).Scan(&intent)
+	if intent == "memory_read_holding" {
+		return recallPrefix + memoryUnavailable
+	}
+	return recallSpeech(recallNotFound, nil)
 }
 
 func (s *Service) persistRecall(ctx context.Context, id, text string) error {
@@ -183,7 +192,17 @@ func (s *Service) runRecall(id string) {
 	if err := s.db.QueryRowContext(ctx, `SELECT workspace_id,owner_id,session_id,generation,turn_id,question FROM voice_recall_jobs WHERE id=?`, id).Scan(&workspace, &owner, &session, &generation, &turn, &question); err != nil {
 		return
 	}
-	text, count, status := s.recallAnswer(ctx, workspace, owner, question)
+	var intent string
+	if err := s.db.QueryRowContext(ctx, `SELECT h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.id=?`, id).Scan(&intent); err != nil {
+		return
+	}
+	var text, status string
+	var count int
+	if intent == "memory_read_holding" {
+		text, count, status = s.memoryAnswer(ctx, workspace, owner, question)
+	} else {
+		text, count, status = s.recallAnswer(ctx, workspace, owner, question)
+	}
 	// Model deadlines get a fallback, but shutdown leaves the lease for recovery.
 	if s.recallCtx.Err() != nil {
 		return
@@ -191,7 +210,7 @@ func (s *Service) runRecall(id string) {
 	persist, done := context.WithTimeout(s.recallCtx, 8*time.Second)
 	defer done()
 	if !s.persistRecallRetry(persist, id, text) {
-		if !s.persistRecallRetry(persist, id, recallSpeech(recallNotFound, nil)) {
+		if !s.persistRecallRetry(persist, id, s.recallFallback(persist, id)) {
 			return
 		}
 		status = "persist_fallback"

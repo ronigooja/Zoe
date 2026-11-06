@@ -32,12 +32,12 @@ Observed on the AVAS route ([evidence](../../acceptance/evidence.md#instruction-
 
 Decision:
 
-1. For client-target delegations, the upstream voice model alone decides when to delegate; Zoe does not classify chat. Zoe routes each received delegation with `zoe-triage`: a stateless LLM call that receives only the current sentence and returns one word: `progress`, `recall`, `memory`, or `task`. Any delegation outside the first three categories is `task`. The prompt contains definitions only, without example sentences. No history, no accumulated context.
+1. For client-target delegations, the upstream voice model alone decides when to delegate; Zoe does not classify chat. Zoe routes each received delegation with `zoe-triage`: a stateless LLM call that receives only the current sentence and returns one category: `progress`, `recall`, `memory_write`, `memory_read`, or `task`. The legacy `memory` category is unknown and follows the existing retry/unclassified slow task fallback. The prompt contains definitions only, without example sentences. No history, no accumulated context. No keyword rules infer read/write semantics.
 2. The model endpoint, model, and key file are configured like the memory model (`ZOE_TRIAGE_BASE_URL`, `ZOE_TRIAGE_MODEL`, `ZOE_TRIAGE_API_KEY_FILE`); empty base URL disables triage. The connection is long-lived and reused; requests are independent.
 3. For committed-turn classification, retry a failed or unrecognized result once within the remaining classification budget. The triage HTTP timeout defaults to 3000 ms (`ZOE_TRIAGE_TIMEOUT_MS`, range 200–10000). Exhausted failures persist `unclassified` and retain the existing slow task path. Failure never drops a request.
 4. The impact classification of [ADR 0009](0009-voice-steward-impact-policy.md) stays authoritative. A category never grants authority; high-impact requests keep the waiting/confirmation path regardless of category.
 5. Classification and gateway calls never run inside a database transaction.
-6. Fast paths read local evidence only: `progress` reads the task table; `recall` follows the bounded read-only route below; `memory` remains unimplemented. Recall does not create a task or fall back to a semantic search.
+6. Fast paths read local evidence only: `progress` reads the task table; `recall` follows the bounded read-only route below; `memory_read` uses the existing owner-scoped context assembler with the question as query. Memory routes do not create Worker tasks. Memory writes remain blocked as described below.
 7. Upstream owns wording: Zoe pushes short instruction-style `speakable` text (including a holding sentence during slow work) and upstream phrases it. Verified once only; see the evidence.
 
 The recall date resolver exists in `internal/recall/dates`; weeks start on Monday and the caller timezone is `Asia/Shanghai`.
@@ -57,9 +57,8 @@ separate fast-path sub-deadline. Progress text is recomputed immediately before
 every send, so delayed classification does not freeze elapsed seconds. Classification
 and handoff waiting stay outside transactions and do not hold up unrelated turns.
 Run Steward only for
-`task`; progress, recall and memory do not pay for a Steward call. Do not run it
-speculatively: non-task requests would consume unnecessary model calls. Memory
-still uses ordinary task admission; it has no implemented fast route.
+`task`; progress, recall, memory_read and memory_write do not pay for a Steward call.
+Do not run it speculatively: non-task requests would consume unnecessary model calls.
 
 When the handoff budget expires before a durable decision exists, return retryable
 `503 triage_timeout` without a receipt, task or reply. Log the turn row ID and wait
@@ -82,6 +81,37 @@ The answer model receives summary/excerpt data, never evidence instructions. A t
 Recall workers share a service-owned cancellation context and a four-slot semaphore, acquired before a durable claim. Stop cancels and joins them before storage closes; shutdown leaves unfinished jobs for recovery. Running jobs recover to the honest fallback at startup or after a clock-injected lease (default twice the total recall timeout). The claim timestamp uses the holding receipt's `updated_at`. Recovery atomically inserts the deterministic final reply ID and marks the job terminal, preserving any existing answer. Final persistence retries three times, then retries the fallback three times; persistent storage failures leave the running job eligible for later recovery. Pending jobs retain normal holding-first dispatch.
 
 This is component behavior, not real-provider or gateway-speech acceptance. Durable holding/final delivery rows retain progress transport retry semantics, including an ambiguous-send duplication risk after a lost acknowledgement; delivery is not exactly once.
+
+## Personal memory routes
+
+When triage selects `memory_read` and the hard impact gate allows it, reuse the
+recall job lifecycle, holding-first delivery, per-turn uniqueness, cancellation,
+leases, and bounded worker slots. Distinguish the route by its holding receipt
+intent. Query the existing context assembler with workspace, owner as recipient,
+question, and the default memory token budget. This is source-verified SQLite
+retrieval, not Qdrant semantic search. Use the existing `ZOE_ANSWER_*` client with
+a separate memory prompt: the question and items are untrusted data, never
+instructions; output only `answer` or `not_found`. Empty retrieval or model
+`not_found` says `I do not have that saved.` Configuration, retrieval, model,
+malformed-output, deadline, and recovered-job failures instead say
+`I could not check right now.` Logs contain IDs, counts, and fixed statuses only.
+
+When triage selects `memory_write`, the current component returns
+`I could not save that right now.` once per turn through the plain fast-reply
+queue, without a Worker task or save claim. Write ingestion is blocked:
+`Repository.RecordVoiceOutcome` creates a source-only extract job, but
+`derivedService.materializeTx` requires an existing current claim/revision and
+rejects source-only jobs as stale. `CreateProposal` accepts already-extracted
+subject/key/content against an existing source, not raw user sentences. Missing
+contracts are raw-source materialization with owner scope, a turn-idempotent
+transactional ingestion entry point, and a successful extraction/save receipt
+that distinguishes worker/model unavailability. Do not create placeholder claims
+or report a queued/unprocessable job as saved. The requested successful write
+route and confirmation remain unimplemented; no live memory config is changed.
+
+These routes have component evidence only; real memory-provider availability,
+prompt-injection resistance in model behavior, and gateway speech acceptance
+remain unverified.
 
 ## Stored call summary generation
 
