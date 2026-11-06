@@ -867,7 +867,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		taskVersion++
-		if _, err = tx.ExecContext(r.Context(), `UPDATE tasks SET status='awaiting_user',interaction_state=?,interaction_run_id=?,interaction_action_digest=?,interaction_expires_at=?,interaction_expected_version=?,interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, map[bool]string{true: "explicit_confirmation", false: "awaiting_message"}[observation.Kind == "permission_requested"], runID, digest, expires, taskVersion, question, now.Format(time.RFC3339Nano), taskID, workspace); err != nil {
+		if _, err = tx.ExecContext(r.Context(), `UPDATE tasks SET status='awaiting_user',interaction_scope=?,interaction_state=?,interaction_run_id=?,interaction_action_digest=?,interaction_expires_at=?,interaction_expected_version=?,interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, map[bool]string{true: "runtime:permission", false: ""}[observation.Kind == "permission_requested"], map[bool]string{true: "explicit_confirmation", false: "awaiting_message"}[observation.Kind == "permission_requested"], runID, digest, expires, taskVersion, question, now.Format(time.RFC3339Nano), taskID, workspace); err != nil {
 			writeError(w, err)
 			return
 		}
