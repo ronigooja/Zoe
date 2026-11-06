@@ -206,6 +206,14 @@ When running `zoe triage test`, only the categories in the [triage routing contr
 
 ### Call-recall model endpoints
 
+When testing delegated-turn triage with `zoe triage test`, valid categories are
+`progress`, `recall`, `memory_write`, `memory_read`, and `task`. The legacy
+`memory` result is invalid and follows the unclassified slow task fallback.
+Memory reads reuse `ZOE_ANSWER_*` and the existing owner-scoped memory context
+assembler; no additional model is configured. Memory writes currently report
+save unavailability without a Worker task; the ingestion contract is blocked
+as recorded in [ADR 0012](../architecture/decisions/0012-voice-conversation-layer.md#personal-memory-routes).
+
 For call-history recall, configure independent endpoints through the existing Models
 menu or `zoe summary configure` and `zoe answer configure`. Both accept `--base-url`,
 `--model`, `--effort` (empty, none, low, medium, high, max), `--thinking` (empty, enabled,

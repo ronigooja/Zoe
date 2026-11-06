@@ -21,10 +21,16 @@ const recallPrefix = "Read this to the user exactly as written: "
 
 // recallFailureSpeech applies fixed wording without implying a failed check found no evidence.
 func recallFailureSpeech(status string) string {
+	return evidenceFailureSpeech(status, recallNotFound, recallUnavailable)
+}
+
+// evidenceFailureSpeech applies to recall and memory reads; only absent evidence
+// may use not-found wording, while every failed check reports unavailability.
+func evidenceFailureSpeech(status, notFound, unavailable string) string {
 	if status == "no_summaries" || status == "not_found" {
-		return recallSpeech(recallNotFound, nil)
+		return recallSpeech(notFound, nil)
 	}
-	return recallSpeech(recallUnavailable, nil)
+	return recallSpeech(unavailable, nil)
 }
 
 // recallWorkerLimit bounds model work per service, including persistence retries.
@@ -64,8 +70,17 @@ func (s *Service) recoverRecall(ctx context.Context, startup bool) {
 	}
 	rows.Close()
 	for _, id := range ids {
-		s.persistRecallRetry(ctx, id, recallSpeech(recallUnavailable, nil))
+		s.persistRecallRetry(ctx, id, s.recallFallback(ctx, id))
 	}
+}
+
+func (s *Service) recallFallback(ctx context.Context, id string) string {
+	var intent string
+	_ = s.db.QueryRowContext(ctx, `SELECT h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.id=?`, id).Scan(&intent)
+	if intent == "memory_read_holding" {
+		return evidenceFailureSpeech("unavailable", memoryNotFound, memoryUnavailable)
+	}
+	return recallFailureSpeech("unavailable")
 }
 
 func (s *Service) persistRecall(ctx context.Context, id, text string) error {
@@ -194,7 +209,17 @@ func (s *Service) runRecall(id string) {
 		return
 	}
 	started := time.Now()
-	text, count, status := s.recallAnswer(ctx, workspace, owner, question)
+	var intent string
+	if err := s.db.QueryRowContext(ctx, `SELECT h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.id=?`, id).Scan(&intent); err != nil {
+		return
+	}
+	var text, status string
+	var count int
+	if intent == "memory_read_holding" {
+		text, count, status = s.memoryAnswer(ctx, workspace, owner, question)
+	} else {
+		text, count, status = s.recallAnswer(ctx, workspace, owner, question)
+	}
 	elapsedMS := time.Since(started).Milliseconds()
 	// Model deadlines get a fallback, but shutdown leaves the lease for recovery.
 	if s.recallCtx.Err() != nil {
@@ -203,7 +228,7 @@ func (s *Service) runRecall(id string) {
 	persist, done := context.WithTimeout(s.recallCtx, 8*time.Second)
 	defer done()
 	if !s.persistRecallRetry(persist, id, text) {
-		if !s.persistRecallRetry(persist, id, recallSpeech(recallUnavailable, nil)) {
+		if !s.persistRecallRetry(persist, id, s.recallFallback(persist, id)) {
 			return
 		}
 		status = "persist_fallback"
