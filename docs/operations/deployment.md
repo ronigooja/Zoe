@@ -10,6 +10,20 @@ SQLite inspection, and voice pool isolation checks, see the
 
 ## Linux services and storage
 
+### Voice delegation instruction
+
+When creating a voice session, `ZOE_VOICE_INSTRUCTION_TEXT` optionally overrides
+the built-in Chinese delegation rule (valid UTF-8, at most 6000 bytes). An unset
+or empty value uses the default: upstream answers greetings, thanks, casual chat
+and opinions directly, delegates research, actions, task progress, past-call
+recall and personal-memory requests, and waits for Zoe rather than inventing a
+result or claiming records are unavailable. Literal `off` disables the push.
+Configure it in `zoe-stack.env`; `zoe update` preserves custom values. Zoe sends
+the rule with a do-not-read-or-acknowledge prefix before returning SDP, records
+delivery per session/media generation/text hash, and retries a failed send once
+on connection without failing call creation. Successful transport does not prove
+silence or compliance: whether upstream obeys must be verified in live calls.
+
 - `/opt/zoe/releases/current` selects the immutable server/runner release.
 - `zoe-compose.service` supervises the server, memory worker, and Qdrant.
 - `zoe-runner.service` runs the trusted execution runner.

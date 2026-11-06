@@ -155,7 +155,7 @@ func run() error {
 			return errors.New("ZOE_RECALL_SUMMARY_LIMIT must be between 1 and 100")
 		}
 	}
-	server, err := composeControlServer(store, cfg, voice.Config{ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Classifier: triageClassifier, Steward: taskSteward, Summarizer: summarizer, SummarySettleDelay: &summarySettle, Answerer: answerer, RecallTimeout: answerTimeout, RecallSummaryLimit: recallLimit, RecallHoldingText: os.Getenv("ZOE_RECALL_HOLDING_TEXT"), GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	server, err := composeControlServer(store, cfg, voice.Config{InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Classifier: triageClassifier, Steward: taskSteward, Summarizer: summarizer, SummarySettleDelay: &summarySettle, Answerer: answerer, RecallTimeout: answerTimeout, RecallSummaryLimit: recallLimit, RecallHoldingText: os.Getenv("ZOE_RECALL_HOLDING_TEXT"), GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	}, memory.DerivedConfig{BackupDeleteManifestPath: strings.TrimSpace(os.Getenv("ZOE_BACKUP_DELETE_MANIFEST_PATH"))})

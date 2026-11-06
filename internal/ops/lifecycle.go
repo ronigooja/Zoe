@@ -986,6 +986,9 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 	}
 	stack := map[string]string{"ZOE_SERVER_IMAGE": image(mfest, "zoe-server"), "ZOE_MEMORY_WORKER_IMAGE": image(mfest, "zoe-memory-worker"), "ZOE_SERVER_DATA_ROOT": filepath.Join(o.DataRoot, "server"), "ZOE_MEMORY_DATA_ROOT": filepath.Join(o.DataRoot, "memory"), "ZOE_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "runner-token"), "ZOE_MEMORY_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "memory-runner-token"), "ZOE_MEM0_LLM_API_KEY_FILE": filepath.Join(o.Root, "secrets", "mem0-llm-api-key"), "ZOE_RUNTIME_PROFILES": profiles, "ZOE_DEFAULT_PROFILE_ID": "worker", "ZOE_MAX_RUNS": "12", "ZOE_COMPOSE_FILE": filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", "docker-compose.yml")}
 	oldStack, _ := readEnv(filepath.Join(o.Root, "zoe-stack.env"))
+	if value, ok := oldStack["ZOE_VOICE_INSTRUCTION_TEXT"]; ok {
+		stack["ZOE_VOICE_INSTRUCTION_TEXT"] = value
+	}
 	for _, kind := range []string{"SUMMARY", "ANSWER"} {
 		for _, suffix := range []string{"BASE_URL", "MODEL", "REASONING_EFFORT", "THINKING", "TIMEOUT_MS", "API_KEY_FILE"} {
 			key := "ZOE_" + kind + "_" + suffix
@@ -1141,6 +1144,9 @@ func isReleaseOwnedEnvKey(key string) bool {
 }
 
 func isOperatorOwnedEnvKey(key string) bool {
+	if key == "ZOE_VOICE_INSTRUCTION_TEXT" {
+		return true
+	}
 	for _, kind := range []string{"SUMMARY", "ANSWER"} {
 		for _, suffix := range []string{"BASE_URL", "MODEL", "REASONING_EFFORT", "THINKING", "TIMEOUT_MS", "API_KEY_FILE"} {
 			if key == "ZOE_"+kind+"_"+suffix {
@@ -1165,6 +1171,9 @@ func isOperatorOwnedEnvKey(key string) bool {
 }
 
 func validOperatorEnvValue(key, value string) bool {
+	if key == "ZOE_VOICE_INSTRUCTION_TEXT" {
+		return true // Startup validates the optional instruction; updates preserve it verbatim.
+	}
 	if strings.HasPrefix(key, "ZOE_SUMMARY_") || strings.HasPrefix(key, "ZOE_ANSWER_") {
 		return isOperatorOwnedEnvKey(key)
 	}
