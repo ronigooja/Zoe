@@ -97,7 +97,7 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 	if key == "" {
 		return nil, errors.New("triage API key file is empty")
 	}
-	timeout := 2 * time.Second
+	timeout := 3 * time.Second
 	if value := strings.TrimSpace(getenv("ZOE_TRIAGE_TIMEOUT_MS")); value != "" {
 		ms, parseErr := strconv.Atoi(value)
 		if parseErr != nil || ms < 200 || ms > 10000 {

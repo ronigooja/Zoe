@@ -609,19 +609,33 @@ func (s *Service) classifyCommittedTurn(id string) {
 	}
 	category := "task"
 	var err error
+	attempts := 0
+	reason := "none"
 	triageStarted := time.Now()
 	if s.classifier != nil {
-		// Triage retains its own fast-path deadline; the larger outer budget
-		// must not turn a slow progress classification into a fast-path reply.
-		triageCtx, triageCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-		category, err = s.classifier.Classify(triageCtx, content)
-		if triageCtx.Err() != nil {
-			err = triageCtx.Err()
+		// Both attempts share the remaining classification budget. Progress
+		// delivery recomputes elapsed time at send time, even after slow triage.
+		for attempts < 2 && ctx.Err() == nil {
+			attempts++
+			category, err = s.classifier.Classify(ctx, content)
+			if ctx.Err() != nil {
+				err = ctx.Err()
+			}
+			if err == nil && validCategory(category) {
+				break
+			}
 		}
-		triageCancel()
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 	}
 	if err != nil || !validCategory(category) {
 		category = "unclassified"
+		reason = "triage_error"
+		var timeout interface{ Timeout() bool }
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+			reason = "triage_timeout"
+		}
 	}
 	triageMS := time.Since(triageStarted).Milliseconds()
 	stewardMS := int64(0)
@@ -643,7 +657,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 			s.cacheTriage(triageKey(session, generation, turn, revision), category)
 		}
 	}
-	log.Printf("voice_classification id=%s triage_ms=%d steward_ms=%d total_ms=%d budget_hit=%t storage_error=%t", id, triageMS, stewardMS, time.Since(started).Milliseconds(), ctx.Err() != nil, writeErr != nil)
+	log.Printf("voice_classification id=%s triage_ms=%d steward_ms=%d total_ms=%d budget_hit=%t storage_error=%t reason=%s attempts=%d", id, triageMS, stewardMS, time.Since(started).Milliseconds(), ctx.Err() != nil, writeErr != nil, reason, attempts)
 }
 
 func (s *Service) handleTurns(w http.ResponseWriter, r *http.Request) {

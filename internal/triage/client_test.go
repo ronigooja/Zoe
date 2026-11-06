@@ -33,6 +33,17 @@ func chatResponse(word string) string {
 	return `{"choices":[{"message":{"content":"` + word + `","reasoning_content":"ignore"},"finish_reason":"stop"}]}`
 }
 
+func TestTriageParsedDefaultTimeout(t *testing.T) {
+	values := map[string]string{"ZOE_TRIAGE_BASE_URL": "https://example.com", "ZOE_TRIAGE_MODEL": "fake", "ZOE_TRIAGE_API_KEY_FILE": "/fake/key"}
+	c, err := FromEnv(func(k string) string { return values[k] }, func(string) ([]byte, error) { return []byte("fake-key"), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.http.Timeout < 3000*time.Millisecond {
+		t.Fatalf("parsed default timeout=%s; want at least 3s", c.http.Timeout)
+	}
+}
+
 func TestTriageFallsBackToChatCompletionsWhen404OnResponses(t *testing.T) {
 	var responses, chats atomic.Int32
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -125,6 +125,13 @@ Use `zoe` with no arguments for the numbered operator menu, or configure endpoin
 Use `--key-stdin` to install a mode-0600 key without placing it in shell history.
 Triage is disabled when `ZOE_TRIAGE_BASE_URL` is empty. Apply a saved change with `zoe update`.
 
+For committed voice turns, `ZOE_TRIAGE_TIMEOUT_MS` sets the HTTP timeout (default
+3000 ms, range 200–10000). `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS` bounds total
+classification and the handoff wait (default 4000 ms, range 100–30000). One retry
+shares the remaining classification budget; there is no separate 1500 ms cutoff.
+Exhausted failures retain the slow path and log only bounded classification
+diagnostics, including `reason=triage_timeout` or `reason=triage_error` and `attempts`.
+
 For triage requests, `ZOE_TRIAGE_THINKING` and `ZOE_TRIAGE_REASONING_EFFORT` (CLI `--thinking` and `--effort`) control the following wire fields. Effort accepts `none`, `low`, `medium`, `high`, `max`, or empty; `minimal` is rejected by the configured OpenAI-style gateway. Values are sent unchanged, not mapped locally.
 
 | Thinking value | `/responses` | `/chat/completions` |

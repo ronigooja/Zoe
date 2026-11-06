@@ -34,7 +34,7 @@ Decision:
 
 1. For client-target delegations, the upstream voice model alone decides when to delegate; Zoe does not classify chat. Zoe routes each received delegation with `zoe-triage`: a stateless LLM call that receives only the current sentence and returns one word: `progress`, `recall`, `memory`, or `task`. Any delegation outside the first three categories is `task`. The prompt contains definitions only, without example sentences. No history, no accumulated context.
 2. The model endpoint, model, and key file are configured like the memory model (`ZOE_TRIAGE_BASE_URL`, `ZOE_TRIAGE_MODEL`, `ZOE_TRIAGE_API_KEY_FILE`); empty base URL disables triage. The connection is long-lived and reused; requests are independent.
-3. Any error, timeout (default 2 s, no retry), or unrecognized output means `task`: the existing slow path. Failure never blocks or drops a request.
+3. For committed-turn classification, retry a failed or unrecognized result once within the remaining classification budget. The triage HTTP timeout defaults to 3000 ms (`ZOE_TRIAGE_TIMEOUT_MS`, range 200–10000). Exhausted failures persist `unclassified` and retain the existing slow task path. Failure never drops a request.
 4. The impact classification of [ADR 0009](0009-voice-steward-impact-policy.md) stays authoritative. A category never grants authority; high-impact requests keep the waiting/confirmation path regardless of category.
 5. Classification and gateway calls never run inside a database transaction.
 6. Fast paths read local evidence only: `progress` reads the task table; `recall` follows the bounded read-only route below; `memory` remains unimplemented. Recall does not create a task or fall back to a semantic search.
@@ -52,7 +52,11 @@ The stateless classifier routes committed voice handoffs; failures retain the sl
 When a handoff arrives before classification completes, wait outside the command
 transaction for the durable category and decision. `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS`
 configures both the classification deadline and handoff wait budget (default 4000,
-range 100–30000). Triage retains its 1500 ms sub-deadline. Run Steward only for
+range 100–30000). Both triage attempts share the remaining budget, without a
+separate fast-path sub-deadline. Progress text is recomputed immediately before
+every send, so delayed classification does not freeze elapsed seconds. Classification
+and handoff waiting stay outside transactions and do not hold up unrelated turns.
+Run Steward only for
 `task`; progress, recall and memory do not pay for a Steward call. Do not run it
 speculatively: non-task requests would consume unnecessary model calls. Memory
 still uses ordinary task admission; it has no implemented fast route.
@@ -64,7 +68,8 @@ model failure persists `unclassified` and retains the existing slow fallback.
 Late classification only persists routing metadata; the retried handoff alone
 admits effects, under the existing stable-turn uniqueness keys. Classification
 logs include `triage_ms`, `steward_ms`, `total_ms`, budget status and storage-error
-status, never sentence text or model errors.
+status, `attempts`, and `reason` (`none`, `triage_timeout`, or `triage_error`), never
+sentence text or model errors.
 
 ## Bounded recall route
 
