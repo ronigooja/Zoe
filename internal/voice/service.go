@@ -43,6 +43,7 @@ type Config struct {
 	ResultDeliveryInterval time.Duration
 	Classifier             Classifier
 	ClassificationTimeout  time.Duration
+	ConfirmationWindow     time.Duration
 	Summarizer             Summarizer
 	SummarySettleDelay     *time.Duration
 	Steward                TaskSteward
@@ -343,6 +344,9 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 func newService(db *sql.DB, cfg Config) *Service {
 	if cfg.ProgressMaxTaskAge <= 0 {
 		cfg.ProgressMaxTaskAge = DefaultProgressMaxTaskAge
+	}
+	if cfg.ConfirmationWindow <= 0 {
+		cfg.ConfirmationWindow = 10 * time.Minute
 	}
 	var base *url.URL
 	if raw := strings.TrimSpace(cfg.GatewayURL); raw != "" {

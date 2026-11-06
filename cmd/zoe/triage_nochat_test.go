@@ -11,9 +11,9 @@ import (
 	"testing"
 )
 
-func TestTriageCommandFiveCategoriesOnly(t *testing.T) {
+func TestTriageCommandBaseCategoriesOnly(t *testing.T) {
 	containerKeyFixture(t)
-	for _, category := range []string{"progress", "recall", "memory_write", "memory_read", "task", "memory", "chat", "unknown"} {
+	for _, category := range []string{"progress", "recall", "memory_write", "memory_read", "task", "cancel", "memory", "confirm", "decline", "chat", "unknown"} {
 		t.Run(category, func(t *testing.T) {
 			root := t.TempDir()
 			key := filepath.Join(root, "key")
@@ -29,7 +29,7 @@ func TestTriageCommandFiveCategoriesOnly(t *testing.T) {
 			}
 			var out, errOut bytes.Buffer
 			err := triageTestOperation([]string{"--root", root}, nil, &out, &errOut)
-			if category == "memory" || category == "chat" || category == "unknown" {
+			if category == "memory" || category == "chat" || category == "unknown" || category == "confirm" || category == "decline" {
 				if err == nil || !strings.Contains(out.String()+errOut.String(), "FAIL") {
 					t.Fatalf("command must fail for %q: err=%v out=%s stderr=%s", category, err, out.String(), errOut.String())
 				}

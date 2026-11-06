@@ -34,7 +34,7 @@ Observed on the AVAS route ([evidence](../../acceptance/evidence.md#instruction-
 
 Decision:
 
-1. For client-target delegations, the upstream voice model alone decides when to delegate; Zoe does not classify chat. Zoe routes each received delegation with `zoe-triage`: a stateless LLM call that receives only the current sentence and returns one category: `progress`, `recall`, `memory_write`, `memory_read`, or `task`. The legacy `memory` category is unknown and follows the existing retry/unclassified slow task fallback. The prompt contains definitions only, without example sentences. No history, no accumulated context. No keyword rules infer read/write semantics.
+1. For client-target delegations, the upstream voice model alone decides when to delegate; Zoe does not classify chat. Zoe routes each received delegation with a stateless LLM call returning `progress`, `recall`, `memory_write`, `memory_read`, `task`, or `cancel`. The legacy `memory` category is unknown and follows the existing retry/unclassified slow task fallback. Only when exactly one eligible held request exists, also offer `confirm` and `decline`, with its pending question as data beside the current utterance. The prompt contains definitions only, without example sentences. No history or accumulated context is sent. No keyword rules infer read/write or agreement semantics. See [held-task controls](#held-task-controls).
 2. The model endpoint, model, and key file are configured like the memory model (`ZOE_TRIAGE_BASE_URL`, `ZOE_TRIAGE_MODEL`, `ZOE_TRIAGE_API_KEY_FILE`); empty base URL disables triage. The connection is long-lived and reused; requests are independent.
 3. For committed-turn classification, retry a failed or unrecognized result once within the remaining classification budget. The triage HTTP timeout defaults to 3000 ms (`ZOE_TRIAGE_TIMEOUT_MS`, range 200–10000). Exhausted failures persist `unclassified` and retain the existing slow task path. Failure never drops a request.
 4. The impact classification of [ADR 0009](0009-voice-steward-impact-policy.md) stays authoritative. A category never grants authority; high-impact requests keep the waiting/confirmation path regardless of category.
@@ -149,15 +149,39 @@ Steward can both consume their full timeout; operators can raise it explicitly.
 Errors, timeouts, disabled configuration and unknown outputs dispatch ordinary
 requests. Existing hard high-impact markers take precedence and always ask.
 
-When Steward asks an intent question, the task uses existing `awaiting_message`
-and `task.append` resume semantics. Exact server confirmation phrases in a later
-turn on the same owned call append to the waiting task. Questions use the durable
-voice fast-reply delivery queue with the fixed read-as-is instruction. When a hard
-high-impact hold is admitted, enqueue its question through the same queue once
-per stable turn, followed by an explicit paused/not-yet-authorizable notice; do
-not imply that work has started. A high-impact hold remains the existing scoped
-`explicit_confirmation` boundary; creating a valid pre-run scoped challenge is
-still unimplemented and cannot be replaced by an intent reply.
+### Held-task controls
+
+When a live call has exactly one held task, accept model-classified `confirm` or
+`decline` only for that owner, workspace, session and generation. Eligible tasks
+are `waiting` or `awaiting_user`, with an `awaiting_message` or
+`explicit_confirmation` question, created during this session within
+`Config.ConfirmationWindow` (default ten minutes). Migration 217 persists task
+ID, version and question on the answering turn before model I/O. Recheck all three
+inside handoff's transaction; stale, ambiguous or other-session bindings never
+authorize anything. No sentence keywords decide agreement or refusal.
+
+When Steward asks, `confirm` reuses `task.append` with a canonical server-owned
+confirmation. A hard-impact admission creates a `task:admit` scoped challenge:
+its run reference is `admission:<task-id>`, not a runtime run; its digest binds
+task ID, goal, question, expected version, scope and expiry. The existing append
+validator records `task_confirmations`, clears the interaction and queues work.
+This authorizes only starting this task, never future runtime permissions.
+Runtime requests retain a real run/action digest, `runtime:permission` scope,
+version and expiry. No broader voice principal or endpoint permission is added.
+
+When triage returns `decline`, reuse `task.stop` with the fixed reply
+`OK, cancelled`. For `cancel`, stop only the newest nonterminal task linked to
+this owner and live generation, with `OK, stopped`; no match produces
+`Nothing is running.` Stop cancels tasks without live runs directly; live runs
+receive the existing desired-stop control and become canceled only after runner
+termination. Stable-turn retries do not repeat effects.
+
+When a held answer is unknown or times out, no task starts or resumes. Re-ask
+at most once per question/version with fixed text. A handoff deadline before
+durable classification still returns retryable `503 triage_timeout`. Without an
+eligible question, confirmation categories are not offered or accepted. Questions
+and fixed replies use the durable queue; logs contain IDs and timing, never
+utterance or question text. Component coverage is not live speech acceptance.
 
 When Worker executes a task, the compatibility profile selects the widest
 existing tier, `external_paths`, including edit, shell and subagents; the existing

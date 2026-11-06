@@ -152,7 +152,7 @@ func TestTriageChatStyleSendsChatCompletionsRequestShape(t *testing.T) {
 		t.Fatalf("body=%v", body)
 	}
 	messages := body["messages"].([]any)
-	if len(messages) != 2 || messages[0].(map[string]any)["content"] != instructions || messages[1].(map[string]any)["content"] != "sentence" {
+	if len(messages) != 2 || messages[0].(map[string]any)["content"] != instructions+"\nAllowed words: "+BaseWords+"." || messages[1].(map[string]any)["content"] != "sentence" {
 		t.Fatalf("messages=%v", messages)
 	}
 }

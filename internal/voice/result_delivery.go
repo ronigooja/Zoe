@@ -72,7 +72,7 @@ func (s *Service) classifyCommittedTurns(ctx context.Context) {
 
 func validCategory(category string) bool {
 	switch category {
-	case "progress", "recall", "memory_write", "memory_read", "task":
+	case "progress", "recall", "memory_write", "memory_read", "task", "confirm", "decline", "cancel":
 		return true
 	}
 	return false

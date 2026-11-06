@@ -28,6 +28,23 @@ delivery per session/media generation/text hash, and retries a failed send once
 on connection without failing call creation. Successful transport does not prove
 silence or compliance: whether upstream obeys must be verified in live calls.
 
+### Live-call held-task controls
+
+When deploying spoken task controls, apply voice migration 217 at normal server
+startup. `ZOE_VOICE_CONFIRMATION_WINDOW_SECONDS` bounds same-call held questions
+(default 600; valid range 1-3600). Configure the existing stateless triage model;
+without a classifier, speech does not authorize a held request. `zoe triage test`
+can return `progress`, `recall`, `memory`, `task`, or `cancel`; the standalone probe
+has no pending question, so `confirm` and `decline` are rejected there.
+
+When validating this route, check a held task and answer in the same live call,
+then verify task/interaction state and runner claims. Admission consent uses
+`task:admit`, never a runtime tool grant. Cancel is limited to the current owner,
+session and generation; running work stops only after runner acknowledgement.
+For binding, timeout, retry and scope rules, see
+[ADR 0012 held-task controls](../architecture/decisions/0012-voice-conversation-layer.md#held-task-controls).
+Local component tests do not establish real-provider or spoken-delivery acceptance.
+
 - `/opt/zoe/releases/current` selects the immutable server/runner release.
 - `zoe-compose.service` supervises the server, memory worker, and Qdrant.
 - `zoe-runner.service` runs the trusted execution runner.
