@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestRenderedOpenCodeConfigHasProfilesAndNoWildcardAllow(t *testing.T) {
+func TestRenderedOpenCodeConfigHasProfilesAndWorkerFullPermissions(t *testing.T) {
 	d := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(d, "system"), 0700); err != nil {
 		t.Fatal(err)
@@ -55,10 +55,24 @@ func TestRenderedOpenCodeConfigHasProfilesAndNoWildcardAllow(t *testing.T) {
 	if !ok || rule["action"] != "*" || rule["resource"] != "*" || rule["effect"] != "deny" {
 		t.Fatalf("rotation summarizer permissions=%v", permissions)
 	}
-	for _, id := range []string{"zoe-worker", "zoe-steward", "zoe-super"} {
+	for _, id := range []string{"zoe-worker", "zoe-super"} {
 		if _, exists := agents[id].(map[string]any)["permissions"]; exists {
 			t.Fatalf("%s unexpectedly has config permissions", id)
 		}
+	}
+	worker := agents["zoe-steward"].(map[string]any)
+	got, err := json.Marshal(worker["permissions"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	const snapshot = `[{"action":"*","resource":"*","effect":"deny"},{"action":"edit","resource":"*","effect":"allow"},{"action":"shell","resource":"*","effect":"allow"},{"action":"bash","resource":"*","effect":"allow"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"external_directory","resource":"*","effect":"allow"},{"action":"mcp*","resource":"*","effect":"allow"},{"action":"*","resource":"*","effect":"allow"}]`
+	var expected any
+	if err := json.Unmarshal([]byte(snapshot), &expected); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := json.Marshal(expected)
+	if string(got) != string(want) {
+		t.Fatalf("Worker permission JSON snapshot mismatch: got %s want %s", got, want)
 	}
 	if _, exists := cfg["permissions"]; exists {
 		t.Fatalf("global permissions must be absent: %v", cfg["permissions"])
@@ -81,6 +95,40 @@ func TestScraplingSettingsPrecedenceAndValidation(t *testing.T) {
 	}
 	if _, err := ParseScraplingSettings(map[string]string{"ZOE_SCRAPLING_MODE": "local", "ZOE_SCRAPLING_URL": "http://host/mcp"}); err == nil {
 		t.Fatal("local accepted remote URL")
+	}
+}
+
+func TestDeploymentResidentWorkerTierAndOtherProfilesPreserved(t *testing.T) {
+	root, data := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "zoe-runner.env"), []byte("ZOE_OPENCODE_MODEL=provider/model\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := ReleaseManifest{Images: map[string]ReleaseImage{
+		"zoe-server":        {Ref: "ghcr.io/test/server", Digest: "sha256:" + strings.Repeat("1", 64)},
+		"zoe-memory-worker": {Ref: "ghcr.io/test/memory", Digest: "sha256:" + strings.Repeat("2", 64)},
+	}}
+	if err := (Manager{}).writeDeploymentFiles(LifecycleOptions{Root: root, DataRoot: data, OptRoot: t.TempDir()}, manifest); err != nil {
+		t.Fatal(err)
+	}
+	values, err := readEnv(filepath.Join(root, "zoe-stack.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configured map[string]struct {
+		ID             string `json:"id"`
+		PermissionTier string `json:"permission_tier"`
+	}
+	if err := json.Unmarshal([]byte(values["ZOE_RUNTIME_PROFILES"]), &configured); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"worker", "zoe-worker", "zoe-super", "zoe-steward"} {
+		want := "external_paths"
+		if id == "zoe-steward" {
+			want = "full"
+		}
+		if configured[id].ID != id || configured[id].PermissionTier != want {
+			t.Errorf("deployment profile %s = %+v, want tier %s", id, configured[id], want)
+		}
 	}
 }
 
