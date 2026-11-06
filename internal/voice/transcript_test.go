@@ -337,7 +337,7 @@ func TestMigrationIsAdditiveAndKeepsExistingVoiceData(t *testing.T) {
 	_, store, _ := handoffHTTPServer(t)
 	// Reconstruct the version-210 database, removing newer dependent schema
 	// and its migration receipts together rather than leaving a history gap.
-	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('legacy','default','handoff-session',1,'legacy',1,'keep verbatim',X'01',?,'legacy'); DROP TRIGGER voice_summary_enqueue; DROP TRIGGER voice_summary_late_turn; DROP TABLE voice_summary_jobs; DROP TABLE voice_call_summaries; DROP TABLE voice_transcript_turns; DELETE FROM schema_migrations WHERE namespace='voice' AND version>=211`, transcriptAt); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('legacy','default','handoff-session',1,'legacy',1,'keep verbatim',X'01',?,'legacy'); ALTER TABLE voice_turns DROP COLUMN steward_decision; ALTER TABLE voice_turns DROP COLUMN resumed_task_id; DROP TRIGGER voice_summary_enqueue; DROP TRIGGER voice_summary_late_turn; DROP TABLE voice_summary_jobs; DROP TABLE voice_call_summaries; DROP TABLE voice_transcript_turns; DELETE FROM schema_migrations WHERE namespace='voice' AND version>=211`, transcriptAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Migrate(context.Background()); err != nil {
@@ -363,7 +363,10 @@ func TestMigrationSummaryJobsUpgrades211AndKeepsExistingVoiceData(t *testing.T) 
 	ctx := context.Background()
 	// Reconstruct exactly the schema/history before migration 212. Keep the
 	// session, delegated turn, raw transcript, and existing derived summary.
-	if _, err := store.DB().Exec(`DROP TRIGGER voice_summary_enqueue;
+	if _, err := store.DB().Exec(`ALTER TABLE voice_turns DROP COLUMN steward_decision;
+ALTER TABLE voice_turns DROP COLUMN resumed_task_id;
+DELETE FROM schema_migrations WHERE namespace='voice' AND version=214;
+DROP TRIGGER voice_summary_enqueue;
 DROP TRIGGER voice_summary_late_turn;
 DROP TABLE voice_summary_jobs;
 DELETE FROM schema_migrations WHERE namespace='voice' AND version=212;
@@ -400,7 +403,7 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 	if err := store.DB().QueryRow(`SELECT count(*) FROM voice_summary_jobs WHERE session_id='handoff-session' AND generation=1 AND status='pending'`).Scan(&jobs); err != nil || jobs != 1 {
 		t.Fatalf("upgraded enqueue jobs=%d err=%v", jobs, err)
 	}
-	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 212 {
+	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 214 {
 		t.Fatalf("post-upgrade version=%d err=%v", version, err)
 	}
 }

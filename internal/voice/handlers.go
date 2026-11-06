@@ -450,9 +450,13 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status='waiting',interaction_state=?,interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, interaction, question, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), admission.Task.ID, cmd.Principal.WorkspaceID); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
-		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?)`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, question, "steward_ask", at, at, at); err != nil {
-			return contracts.CommandResult{}, nil, err
+		// A hard-impact hold has no resumable scoped challenge yet. Do not
+		// speak an intent question that would imply a reply can authorize it.
+		if impact != "high" {
+			at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
+			if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?)`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, question, "steward_ask", at, at, at); err != nil {
+				return contracts.CommandResult{}, nil, err
+			}
 		}
 	}
 	handoffEvent, _ := json.Marshal(map[string]any{"task_id": admission.Task.ID, "turn_id": p.TurnID, "revision": p.Revision, "content_hash": p.ContentHash, "profile_id": "zoe-steward", "impact": impact, "status": status, "route": "slow", "category": category})
@@ -584,7 +588,14 @@ func (s *Service) classifyCommittedTurn(id string) {
 	category := "task"
 	var err error
 	if s.classifier != nil {
-		category, err = s.classifier.Classify(ctx, content)
+		// Triage retains its own fast-path deadline; the larger outer budget
+		// must not turn a slow progress classification into a fast-path reply.
+		triageCtx, triageCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		category, err = s.classifier.Classify(triageCtx, content)
+		if triageCtx.Err() != nil {
+			err = triageCtx.Err()
+		}
+		triageCancel()
 	}
 	if err != nil || !validCategory(category) {
 		category = "unclassified"

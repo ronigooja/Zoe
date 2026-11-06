@@ -280,6 +280,17 @@ Consequence recorded in [ADR 0011](../architecture/decisions/0011-profiles-permi
 
 ## Stateless Steward task admission fixtures - 2026-11-06
 
+Follow-up on main `c097e69`: the four hosted failure names from run
+`42156806235` and the summary-job upgrade fixture passed targeted local checks.
+The menu dispatch fixture selects renumbered key rotation; triage retains its
+independent 1.5-second deadline; hard-impact holds create no fast reply.
+Summary migration 212 is preserved and Steward uses 214, reserving 213 for recall.
+Version-210/211 upgrade fixtures remove both newer schema and receipts before
+reapplying migrations. The requested `TestHandoff|TestMenu|TestSteward` selection
+passed in voice and operator CLI packages. The rebased tree also passed a local
+serial Go build. These are local fixture/build observations, not hosted race or
+live deployment acceptance; no CI dispatch was made.
+
 Source: `feat/steward` based on `d444f5b`; environment: local macOS, fake HTTP
 models/gateway and in-memory SQLite. Targeted serial Go checks passed for strict
 stateless decisions, unsupported-route API fallback, errors/timeouts, eight
