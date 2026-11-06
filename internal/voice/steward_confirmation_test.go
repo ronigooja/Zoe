@@ -11,8 +11,10 @@ import (
 )
 
 func TestStewardSpokenConfirmationUsesExistingAppend(t *testing.T) {
-	ts, store, key := handoffHTTPServerWithConfig(t, Config{Steward: &fakeSteward{decision: steward.Ask}})
+	f := &pendingClassifier{category: "task"}
+	ts, store, key := handoffHTTPServerWithConfig(t, Config{Steward: &fakeSteward{decision: steward.Ask}, Classifier: f})
 	first := commitAndHandoff(t, ts, key, "intent-question", "please handle this")
+	f.category = "confirm"
 	answer := commitAndHandoff(t, ts, key, "intent-answer", "yes, proceed")
 	hash := sha256.Sum256([]byte("yes, proceed"))
 	code, replayed, raw := handoffCommand(t, ts.Client(), ts.URL, key, "intent-answer-replay", "voice.turn.handoff", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "intent-answer", "revision": 1, "content_hash": fmt.Sprintf("%x", hash[:])})
