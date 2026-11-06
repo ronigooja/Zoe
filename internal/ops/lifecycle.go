@@ -264,7 +264,11 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if err != nil {
 		return err
 	}
-	warnings := ModelKeyWarnings(triage, TriageConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, TriageConfig{BaseURL: summary.BaseURL, SecretPath: summary.SecretPath}, TriageConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath})
+	steward, err := d.StewardConfig()
+	if err != nil {
+		return err
+	}
+	warnings := ModelKeyWarnings(triage, steward, TriageConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, TriageConfig{BaseURL: summary.BaseURL, SecretPath: summary.SecretPath}, TriageConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath})
 	for _, warning := range warnings {
 		if o.Out != nil {
 			fmt.Fprintln(o.Out, warning)
@@ -990,7 +994,7 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 			}
 		}
 	}
-	for _, key := range []string{"ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_TRIAGE_API_STYLE", "ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_REASONING_EFFORT", "ZOE_TRIAGE_THINKING", "ZOE_TRIAGE_TIMEOUT_MS", "ZOE_TRIAGE_API_KEY_FILE"} {
+	for _, key := range []string{"ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_TRIAGE_API_STYLE", "ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_REASONING_EFFORT", "ZOE_TRIAGE_THINKING", "ZOE_TRIAGE_TIMEOUT_MS", "ZOE_TRIAGE_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE"} {
 		if value := strings.TrimSpace(oldStack[key]); value != "" {
 			stack[key] = value
 		}
@@ -1025,9 +1029,9 @@ func readEnvValue(path, wanted string) string {
 
 func defaultProfileValues(model string) (string, string, error) {
 	profiles := map[string]control.RuntimeProfile{
-		"worker":      {ID: "worker", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "worker", Agent: "zoe-worker", PermissionTier: "workspace_read_write", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"workspace.read", "workspace.write"}, Scopes: []string{"workspace"}},
-		"zoe-worker":  {ID: "zoe-worker", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "worker", Agent: "zoe-worker", PermissionTier: "workspace_read_write", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"workspace.read", "workspace.write"}, Scopes: []string{"workspace"}},
-		"zoe-steward": {ID: "zoe-steward", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "steward", Agent: "zoe-steward", PermissionTier: "read_only_research", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"research.read"}, Scopes: []string{"workspace"}},
+		"worker":      {ID: "worker", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "worker", Agent: "zoe-worker", PermissionTier: "external_paths", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, Scopes: []string{"workspace"}},
+		"zoe-worker":  {ID: "zoe-worker", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "worker", Agent: "zoe-worker", PermissionTier: "external_paths", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, Scopes: []string{"workspace"}},
+		"zoe-steward": {ID: "zoe-steward", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "worker", Agent: "zoe-steward", PermissionTier: "external_paths", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, Scopes: []string{"workspace"}},
 		"zoe-super":   {ID: "zoe-super", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "default", Role: "super", Agent: "zoe-super", PermissionTier: "external_paths", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, Scopes: []string{"workspace"}},
 	}
 	routes := map[string]runner.Route{
@@ -1153,7 +1157,7 @@ func isOperatorOwnedEnvKey(key string) bool {
 		return true
 	case "ZOE_VOICE_INGEST_TOKEN_FILE", "ZOE_VOICE_INGEST_ID", "ZOE_VOICE_INGEST_WORKSPACES":
 		return true
-	case "ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_TRIAGE_API_STYLE", "ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_REASONING_EFFORT", "ZOE_TRIAGE_THINKING", "ZOE_TRIAGE_TIMEOUT_MS", "ZOE_TRIAGE_API_KEY_FILE":
+	case "ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_TRIAGE_API_STYLE", "ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_REASONING_EFFORT", "ZOE_TRIAGE_THINKING", "ZOE_TRIAGE_TIMEOUT_MS", "ZOE_TRIAGE_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE":
 		return true
 	default:
 		return false

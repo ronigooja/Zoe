@@ -385,6 +385,9 @@ func handoffHTTPServerWithConfig(t *testing.T, voiceCfg Config) (*httptest.Serve
 	if _, _, err = control.InitializeInstanceAuth(ctx, store, key); err != nil {
 		t.Fatal(err)
 	}
+	if err = server.RegisterRunnerCredential(ctx, "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA", "steward-test-runner", []string{"default"}, []string{"runner:claim"}); err != nil {
+		t.Fatal(err)
+	}
 	ts := httptest.NewServer(server.Handler())
 	t.Cleanup(func() { ts.Close(); server.Shutdown(); _ = store.Close() })
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -465,8 +468,8 @@ func TestVoiceHandoffHTTPLowImpactUsesStewardTaskAdmission(t *testing.T) {
 	}
 }
 
-func TestVoiceHandoffHTTPFailClosedForHighImpactAndAmbiguousRequests(t *testing.T) {
-	for _, tc := range []struct{ name, text string }{{"high", "delete the old project"}, {"ambiguous", "please handle this"}} {
+func TestVoiceHandoffHTTPFailClosedForHighImpactRequests(t *testing.T) {
+	for _, tc := range []struct{ name, text string }{{"high", "delete the old project"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			ts, store, key := handoffHTTPServer(t)
 			hash := sha256.Sum256([]byte(tc.text))

@@ -177,6 +177,15 @@ func (d Deployment) MemoryConfig() (MemoryConfig, error) {
 }
 
 func (d Deployment) TriageConfig() (TriageConfig, error) {
+	return d.taskManagerConfig("TRIAGE")
+}
+
+// StewardConfig reads the independent stateless task-manager configuration.
+func (d Deployment) StewardConfig() (TriageConfig, error) {
+	return d.taskManagerConfig("STEWARD")
+}
+
+func (d Deployment) taskManagerConfig(kind string) (TriageConfig, error) {
 	c := TriageConfig{}
 	v, err := readEnv(d.StackEnv)
 	if os.IsNotExist(err) {
@@ -185,12 +194,12 @@ func (d Deployment) TriageConfig() (TriageConfig, error) {
 	if err != nil {
 		return c, err
 	}
-	c.BaseURL = v["ZOE_TRIAGE_BASE_URL"]
-	c.APIStyle = v["ZOE_TRIAGE_API_STYLE"]
-	c.Model = v["ZOE_TRIAGE_MODEL"]
-	c.ReasoningEffort = v["ZOE_TRIAGE_REASONING_EFFORT"]
-	c.Thinking = v["ZOE_TRIAGE_THINKING"]
-	c.SecretPath = v["ZOE_TRIAGE_API_KEY_FILE"]
+	c.BaseURL = v["ZOE_"+kind+"_BASE_URL"]
+	c.APIStyle = v["ZOE_"+kind+"_API_STYLE"]
+	c.Model = v["ZOE_"+kind+"_MODEL"]
+	c.ReasoningEffort = v["ZOE_"+kind+"_REASONING_EFFORT"]
+	c.Thinking = v["ZOE_"+kind+"_THINKING"]
+	c.SecretPath = v["ZOE_"+kind+"_API_KEY_FILE"]
 	return c, nil
 }
 

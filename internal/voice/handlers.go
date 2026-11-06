@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
+	"github.com/ronigooja/Zoe/internal/steward"
 )
 
 func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -351,10 +352,9 @@ type handoffPayload struct {
 }
 
 // commandHandoff is the server-owned boundary between a stable voice turn and
-// Steward. It deliberately does not accept an impact level or routing decision
-// from the caller. Low-impact research is admitted as a zoe-steward task;
-// high-impact or unknown requests are durably held for a later server-owned
-// confirmation flow and never become runnable work.
+// Worker. It deliberately does not accept an impact level or routing decision
+// from the caller. Ordinary requests dispatch unless the stateless Steward asks
+// an intent question; hard high-impact holds require scoped confirmation.
 func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest, server *control.Server) (contracts.CommandResult, []contracts.Event, error) {
 	if !control.HasScope(cmd.Principal, "client:command") && !control.HasScope(cmd.Principal, "voice:turn:commit") {
 		return contracts.CommandResult{}, nil, apiError(http.StatusForbidden, "forbidden", "voice handoff scope is required", nil)
@@ -383,9 +383,9 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if state != "active" || generation != p.Generation {
 		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_generation_stale", "voice handoff belongs to an inactive media generation", nil)
 	}
-	var taskID, content, storedCategory string
+	var taskID, content, storedCategory, stewardDecision string
 	var storedHash []byte
-	if err := tx.QueryRowContext(ctx, `SELECT coalesce(l.task_id,''),v.content,v.content_hash,coalesce(v.triage_category,'') FROM voice_turns v LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&taskID, &content, &storedHash, &storedCategory); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(l.task_id,nullif(v.resumed_task_id,''),''),v.content,v.content_hash,coalesce(v.triage_category,''),v.steward_decision FROM voice_turns v LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&taskID, &content, &storedHash, &storedCategory, &stewardDecision); errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(http.StatusNotFound, "voice_turn_not_found", "confirmed voice turn revision was not found", nil)
 	} else if err != nil {
 		return contracts.CommandResult{}, nil, err
@@ -401,6 +401,23 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		return contracts.CommandResult{ResourceType: "task", ResourceID: taskID}, nil, nil
 	}
 	content = strings.TrimSpace(content)
+	if control.IsExplicitConfirmation(content) {
+		// Match only this owner's pending intent question on this live call.
+		// Runtime permission challenges continue to use their scoped flow.
+		var pending string
+		err := tx.QueryRowContext(ctx, `SELECT t.id FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND l.session_id=? AND l.generation=? AND t.status='waiting' AND t.interaction_state='awaiting_message' AND t.interaction_run_id='' AND EXISTS (SELECT 1 FROM voice_fast_replies f WHERE f.session_id=l.session_id AND f.generation=l.generation AND f.turn_id=l.turn_id AND f.intent_kind='steward_ask') ORDER BY t.updated_at DESC LIMIT 1`, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.SessionID, p.Generation).Scan(&pending)
+		if err == nil {
+			result, events, err := server.AppendTaskTx(ctx, tx, cmd, pending, content)
+			if err != nil {
+				return result, events, err
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE voice_turns SET resumed_task_id=? WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, pending, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
+			return result, events, err
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return contracts.CommandResult{}, nil, err
+		}
+	}
 	impact := classifyHandoff(content)
 	if category == "progress" && impact != "high" {
 		text, err := s.progressReplyTx(ctx, tx, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.SessionID, p.TurnID, s.now())
@@ -420,15 +437,21 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	}
 	events := admission.Events
 	status := "queued"
-	if impact != "low" {
+	if impact == "high" || stewardDecision == "ask" {
 		status = "waiting"
-		// This is deliberately an incomplete explicit-confirmation context:
-		// there is no real run or proposed action yet, so inventing either would
-		// grant authority. task.append rejects this state with confirmation_invalid
-		// before inserting an entry or changing the task status. A future
-		// server-owned command must create the scoped run/action/expiry context.
-		question := "This spoken request needs a server-owned scoped confirmation before any high-impact action can run."
-		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status='waiting',interaction_state='explicit_confirmation',interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, question, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), admission.Task.ID, cmd.Principal.WorkspaceID); err != nil {
+		// Intent questions reuse task.append's awaiting_message policy. Hard
+		// high-impact holds retain incomplete explicit-confirmation context:
+		// inventing a run/action here would grant authority without evidence.
+		question := steward.Question(content)
+		interaction := "awaiting_message"
+		if impact == "high" {
+			interaction = "explicit_confirmation"
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status='waiting',interaction_state=?,interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, interaction, question, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), admission.Task.ID, cmd.Principal.WorkspaceID); err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
+		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
+		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?)`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, question, "steward_ask", at, at, at); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 	}
@@ -501,7 +524,7 @@ func classifyHandoff(content string) string {
 			return "low"
 		}
 	}
-	return "ambiguous"
+	return "low"
 }
 
 func (s *Service) commandCommitTurn(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
@@ -551,21 +574,32 @@ func (s *Service) commandCommitTurn(ctx context.Context, tx *sql.Tx, cmd control
 }
 
 func (s *Service) classifyCommittedTurn(id string) {
-	if s.classifier == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	var content, session, turn string
 	var generation, revision int64
 	if err := s.db.QueryRowContext(ctx, `SELECT content,session_id,generation,turn_id,revision FROM voice_turns WHERE id=? AND triage_category IS NULL`, id).Scan(&content, &session, &generation, &turn, &revision); err != nil {
 		return
 	}
-	category, err := s.classifier.Classify(ctx, content)
+	category := "task"
+	var err error
+	if s.classifier != nil {
+		category, err = s.classifier.Classify(ctx, content)
+	}
 	if err != nil || !validCategory(category) {
 		category = "unclassified"
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE voice_turns SET triage_category=? WHERE id=? AND triage_category IS NULL`, category, id)
+	decision := steward.Dispatch
+	if classifyHandoff(content) == "high" {
+		decision = steward.Ask
+	} else if s.steward != nil && category != "progress" {
+		answer, callErr := s.steward.Decide(ctx, content)
+		decision = steward.Resolve(answer, callErr, false)
+	}
+	// Persist using a fresh short context even if model I/O exhausted its deadline.
+	writeCtx, writeCancel := context.WithTimeout(context.Background(), time.Second)
+	defer writeCancel()
+	_, _ = s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_decision=? WHERE id=? AND triage_category IS NULL`, category, string(decision), id)
 	s.cacheTriage(triageKey(session, generation, turn, revision), category)
 }
 

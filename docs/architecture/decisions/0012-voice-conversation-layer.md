@@ -51,6 +51,38 @@ The stateless `zoe-triage` classifier is a configurable, startup-loaded client o
 
 ## Open questions (to measure before implementation)
 
+### Stateless task manager
+
+When a delegation reaches the task path, the Zoe-owned Steward receives only the
+current transcript sentence, with no history, memory, project layer, result
+validation, or result rewriting. Its exact output is `dispatch` or `ask`;
+whitespace is stripped, but case changes, punctuation, explanations and unknown
+values are rejected. Zoe supplies a fixed English or Chinese intent question;
+unsupported languages currently use the English fallback.
+
+When configured, `ZOE_STEWARD_BASE_URL`, `MODEL`, `API_KEY_FILE`, `API_STYLE`,
+`REASONING_EFFORT`, `THINKING`, and `TIMEOUT_MS` (each with the `ZOE_STEWARD_`
+prefix) select an independent model. Base URLs do not require `/v1`; auto style
+tries `/responses` then `/chat/completions` on unsupported-route responses.
+The default HTTP timeout is 2 seconds, with an overall 3-second deadline.
+Errors, timeouts, disabled configuration and unknown outputs dispatch ordinary
+requests. Existing hard high-impact markers take precedence and always ask.
+
+When Steward asks an intent question, the task uses existing `awaiting_message`
+and `task.append` resume semantics. Exact server confirmation phrases in a later
+turn on the same owned call append to the waiting task. Questions use the durable
+voice fast-reply delivery queue. A high-impact hold remains the existing scoped
+`explicit_confirmation` boundary; creating a valid pre-run scoped challenge is
+still unimplemented and cannot be replaced by an intent reply.
+
+When Worker executes a task, the compatibility profile selects the widest
+existing tier, `external_paths`, including edit, shell and subagents; the existing
+OpenCode harness and isolation-policy identifiers remain unchanged. The task
+model is configured, never hardcoded. **Risk:** this permits host-changing shell
+work and is not a sandbox or per-tool approval boundary. External-directory
+rules remain directory-scoped and unknown MCP tools remain denied by the
+existing ruleset. This is a bootstrap permission policy, not security acceptance.
+
 - Fast-path time to first audio end to end, not only upstream acknowledgement.
 - Whether long `speakable` content is summarized or altered by upstream; whether the lead-in sentence can be suppressed.
 - Behavior with several delegations in one call and with barge-in.
