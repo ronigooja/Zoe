@@ -39,9 +39,9 @@ func (s *Service) resultDispatcher() {
 	for {
 		select {
 		case <-t.C:
-			s.consumeResultEvents(context.Background())
-			s.dispatchResults(context.Background())
-			s.dispatchFastReplies(context.Background())
+			s.consumeResultEvents(s.recallCtx)
+			s.dispatchResults(s.recallCtx)
+			s.dispatchFastReplies(s.recallCtx)
 		case <-s.reaperStop:
 			return
 		}

@@ -17,7 +17,7 @@ Milestones sequence delivery without reducing product scope. The [acceptance mat
 
 ## Current status and blockers
 
-The bounded recall route has local fake-gateway/model regression coverage; see [its contract](architecture/decisions/0012-voice-conversation-layer.md#bounded-recall-route). Hosted integration, real speech/provider behavior and in-flight restart recovery remain open.
+The bounded recall route, leased fallback recovery and bounded shutdown-joined workers have local fake-gateway/model regression coverage; see [its contract](architecture/decisions/0012-voice-conversation-layer.md#bounded-recall-route). Hosted integration and real speech/provider behavior remain open.
 
 The [2026-10-29 voice deployment repair](acceptance/evidence.md#voice-deployment-configuration-repair--2026-10-29)
 restored the missing gateway credential mount and startup configuration on the

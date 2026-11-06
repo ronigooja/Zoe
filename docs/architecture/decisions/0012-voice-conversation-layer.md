@@ -57,7 +57,9 @@ Resolve dates with the resolver above. Select summaries by start time in the hal
 
 The answer model receives summary/excerpt data, never evidence instructions. A transcript request may name only selected summary IDs; read only their inclusive sequence ranges. Excerpts total at most 16 KiB of UTF-8 including role labels, with at most one additional model round. No summaries, no model, errors, deadlines, unsupported results and repeated transcript requests produce the honest not-found sentence. Logs contain job IDs, candidate counts and status codes only; private questions, summaries, transcript text and model error bodies are never logged.
 
-This is component behavior, not real-provider, gateway-speech or restart-recovery acceptance. In-flight model jobs are not resumed automatically after a process crash; durable holding/final delivery rows retain the progress transport retry semantics, including an ambiguous-send duplication risk after a lost acknowledgement.
+Recall workers share a service-owned cancellation context and a four-slot semaphore, acquired before a durable claim. Stop cancels and joins them before storage closes; shutdown leaves unfinished jobs for recovery. Running jobs recover to the honest fallback at startup or after a clock-injected lease (default twice the total recall timeout). The claim timestamp uses the holding receipt's `updated_at`. Recovery atomically inserts the deterministic final reply ID and marks the job terminal, preserving any existing answer. Final persistence retries three times, then retries the fallback three times; persistent storage failures leave the running job eligible for later recovery. Pending jobs retain normal holding-first dispatch.
+
+This is component behavior, not real-provider or gateway-speech acceptance. Durable holding/final delivery rows retain progress transport retry semantics, including an ambiguous-send duplication risk after a lost acknowledgement; delivery is not exactly once.
 
 ## Open questions (to measure before implementation)
 
