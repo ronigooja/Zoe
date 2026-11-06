@@ -31,7 +31,7 @@ func recallConfigureOperation(kind string, args []string, in io.Reader, out, err
 	root := fs.String("root", "/etc/zoe", "deployment configuration root")
 	base := fs.String("base-url", "", "model base URL")
 	model := fs.String("model", "", "model")
-	effort := fs.String("effort", "", "reasoning effort (low, medium, high, or empty)")
+	effort := fs.String("effort", "", "reasoning effort (none, low, medium, high, max, or empty)")
 	thinking := fs.String("thinking", "", "thinking (enabled, disabled, or empty)")
 	keyStdin := fs.Bool("key-stdin", false, "read private API key from stdin")
 	disable := fs.Bool("disable", false, "disable without deleting other settings")
@@ -158,7 +158,7 @@ func menuRecallModel(m ConfigureMenuIO, kind string) error {
 			}
 			return nil
 		}},
-		{"Reasoning effort (low/medium/high; empty keeps default)", &c.ReasoningEffort, ops.ValidateReasoningEffort},
+		{"Reasoning effort (none/low/medium/high/max; empty keeps default)", &c.ReasoningEffort, ops.ValidateReasoningEffort},
 		{"Thinking (Enter = provider default, disabled = faster, enabled)", &c.Thinking, func(v string) error {
 			if v != "" && v != "enabled" && v != "disabled" {
 				return errors.New("thinking must be enabled, disabled, or empty")
