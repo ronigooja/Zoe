@@ -84,10 +84,10 @@ func TestMenuUsesGroupedTwoDigitLabels(t *testing.T) {
 		return nil
 	}
 	var out, errOut bytes.Buffer
-	if err := menu(strings.NewReader("22\n0\n"), &out, &errOut); err != nil {
+	if err := menu(strings.NewReader("23\n0\n"), &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"Overview:", "1) Show status", "First-time setup", "System:", "3) Install host", "4) Update host", "5) Uninstall host", "Models:", "8) Configure memory model", "10) Configure triage model", "11) Test triage model", "12) Configure Steward model", "13) Test Steward model", "Voice:", "Access:", "21) Create instance key", "22) Rotate instance key", "23) Show client policy", "24) Set client policy"} {
+	for _, label := range []string{"Overview:", "1) Show status", "First-time setup", "System:", "3) Install host", "4) Update host", "5) Uninstall host", "Models:", "8) Configure memory model", "10) Configure triage model", "11) Test triage model", "12) Configure Steward model", "13) Test Steward model", "Voice:", "21) Configure voice instruction", "Access:", "22) Create instance key", "23) Rotate instance key", "24) Show client policy", "25) Set client policy"} {
 		if !strings.Contains(out.String(), label) {
 			t.Fatalf("menu missing %q: %s", label, out.String())
 		}

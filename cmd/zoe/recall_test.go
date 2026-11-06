@@ -17,7 +17,7 @@ func TestMaintenanceMenuListsSummaryAndAnswerItems(t *testing.T) {
 	if err := menuWithRoot(strings.NewReader("0\n"), &out, &errOut, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"14) Configure summary model", "15) Test summary model", "16) Configure answer model", "17) Test answer model", "18) Configure voice gateway", "24) Set client policy"} {
+	for _, label := range []string{"14) Configure summary model", "15) Test summary model", "16) Configure answer model", "17) Test answer model", "18) Configure voice gateway", "25) Set client policy"} {
 		if !strings.Contains(out.String(), label) {
 			t.Errorf("missing %s", label)
 		}
