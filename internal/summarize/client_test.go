@@ -57,17 +57,18 @@ func TestSummarizeRequestContainsWholeTranscriptWithSeqNumbers(t *testing.T) {
 	}
 }
 
-func TestSummarizeParsesValidTopicsAndRejectsGapsOverlapsAndOutOfRange(t *testing.T) {
+func TestSummarizeParsesValidTopicsWithGapsAndRejectsInvalidRanges(t *testing.T) {
 	for _, tc := range []struct {
 		name, output string
 		valid        bool
 	}{
 		{"valid", `[{"topic":"Documents","summary":"Documents on Monday.","first_seq":4,"last_seq":5},{"topic":"Budget","summary":"42 dollars.","first_seq":6,"last_seq":6}]`, true},
-		{"gap", `[{"topic":"a","summary":"b","first_seq":4,"last_seq":4},{"topic":"c","summary":"d","first_seq":6,"last_seq":6}]`, false},
+		{"gap", `[{"topic":"a","summary":"b","first_seq":4,"last_seq":4},{"topic":"c","summary":"d","first_seq":6,"last_seq":6}]`, true},
 		{"overlap", `[{"topic":"a","summary":"b","first_seq":4,"last_seq":5},{"topic":"c","summary":"d","first_seq":5,"last_seq":6}]`, false},
 		{"out_of_range", `[{"topic":"a","summary":"b","first_seq":4,"last_seq":7}]`, false},
-		{"missing_start", `[{"topic":"a","summary":"b","first_seq":5,"last_seq":6}]`, false},
-		{"missing_end", `[{"topic":"a","summary":"b","first_seq":4,"last_seq":5}]`, false},
+		{"missing_start", `[{"topic":"a","summary":"b","first_seq":5,"last_seq":6}]`, true},
+		{"missing_end", `[{"topic":"a","summary":"b","first_seq":4,"last_seq":5}]`, true},
+		{"unordered", `[{"topic":"a","summary":"b","first_seq":6,"last_seq":6},{"topic":"c","summary":"d","first_seq":4,"last_seq":4}]`, false},
 		{"reversed", `[{"topic":"a","summary":"b","first_seq":4,"last_seq":3}]`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,8 +77,16 @@ func TestSummarizeParsesValidTopicsAndRejectsGapsOverlapsAndOutOfRange(t *testin
 			if (err == nil) != tc.valid {
 				t.Fatalf("result=%v err=%v", result, err)
 			}
-			if tc.valid && (len(result) != 2 || result[1].FirstSeq != 6) {
-				t.Fatalf("result=%v", result)
+			if tc.valid {
+				var want []Summary
+				if err := json.Unmarshal([]byte(tc.output), &want); err != nil {
+					t.Fatal(err)
+				}
+				gotJSON, _ := json.Marshal(result)
+				wantJSON, _ := json.Marshal(want)
+				if string(gotJSON) != string(wantJSON) {
+					t.Fatalf("result=%v", result)
+				}
 			}
 		})
 	}
@@ -97,6 +106,26 @@ func TestSummarizeRejectsNonJSONAndEmptyFields(t *testing.T) {
 	})
 	if _, err := c.Summarize(context.Background(), []Turn{{Seq: 0, Role: "user", Text: "Agreed."}}); err == nil {
 		t.Fatal("missing sequence fields accepted as zero")
+	}
+}
+
+func TestSummarizeWhitespaceSkipsModel(t *testing.T) {
+	c := testClient(t, func(http.ResponseWriter, *http.Request) { t.Error("whitespace called model") })
+	result, err := c.Summarize(context.Background(), []Turn{{Seq: 0, Text: " \n\t\u2003"}})
+	if err != nil || len(result) != 0 {
+		t.Fatalf("whitespace result=%v err=%v", result, err)
+	}
+}
+
+func TestSummarizeSparseTranscriptEndpoints(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		respond(w, `[{"topic":"Plan","summary":"Agreed.","first_seq":4,"last_seq":6}]`)
+	})
+	if _, err := c.Summarize(context.Background(), []Turn{{Seq: 4, Text: "plan"}, {Seq: 6, Text: "agreed"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate([]Turn{{Seq: 4, Text: "plan"}, {Seq: 6, Text: "agreed"}}, []Summary{{Topic: "Plan", Summary: "Agreed.", FirstSeq: 5, LastSeq: 6}}); err == nil {
+		t.Fatal("nonexistent endpoint accepted")
 	}
 }
 

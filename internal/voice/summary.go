@@ -7,7 +7,6 @@ import (
 	"log"
 	"math"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -91,7 +90,11 @@ func (w *summaryWorker) step(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(turns) > 0 && w.model == nil {
+	input := make([]summarize.Turn, len(turns))
+	for i, t := range turns {
+		input[i] = summarize.Turn{Seq: int(t.Seq), Role: t.Role, Text: t.Text}
+	}
+	if summarize.HasText(input) && w.model == nil {
 		_, err = w.db.ExecContext(ctx, `UPDATE voice_summary_jobs SET status='pending',reason='model_not_configured',next_attempt_ms=0 WHERE session_id=? AND generation=? AND next_attempt_ms<=? AND reason<> 'model_not_configured'`, session, generation, now.UnixMilli())
 		return err
 	}
@@ -106,11 +109,7 @@ func (w *summaryWorker) step(ctx context.Context) error {
 	}
 	var result []summarize.Summary
 	reason := ""
-	if len(turns) > 0 {
-		input := make([]summarize.Turn, len(turns))
-		for i, t := range turns {
-			input[i] = summarize.Turn{Seq: int(t.Seq), Role: t.Role, Text: t.Text}
-		}
+	if summarize.HasText(input) {
 		callCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		result, err = w.model.Summarize(callCtx, input)
 		cancel()
@@ -184,23 +183,9 @@ func (w *summaryWorker) step(ctx context.Context) error {
 }
 
 func validSummaryRanges(turns []TranscriptTurn, result []summarize.Summary) bool {
-	if len(result) == 0 {
-		return false
+	input := make([]summarize.Turn, len(turns))
+	for i, t := range turns {
+		input[i] = summarize.Turn{Seq: int(t.Seq), Role: t.Role, Text: t.Text}
 	}
-	i := 0
-	for _, s := range result {
-		if strings.TrimSpace(s.Topic) == "" || strings.TrimSpace(s.Summary) == "" || i >= len(turns) || int64(s.FirstSeq) != turns[i].Seq || s.LastSeq < s.FirstSeq {
-			return false
-		}
-		for seq := int64(s.FirstSeq); seq <= int64(s.LastSeq); seq++ {
-			if i >= len(turns) || turns[i].Seq != seq {
-				return false
-			}
-			i++
-			if seq == math.MaxInt64 {
-				break
-			}
-		}
-	}
-	return i == len(turns)
+	return summarize.Validate(input, result) == nil
 }
