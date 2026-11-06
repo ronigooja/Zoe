@@ -27,6 +27,7 @@ func menuVoiceInstruction(m ConfigureMenuIO) error {
 		mode = "off (disabled)"
 	}
 	fmt.Fprintf(m.Out, "Current voice instruction (%s):\n%s\n", mode, effective)
+	fmt.Fprintln(m.Out, "Sent verbatim as instructions in each gateway create-session request; no prefix.")
 	fmt.Fprint(m.Out, "New instruction (single line; off disables; Enter restores default): ")
 	text, err := inputLine(m.In)
 	if err != nil {

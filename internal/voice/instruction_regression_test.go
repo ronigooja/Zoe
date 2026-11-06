@@ -1,54 +1,24 @@
 package voice
 
-import (
-	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"testing"
+import "testing"
 
-	"github.com/ronigooja/Zoe/contracts"
-)
+func TestInstructionDefaultExact(t *testing.T) {
+	const expected = `## 身份与角色
+你是用户的语音助手,负责说话和听话。查资料、联网、操作文件或设备、记忆、过去的通话和任务进度,这些事你自己都做不了,也不要自己回答,一律委托出去。
 
-// This test deliberately uses the old API too, so it demonstrates the missing
-// call-start delivery on the pre-change baseline rather than a compilation error.
-func TestInstructionDefaultBeforeSDPAndCreateReplay(t *testing.T) {
-	const expected = "Standing rule for you, do not read this aloud or acknowledge it: 你是语音入口。问候、感谢、闲聊、观点这类不需要查资料的话,你自己直接回答。其余一律委托,不要自己回答:需要查资料、联网、操作文件或设备的请求;问之前交办的事做到哪了、好了没有;问以前的通话里说过什么、做过什么;让你记住或回忆我的个人信息。委托之后等结果再说,不要自己编结果,也不要说没有记录。"
-	var pushes, creates int
-	gateway := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/voice/sessions":
-			creates++
-			_ = json.NewEncoder(w).Encode(map[string]any{"voice_session_id": "gateway-instruction", "voice_session_generation": 3, "answer_sdp": "answer"})
-		case "/v1/voice/sessions/gateway-instruction/context":
-			pushes++
-			var body map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 1 || body["text"] != expected {
-				t.Errorf("instruction body differs from standing rule; decode error=%v", err)
-			}
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			t.Errorf("unexpected gateway path %s", r.URL.Path)
-		}
-	}))
-	defer gateway.Close()
-	_, svc := newVoiceTestService(t, Config{GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), UpstreamRoute: "avas"})
-	// newVoiceTestService isolates unrelated legacy tests from instruction pushes.
-	// Use the production default here without depending on new configuration fields.
-	svc.recall = Config{UpstreamRoute: "avas"}
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "instruction-user", DeviceID: "device"}
-	req := createRequest{RequestID: "instruction-request", OfferSDP: "offer"}
-	created, err := svc.create(context.Background(), p, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pushes != 1 || created.AnswerSDP != "answer" {
-		t.Fatalf("instruction pushes before SDP return=%d, want 1; answer=%q", pushes, created.AnswerSDP)
-	}
-	if _, err := svc.create(context.Background(), p, req); err != nil {
-		t.Fatal(err)
-	}
-	if pushes != 1 || creates != 1 {
-		t.Fatalf("replay pushes=%d creates=%d, want one each", pushes, creates)
+## 委托规则
+- 凡是动作和任务,一律委托。拿不准要不要委托,就委托。
+- 只有明显不需要任何资料的话,才自己直接答:问候、感谢、闲聊、观点。
+- 不要拒绝,不要说自己做不了、没有记录、查不到。这些由委托的结果来回答。
+- 任务进行中用户补充要求或更正,立刻委托,不要说无法修改或中断。
+- 不要自己编结果,不要预测结果。委托之后只说一句很短的等待的话。
+
+## 收到结果之后
+- 不要向用户提到委托、系统或任何内部分工,对用户来说你就是一个助手。
+
+## 说话方式
+- 简短,自然,不复述用户的话,不预告计划,不重复确认。`
+	if DefaultInstructionText != expected {
+		t.Fatal("default instruction differs from the approved system prompt")
 	}
 }

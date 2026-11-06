@@ -17,16 +17,26 @@ the built-in Chinese delegation rule (valid UTF-8, at most 6000 bytes). An unset
 or empty value uses the default: upstream answers greetings, thanks, casual chat
 and opinions directly, delegates research, actions, task progress, past-call
 recall and personal-memory requests, and waits for Zoe rather than inventing a
-result or claiming records are unavailable. Literal `off` disables the push.
+result or claiming records are unavailable. Literal `off` omits `instructions`.
 Use maintenance menu item **21) Configure voice instruction** to view the effective
 default, custom text or disabled state and save a single-line replacement; empty
 input removes the key to restore the default. The atomic stack-env writer escapes
 quotes, newlines and dollar signs for literal Compose parsing. Apply saved changes
-with `zoe update`, which preserves custom values. Zoe sends
-the rule with the fixed prefix `Standing rule for you, do not read this aloud or acknowledge it: ` before returning SDP, records
-delivery per session/media generation/text hash, and retries a failed send once
-on connection without failing call creation. Successful transport does not prove
+with `zoe update`, which preserves custom values. For every gateway create-session
+request, including reconnects, Zoe sends the resolved rule verbatim in the top-level
+`instructions` field alongside `opening_context`. The gateway writes it unchanged
+into AVAS `session.instructions`. No prefix, post-create context push, or connected
+retry is used. Migration 215 and its historical delivery rows remain intact; this
+path no longer writes separate delivery rows. Successful transport does not prove
 silence or compliance: whether upstream obeys must be verified in live calls.
+
+When inspecting AVAS opening-context evidence, `unsupported` means no recognized
+create-response acknowledgement, not that Zoe attempted a live context push.
+The gateway must return `opening_context: {"applied": true}` (with `silent`
+omitted, null, or true) for `delivered`; `silent: "unverified"` remains unverified.
+Return top-level `context_chars` to report the gateway's applied character count;
+an omitted count decodes as zero. These fields describe opening context, not the
+separate `instructions` system prompt.
 
 ### Live-call held-task controls
 

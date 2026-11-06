@@ -151,6 +151,7 @@ type gatewaySessionRequest struct {
 	VoiceMode      string          `json:"voice_mode,omitempty"`
 	LanguageCode   string          `json:"language_code,omitempty"`
 	OpeningContext *openingContext `json:"opening_context,omitempty"`
+	Instructions   string          `json:"instructions,omitempty"`
 }
 
 type gatewaySessionResponse struct {
@@ -735,7 +736,10 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	}
 	// The gateway owns account selection and returns only its opaque sticky
 	// session handle. Zoe never receives or records an account credential/id.
-	gatewayBody, _ := json.Marshal(gatewaySessionRequest{OfferSDP: req.OfferSDP, Voice: req.Voice, VoiceMode: req.VoiceMode, LanguageCode: req.LanguageCode, OpeningContext: opening})
+	// Startup rejects invalid configuration. Keep media creation safe if an
+	// internally constructed service nevertheless contains invalid text.
+	instructions, _ := ResolveInstructionText(s.recall.InstructionText)
+	gatewayBody, _ := json.Marshal(gatewaySessionRequest{OfferSDP: req.OfferSDP, Voice: req.Voice, VoiceMode: req.VoiceMode, LanguageCode: req.LanguageCode, OpeningContext: opening, Instructions: instructions})
 	gatewayRequestID := uuid.NewString()
 	if err := s.persistGatewayRequestID(ctx, id, gatewayRequestID); err != nil {
 		_ = s.markSession(context.WithoutCancel(ctx), id, "failed", "gateway_request_id_persist_failed", nil, "")
@@ -801,7 +805,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	if upstream.OpeningContext != nil && upstream.OpeningContext.Silent == "unverified" {
 		openingDelivery = []byte("unverified")
 	}
-	if upstream.OpeningContext != nil && upstream.OpeningContext.Silent == nil && upstream.OpeningContext.Applied {
+	if upstream.OpeningContext != nil && (upstream.OpeningContext.Silent == nil || upstream.OpeningContext.Silent == true) && upstream.OpeningContext.Applied {
 		openingDelivery = []byte("delivered")
 	}
 	// The gateway's account ID is sensitive correlation data. Persist only the
@@ -852,7 +856,6 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	} else if _, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET gateway_media_generation=? WHERE id=? AND state='active'`, upstream.VoiceSessionGeneration, id); err != nil {
 		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_outcome_unknown", "media generation could not be durably bound; account pool remains isolated", nil)
 	}
-	s.deliverInstruction(ctx, id, false)
 	return sessionResponse{SessionID: id, Generation: 1, State: "active", AnswerSDP: upstream.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, OpeningContextDelivery: string(openingDelivery), OpeningContextVersion: openingVersion, OpeningContextChars: openingChars, GatewayContextChars: upstream.ContextChars}, nil
 }
 

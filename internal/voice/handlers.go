@@ -136,7 +136,6 @@ func (s *Service) handleConnected(w http.ResponseWriter, r *http.Request) {
 		control.WriteError(w, apiError(http.StatusConflict, "voice_generation_stale", "active voice generation was not found", nil))
 		return
 	}
-	s.deliverInstruction(r.Context(), r.PathValue("session_id"), true)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": "active"})
 }
 

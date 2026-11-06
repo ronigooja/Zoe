@@ -32,8 +32,8 @@ func TestMaintenanceMenuVoiceInstructionShowsEffectiveDefaultAndCustom(t *testin
 			t.Fatal("effective instruction not shown")
 		}
 	}
-	if strings.Contains(out.String(), voice.InstructionPrefix) {
-		t.Fatal("internal prefix shown in menu")
+	if !strings.Contains(out.String(), "Sent verbatim as instructions in each gateway create-session request; no prefix.") {
+		t.Fatal("create-session delivery help missing")
 	}
 }
 
