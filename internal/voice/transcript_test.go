@@ -337,6 +337,9 @@ func TestMigrationIsAdditiveAndKeepsExistingVoiceData(t *testing.T) {
 	_, store, _ := handoffHTTPServer(t)
 	// Reconstruct the version-210 database, removing newer dependent schema
 	// and its migration receipts together rather than leaving a history gap.
+	if _, err := store.DB().Exec(`DROP TABLE voice_instruction_deliveries; DELETE FROM schema_migrations WHERE namespace='voice' AND version=215`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('legacy','default','handoff-session',1,'legacy',1,'keep verbatim',X'01',?,'legacy'); ALTER TABLE voice_turns DROP COLUMN steward_decision; ALTER TABLE voice_turns DROP COLUMN resumed_task_id; DROP TRIGGER voice_summary_enqueue; DROP TRIGGER voice_summary_late_turn; DROP TABLE voice_summary_jobs; DROP TABLE voice_recall_jobs; DROP TABLE voice_call_summaries; DROP TABLE voice_transcript_turns; DELETE FROM schema_migrations WHERE namespace='voice' AND version>=211`, transcriptAt); err != nil {
 		t.Fatal(err)
 	}
