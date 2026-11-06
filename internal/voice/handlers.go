@@ -366,10 +366,9 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if p.SessionID == "" || p.Generation < 1 || p.TurnID == "" || p.Revision < 1 || len(p.ContentHash) != sha256.Size*2 {
 		return contracts.CommandResult{}, nil, apiError(http.StatusBadRequest, "invalid_request", "session, generation, turn revision, and content hash are required", nil)
 	}
-	// ExecuteCommand begins its transaction before invoking handlers and exposes
-	// no post-commit hook. Classify through the service DB before the handler's
-	// first transaction read; this keeps classifier I/O and its write off tx.
-	category := s.waitForTriageCache(ctx, p.SessionID, p.Generation, p.TurnID, p.Revision)
+	// Classification preparation runs before ExecuteCommand acquires its sole
+	// database connection. Read the durable routing decision inside this tx.
+	category := ""
 	var owner, device, state string
 	var generation int64
 	if err := tx.QueryRowContext(ctx, `SELECT owner_id,device_id,state,generation FROM voice_sessions WHERE workspace_id=? AND id=?`, cmd.Principal.WorkspaceID, p.SessionID).Scan(&owner, &device, &state, &generation); errors.Is(err, sql.ErrNoRows) {
@@ -600,7 +599,8 @@ func (s *Service) commandCommitTurn(ctx context.Context, tx *sql.Tx, cmd control
 }
 
 func (s *Service) classifyCommittedTurn(id string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), s.classificationTimeout())
 	defer cancel()
 	var content, session, turn string
 	var generation, revision int64
@@ -609,6 +609,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 	}
 	category := "task"
 	var err error
+	triageStarted := time.Now()
 	if s.classifier != nil {
 		// Triage retains its own fast-path deadline; the larger outer budget
 		// must not turn a slow progress classification into a fast-path reply.
@@ -622,18 +623,27 @@ func (s *Service) classifyCommittedTurn(id string) {
 	if err != nil || !validCategory(category) {
 		category = "unclassified"
 	}
+	triageMS := time.Since(triageStarted).Milliseconds()
+	stewardMS := int64(0)
 	decision := steward.Dispatch
 	if classifyHandoff(content) == "high" {
 		decision = steward.Ask
-	} else if s.steward != nil && category != "progress" {
+	} else if s.steward != nil && category == "task" {
+		stewardStarted := time.Now()
 		answer, callErr := s.steward.Decide(ctx, content)
 		decision = steward.Resolve(answer, callErr, false)
+		stewardMS = time.Since(stewardStarted).Milliseconds()
 	}
 	// Persist using a fresh short context even if model I/O exhausted its deadline.
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), time.Second)
 	defer writeCancel()
-	_, _ = s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_decision=? WHERE id=? AND triage_category IS NULL`, category, string(decision), id)
-	s.cacheTriage(triageKey(session, generation, turn, revision), category)
+	res, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_decision=? WHERE id=? AND triage_category IS NULL`, category, string(decision), id)
+	if writeErr == nil {
+		if n, _ := res.RowsAffected(); n == 1 {
+			s.cacheTriage(triageKey(session, generation, turn, revision), category)
+		}
+	}
+	log.Printf("voice_classification id=%s triage_ms=%d steward_ms=%d total_ms=%d budget_hit=%t storage_error=%t", id, triageMS, stewardMS, time.Since(started).Milliseconds(), ctx.Err() != nil, writeErr != nil)
 }
 
 func (s *Service) handleTurns(w http.ResponseWriter, r *http.Request) {

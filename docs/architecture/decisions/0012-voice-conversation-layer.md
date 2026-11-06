@@ -49,6 +49,23 @@ Historical prerequisites observed before transcript ingestion:
 
 The stateless classifier routes committed voice handoffs; failures retain the slow path. High-impact admission remains authoritative.
 
+When a handoff arrives before classification completes, wait outside the command
+transaction for the durable category and decision. `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS`
+configures both the classification deadline and handoff wait budget (default 4000,
+range 100–30000). Triage retains its 1500 ms sub-deadline. Run Steward only for
+`task`; progress, recall and memory do not pay for a Steward call. Do not run it
+speculatively: non-task requests would consume unnecessary model calls. Memory
+still uses ordinary task admission; it has no implemented fast route.
+
+When the handoff budget expires before a durable decision exists, return retryable
+`503 triage_timeout` without a receipt, task or reply. Log the turn row ID and wait
+milliseconds with `budget_hit=true`; no schema migration is needed. A completed
+model failure persists `unclassified` and retains the existing slow fallback.
+Late classification only persists routing metadata; the retried handoff alone
+admits effects, under the existing stable-turn uniqueness keys. Classification
+logs include `triage_ms`, `steward_ms`, `total_ms`, budget status and storage-error
+status, never sentence text or model errors.
+
 ## Bounded recall route
 
 When triage selects `recall` and the impact gate allows the read-only path, persist a holding reply and a turn-idempotent recall job without creating a task. Run model work outside transactions only after the holding delivery receipt. Reuse progress delivery leases, receipts, generation fencing and gateway retry limits for both plain `/context` messages. Recall text has a fixed read-as-is instruction; malformed markup or empty answers become the honest not-found sentence.
@@ -86,7 +103,8 @@ When configured, `ZOE_STEWARD_BASE_URL`, `MODEL`, `API_KEY_FILE`, `API_STYLE`,
 `REASONING_EFFORT`, `THINKING`, and `TIMEOUT_MS` (each with the `ZOE_STEWARD_`
 prefix) select an independent model. Base URLs do not require `/v1`; auto style
 tries `/responses` then `/chat/completions` on unsupported-route responses.
-The default HTTP timeout is 2 seconds, with an overall 3-second deadline.
+The default Steward HTTP timeout is 2 seconds, within the shared classification
+deadline defined in [routing](#routing-stateless-triage-decided-2026-11-06).
 Errors, timeouts, disabled configuration and unknown outputs dispatch ordinary
 requests. Existing hard high-impact markers take precedence and always ask.
 

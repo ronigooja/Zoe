@@ -211,6 +211,7 @@ type Server struct {
 	store              *storage.Store
 	cfg                Config
 	commands           map[string]CommandHandler
+	commandPreflights  map[string]func(context.Context, contracts.Principal, contracts.CommandRequest) error
 	taskSources        map[string]TaskSourceAdmissionHandler
 	taskDispatchGuards map[string]TaskDispatchGuard
 	public             *http.ServeMux
@@ -441,6 +442,25 @@ func (s *Server) RegisterCommand(kind string, h CommandHandler) error {
 		return fmt.Errorf("command %q already registered", kind)
 	}
 	s.commands[kind] = h
+	return nil
+}
+
+// RegisterCommandPreflight applies to bounded feature preparation that must run
+// before acquiring the command transaction. Authorization and mutation remain
+// the command handler's responsibility and are checked again transactionally.
+func (s *Server) RegisterCommandPreflight(kind string, prepare func(context.Context, contracts.Principal, contracts.CommandRequest) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sealed || prepare == nil || s.commands[kind] == nil {
+		return errors.New("preflight requires an unsealed registered command")
+	}
+	if s.commandPreflights == nil {
+		s.commandPreflights = make(map[string]func(context.Context, contracts.Principal, contracts.CommandRequest) error)
+	}
+	if s.commandPreflights[kind] != nil {
+		return errors.New("command preflight already registered")
+	}
+	s.commandPreflights[kind] = prepare
 	return nil
 }
 

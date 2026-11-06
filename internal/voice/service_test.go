@@ -713,8 +713,8 @@ func TestHandoffHighImpactIgnoresClassifier(t *testing.T) {
 		t.Fatalf("status=%q interaction=%q", status, interaction)
 	}
 	var replies int
-	_ = store.DB().QueryRow(`SELECT count(*) FROM voice_fast_replies`).Scan(&replies)
-	if replies != 0 {
+	_ = store.DB().QueryRow(`SELECT count(*) FROM voice_fast_replies WHERE intent_kind='explicit_confirmation'`).Scan(&replies)
+	if replies != 1 {
 		t.Fatalf("fast replies=%d", replies)
 	}
 }

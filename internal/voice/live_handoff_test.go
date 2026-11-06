@@ -1,11 +1,13 @@
 package voice
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,19 +20,34 @@ import (
 )
 
 // delayedLiveClassifier reproduces a model completing after handoff starts.
-type delayedLiveClassifier struct{}
+type delayedLiveClassifier struct{ delay time.Duration }
 
-func (delayedLiveClassifier) Classify(ctx context.Context, _ string) (string, error) {
+func (f delayedLiveClassifier) Classify(ctx context.Context, _ string) (string, error) {
 	select {
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(f.delay):
 		return "recall", nil
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
 }
 
+type delayedLiveSteward struct{ delay time.Duration }
+
+func (f delayedLiveSteward) Decide(ctx context.Context, _ string) (steward.Decision, error) {
+	select {
+	case <-time.After(f.delay):
+		return steward.Dispatch, nil
+	case <-ctx.Done():
+		return steward.Dispatch, ctx.Err()
+	}
+}
+
 func TestLiveRecallHTTPProductionAnswerWiring(t *testing.T) {
 	const question = "上一次通话咱们聊了什么"
+	var logs bytes.Buffer
+	previousLog := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previousLog)
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if !strings.Contains(string(body), "今日天气查询") || !strings.Contains(string(body), question) {
@@ -55,7 +72,7 @@ func TestLiveRecallHTTPProductionAnswerWiring(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer gateway.Close()
-	cfg := Config{Classifier: delayedLiveClassifier{}, Steward: &fakeSteward{decision: steward.Dispatch}, Answerer: client, GatewayURL: gateway.URL, GatewayAPIKey: "fake-key", HTTPClient: gateway.Client()}
+	cfg := Config{Classifier: delayedLiveClassifier{1200 * time.Millisecond}, Steward: delayedLiveSteward{1500 * time.Millisecond}, Answerer: client, GatewayURL: gateway.URL, GatewayAPIKey: "fake-key", HTTPClient: gateway.Client()}
 	ts, store, key := handoffHTTPServerWithConfig(t, cfg)
 	_, err = store.DB().Exec(`UPDATE voice_sessions SET gateway_session_id='gateway' WHERE id='handoff-session';
 INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) SELECT 'previous-call',workspace_id,owner_id,device_id,'previous-request',X'01',1,'ended',created_at,updated_at FROM voice_sessions WHERE id='handoff-session';
@@ -63,7 +80,14 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 	if err != nil {
 		t.Fatal(err)
 	}
-	commitAndHandoff(t, ts, key, "live-recall", question)
+	if code, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "commit-live-recall", "voice.turn.commit", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "live-recall", "revision": 1, "content": question, "user_confirmed": true}); code != http.StatusOK {
+		t.Fatalf("commit: %d %s", code, raw)
+	}
+	time.Sleep(300 * time.Millisecond)
+	hash := sha256.Sum256([]byte(question))
+	if code, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-live-recall", "voice.turn.handoff", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "live-recall", "revision": 1, "content_hash": fmt.Sprintf("%x", hash[:])}); code != http.StatusOK {
+		t.Fatalf("handoff: %d %s", code, raw)
+	}
 	var holdings, jobs, tasks int
 	if err := store.DB().QueryRow(`SELECT (SELECT count(*) FROM voice_fast_replies WHERE intent_kind='recall_holding'),(SELECT count(*) FROM voice_recall_jobs),(SELECT count(*) FROM tasks)`).Scan(&holdings, &jobs, &tasks); err != nil {
 		t.Fatal(err)
@@ -88,6 +112,88 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 	defer mu.Unlock()
 	if len(pushes) != 2 || pushes[1] != recallPrefix+"上次通话我们聊了今天的天气。" {
 		t.Fatalf("holding then grounded answer: %q", pushes)
+	}
+	if strings.Contains(logs.String(), question) || !strings.Contains(logs.String(), "triage_ms=") || !strings.Contains(logs.String(), "steward_ms=0") || !strings.Contains(logs.String(), "wait_ms=") {
+		t.Fatalf("classification log missing metrics or leaked sentence: %s", logs.String())
+	}
+}
+
+func TestLiveHandoffBudgetTimeoutIsRetryableWithoutEffects(t *testing.T) {
+	ts, store, key := handoffHTTPServerWithConfig(t, Config{ClassificationTimeout: 30 * time.Millisecond})
+	const question = "上一次通话咱们聊了什么"
+	hash := sha256.Sum256([]byte(question))
+	_, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('late-id','default','handoff-session',1,'late',1,?,?,?,'late-commit')`, question, hash[:], time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "late", "revision": 1, "content_hash": fmt.Sprintf("%x", hash[:])}
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previous)
+	code, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "late-handoff", "voice.turn.handoff", payload)
+	if code != http.StatusServiceUnavailable || !strings.Contains(raw, "triage_timeout") {
+		t.Fatalf("timeout: %d %s", code, raw)
+	}
+	var effects int
+	if err := store.DB().QueryRow(`SELECT (SELECT count(*) FROM tasks)+(SELECT count(*) FROM voice_recall_jobs)+(SELECT count(*) FROM voice_fast_replies)`).Scan(&effects); err != nil {
+		t.Fatal(err)
+	}
+	if effects != 0 {
+		t.Fatalf("timeout created %d effects", effects)
+	}
+	if !strings.Contains(logs.String(), "budget_hit=true reason=triage_timeout") || strings.Contains(logs.String(), question) {
+		t.Fatalf("timeout log missing or leaked: %s", logs.String())
+	}
+	// A late classification only persists routing; retry admits the effect once.
+	if _, err := store.DB().Exec(`UPDATE voice_turns SET triage_category='recall',steward_decision='dispatch' WHERE id='late-id'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"late-handoff", "late-new-command"} {
+		code, _, raw = handoffCommand(t, ts.Client(), ts.URL, key, id, "voice.turn.handoff", payload)
+		if code != http.StatusOK {
+			t.Fatalf("retry: %d %s", code, raw)
+		}
+	}
+	var jobs, holdings, tasks int
+	if err := store.DB().QueryRow(`SELECT (SELECT count(*) FROM voice_recall_jobs),(SELECT count(*) FROM voice_fast_replies WHERE intent_kind='recall_holding'),(SELECT count(*) FROM tasks)`).Scan(&jobs, &holdings, &tasks); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 1 || holdings != 1 || tasks != 0 {
+		t.Fatalf("late effects jobs=%d holding=%d tasks=%d", jobs, holdings, tasks)
+	}
+}
+
+func TestLiveNonTaskRoutingSkipsStewardAndMemoryStaysSlow(t *testing.T) {
+	for _, category := range []string{"progress", "recall", "memory", "task"} {
+		t.Run(category, func(t *testing.T) {
+			decision := &fakeSteward{decision: steward.Ask}
+			ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: &fakeClassifier{category: category}, Steward: decision})
+			receipt := commitAndHandoff(t, ts, key, "routing-"+category, "please handle this")
+			if category == "task" {
+				if decision.calls.Load() != 1 {
+					t.Fatalf("task Steward calls=%d", decision.calls.Load())
+				}
+				var status string
+				if err := store.DB().QueryRow(`SELECT status FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&status); err != nil {
+					t.Fatal(err)
+				}
+				if status != "waiting" {
+					t.Fatalf("task decision not awaited: %s", status)
+				}
+			} else {
+				if decision.calls.Load() != 0 {
+					t.Fatalf("non-task Steward calls=%d", decision.calls.Load())
+				}
+				want := "voice_turn"
+				if category == "memory" {
+					want = "task"
+				}
+				if receipt.ResourceType != want {
+					t.Fatalf("route=%s want=%s", receipt.ResourceType, want)
+				}
+			}
+		})
 	}
 }
 

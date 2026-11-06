@@ -41,6 +41,7 @@ type Config struct {
 	ResultDeliveryEnabled  bool
 	ResultDeliveryInterval time.Duration
 	Classifier             Classifier
+	ClassificationTimeout  time.Duration
 	Summarizer             Summarizer
 	SummarySettleDelay     *time.Duration
 	Steward                TaskSteward
@@ -303,6 +304,9 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 	if err := server.RegisterCommand("voice.turn.handoff", func(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
 		return svc.commandHandoff(ctx, tx, cmd, req, server)
 	}); err != nil {
+		return err
+	}
+	if err := server.RegisterCommandPreflight("voice.turn.handoff", svc.prepareHandoff); err != nil {
 		return err
 	}
 	if err := server.RegisterTaskSourceHandler("voice", svc.admitVoiceTask); err != nil {

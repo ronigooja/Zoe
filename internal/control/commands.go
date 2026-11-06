@@ -107,9 +107,15 @@ func canonicalCommand(req contracts.CommandRequest) ([]byte, error) {
 func (s *Server) ExecuteCommand(ctx context.Context, p contracts.Principal, key string, req contracts.CommandRequest, requestHash []byte) (contracts.CommandReceipt, error) {
 	s.mu.RLock()
 	handler := s.commands[req.Kind]
+	prepare := s.commandPreflights[req.Kind]
 	s.mu.RUnlock()
 	if handler == nil {
 		return contracts.CommandReceipt{}, apiError(400, "unknown_command", "command kind is not registered", map[string]any{"kind": req.Kind})
+	}
+	if prepare != nil {
+		if err := prepare(ctx, p, req); err != nil {
+			return contracts.CommandReceipt{}, err
+		}
 	}
 	tx, err := s.store.DB().BeginTx(ctx, nil)
 	if err != nil {
