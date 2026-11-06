@@ -117,7 +117,7 @@ func TestSummaryInvalidRangesRetryFive(t *testing.T) {
 	for _, ranges := range [][]summarize.Summary{
 		{{Topic: "x", Summary: "y", FirstSeq: 0, LastSeq: 99}},
 		{{Topic: "x", Summary: "y", FirstSeq: 0, LastSeq: 1}, {Topic: "x", Summary: "y", FirstSeq: 1, LastSeq: 1}},
-		{{Topic: "x", Summary: "y", FirstSeq: 1, LastSeq: 1}},
+		{{Topic: "x", Summary: "y", FirstSeq: 1, LastSeq: 0}},
 	} {
 		t.Run("invalid", func(t *testing.T) {
 			f := newSummaryFixture(t, 2)
