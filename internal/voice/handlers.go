@@ -419,14 +419,25 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		}
 	}
 	impact := classifyHandoff(content)
-	if category == "recall" && impact != "high" {
+	if category == "memory_write" && impact != "high" {
+		// Source-only extraction currently has no worker materialization contract.
+		// Never acknowledge a save that the existing pipeline cannot perform.
+		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,'memory_write','pending',?,?,?)`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, recallPrefix+memorySaveUnavailable, at, at, at)
+		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, err
+	}
+	if (category == "recall" || category == "memory_read") && impact != "high" {
 		id := uuid.NewString()
 		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
 		holding := s.recall.RecallHoldingText
 		if strings.TrimSpace(holding) == "" {
 			holding = "I will check our earlier conversations."
 		}
-		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,'recall_holding','pending',?,?,?)`, id, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, recallSpeech(holding, nil), at, at, at)
+		intent := "recall_holding"
+		if category == "memory_read" {
+			holding, intent = "I will check my saved notes.", "memory_read_holding"
+		}
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?)`, id, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, recallSpeech(holding, nil), intent, at, at, at)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}

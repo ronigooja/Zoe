@@ -7,15 +7,15 @@ import (
 	"testing"
 )
 
-func TestDelegationPromptFourDefinitionsOnly(t *testing.T) {
+func TestDelegationPromptFiveDefinitionsOnly(t *testing.T) {
 	if strings.Contains(strings.ToLower(instructions), "chat") {
 		t.Error("delegation prompt still defines chat")
 	}
 	lines := strings.Split(instructions, "\n")
-	if len(lines) != 6 {
-		t.Fatalf("definitions-only prompt must have introduction, four definitions, and output rule; got %d lines", len(lines))
+	if len(lines) != 7 {
+		t.Fatalf("definitions-only prompt must have introduction, five definitions, and output rule; got %d lines", len(lines))
 	}
-	for i, category := range []string{"progress", "recall", "memory", "task"} {
+	for i, category := range []string{"progress", "recall", "memory_write", "memory_read", "task"} {
 		if !strings.HasPrefix(lines[i+1], category+": ") {
 			t.Errorf("definition %d = %q", i, lines[i+1])
 		}
@@ -24,6 +24,12 @@ func TestDelegationPromptFourDefinitionsOnly(t *testing.T) {
 		if strings.Contains(strings.ToLower(instructions), marker) {
 			t.Errorf("prompt contains example marker %q", marker)
 		}
+	}
+}
+
+func TestLegacyMemoryCategoryIsUnknown(t *testing.T) {
+	if got, err := parseCategory("memory"); err == nil || got != "" {
+		t.Fatalf("legacy memory accepted: %q %v", got, err)
 	}
 }
 
