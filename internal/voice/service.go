@@ -46,6 +46,7 @@ type Config struct {
 	Steward                TaskSteward
 	Answerer               Answerer
 	RecallTimeout          time.Duration
+	RecallLease            time.Duration
 	RecallSummaryLimit     int
 	RecallHoldingText      string
 }
@@ -81,6 +82,13 @@ type Service struct {
 	classifier             Classifier
 	steward                TaskSteward
 	recall                 Config
+	recallCtx              context.Context
+	recallCancel           context.CancelFunc
+	recallSlots            chan struct{}
+	lifecycleMu            sync.Mutex
+	started                bool
+	stopped                bool
+	workers                sync.WaitGroup
 	triageMu               sync.RWMutex
 	triage                 map[string]triageCacheEntry
 	reaperStop             chan struct{}
@@ -366,8 +374,8 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if cfg.SummarySettleDelay != nil {
 		settle = *cfg.SummarySettleDelay
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, steward: cfg.Steward, triage: make(map[string]triageCacheEntry), reaperStop: make(chan struct{}), reaperDone: make(chan struct{}), summary: &summaryWorker{db: db, model: cfg.Summarizer, now: now, settle: settle}, summaryDone: make(chan struct{})}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, recall: cfg, triage: make(map[string]triageCacheEntry), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, steward: cfg.Steward, summary: &summaryWorker{db: db, model: cfg.Summarizer, now: now, settle: settle}, summaryDone: make(chan struct{}), recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), triage: make(map[string]triageCacheEntry), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func triageKey(session string, generation int64, turn string, revision int64) string {
@@ -430,26 +438,32 @@ func (s *Service) rotateIfOverBudget(ctx context.Context, p contracts.Principal)
 }
 
 func (s *Service) Start() {
-	ctx, cancel := context.WithCancel(context.Background())
-	s.summaryCancel = cancel
-	go func() { defer close(s.summaryDone); s.summary.run(ctx) }()
-	go s.reaper()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.started || s.stopped {
+		return
+	}
+	s.started = true
+	s.recoverRecall(s.recallCtx, true)
+	s.workers.Add(1)
+	go func() { defer s.workers.Done(); s.reaper() }()
+	s.workers.Add(1)
+	go func() { defer s.workers.Done(); defer close(s.summaryDone); s.summary.run(s.recallCtx) }()
 	if s.resultDeliveryEnabled || s.classifier != nil {
-		go s.resultDispatcher()
+		s.workers.Add(1)
+		go func() { defer s.workers.Done(); s.resultDispatcher() }()
 	}
 }
 
 func (s *Service) Stop() {
-	if s.summaryCancel != nil {
-		s.summaryCancel()
-		<-s.summaryDone
-	}
-	select {
-	case <-s.reaperStop:
-	default:
+	s.lifecycleMu.Lock()
+	if !s.stopped {
+		s.stopped = true
+		s.recallCancel()
 		close(s.reaperStop)
 	}
-	<-s.reaperDone
+	s.lifecycleMu.Unlock()
+	s.workers.Wait()
 }
 
 func (s *Service) reaper() {

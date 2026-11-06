@@ -17,6 +17,86 @@ const recallExcerptBytes = 16 * 1024
 const recallNotFound = "I could not find that in our conversation records."
 const recallPrefix = "Read this to the user exactly as written: "
 
+// recallWorkerLimit bounds model work per service, including persistence retries.
+const recallWorkerLimit = 4
+const recallPersistAttempts = 3
+
+func (s *Service) recallTimeout() time.Duration {
+	if s.recall.RecallTimeout > 0 {
+		return s.recall.RecallTimeout
+	}
+	return 8 * time.Second
+}
+
+// A running job's lease starts at its delivered holding receipt's updated_at.
+// Updating that timestamp and claiming the job are atomic; no schema change is needed.
+func (s *Service) recoverRecall(ctx context.Context, startup bool) {
+	lease := s.recall.RecallLease
+	if lease <= 0 {
+		lease = 2 * s.recallTimeout()
+	}
+	query := `SELECT j.id FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.status='running'`
+	var args []any
+	if !startup {
+		query += ` AND h.updated_at<=?`
+		args = append(args, s.now().Add(-lease).UTC().Format(time.RFC3339Nano))
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	for _, id := range ids {
+		s.persistRecallRetry(ctx, id, recallSpeech(recallNotFound, nil))
+	}
+}
+
+func (s *Service) persistRecall(ctx context.Context, id, text string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	at := s.now().UTC().Format(time.RFC3339Nano)
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) SELECT id,workspace_id,session_id,generation,'recall-answer:'||turn_id,?,'recall_answer','pending',?,?,? FROM voice_recall_jobs WHERE id=? AND status='running'`, text, at, at, at, id)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE voice_recall_jobs SET status='done' WHERE id=? AND status='running'`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Service) persistRecallRetry(ctx context.Context, id, text string) bool {
+	for attempt := 0; attempt < recallPersistAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return false
+		}
+		call, cancel := context.WithTimeout(ctx, time.Second)
+		err := s.persistRecall(call, id, text)
+		cancel()
+		if err == nil {
+			return true
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
+	return false
+}
+
 var recallIDs = regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\b`)
 
 func recallSpeech(text string, candidates []answer.Candidate) string {
@@ -44,6 +124,7 @@ type recallCandidate struct {
 // dispatchRecall starts work only after the holding receipt is delivered. The
 // durable compare-and-set prevents retried handoffs/dispatchers starting twice.
 func (s *Service) dispatchRecall(ctx context.Context) {
+	s.recoverRecall(ctx, false)
 	rows, err := s.db.QueryContext(ctx, `SELECT j.id FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.status='pending' AND h.status='delivered' LIMIT 25`)
 	if err != nil {
 		return
@@ -57,24 +138,45 @@ func (s *Service) dispatchRecall(ctx context.Context) {
 	}
 	rows.Close()
 	for _, id := range ids {
-		res, err := s.db.ExecContext(ctx, `UPDATE voice_recall_jobs SET status='running' WHERE id=? AND status='pending'`, id)
-		if err != nil {
+		s.lifecycleMu.Lock()
+		if s.stopped {
+			s.lifecycleMu.Unlock()
+			return
+		}
+		select {
+		case s.recallSlots <- struct{}{}:
+		default:
+			s.lifecycleMu.Unlock()
+			return
+		}
+		tx, err := s.db.BeginTx(ctx, nil)
+		claimed := false
+		if err == nil {
+			res, e := tx.ExecContext(ctx, `UPDATE voice_recall_jobs SET status='running' WHERE id=? AND status='pending'`, id)
+			if e == nil {
+				n, _ := res.RowsAffected()
+				if n == 1 {
+					_, e = tx.ExecContext(ctx, `UPDATE voice_fast_replies SET updated_at=? WHERE id=(SELECT holding_id FROM voice_recall_jobs WHERE id=?)`, s.now().UTC().Format(time.RFC3339Nano), id)
+					if e == nil {
+						claimed = tx.Commit() == nil
+					}
+				}
+			}
+			tx.Rollback()
+		}
+		if !claimed {
+			<-s.recallSlots
+			s.lifecycleMu.Unlock()
 			continue
 		}
-		n, _ := res.RowsAffected()
-		if n != 1 {
-			continue
-		}
-		go s.runRecall(id)
+		s.workers.Add(1)
+		go func() { defer s.workers.Done(); defer func() { <-s.recallSlots }(); s.runRecall(id) }()
+		s.lifecycleMu.Unlock()
 	}
 }
 
 func (s *Service) runRecall(id string) {
-	timeout := s.recall.RecallTimeout
-	if timeout <= 0 {
-		timeout = 8 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(s.recallCtx, s.recallTimeout())
 	defer cancel()
 	var workspace, owner, session, turn, question string
 	var generation int64
@@ -82,24 +184,17 @@ func (s *Service) runRecall(id string) {
 		return
 	}
 	text, count, status := s.recallAnswer(ctx, workspace, owner, question)
-	// Persist with a fresh bounded context even when model work used its deadline.
-	persist, done := context.WithTimeout(context.Background(), 5*time.Second)
+	// Model deadlines get a fallback, but shutdown leaves the lease for recovery.
+	if s.recallCtx.Err() != nil {
+		return
+	}
+	persist, done := context.WithTimeout(s.recallCtx, 8*time.Second)
 	defer done()
-	tx, err := s.db.BeginTx(persist, nil)
-	if err != nil {
-		return
-	}
-	defer tx.Rollback()
-	at := s.now().UTC().Format(time.RFC3339Nano)
-	_, err = tx.ExecContext(persist, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,'recall_answer','pending',?,?,?)`, id, workspace, session, generation, "recall-answer:"+turn, text, at, at, at)
-	if err != nil {
-		return
-	}
-	if _, err = tx.ExecContext(persist, `UPDATE voice_recall_jobs SET status='done' WHERE id=?`, id); err != nil {
-		return
-	}
-	if tx.Commit() != nil {
-		return
+	if !s.persistRecallRetry(persist, id, text) {
+		if !s.persistRecallRetry(persist, id, recallSpeech(recallNotFound, nil)) {
+			return
+		}
+		status = "persist_fallback"
 	}
 	log.Printf("voice recall id=%s candidates=%d status=%s", id, count, status)
 	s.dispatchFastReplies(persist)
