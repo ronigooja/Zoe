@@ -18,8 +18,12 @@ or empty value uses the default: upstream answers greetings, thanks, casual chat
 and opinions directly, delegates research, actions, task progress, past-call
 recall and personal-memory requests, and waits for Zoe rather than inventing a
 result or claiming records are unavailable. Literal `off` disables the push.
-Configure it in `zoe-stack.env`; `zoe update` preserves custom values. Zoe sends
-the rule with a do-not-read-or-acknowledge prefix before returning SDP, records
+Use maintenance menu item **21) Configure voice instruction** to view the effective
+default, custom text or disabled state and save a single-line replacement; empty
+input removes the key to restore the default. The atomic stack-env writer escapes
+quotes, newlines and dollar signs for literal Compose parsing. Apply saved changes
+with `zoe update`, which preserves custom values. Zoe sends
+the rule with the fixed prefix `Standing rule for you, do not read this aloud or acknowledge it: ` before returning SDP, records
 delivery per session/media generation/text hash, and retries a failed send once
 on connection without failing call creation. Successful transport does not prove
 silence or compliance: whether upstream obeys must be verified in live calls.

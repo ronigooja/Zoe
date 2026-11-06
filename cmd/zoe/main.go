@@ -151,12 +151,13 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		fmt.Fprintln(out, "  18) Configure voice gateway")
 		fmt.Fprintln(out, "  19) Test voice gateway")
 		fmt.Fprintln(out, "  20) Show voice gateway status")
+		fmt.Fprintln(out, "  21) Configure voice instruction")
 		fmt.Fprintln(out, "Access:")
-		fmt.Fprintln(out, "  21) Create instance key")
-		fmt.Fprintln(out, "  22) Rotate instance key")
+		fmt.Fprintln(out, "  22) Create instance key")
+		fmt.Fprintln(out, "  23) Rotate instance key")
 		fmt.Fprintln(out, "Client policy:")
-		fmt.Fprintln(out, "  23) Show client policy")
-		fmt.Fprintln(out, "  24) Set client policy")
+		fmt.Fprintln(out, "  24) Show client policy")
+		fmt.Fprintln(out, "  25) Set client policy")
 		fmt.Fprintln(out, "  0) Exit")
 		fmt.Fprint(out, "Select an option: ")
 		line, err := inputLine(in)
@@ -170,7 +171,13 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		if choice == "0" || strings.EqualFold(choice, "q") || strings.EqualFold(choice, "quit") || strings.EqualFold(choice, "exit") {
 			return nil
 		}
-		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "9": "memory test", "18": "voice configure", "19": "voice test", "20": "voice status", "21": "key init", "22": "key rotate", "23": "client-policy show", "24": "client-policy set"}[choice]
+		if choice == "21" {
+			if err := menuVoiceInstruction(configureMenuIO(root, in, out, errOut)); err != nil && !errors.Is(err, io.EOF) {
+				fmt.Fprintln(errOut, "Error:", err)
+			}
+			continue
+		}
+		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "9": "memory test", "18": "voice configure", "19": "voice test", "20": "voice status", "22": "key init", "23": "key rotate", "24": "client-policy show", "25": "client-policy set"}[choice]
 		if !ok {
 			if choice == "14" || choice == "16" {
 				kind := "summary"
@@ -218,7 +225,7 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 				}
 				continue
 			}
-			fmt.Fprintln(errOut, "Please choose a number from 0 to 24.")
+			fmt.Fprintln(errOut, "Please choose a number from 0 to 25.")
 			continue
 		}
 		if err := operations[name](nil, in, out, errOut); err != nil {

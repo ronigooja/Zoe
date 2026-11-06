@@ -128,6 +128,11 @@ func readEnv(path string) (map[string]string, error) {
 		}
 		value = strings.TrimSpace(value)
 		if strings.HasPrefix(value, "\"") {
+			// Voice instruction uses Compose's escaped dollar syntax; the
+			// ordinary Go unquoter does not recognize that escape sequence.
+			if strings.TrimSpace(key) == "ZOE_VOICE_INSTRUCTION_TEXT" {
+				value = strings.ReplaceAll(value, `\$`, `$`)
+			}
 			decoded, e := strconv.Unquote(value)
 			if e != nil {
 				continue
