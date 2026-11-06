@@ -217,7 +217,7 @@ func TestTriageTestUsesTheRuntimeRequestShape(t *testing.T) {
 			t.Fatal(err)
 		}
 		instruction, ok := body["instructions"].(string)
-		if !ok || !strings.Contains(instruction, "progress, recall, memory, task, or chat") {
+		if !ok || !strings.Contains(instruction, "progress, recall, memory, or task") {
 			t.Fatalf("instructions=%v", body["instructions"])
 		}
 		if body["max_output_tokens"].(float64) < 128 {
@@ -229,7 +229,7 @@ func TestTriageTestUsesTheRuntimeRequestShape(t *testing.T) {
 		if _, ok := body["temperature"]; ok {
 			t.Fatal("temperature present")
 		}
-		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"chat"}]}]}`))
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"task"}]}]}`))
 	}))
 	defer s.Close()
 	p := filepath.Join(t.TempDir(), "key")
@@ -237,12 +237,12 @@ func TestTriageTestUsesTheRuntimeRequestShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL + "/v1", Model: "gpt-6.1-sol", ReasoningEffort: "high", SecretPath: p}, nil)
-	if err != nil || r.Category != "chat" {
+	if err != nil || r.Category != "task" {
 		t.Fatalf("result=%+v err=%v", r, err)
 	}
 }
 
-func TestTriageTestFailsWhenModelAnswersOutsideTheFiveCategories(t *testing.T) {
+func TestTriageTestFailsWhenModelAnswersOutsideTheFourCategories(t *testing.T) {
 	modelKeyReadableFixture(t)
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Sure"}]}]}`))

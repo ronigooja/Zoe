@@ -379,13 +379,13 @@ func TestClassifySendsTheNewInstruction(t *testing.T) {
 	}
 }
 
-func TestInstructionDefinesAllFiveCategoriesWithoutExamples(t *testing.T) {
-	for _, category := range []string{"progress", "recall", "memory", "task", "chat"} {
+func TestInstructionDefinesAllFourCategoriesWithoutExamples(t *testing.T) {
+	for _, category := range []string{"progress", "recall", "memory", "task"} {
 		if !strings.Contains(instructions, category+": ") {
 			t.Errorf("instruction has no definition for %s", category)
 		}
 	}
-	for _, phrase := range []string{"state, duration, or result", "past conversations or calls", "stable personal fact or preference", "requiring tools, research, files, devices, or the web", "needs no lookup"} {
+	for _, phrase := range []string{"state, duration, or result", "past conversations or calls", "stable personal fact or preference", "requiring tools, research, files, devices, or the web", "any delegated request that is not progress, recall, or memory"} {
 		if !strings.Contains(instructions, phrase) {
 			t.Errorf("instruction lacks definition phrase %q", phrase)
 		}
@@ -415,7 +415,7 @@ func TestClassifyReturnsEachCategory(t *testing.T) {
 	words := []struct {
 		text string
 		want Category
-	}{{"PROGRESS", Progress}, {"recall.", Recall}, {"memory!", Memory}, {"task,", Task}, {"chat?", Chat}}
+	}{{"PROGRESS", Progress}, {"recall.", Recall}, {"memory!", Memory}, {"task,", Task}}
 	for _, tc := range words {
 		t.Run(string(tc.want), func(t *testing.T) {
 			client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(response(tc.text))) }))
@@ -468,7 +468,7 @@ func TestClassifyIsStatelessAcrossCalls(t *testing.T) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		bodies = append(bodies, string(mustJSON(body)))
-		_, _ = w.Write([]byte(response("chat")))
+		_, _ = w.Write([]byte(response("task")))
 	}))
 	defer server.Close()
 	if _, err := client.Classify(context.Background(), "first sentence"); err != nil {
@@ -499,7 +499,7 @@ func TestFromEnvDisabledWhenBaseURLEmptyAndRejectsBadValues(t *testing.T) {
 func TestClassifyReusesConnection(t *testing.T) {
 	var connections atomic.Int32
 	listener := &countingListener{Listener: mustListen(t), count: &connections}
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(response("chat"))) }))
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(response("task"))) }))
 	server.Listener = listener
 	server.Start()
 	defer server.Close()
@@ -532,7 +532,7 @@ func TestClassifyOmitsTemperatureAndSendsReasoningForReasoningModels(t *testing.
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Fatal(err)
 				}
-				_, _ = w.Write([]byte(response("chat")))
+				_, _ = w.Write([]byte(response("task")))
 			}))
 			defer server.Close()
 			key := filepathTemp(t, "key")
@@ -601,7 +601,7 @@ func TestClassifyOutputTokenBudgetLeavesRoomForReasoning(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		_, _ = w.Write([]byte(response("chat")))
+		_, _ = w.Write([]byte(response("task")))
 	}))
 	defer server.Close()
 	key := filepathTemp(t, "key")
