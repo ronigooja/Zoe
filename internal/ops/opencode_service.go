@@ -76,7 +76,11 @@ func renderOpenCodeConfig(o LifecycleOptions) error {
 	}
 	agents := map[string]any{}
 	for _, p := range profiles.Definitions {
-		agents[p.ID] = map[string]string{"system": p.SystemPrompt, "model": model}
+		agent := map[string]any{"system": p.SystemPrompt, "model": model}
+		if p.PermissionTier == profiles.TierFull {
+			agent["permissions"] = profiles.FullPermissionRules()
+		}
+		agents[p.ID] = agent
 	}
 	agents["zoe-rotation-summary"] = map[string]any{"model": model, "permissions": []map[string]string{{"action": "*", "resource": "*", "effect": "deny"}}, "system": "Summarize the provided session content in plain text. Do not use tools."}
 	scrapling, err := ParseScraplingSettings(v)

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	profilepolicy "github.com/ronigooja/Zoe/internal/profiles"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
 
@@ -343,6 +344,15 @@ func NewServer(store *storage.Store, cfg Config) (*Server, error) {
 		}
 	}
 	for id, profile := range cfg.Profiles {
+		if err := profilepolicy.ValidateProfileTier(id, profile.PermissionTier); err != nil {
+			return nil, fmt.Errorf("runtime profile %q: %w", id, err)
+		}
+		if profile.Agent == "zoe-steward" && id != "zoe-steward" {
+			return nil, fmt.Errorf("runtime profile %q cannot select the full-permission resident Worker agent", id)
+		}
+		if profile.PermissionTier == profilepolicy.TierFull && (profile.Agent != "zoe-steward" || profile.Role != "worker") {
+			return nil, fmt.Errorf("runtime profile %q full tier requires resident Worker identity", id)
+		}
 		if profile.Harness != "opencode" {
 			return nil, fmt.Errorf("runtime profile %q selects unsupported harness %q", id, profile.Harness)
 		}

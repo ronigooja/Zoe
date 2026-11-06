@@ -19,6 +19,7 @@ const (
 	TierReadOnlyResearch   = "read_only_research"
 	TierWorkspaceReadWrite = "workspace_read_write"
 	TierExternalPaths      = "external_paths"
+	TierFull               = "full"
 )
 
 type Profile struct {
@@ -30,16 +31,31 @@ type Profile struct {
 
 var Definitions = map[string]Profile{
 	"zoe-worker":  {ID: "zoe-worker", SystemPrompt: "Act as Zoe's Worker. Complete the assigned task using tools and subagents as needed and report evidence.", ModelRouteKey: "default", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, ScopeDefaults: []string{"workspace"}, PermissionTier: TierExternalPaths},
-	"zoe-steward": {ID: "zoe-steward", SystemPrompt: "Act as Zoe's Worker. Execute the assigned task using tools and subagents as needed; report evidence. Zoe manages task admission separately.", ModelRouteKey: "default", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, ScopeDefaults: []string{"workspace"}, PermissionTier: TierExternalPaths},
+	"zoe-steward": {ID: "zoe-steward", SystemPrompt: "Act as Zoe's Worker. Execute the assigned task using tools and subagents as needed; report evidence. Zoe manages task admission separately.", ModelRouteKey: "default", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, ScopeDefaults: []string{"workspace"}, PermissionTier: TierFull},
 	"zoe-super":   {ID: "zoe-super", SystemPrompt: "Act as Zoe's Super planner. Decompose complex goals and coordinate bounded work.", ModelRouteKey: "default", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, ScopeDefaults: []string{"workspace"}, PermissionTier: TierExternalPaths},
 }
 
 func ByID(id string) (Profile, bool) { p, ok := Definitions[id]; return p, ok }
 
+// ValidateProfileTier applies whenever a configured profile or claim selects full.
+// Only the resident Worker's stable profile ID may select this tier.
+func ValidateProfileTier(id, tier string) error {
+	if tier == TierFull && id != "zoe-steward" {
+		return errors.New("full permission tier is reserved for zoe-steward")
+	}
+	return nil
+}
+
 func EffectivePermissionSet(p Profile, taskScopes, extras []string) ([]contracts.PermissionRule, string, error) {
 	tier := p.PermissionTier
 	if tier == "" {
 		tier = TierWorkspaceReadWrite
+	}
+	if err := ValidateProfileTier(p.ID, tier); err != nil {
+		return nil, "", err
+	}
+	if tier == TierFull {
+		return FullPermissionRules(), "high", nil
 	}
 	if tier != TierReadOnlyResearch && tier != TierWorkspaceReadWrite && tier != TierExternalPaths {
 		return nil, "", fmt.Errorf("unknown permission tier %q", tier)
@@ -88,6 +104,16 @@ func EffectivePermissionSet(p Profile, taskScopes, extras []string) ([]contracts
 	return rules, impact, nil
 }
 
+// FullPermissionRules applies to the resident Worker, including future MCP tools.
+// V2 uses shell and server_tool actions; bash and mcp* also cover legacy names.
+func FullPermissionRules() []contracts.PermissionRule {
+	rules := []contracts.PermissionRule{{Action: "*", Resource: "*", Effect: "deny"}}
+	for _, action := range []string{"edit", "shell", "bash", "webfetch", "external_directory", "mcp*", "*"} {
+		rules = append(rules, contracts.PermissionRule{Action: action, Resource: "*", Effect: "allow"})
+	}
+	return rules
+}
+
 func externalDirectories(scopes []string) ([]string, error) {
 	seen := map[string]bool{}
 	out := make([]string, 0)
@@ -128,6 +154,18 @@ func validateExternalDirectory(dir string) error {
 }
 
 func ValidateRuleset(rules []contracts.PermissionRule, tier string) error {
+	if tier == TierFull {
+		want := FullPermissionRules()
+		if len(rules) != len(want) {
+			return errors.New("full permission ruleset must be noninteractive and unrestricted")
+		}
+		for i := range want {
+			if rules[i] != want[i] {
+				return errors.New("full permission ruleset must be noninteractive and unrestricted")
+			}
+		}
+		return nil
+	}
 	if len(rules) == 0 || len(rules) > 64 {
 		return errors.New("permission ruleset is missing or too large")
 	}
