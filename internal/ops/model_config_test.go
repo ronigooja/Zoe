@@ -242,7 +242,7 @@ func TestTriageTestUsesTheRuntimeRequestShape(t *testing.T) {
 	}
 }
 
-func TestTriageTestFailsWhenModelAnswersOutsideTheFourCategories(t *testing.T) {
+func TestTriageTestFailsWhenModelAnswersOutsideAllowedCategories(t *testing.T) {
 	modelKeyReadableFixture(t)
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Sure"}]}]}`))

@@ -34,7 +34,7 @@ When deploying spoken task controls, apply voice migration 216 at normal server
 startup. `ZOE_VOICE_CONFIRMATION_WINDOW_SECONDS` bounds same-call held questions
 (default 600; valid range 1-3600). Configure the existing stateless triage model;
 without a classifier, speech does not authorize a held request. `zoe triage test`
-can return `progress`, `recall`, `memory`, `task`, or `cancel`; the standalone probe
+can return `progress`, `recall`, `memory_write`, `memory_read`, `task`, or `cancel`; the standalone probe
 has no pending question, so `confirm` and `decline` are rejected there.
 
 When validating this route, check a held task and answer in the same live call,
@@ -224,8 +224,10 @@ When running `zoe triage test`, only the categories in the [triage routing contr
 ### Call-recall model endpoints
 
 When testing delegated-turn triage with `zoe triage test`, valid categories are
-`progress`, `recall`, `memory_write`, `memory_read`, and `task`. The legacy
-`memory` result is invalid and follows the unclassified slow task fallback.
+`progress`, `recall`, `memory_write`, `memory_read`, `task`, and `cancel`. The legacy
+`memory` result is invalid and follows the unclassified slow task fallback at runtime.
+The standalone probe has no pending question and rejects `confirm` and `decline`;
+those categories are available only for a bound held-task answer in a live call.
 Memory reads reuse `ZOE_ANSWER_*` and the existing owner-scoped memory context
 assembler; no additional model is configured. Memory writes currently report
 save unavailability without a Worker task; the ingestion contract is blocked

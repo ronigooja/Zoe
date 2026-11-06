@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-func TestTriageProbeFiveCategoriesOnly(t *testing.T) {
+func TestTriageProbeBaseCategoriesOnly(t *testing.T) {
 	modelKeyReadableFixture(t)
-	for _, category := range []string{"progress", "recall", "memory_write", "memory_read", "task", "memory", "chat", "unknown"} {
+	for _, category := range []string{"progress", "recall", "memory_write", "memory_read", "task", "cancel", "confirm", "decline", "memory", "chat", "unknown"} {
 		t.Run(category, func(t *testing.T) {
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				_, _ = fmt.Fprintf(w, `{"output_text":%q}`, category)
@@ -23,7 +23,7 @@ func TestTriageProbeFiveCategoriesOnly(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL, Model: "m", SecretPath: key}, nil)
-			if category == "memory" || category == "chat" || category == "unknown" {
+			if category == "memory" || category == "chat" || category == "unknown" || category == "confirm" || category == "decline" {
 				if err == nil {
 					t.Fatalf("probe accepted removed/unknown category %q: %+v", category, result)
 				}

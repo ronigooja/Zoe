@@ -378,7 +378,7 @@ func TestClassifySendsTheNewInstruction(t *testing.T) {
 		if _, ok := body["history"]; ok || strings.Contains(string(mustJSON(body)), "first sentence") {
 			t.Errorf("request contained history: %#v", body)
 		}
-		if body["instructions"] != instructions {
+		if body["instructions"] != classificationPrompt(false) {
 			t.Error("missing system instruction")
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -390,13 +390,13 @@ func TestClassifySendsTheNewInstruction(t *testing.T) {
 	}
 }
 
-func TestInstructionDefinesAllFiveCategoriesWithoutExamples(t *testing.T) {
-	for _, category := range []string{"progress", "recall", "memory_write", "memory_read", "task"} {
+func TestInstructionDefinesBaseCategoriesWithoutExamples(t *testing.T) {
+	for _, category := range strings.Split(BaseWords, ", ") {
 		if !strings.Contains(instructions, category+": ") {
 			t.Errorf("instruction has no definition for %s", category)
 		}
 	}
-	for _, phrase := range []string{"state, duration, or result", "past conversations or calls", "stable personal fact or preference", "requiring tools, research, files, devices, or the web", "any delegated request that is not progress, recall, memory_write, or memory_read"} {
+	for _, phrase := range []string{"state, duration, or result", "past conversations or calls", "stable personal fact or preference", "requiring tools, research, files, devices, or the web", "any delegated request outside the other categories", "withdraws or stops previously requested work"} {
 		if !strings.Contains(instructions, phrase) {
 			t.Errorf("instruction lacks definition phrase %q", phrase)
 		}
@@ -426,7 +426,7 @@ func TestClassifyReturnsEachCategory(t *testing.T) {
 	words := []struct {
 		text string
 		want Category
-	}{{"PROGRESS", Progress}, {"recall.", Recall}, {"memory_write!", MemoryWrite}, {"memory_read", MemoryRead}, {"task,", Task}}
+	}{{"PROGRESS", Progress}, {"recall.", Recall}, {"memory_write!", MemoryWrite}, {"memory_read", MemoryRead}, {"task,", Task}, {"cancel", Cancel}}
 	for _, tc := range words {
 		t.Run(string(tc.want), func(t *testing.T) {
 			client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(response(tc.text))) }))

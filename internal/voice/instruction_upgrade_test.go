@@ -7,6 +7,9 @@ import (
 
 func TestInstructionMigration214To215KeepsExistingData(t *testing.T) {
 	_, store, _ := handoffHTTPServer(t)
+	if _, err := store.DB().Exec(rollbackVoiceConfirmationBinding); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.DB().Exec(`DROP TABLE voice_instruction_deliveries;
 DELETE FROM schema_migrations WHERE namespace='voice' AND version=215;
 INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,steward_decision) VALUES('legacy215','default','handoff-session',1,'legacy215',1,'keep voice data',X'01','2026-11-06T00:00:00Z','legacy215','execute')`); err != nil {

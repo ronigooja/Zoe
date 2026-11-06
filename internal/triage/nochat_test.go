@@ -7,22 +7,47 @@ import (
 	"testing"
 )
 
-func TestDelegationPromptFiveDefinitionsOnly(t *testing.T) {
-	if strings.Contains(strings.ToLower(instructions), "chat") {
-		t.Error("delegation prompt still defines chat")
-	}
-	lines := strings.Split(instructions, "\n")
-	if len(lines) != 7 {
-		t.Fatalf("definitions-only prompt must have introduction, five definitions, and output rule; got %d lines", len(lines))
-	}
-	for i, category := range []string{"progress", "recall", "memory_write", "memory_read", "task"} {
-		if !strings.HasPrefix(lines[i+1], category+": ") {
-			t.Errorf("definition %d = %q", i, lines[i+1])
+func TestDelegationPromptDefinitionsOnly(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		prompt := classificationPrompt(pending)
+		words := BaseWords
+		if pending {
+			words = PendingWords
 		}
-	}
-	for _, marker := range []string{"example", "e.g.", "for instance", "\"", "“", "”"} {
-		if strings.Contains(strings.ToLower(instructions), marker) {
-			t.Errorf("prompt contains example marker %q", marker)
+		categories := strings.Split(words, ", ")
+		definitions := map[string]int{}
+		for _, line := range strings.Split(prompt, "\n") {
+			if strings.HasPrefix(line, "Allowed words: ") {
+				continue
+			}
+			if category, _, ok := strings.Cut(line, ": "); ok {
+				definitions[category]++
+			}
+		}
+		if len(definitions) != len(categories) {
+			t.Errorf("pending=%t definitions=%v, want %v", pending, definitions, categories)
+		}
+		for _, category := range categories {
+			if definitions[category] != 1 {
+				t.Errorf("pending=%t category=%s definitions=%d", pending, category, definitions[category])
+			}
+		}
+		if !strings.HasSuffix(prompt, "Allowed words: "+words+".") {
+			t.Errorf("pending=%t incorrect allowed words", pending)
+		}
+		if strings.Contains(prompt, "chat:") || strings.Contains(prompt, "memory:") {
+			t.Error("legacy category defined")
+		}
+		if !pending && (strings.Contains(prompt, "confirm") || strings.Contains(prompt, "decline")) {
+			t.Error("pending answers offered without question")
+		}
+		if !strings.Contains(prompt, "unsure, choose task") || !strings.Contains(prompt, "exactly one lowercase word") || !strings.Contains(prompt, "Output nothing else") {
+			t.Error("missing fallback or single-word output contract")
+		}
+		for _, marker := range []string{"example", "e.g.", "for instance", "\"", "“", "”"} {
+			if strings.Contains(strings.ToLower(prompt), marker) {
+				t.Errorf("prompt contains example marker %q", marker)
+			}
 		}
 	}
 }
