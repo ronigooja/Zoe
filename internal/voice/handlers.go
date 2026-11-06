@@ -402,6 +402,24 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	}
 	content = strings.TrimSpace(content)
 	impact := classifyHandoff(content)
+	if category == "recall" && impact != "high" {
+		id := uuid.NewString()
+		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
+		holding := s.recall.RecallHoldingText
+		if strings.TrimSpace(holding) == "" {
+			holding = "I will check our earlier conversations."
+		}
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,'recall_holding','pending',?,?,?)`, id, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, recallSpeech(holding, nil), at, at, at)
+		if err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_recall_jobs(id,workspace_id,owner_id,session_id,generation,turn_id,question,holding_id) VALUES(?,?,?,?,?,?,?,(SELECT id FROM voice_fast_replies WHERE session_id=? AND generation=? AND turn_id=?))`, uuid.NewString(), cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.SessionID, p.Generation, p.TurnID, content, p.SessionID, p.Generation, p.TurnID)
+		if err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
+		event, _ := json.Marshal(map[string]any{"route": "fast", "category": category, "turn_id": p.TurnID, "revision": p.Revision})
+		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, []contracts.Event{{Type: "voice.turn.handoff", AggregateType: "voice_session", AggregateID: p.SessionID, AggregateVersion: p.Generation, Payload: event}}, nil
+	}
 	if category == "progress" && impact != "high" {
 		text, err := s.progressReplyTx(ctx, tx, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.SessionID, p.TurnID, s.now())
 		if err != nil {

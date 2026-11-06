@@ -196,7 +196,7 @@ CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 211, Name: "voice_transcripts_and_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 211, Name: "voice_transcripts_and_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_transcript_turns (
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   session_id TEXT NOT NULL REFERENCES voice_sessions(id),
@@ -222,6 +222,16 @@ CREATE TABLE voice_call_summaries (
   model_call_id TEXT
 );
 CREATE INDEX voice_call_summaries_workspace_started ON voice_call_summaries(workspace_id,started_at);`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 213, Name: "voice_recall_jobs", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_recall_jobs (
+id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+session_id TEXT NOT NULL, generation INTEGER NOT NULL, turn_id TEXT NOT NULL,
+question TEXT NOT NULL, holding_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+UNIQUE(session_id,generation,turn_id));`)
 		return err
 	}})
 }

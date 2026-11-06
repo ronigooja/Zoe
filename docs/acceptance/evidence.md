@@ -265,3 +265,7 @@ Environment: Zoe host with release `53daae1`, `zoe-opencode` v2.2.5-ronigooja.3 
 - Not exercised: a live `ask`, Worker question, expiry, or reply against a real OpenCode session.
 
 Consequence recorded in [ADR 0011](../architecture/decisions/0011-profiles-permissions-and-context-hygiene.md): OpenCode permissions are the only enforcement layer by operator decision.
+
+## Bounded recall component verification — 2026-11-06
+
+Source: recall-route candidate based on `d444f5b`, local macOS, fake clock/gateway/model. The authorized serial command `nice -n 19 go test -count=1 -p 1 -parallel 2 -timeout 120s ./internal/voice/ ./internal/answer/ -run 'TestRecall|TestAnswer|TestHandoffProgress|TestHandoffTaskMemory|TestHandoffHighImpact|TestClassifierAndGateway'` passed. Route cases cover ordered holding/final delivery, no task, owner/workspace/date exclusion, requested transcript ranges, 16 KiB excerpts, one-extra-round limit, honest failures, handoff deduplication, speakable text and private-log exclusion. Disabling the recall branch made all eight original route cases fail at `recall_test.go:110`: `recall created task: tasks=1 resource=task`. Targeted vet, formatting and documentation checks passed. These are fixture/source checks only; no hosted run, real provider, live gateway speech or restart-recovery acceptance is established. Limits are recorded in the [recall contract](../architecture/decisions/0012-voice-conversation-layer.md#bounded-recall-route).

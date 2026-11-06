@@ -56,6 +56,8 @@ services:
       ZOE_ANSWER_THINKING: ${ZOE_ANSWER_THINKING:-}
       ZOE_ANSWER_TIMEOUT_MS: ${ZOE_ANSWER_TIMEOUT_MS:-8000}
       ZOE_ANSWER_API_KEY_FILE: /run/secrets/answer_api_key
+      ZOE_RECALL_SUMMARY_LIMIT: ${ZOE_RECALL_SUMMARY_LIMIT:-20}
+      ZOE_RECALL_HOLDING_TEXT: ${ZOE_RECALL_HOLDING_TEXT:-}
       ZOE_SECRET_FILE_MAP: ZOE_RUNNER_TOKEN=/run/secrets/runner_token${ZOE_VOICE_SECRET_MAP:-}
     entrypoint: ["/usr/local/bin/zoe-secret-entrypoint"]
     command: ["/usr/local/bin/zoe-server"]

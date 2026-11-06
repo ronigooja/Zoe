@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -39,6 +40,14 @@ type Config struct {
 	ResultDeliveryEnabled  bool
 	ResultDeliveryInterval time.Duration
 	Classifier             Classifier
+	Answerer               Answerer
+	RecallTimeout          time.Duration
+	RecallSummaryLimit     int
+	RecallHoldingText      string
+}
+
+type Answerer interface {
+	Answer(context.Context, string, []answer.Candidate, []answer.Excerpt) (answer.Result, error)
 }
 
 type Classifier interface {
@@ -62,6 +71,7 @@ type Service struct {
 	resultDeliveryEnabled  bool
 	resultDeliveryInterval time.Duration
 	classifier             Classifier
+	recall                 Config
 	triageMu               sync.RWMutex
 	triage                 map[string]triageCacheEntry
 	reaperStop             chan struct{}
@@ -340,7 +350,7 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if interval <= 0 {
 		interval = time.Second
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, triage: make(map[string]triageCacheEntry), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, recall: cfg, triage: make(map[string]triageCacheEntry), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func triageKey(session string, generation int64, turn string, revision int64) string {
