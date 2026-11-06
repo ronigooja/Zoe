@@ -859,7 +859,7 @@ func pauseControl(ctx context.Context, root string) (func() error, error) {
 			return err
 		}
 	}
-	if d.Mode == ops.ModeSystemd {
+	if d.HasSystemdRunner() {
 		state, err := m.Run(ctx, "systemctl", "is-active", "zoe-compose.service")
 		if strings.TrimSpace(string(state)) == "inactive" {
 			return func() error { return nil }, nil
