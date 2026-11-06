@@ -193,6 +193,10 @@ func TestVoiceReaperRaceReleasesOnceAndLateHeartbeatConflicts(t *testing.T) {
 
 func newVoiceTestService(t *testing.T, cfg Config) (*storage.Store, *Service) {
 	t.Helper()
+	// Legacy component fixtures do not exercise call-start instruction delivery.
+	if cfg.InstructionText == "" {
+		cfg.InstructionText = "off"
+	}
 	ctx := context.Background()
 	store, err := storage.Open(ctx, storage.Config{Path: ":memory:"})
 	if err != nil {

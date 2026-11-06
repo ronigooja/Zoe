@@ -363,7 +363,8 @@ func TestMigrationSummaryJobsUpgrades211AndKeepsExistingVoiceData(t *testing.T) 
 	ctx := context.Background()
 	// Reconstruct exactly the schema/history before migration 212. Keep the
 	// session, delegated turn, raw transcript, and existing derived summary.
-	if _, err := store.DB().Exec(`ALTER TABLE voice_turns DROP COLUMN steward_decision;
+	if _, err := store.DB().Exec(`DROP TABLE voice_instruction_deliveries;
+ALTER TABLE voice_turns DROP COLUMN steward_decision;
 ALTER TABLE voice_turns DROP COLUMN resumed_task_id;
 DROP TABLE voice_recall_jobs;
 DELETE FROM schema_migrations WHERE namespace='voice' AND version>=213;
@@ -404,7 +405,7 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 	if err := store.DB().QueryRow(`SELECT count(*) FROM voice_summary_jobs WHERE session_id='handoff-session' AND generation=1 AND status='pending'`).Scan(&jobs); err != nil || jobs != 1 {
 		t.Fatalf("upgraded enqueue jobs=%d err=%v", jobs, err)
 	}
-	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 214 {
+	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 215 {
 		t.Fatalf("post-upgrade version=%d err=%v", version, err)
 	}
 }
@@ -412,7 +413,8 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 func TestMigrationRecallUpgrades212Through214(t *testing.T) {
 	_, store, _ := handoffHTTPServer(t)
 	ctx := context.Background()
-	if _, err := store.DB().Exec(`ALTER TABLE voice_turns DROP COLUMN steward_decision;
+	if _, err := store.DB().Exec(`DROP TABLE voice_instruction_deliveries;
+ALTER TABLE voice_turns DROP COLUMN steward_decision;
 ALTER TABLE voice_turns DROP COLUMN resumed_task_id;
 DROP TABLE voice_recall_jobs;
 DELETE FROM schema_migrations WHERE namespace='voice' AND version>=213;

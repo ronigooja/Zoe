@@ -25,6 +25,7 @@ import (
 )
 
 type Config struct {
+	InstructionText        string
 	IngestEnabled          bool
 	GatewayURL             string
 	GatewayAPIKey          string
@@ -286,6 +287,9 @@ func (s *Service) applyOpeningContext(ctx context.Context, sessionID string, c *
 }
 
 func Register(server *control.Server, store *storage.Store, cfg Config) error {
+	if _, err := ResolveInstructionText(cfg.InstructionText); err != nil {
+		return err
+	}
 	if server == nil || store == nil || store.DB() == nil {
 		return errors.New("voice registration requires control server and storage")
 	}
@@ -844,6 +848,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	} else if _, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET gateway_media_generation=? WHERE id=? AND state='active'`, upstream.VoiceSessionGeneration, id); err != nil {
 		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_outcome_unknown", "media generation could not be durably bound; account pool remains isolated", nil)
 	}
+	s.deliverInstruction(ctx, id, false)
 	return sessionResponse{SessionID: id, Generation: 1, State: "active", AnswerSDP: upstream.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, OpeningContextDelivery: string(openingDelivery), OpeningContextVersion: openingVersion, OpeningContextChars: openingChars, GatewayContextChars: upstream.ContextChars}, nil
 }
 

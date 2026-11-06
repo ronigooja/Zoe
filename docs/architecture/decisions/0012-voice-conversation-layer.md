@@ -25,6 +25,8 @@ The problem is control, not speed: the upstream model leads the conversation and
 6. Authority is unchanged: voice and the conversation layer create no commands directly. Impact-level rules of [ADR 0009](0009-voice-steward-impact-policy.md) apply to the slow path only; the fast path is read-only.
 7. The gateway stays transport-only (media, accounts, sideband). It carries no conversation logic.
 
+When creating a voice session, Zoe pushes its standing delegation instruction through the gateway before returning SDP, records delivery per session/media generation/instruction hash, and retries a failed push once on connection; this is transport evidence only, not proof that upstream obeys (configuration: [deployment](../../operations/deployment.md#voice-delegation-instruction)).
+
 
 ## Routing: stateless triage (decided 2026-11-06)
 
