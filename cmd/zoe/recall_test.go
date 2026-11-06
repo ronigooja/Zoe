@@ -25,6 +25,7 @@ func TestMaintenanceMenuListsSummaryAndAnswerItems(t *testing.T) {
 }
 
 func TestMaintenanceMenuAnswerFlowWritesEnvAndSecretAndTests(t *testing.T) {
+	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
 	calls := 0
@@ -79,6 +80,7 @@ func TestMaintenanceMenuAnswerFlowWritesEnvAndSecretAndTests(t *testing.T) {
 }
 
 func TestSummaryTestAndAnswerTestUseRuntimeClients(t *testing.T) {
+	containerKeyFixture(t)
 	menuManager(t)
 	for _, kind := range []string{"summary", "answer"} {
 		t.Run(kind, func(t *testing.T) {
@@ -129,6 +131,7 @@ func TestSummaryTestAndAnswerTestUseRuntimeClients(t *testing.T) {
 }
 
 func TestStatusShowsSummaryAndAnswerWithoutSecrets(t *testing.T) {
+	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
 	for _, kind := range []string{"summary", "answer"} {

@@ -72,8 +72,8 @@ func FromEnv(prefix string, getenv func(string) string, readFile func(string) ([
 		return nil, errors.New("model API key file is empty")
 	}
 	effort := strings.TrimSpace(getenv(prefix + "_REASONING_EFFORT"))
-	if effort != "" && effort != "low" && effort != "medium" && effort != "high" {
-		return nil, errors.New("reasoning effort must be low, medium, high, or empty")
+	if effort != "" && effort != "none" && effort != "low" && effort != "medium" && effort != "high" && effort != "max" {
+		return nil, errors.New("reasoning effort must be none, low, medium, high, max, or empty")
 	}
 	thinking := strings.TrimSpace(getenv(prefix + "_THINKING"))
 	if thinking != "" && thinking != "enabled" && thinking != "disabled" {
@@ -190,12 +190,16 @@ func (c *Client) call(ctx context.Context, style, instructions, input string) ([
 		request["store"] = false
 	}
 	m := strings.ToLower(strings.TrimSpace(c.model))
-	if style == "responses" && (strings.HasPrefix(m, "gpt-6") || strings.HasPrefix(m, "gpt-5.6") || strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3")) {
+	if style == "responses" && (c.thinking != "" || strings.HasPrefix(m, "gpt-6") || strings.HasPrefix(m, "gpt-5.6") || strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3")) {
 		effort := c.effort
-		if effort == "" {
+		if c.thinking == "disabled" {
+			effort = "none"
+		} else if c.thinking == "" && effort == "" {
 			effort = "low"
 		}
-		request["reasoning"] = map[string]string{"effort": effort}
+		if effort != "" {
+			request["reasoning"] = map[string]string{"effort": effort}
+		}
 	} else {
 		request["temperature"] = 0
 	}

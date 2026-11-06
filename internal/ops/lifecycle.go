@@ -254,7 +254,15 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if memoryErr != nil {
 		return memoryErr
 	}
-	warnings := ModelKeyWarnings(triage, TriageConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath})
+	summary, err := d.SummaryConfig()
+	if err != nil {
+		return err
+	}
+	answer, err := d.AnswerConfig()
+	if err != nil {
+		return err
+	}
+	warnings := ModelKeyWarnings(triage, TriageConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, TriageConfig{BaseURL: summary.BaseURL, SecretPath: summary.SecretPath}, TriageConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath})
 	for _, warning := range warnings {
 		if o.Out != nil {
 			fmt.Fprintln(o.Out, warning)

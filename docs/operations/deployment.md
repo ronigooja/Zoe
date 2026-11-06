@@ -129,15 +129,18 @@ Responses requests never send the chat `thinking` field. Explicit thinking setti
 
 For call-history recall, configure independent endpoints through the existing Models
 menu or `zoe summary configure` and `zoe answer configure`. Both accept `--base-url`,
-`--model`, `--effort` (empty, low, medium, high), `--thinking` (empty, enabled,
+`--model`, `--effort` (empty, none, low, medium, high, max), `--thinking` (empty, enabled,
 disabled), `--key-stdin`, and `--disable`. Keys are written atomically with mode
-0600 to `/etc/zoe/secrets/summary-api-key` and `/etc/zoe/secrets/answer-api-key`.
+0600 and server ownership 65532:65532 to `/etc/zoe/secrets/summary-api-key` and `/etc/zoe/secrets/answer-api-key`.
 Empty base URLs disable each endpoint independently; updates preserve their settings.
 Environment names and secret references are in the [stack example](../../deploy/linux/zoe-stack.env.example).
 The summary timeout defaults to 120000 ms (range 5000–600000); the answer timeout
 defaults to 8000 ms (range 500–30000). Both use Responses first and remember a
-Chat Completions fallback after HTTP 404, 405, or 501. Thinking is sent only to Chat
-Completions, matching triage. `zoe summary test` and `zoe answer test` invoke runtime
+Chat Completions fallback after HTTP 404, 405, or 501. The thinking/effort wire
+contract is the same as the triage table above, including temperature suppression.
+Existing keys must be readable by the server user before saving or probing;
+status and update warn about unreadable configured keys, and update stops before
+service changes. `zoe summary test` and `zoe answer test` invoke runtime
 clients with synthetic evidence and report PASS/FAIL, API style, and latency;
 `zoe status` reports configuration without credential contents. Apply with `zoe update`.
 

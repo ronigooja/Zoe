@@ -15,6 +15,7 @@ import (
 )
 
 func TestSummaryAndAnswerConfigureWriteIndependentEnvAndSecrets(t *testing.T) {
+	recallOwnedKeyFixture(t)
 	root := t.TempDir()
 	d := Deployment{Root: root, StackEnv: filepath.Join(root, "zoe-stack.env")}
 	configs := map[string]RecallModelConfig{}
@@ -70,6 +71,7 @@ func TestSummaryAndAnswerConfigureWriteIndependentEnvAndSecrets(t *testing.T) {
 }
 
 func TestSummaryAndAnswerSettingsSurviveUpdate(t *testing.T) {
+	recallOwnedKeyFixture(t)
 	f := newUpdateFixture(t)
 	d := Deployment{Root: f.root, StackEnv: filepath.Join(f.root, "zoe-stack.env")}
 	for _, kind := range []string{"summary", "answer"} {

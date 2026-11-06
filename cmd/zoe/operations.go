@@ -1046,7 +1046,15 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	inspect.TriageModel = triage.Model
 	inspect.TriageSecretPath = triage.SecretPath
 	status := opsManager().Inspect(ctx, inspect)
-	for _, warning := range ops.ModelKeyWarnings(triage, ops.TriageConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}) {
+	summary, err := d.SummaryConfig()
+	if err != nil {
+		return err
+	}
+	answer, err := d.AnswerConfig()
+	if err != nil {
+		return err
+	}
+	for _, warning := range ops.ModelKeyWarnings(triage, ops.TriageConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, ops.TriageConfig{BaseURL: summary.BaseURL, SecretPath: summary.SecretPath}, ops.TriageConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath}) {
 		fmt.Fprintln(out, warning)
 	}
 	fmt.Fprintf(out, "Deployment: %s\n", status.Mode)

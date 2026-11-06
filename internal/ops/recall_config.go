@@ -125,6 +125,8 @@ func SaveRecallModel(ctx context.Context, d Deployment, kind string, c RecallMod
 		}
 	} else if err = ValidateKeyFile(c.SecretPath); err != nil {
 		return err
+	} else if err = ValidateModelKeyReadable(c.SecretPath); err != nil {
+		return err
 	}
 	if err = WriteRecallModelEnvAtomic(d.StackEnv, kind, c, false); err != nil {
 		return errors.Join(err, key.restore(), env.restore())
@@ -193,6 +195,9 @@ type RecallProbeResult struct {
 func TestRecallModel(ctx context.Context, kind string, c RecallModelConfig, client *http.Client) (RecallProbeResult, error) {
 	c, err := c.Normalized(kind)
 	if err != nil {
+		return RecallProbeResult{}, err
+	}
+	if err := ValidateModelKeyReadable(c.SecretPath); err != nil {
 		return RecallProbeResult{}, err
 	}
 	prefix, _ := recallPrefix(kind)
