@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	_ "modernc.org/sqlite"
@@ -417,9 +418,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
+var memoryDatabaseID atomic.Uint64
+
 func sqliteDSN(path string) string {
 	if path == ":memory:" {
-		path = "file:zoe-memory?mode=memory&cache=shared"
+		// Each Open owns a database, even while another store or one of its
+		// checked-out connections is still alive during asynchronous cleanup.
+		path = fmt.Sprintf("file:zoe-memory-%d?mode=memory&cache=shared", memoryDatabaseID.Add(1))
 	}
 	u, err := url.Parse(path)
 	if err != nil || u.Scheme == "" {

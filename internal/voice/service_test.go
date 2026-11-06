@@ -618,6 +618,31 @@ func TestHandoffWithoutClassifierBehavesAsBefore(t *testing.T) {
 	}
 }
 
+func TestHandoffFixturesIsolateRetainedConnection(t *testing.T) {
+	// database/sql.Close does not close a connection still held by a worker.
+	// Keep one across fixture cleanup to deterministically model that overlap.
+	parent := t
+	t.Run("previous fixture", func(t *testing.T) {
+		_, store, _ := handoffHTTPServer(t)
+		conn, err := store.DB().Conn(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The parent cleanup runs after the next fixture, unlike this subtest's
+		// server/store cleanup, so the previous SQLite database remains alive.
+		parent.Cleanup(func() { _ = conn.Close() })
+	})
+	ts, store, key := handoffHTTPServer(t)
+	receipt := commitAndHandoff(t, ts, key, "isolated-fixture", "research release notes")
+	var count int
+	if err := store.DB().QueryRow(`SELECT count(*) FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("tasks=%d, want 1", count)
+	}
+}
+
 func TestFailedClassificationIsNotRetriedEveryTick(t *testing.T) {
 	classifier := &fakeClassifier{err: errors.New("no")}
 	ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier})
