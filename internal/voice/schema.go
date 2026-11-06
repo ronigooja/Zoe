@@ -253,7 +253,9 @@ BEGIN
     WHERE session_id=NEW.session_id AND status='done' AND revision=0;
 END;`)
 		return err
-	}}); err != nil { return err }
+	}}); err != nil {
+		return err
+	}
 	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 213, Name: "voice_recall_jobs", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_recall_jobs (
 id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, owner_id TEXT NOT NULL,
@@ -261,7 +263,9 @@ session_id TEXT NOT NULL, generation INTEGER NOT NULL, turn_id TEXT NOT NULL,
 question TEXT NOT NULL, holding_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
 UNIQUE(session_id,generation,turn_id));`)
 		return err
-	}}); err != nil { return err }
+	}}); err != nil {
+		return err
+	}
 	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 214, Name: "voice_steward_decision", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN steward_decision TEXT NOT NULL DEFAULT '';
 ALTER TABLE voice_turns ADD COLUMN resumed_task_id TEXT NOT NULL DEFAULT ''`)

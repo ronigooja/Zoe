@@ -130,6 +130,11 @@ func TestRecallRoute(t *testing.T) {
 				t.Fatalf("recall created task: tasks=%d resource=%s", tasks, receipt.ResourceType)
 			}
 			svc := newService(store.DB(), cfg)
+			// Command acceptance uses the control clock, independently of voice's
+			// fake clock. Make the holding row due explicitly before dispatch.
+			if _, err := store.DB().Exec(`UPDATE voice_fast_replies SET next_attempt_at=? WHERE intent_kind='recall_holding'`, at); err != nil {
+				t.Fatal(err)
+			}
 			svc.dispatchFastReplies(context.Background())
 			deadline := time.Now().Add(3 * time.Second)
 			for time.Now().Before(deadline) {

@@ -337,7 +337,7 @@ func TestMigrationIsAdditiveAndKeepsExistingVoiceData(t *testing.T) {
 	_, store, _ := handoffHTTPServer(t)
 	// Reconstruct the version-210 database, removing newer dependent schema
 	// and its migration receipts together rather than leaving a history gap.
-	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('legacy','default','handoff-session',1,'legacy',1,'keep verbatim',X'01',?,'legacy'); ALTER TABLE voice_turns DROP COLUMN steward_decision; ALTER TABLE voice_turns DROP COLUMN resumed_task_id; DROP TRIGGER voice_summary_enqueue; DROP TRIGGER voice_summary_late_turn; DROP TABLE voice_summary_jobs; DROP TABLE voice_call_summaries; DROP TABLE voice_transcript_turns; DELETE FROM schema_migrations WHERE namespace='voice' AND version>=211`, transcriptAt); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('legacy','default','handoff-session',1,'legacy',1,'keep verbatim',X'01',?,'legacy'); ALTER TABLE voice_turns DROP COLUMN steward_decision; ALTER TABLE voice_turns DROP COLUMN resumed_task_id; DROP TRIGGER voice_summary_enqueue; DROP TRIGGER voice_summary_late_turn; DROP TABLE voice_summary_jobs; DROP TABLE voice_recall_jobs; DROP TABLE voice_call_summaries; DROP TABLE voice_transcript_turns; DELETE FROM schema_migrations WHERE namespace='voice' AND version>=211`, transcriptAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Migrate(context.Background()); err != nil {
@@ -365,7 +365,8 @@ func TestMigrationSummaryJobsUpgrades211AndKeepsExistingVoiceData(t *testing.T) 
 	// session, delegated turn, raw transcript, and existing derived summary.
 	if _, err := store.DB().Exec(`ALTER TABLE voice_turns DROP COLUMN steward_decision;
 ALTER TABLE voice_turns DROP COLUMN resumed_task_id;
-DELETE FROM schema_migrations WHERE namespace='voice' AND version=214;
+DROP TABLE voice_recall_jobs;
+DELETE FROM schema_migrations WHERE namespace='voice' AND version>=213;
 DROP TRIGGER voice_summary_enqueue;
 DROP TRIGGER voice_summary_late_turn;
 DROP TABLE voice_summary_jobs;
@@ -405,6 +406,42 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 	}
 	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 214 {
 		t.Fatalf("post-upgrade version=%d err=%v", version, err)
+	}
+}
+
+func TestMigrationRecallUpgrades212Through214(t *testing.T) {
+	_, store, _ := handoffHTTPServer(t)
+	ctx := context.Background()
+	if _, err := store.DB().Exec(`ALTER TABLE voice_turns DROP COLUMN steward_decision;
+ALTER TABLE voice_turns DROP COLUMN resumed_task_id;
+DROP TABLE voice_recall_jobs;
+DELETE FROM schema_migrations WHERE namespace='voice' AND version>=213;
+UPDATE voice_sessions SET state='ended',ended_at=? WHERE id='handoff-session';`, transcriptAt); err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 212 {
+		t.Fatalf("pre-upgrade version=%d err=%v", version, err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []int{212, 213, 214} {
+		var count int
+		if err := store.DB().QueryRow(`SELECT count(*) FROM schema_migrations WHERE namespace='voice' AND version=?`, version).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("migration %d count=%d err=%v", version, count, err)
+		}
+	}
+	var jobs int
+	if err := store.DB().QueryRow(`SELECT count(*) FROM voice_summary_jobs WHERE session_id='handoff-session'`).Scan(&jobs); err != nil || jobs != 1 {
+		t.Fatalf("summary jobs=%d err=%v", jobs, err)
+	}
+	if _, err := store.DB().Exec(`INSERT INTO voice_recall_jobs(id,workspace_id,owner_id,session_id,generation,turn_id,question,holding_id) VALUES('upgrade','default','owner','handoff-session',1,'upgrade','question','holding');
+INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,steward_decision,resumed_task_id) VALUES('upgrade','default','handoff-session',1,'upgrade',1,'preserved',X'01','2026-11-06T00:00:00Z','upgrade','execute','');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 

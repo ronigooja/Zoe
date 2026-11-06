@@ -94,7 +94,6 @@ type Service struct {
 	reaperStop             chan struct{}
 	reaperDone             chan struct{}
 	summary                *summaryWorker
-	summaryCancel          context.CancelFunc
 	summaryDone            chan struct{}
 }
 
