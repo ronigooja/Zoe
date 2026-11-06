@@ -280,6 +280,8 @@ Real-device, simulator, build, and service evidence stays separate in [the evide
 
 When voice calls are ingested, the server retains both speakers' full text under the [transcript lifecycle contract](operations/data-lifecycle.md#voice-transcript-authority-and-ingestion), independently of task delegation and raw audio.
 
+When voice calls end, the server derives dated topic summaries mapped to authoritative raw turns under the [stored summary generation contract](architecture/decisions/0012-voice-conversation-layer.md#stored-call-summary-generation). Summary generation does not change command authority or confirmed user decisions.
+
 The server baseline and migration requirements are defined in [§4.1](#41-independent-background-operation), [§4.2](#42-separation-of-client-and-server), and [§4.3](#43-environment-migration). Native Apple clients do not host the control server. Migration and restore must preserve linked identities and prevent two active copies of the authority.
 
 <a id="cy-04-01"></a>

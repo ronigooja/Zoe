@@ -196,7 +196,7 @@ CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 211, Name: "voice_transcripts_and_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 211, Name: "voice_transcripts_and_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_transcript_turns (
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   session_id TEXT NOT NULL REFERENCES voice_sessions(id),
@@ -222,6 +222,36 @@ CREATE TABLE voice_call_summaries (
   model_call_id TEXT
 );
 CREATE INDEX voice_call_summaries_workspace_started ON voice_call_summaries(workspace_id,started_at);`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 212, Name: "voice_summary_jobs", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_summary_jobs (
+  session_id TEXT NOT NULL REFERENCES voice_sessions(id),
+  generation INTEGER NOT NULL,
+  workspace_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','done','failed')),
+  reason TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  revision INTEGER NOT NULL DEFAULT 0 CHECK(revision IN (0,1)),
+  next_attempt_ms INTEGER NOT NULL DEFAULT 0,
+  settled_from TEXT NOT NULL,
+  PRIMARY KEY(session_id,generation)
+);
+CREATE INDEX voice_summary_jobs_due ON voice_summary_jobs(status,next_attempt_ms);
+CREATE TRIGGER voice_summary_enqueue AFTER UPDATE OF state ON voice_sessions
+WHEN NEW.state='ended'
+BEGIN
+  INSERT OR IGNORE INTO voice_summary_jobs(session_id,generation,workspace_id,settled_from)
+    VALUES(NEW.id,NEW.generation,NEW.workspace_id,COALESCE(NEW.ended_at,NEW.updated_at));
+END;
+CREATE TRIGGER voice_summary_late_turn AFTER INSERT ON voice_transcript_turns
+BEGIN
+  UPDATE voice_summary_jobs SET revision=1,status='pending',reason='',attempts=0,
+    next_attempt_ms=0,settled_from=NEW.received_at
+    WHERE session_id=NEW.session_id AND status='done' AND revision=0;
+END;`)
 		return err
 	}})
 }

@@ -1,6 +1,6 @@
 # ADR 0012: Zoe-owned conversation layer for real-time voice
 
-Status: proposed direction; routing decision recorded 2026-11-06; nothing here is implemented or accepted. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
+Status: proposed direction; routing decision recorded 2026-11-06; component implementation is described below, not product acceptance. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
 
 ## Context
 
@@ -48,6 +48,16 @@ Prerequisites not yet met:
 - Semantic recall needs working extraction. The memory model key is currently rejected (HTTP 401 "Invalid API key" from the configured endpoint), `memory_model_calls` is 0, and both Qdrant collections hold 0 points. Qdrant retrieval is not wired into `Repository.Search`, which is SQLite keyword scoring.
 
 The stateless `zoe-triage` classifier is a configurable, startup-loaded client only; it is not wired into voice behavior. When enabled, it classifies one sentence through the configured Responses endpoint and callers retain the slow-path fallback on any failure.
+
+## Stored call summary generation
+
+When a session transitions to `ended`, migration 212 transactionally enqueues one job keyed by session ID and control-plane generation, including hangup, reaper, and context rotation. Existing historical ended sessions are not backfilled. A single context-cancellable goroutine in `zoe-server` reads the entire raw transcript outside transactions and calls `internal/summarize` using `ZOE_SUMMARY_*`. No separate service is required.
+
+When a job is due, `ZOE_SUMMARY_SETTLE_SECONDS` delays the initial read after closure (default 60, range 0–600). A missing model leaves nonempty jobs pending with `model_not_configured`, without attempts or repeated error logging; configuring the model and restarting resumes them. Empty calls complete without model calls or rows. Model failures, timeouts, and invalid output retry at 1, 2, 4, and 8 minutes, then fail on attempt 5 with a fixed reason code. Model execution is limited to 10 minutes; abandoned durable claims expire after 11 minutes. Shutdown cancellation consumes no attempt.
+
+When validating model output, strict JSON decoding rejects missing/unknown fields and trailing data. Nonempty topics/summaries and inclusive ranges must cover every real transcript sequence exactly once in order, with no gaps or overlaps. A transaction replaces all session summary rows and marks completion together; each row's timestamps come from its first/last raw turns. Storage diagnostics never include raw errors or transcript/model text.
+
+When new (not duplicate) turns arrive during or after the first summary, schedule exactly one replacement revision after the same settle delay, retaining previous rows until replacement commits. Multiple late turns coalesce into that revision. Turns arriving during or after the replacement remain in the authoritative transcript but do not trigger a third pass. The existing 10-minute ingestion window is unchanged. This bounded regeneration rule applies equally to initially empty calls; summary recall must not assume the derived store is exhaustive.
 
 ## Open questions (to measure before implementation)
 

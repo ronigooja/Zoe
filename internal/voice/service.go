@@ -39,6 +39,8 @@ type Config struct {
 	ResultDeliveryEnabled  bool
 	ResultDeliveryInterval time.Duration
 	Classifier             Classifier
+	Summarizer             Summarizer
+	SummarySettleDelay     *time.Duration
 }
 
 type Classifier interface {
@@ -66,6 +68,9 @@ type Service struct {
 	triage                 map[string]triageCacheEntry
 	reaperStop             chan struct{}
 	reaperDone             chan struct{}
+	summary                *summaryWorker
+	summaryCancel          context.CancelFunc
+	summaryDone            chan struct{}
 }
 
 const triageCacheCap = 1024
@@ -340,7 +345,11 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if interval <= 0 {
 		interval = time.Second
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, triage: make(map[string]triageCacheEntry), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	settle := time.Minute
+	if cfg.SummarySettleDelay != nil {
+		settle = *cfg.SummarySettleDelay
+	}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, triage: make(map[string]triageCacheEntry), reaperStop: make(chan struct{}), reaperDone: make(chan struct{}), summary: &summaryWorker{db: db, model: cfg.Summarizer, now: now, settle: settle}, summaryDone: make(chan struct{})}
 }
 
 func triageKey(session string, generation int64, turn string, revision int64) string {
@@ -403,6 +412,9 @@ func (s *Service) rotateIfOverBudget(ctx context.Context, p contracts.Principal)
 }
 
 func (s *Service) Start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.summaryCancel = cancel
+	go func() { defer close(s.summaryDone); s.summary.run(ctx) }()
 	go s.reaper()
 	if s.resultDeliveryEnabled || s.classifier != nil {
 		go s.resultDispatcher()
@@ -410,6 +422,10 @@ func (s *Service) Start() {
 }
 
 func (s *Service) Stop() {
+	if s.summaryCancel != nil {
+		s.summaryCancel()
+		<-s.summaryDone
+	}
 	select {
 	case <-s.reaperStop:
 	default:
