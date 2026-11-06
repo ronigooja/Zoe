@@ -310,6 +310,8 @@ If the execution environment becomes unavailable because a device is powered off
 
 **CY-04-02.** Keep agent execution, services, data, memory, permissions, events, status, and health on the server.
 
+For delegated voice tasks, Zoe owns stateless Steward admission and the resident OpenCode Worker executes work; the current bootstrap policy and limits are defined once in the [task-manager contract](architecture/decisions/0012-voice-conversation-layer.md#stateless-task-manager).
+
 The client is primarily responsible for interaction and presentation.
 
 The server is responsible for:

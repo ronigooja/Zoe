@@ -44,6 +44,13 @@ services:
       ZOE_TRIAGE_THINKING: ${ZOE_TRIAGE_THINKING:-}
       ZOE_TRIAGE_TIMEOUT_MS: ${ZOE_TRIAGE_TIMEOUT_MS:-}
       ZOE_TRIAGE_API_KEY_FILE: /run/secrets/triage_api_key
+      ZOE_STEWARD_BASE_URL: ${ZOE_STEWARD_BASE_URL:-}
+      ZOE_STEWARD_API_STYLE: ${ZOE_STEWARD_API_STYLE:-}
+      ZOE_STEWARD_MODEL: ${ZOE_STEWARD_MODEL:-}
+      ZOE_STEWARD_REASONING_EFFORT: ${ZOE_STEWARD_REASONING_EFFORT:-}
+      ZOE_STEWARD_THINKING: ${ZOE_STEWARD_THINKING:-}
+      ZOE_STEWARD_TIMEOUT_MS: ${ZOE_STEWARD_TIMEOUT_MS:-2000}
+      ZOE_STEWARD_API_KEY_FILE: /run/secrets/steward_api_key
       ZOE_SUMMARY_BASE_URL: ${ZOE_SUMMARY_BASE_URL:-}
       ZOE_SUMMARY_MODEL: ${ZOE_SUMMARY_MODEL:-}
       ZOE_SUMMARY_REASONING_EFFORT: ${ZOE_SUMMARY_REASONING_EFFORT:-}
@@ -74,6 +81,8 @@ services:
         target: voice_ingest_token
       - source: triage_api_key
         target: triage_api_key
+      - source: steward_api_key
+        target: steward_api_key
       - source: summary_api_key
         target: summary_api_key
       - source: answer_api_key
@@ -142,6 +151,8 @@ networks:
     external: true
 
 secrets:
+  steward_api_key:
+    file: ${ZOE_STEWARD_API_KEY_FILE:-/dev/null}
   runner_token:
     file: ${ZOE_RUNNER_TOKEN_FILE:?set a private runner token file path}
   memory_runner_token:

@@ -9,7 +9,7 @@ Requiring explicit transcript submission for every voice request made speaking a
 ## Decision
 
 1. Voice is the front desk: it listens, speaks, and hands the user's words to the control plane. It holds no authority and performs no work.
-2. A steward (a warm OpenCode agent profile) routes each handoff: answer directly, add to an active task, or start a task. Steward, Worker, and Super are profiles of one runtime, not separate programs.
+2. For delegated tasks, Steward is a Zoe-owned stateless model call that decides `dispatch` or `ask`, not an OpenCode agent or result reviewer. Worker is the existing resident OpenCode service, using the configured task model and permitted subagents. No Super/project coordinator is introduced. The stable `zoe-steward` executor profile ID remains for compatibility; it now denotes Worker execution. See [the task-manager contract](0012-voice-conversation-layer.md#stateless-task-manager).
 3. A spoken request is the instruction. The control plane creates the command on an authenticated path bound to the call and turn identity, with stable turn identity, revisions, and deduplication unchanged. Voice and the steward never create commands directly.
 4. Authorization follows server-set impact levels derived from the profile's declared capabilities and scopes, never from the model's description. Low-impact, reversible work executes on the spoken request. High-impact or irreversible work requires a scoped confirmation challenge bound to task, run, action, expected version, and expiry, answered by voice or screen and recorded by the server. Ambiguous words authorize nothing.
 5. Spoken output and transport continuity never establish completion or approval; only authoritative task events do.

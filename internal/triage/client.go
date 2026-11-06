@@ -146,6 +146,16 @@ func validateBaseURL(raw string) error {
 }
 
 func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
+	output, err := c.Complete(ctx, text, instructions)
+	if err != nil {
+		return "", err
+	}
+	return parseCategory(output)
+}
+
+// Complete applies to independent bounded classifiers sharing this transport.
+// It sends no conversation identifiers or previous messages.
+func (c *Client) Complete(ctx context.Context, text, prompt string) (string, error) {
 	if c == nil || c.http == nil || c.baseURL == "" || c.model == "" || c.apiKey == "" {
 		return "", errors.New("triage client is not configured")
 	}
@@ -155,9 +165,9 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 	if style == "" {
 		style = "responses"
 	}
-	_, body, status, err := c.call(ctx, style, text)
+	_, body, status, err := c.call(ctx, style, text, prompt)
 	if err != nil && c.apiStyle == "" && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusNotImplemented) {
-		_, body, status, err = c.call(ctx, "chat", text)
+		_, body, status, err = c.call(ctx, "chat", text, prompt)
 		if err == nil {
 			c.apiStyle = "chat"
 			style = "chat"
@@ -170,17 +180,17 @@ func (c *Client) Classify(ctx context.Context, text string) (Category, error) {
 		c.apiStyle = "responses"
 	}
 	if style == "chat" {
-		return parseChatResponse(body)
+		return chatOutput(body)
 	}
-	return parseResponsesResponse(body)
+	return responsesOutput(body)
 }
 
-func (c *Client) call(ctx context.Context, style, text string) (Category, []byte, int, error) {
+func (c *Client) call(ctx context.Context, style, text, prompt string) (Category, []byte, int, error) {
 	request := map[string]any{"model": c.model}
 	path := "/responses"
 	if style == "chat" {
 		path = "/chat/completions"
-		request["messages"] = []map[string]string{{"role": "system", "content": instructions}, {"role": "user", "content": text}}
+		request["messages"] = []map[string]string{{"role": "system", "content": prompt}, {"role": "user", "content": text}}
 		request["max_tokens"] = 1024
 		request["stream"] = false
 		if c.reasoningEffort != "" {
@@ -190,7 +200,7 @@ func (c *Client) call(ctx context.Context, style, text string) (Category, []byte
 			request["thinking"] = map[string]string{"type": c.thinking}
 		}
 	} else {
-		request["instructions"] = instructions
+		request["instructions"] = prompt
 		request["input"] = text
 		request["max_output_tokens"] = 256
 		request["store"] = false
@@ -234,6 +244,14 @@ func (c *Client) call(ctx context.Context, style, text string) (Category, []byte
 }
 
 func parseResponsesResponse(responseBody []byte) (Category, error) {
+	text, err := responsesOutput(responseBody)
+	if err != nil {
+		return "", err
+	}
+	return parseCategory(text)
+}
+
+func responsesOutput(responseBody []byte) (string, error) {
 	var response struct {
 		Status     string `json:"status"`
 		OutputText string `json:"output_text"`
@@ -269,10 +287,18 @@ func parseResponsesResponse(responseBody []byte) (Category, error) {
 	if output == "" {
 		output = response.OutputText
 	}
-	return parseCategory(output)
+	return output, nil
 }
 
 func parseChatResponse(body []byte) (Category, error) {
+	text, err := chatOutput(body)
+	if err != nil {
+		return "", err
+	}
+	return parseCategory(text)
+}
+
+func chatOutput(body []byte) (string, error) {
 	var response struct {
 		Choices []struct {
 			FinishReason string `json:"finish_reason"`
@@ -287,17 +313,10 @@ func parseChatResponse(body []byte) (Category, error) {
 	if len(response.Choices) == 0 {
 		return "", errors.New("triage response was incomplete")
 	}
-	category, err := parseCategory(response.Choices[0].Message.Content)
-	if err != nil {
-		if response.Choices[0].FinishReason == "length" {
-			return "", errors.New("triage response was incomplete")
-		}
-		return "", err
-	}
 	if response.Choices[0].FinishReason != "" && response.Choices[0].FinishReason != "stop" && response.Choices[0].FinishReason != "length" {
 		return "", errors.New("triage response was incomplete")
 	}
-	return category, nil
+	return response.Choices[0].Message.Content, nil
 }
 
 func parseCategory(output string) (Category, error) {

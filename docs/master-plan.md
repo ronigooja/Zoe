@@ -17,6 +17,10 @@ Milestones sequence delivery without reducing product scope. The [acceptance mat
 
 ## Current status and blockers
 
+Stateless Steward task admission and the compatible Worker executor profile are
+implemented in source; see the [contract and current limitations](architecture/decisions/0012-voice-conversation-layer.md#stateless-task-manager).
+Pre-run scoped high-impact confirmation and live Worker/voice acceptance remain open.
+
 The [2026-10-29 voice deployment repair](acceptance/evidence.md#voice-deployment-configuration-repair--2026-10-29)
 restored the missing gateway credential mount and startup configuration on the
 current Zoe host. Server startup and gateway configuration checks passed;

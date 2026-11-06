@@ -102,7 +102,7 @@ func (s *Service) ensureClassified(ctx context.Context, workspace, session strin
 }
 
 func (s *Service) waitForTriageCache(ctx context.Context, session string, generation int64, turn string, revision int64) string {
-	deadline := time.Now().Add(1500 * time.Millisecond)
+	deadline := time.Now().Add(3100 * time.Millisecond)
 	key := triageKey(session, generation, turn, revision)
 	for time.Now().Before(deadline) {
 		s.triageMu.RLock()
