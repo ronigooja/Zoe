@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -51,7 +52,24 @@ func (s *Server) AppendTaskTx(ctx context.Context, tx *sql.Tx, c CommandContext,
 	if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
-	return s.commandTaskAppend(ctx, tx, c, contracts.CommandRequest{Payload: payload})
+	var version int64
+	if err := tx.QueryRowContext(ctx, `SELECT version FROM tasks WHERE id=? AND workspace_id=? AND owner_subject_id=?`, taskID, c.Principal.WorkspaceID, c.Principal.SubjectID).Scan(&version); err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	return s.commandTaskAppend(ctx, tx, c, contracts.CommandRequest{Payload: payload, ExpectedVersion: &version})
+}
+
+// StopTaskTx applies the normal task.stop policy to authenticated voice controls.
+func (s *Server) StopTaskTx(ctx context.Context, tx *sql.Tx, c CommandContext, taskID string) (contracts.CommandResult, []contracts.Event, error) {
+	payload, _ := json.Marshal(taskIDPayload{TaskID: taskID})
+	return s.commandTaskStop(ctx, tx, c, contracts.CommandRequest{Payload: payload})
+}
+
+// AdmissionConfirmationDigest binds pre-run consent to the exact task and question.
+// Admission consent does not authorize any runtime permission request.
+func AdmissionConfirmationDigest(taskID, goal, question string, version int64, expires string) string {
+	data, _ := json.Marshal([]any{taskID, goal, question, version, expires, "task:admit"})
+	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
 type approvePayload struct {
@@ -273,6 +291,18 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 		if parseErr != nil || !c.AcceptedAt.Before(deadline) {
 			return contracts.CommandResult{}, nil, apiError(409, "confirmation_expired", "confirmation has expired", nil)
 		}
+		if scope == "task:admit" {
+			if req.ExpectedVersion == nil || *req.ExpectedVersion != interactionVersion {
+				return contracts.CommandResult{}, nil, apiError(409, "confirmation_invalid", "admission confirmation requires the scoped expected version", nil)
+			}
+			var goal, question, source string
+			if err = tx.QueryRowContext(ctx, `SELECT goal,interaction_question,source FROM tasks WHERE id=? AND workspace_id=?`, p.TaskID, c.Principal.WorkspaceID).Scan(&goal, &question, &source); err != nil {
+				return contracts.CommandResult{}, nil, err
+			}
+			if source != "voice" || interactionRun != "admission:"+p.TaskID || actionDigest != AdmissionConfirmationDigest(p.TaskID, goal, question, version, expires) || liveInteractionRun {
+				return contracts.CommandResult{}, nil, apiError(409, "confirmation_invalid", "admission confirmation does not match the pending request", nil)
+			}
+		}
 		confirmed = explicitConfirmationPhrases[strings.ToLower(p.Content)]
 		if !confirmed {
 			if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='reject' WHERE task_id=? AND run_id=? AND action_digest=? AND authorization_used=0`, p.TaskID, interactionRun, actionDigest); err != nil {
@@ -353,7 +383,11 @@ func (s *Server) commandTaskStop(ctx context.Context, tx *sql.Tx, c CommandConte
 		return contracts.CommandResult{}, nil, apiError(409, "state_conflict", "terminal task cannot be stopped", map[string]any{"status": status})
 	}
 	at := c.AcceptedAt.Format(time.RFC3339Nano)
-	if status == "queued" {
+	var liveRuns int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE task_id=? AND workspace_id=? AND status IN ('dispatching','active','uncertain')`, p.TaskID, c.Principal.WorkspaceID).Scan(&liveRuns); err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	if status == "queued" || liveRuns == 0 {
 		version++
 		_, err = tx.ExecContext(ctx, `UPDATE tasks SET status='canceled',version=?,updated_at=?,finished_at=? WHERE id=? AND workspace_id=?`, version, at, at, p.TaskID, c.Principal.WorkspaceID)
 		if err != nil {
