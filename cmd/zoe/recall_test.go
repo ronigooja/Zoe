@@ -96,7 +96,7 @@ func TestSummaryTestAndAnswerTestUseRuntimeClients(t *testing.T) {
 				_ = json.NewDecoder(r.Body).Decode(&body)
 				output := `{"status":"answer","text":"In the January call, the meeting was set for Monday."}`
 				if kind == "summary" {
-					if !strings.Contains(body.Input, `"seq":1`) || !strings.Contains(body.Input, "The project meeting is on Monday.") || !strings.Contains(body.Instructions, "entire call") {
+					if !strings.Contains(body.Input, `"seq":1`) || !strings.Contains(body.Input, "The project meeting is on Monday.") || !strings.Contains(body.Instructions, "Group the call into meaningful topics") || !strings.Contains(body.Instructions, "greetings and filler may be omitted") || !strings.Contains(body.Instructions, "without overlaps; gaps are allowed") {
 						t.Error("summary runtime not used")
 					}
 					output = `[{"topic":"Meeting","summary":"The meeting is on Monday.","first_seq":1,"last_seq":2}]`
