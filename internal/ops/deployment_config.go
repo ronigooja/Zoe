@@ -19,6 +19,7 @@ import (
 // Deployment records resolved host paths; discovery never changes services.
 type Deployment struct {
 	Mode                                                                                            Mode
+	RunnerSystemd                                                                                   bool
 	Root, RunnerEnv, StackEnv, DatabasePath, ComposeFile, ComposeProject, RunnerService, DropInPath string
 }
 
@@ -30,8 +31,13 @@ func DiscoverDeployment(ctx context.Context, m Manager, root string) (Deployment
 		return Deployment{}, errors.New("deployment root must be absolute")
 	}
 	d := Deployment{Root: root, Mode: ModeUnknown, RunnerEnv: filepath.Join(root, "zoe-runner.env"), StackEnv: filepath.Join(root, "zoe-stack.env"), RunnerService: "zoe-runner.service", ComposeProject: "zoe"}
-	if v := os.Getenv("ZOE_DEPLOYMENT_MODE"); v != "" {
-		d.Mode = Mode(v)
+	// Persisted paths are fallbacks, not authority over current host evidence.
+	if b, err := os.ReadFile(filepath.Join(root, "provider-deployment.json")); err == nil && len(b) < 16384 {
+		var persisted Deployment
+		if json.Unmarshal(b, &persisted) == nil && persisted.Root == root {
+			_ = json.Unmarshal(b, &d)
+			d.Mode, d.RunnerSystemd = ModeUnknown, false
+		}
 	}
 	if m.Run == nil {
 		m = NewManager(nil)
@@ -39,6 +45,7 @@ func DiscoverDeployment(ctx context.Context, m Manager, root string) (Deployment
 	// Only fixed metadata properties are requested; Environment is deliberately excluded.
 	out, err := m.Run(ctx, "systemctl", "show", d.RunnerService, "--property=LoadState,EnvironmentFiles,FragmentPath", "--no-pager")
 	if err == nil && strings.Contains(string(out), "LoadState=loaded") {
+		d.RunnerSystemd = true
 		if d.Mode == ModeUnknown {
 			d.Mode = ModeSystemd
 		}
@@ -57,6 +64,7 @@ func DiscoverDeployment(ctx context.Context, m Manager, root string) (Deployment
 	if d.Mode == ModeUnknown {
 		if _, err := os.Stat(d.RunnerEnv); err == nil {
 			d.Mode = ModeSystemd
+			d.RunnerSystemd = true
 		}
 	}
 	stack, _ := readEnv(d.StackEnv)
@@ -66,7 +74,7 @@ func DiscoverDeployment(ctx context.Context, m Manager, root string) (Deployment
 	if p := os.Getenv("ZOE_COMPOSE_FILE"); filepath.IsAbs(p) {
 		d.ComposeFile = p
 	}
-	if d.ComposeFile != "" && d.Mode == ModeUnknown {
+	if composeFileExists(d.ComposeFile) {
 		d.Mode = ModeCompose
 	}
 	if p := stack["COMPOSE_PROJECT_NAME"]; p != "" {
@@ -80,24 +88,23 @@ func DiscoverDeployment(ctx context.Context, m Manager, root string) (Deployment
 	if d.DatabasePath == "" {
 		d.DatabasePath = "/var/lib/zoe/server/data/zoe.sqlite"
 	}
-	d.DropInPath = "/etc/systemd/system/zoe-runner.service.d/90-zoe-provider.conf"
-	if root != "/etc/zoe" {
-		d.DropInPath = filepath.Join(root, "systemd", "zoe-runner.service.d", "90-zoe-provider.conf")
-	}
-	// Reload the non-secret managed deployment descriptor, if present.
-	if b, e := os.ReadFile(filepath.Join(root, "provider-deployment.json")); e == nil && len(b) < 16384 {
-		var persisted Deployment
-		if json.Unmarshal(b, &persisted) == nil && persisted.Root == root {
-			d = persisted
+	if d.DropInPath == "" {
+		d.DropInPath = "/etc/systemd/system/zoe-runner.service.d/90-zoe-provider.conf"
+		if root != "/etc/zoe" {
+			d.DropInPath = filepath.Join(root, "systemd", "zoe-runner.service.d", "90-zoe-provider.conf")
 		}
 	}
-	// A Compose stack may be supervised by systemd (zoe-compose.service).
-	// A stale persisted descriptor must not make Compose-only operations use
-	// the systemd provider path.
-	if os.Getenv("ZOE_DEPLOYMENT_MODE") == "" && d.ComposeFile != "" && d.Mode != ModeSystemd {
-		d.Mode = ModeCompose
+	if mode := explicitDeploymentMode(); mode != ModeUnknown {
+		d.Mode = mode
+	} else if d.Mode == ModeUnknown {
+		d.Mode = DetectMode()
 	}
 	return d, nil
+}
+
+// HasSystemdRunner applies to runner operations, independently of stack mode.
+func (d Deployment) HasSystemdRunner() bool {
+	return d.Mode == ModeSystemd || d.RunnerSystemd
 }
 
 // readEnv parses literal values without shell evaluation and returns no raw output.
@@ -203,6 +210,9 @@ func (d Deployment) InspectConfig() InspectConfig {
 	services := []string{}
 	if d.Mode == ModeCompose {
 		services = []string{"zoe-server", "zoe-memory-worker", "qdrant"}
+		if d.HasSystemdRunner() {
+			services = append(services, "zoe-compose.service", d.RunnerService, "zoe-opencode.service")
+		}
 	} else {
 		services = []string{"zoe-compose.service", d.RunnerService}
 	}
@@ -300,7 +310,7 @@ func (m Manager) ConfigureProvider(ctx context.Context, d Deployment, c Provider
 	if d.RunnerService != "zoe-runner.service" {
 		return ProbeResult{}, errors.New("zoe-runner.service is not the configured provider consumer")
 	}
-	if d.Mode != ModeSystemd {
+	if !d.HasSystemdRunner() {
 		return ProbeResult{}, errors.New("provider configuration requires the systemd zoe-runner.service deployment")
 	}
 	result := Probe(ctx, c, client)
@@ -378,7 +388,7 @@ func (m Manager) ConfigureProvider(ctx context.Context, d Deployment, c Provider
 			return result, rollback(err)
 		}
 	}
-	if d.Mode == ModeSystemd {
+	if d.HasSystemdRunner() {
 		canonicalSecretDir := filepath.Clean(c.SecretPath) == filepath.Join("/etc/zoe", "runner-secrets", filepath.Base(c.SecretPath)) && filepath.Dir(filepath.Clean(c.SecretPath)) == "/etc/zoe/runner-secrets"
 		if d.Root == "/etc/zoe" && !canonicalSecretDir {
 			return result, errors.New("systemd credential must be inside /etc/zoe/runner-secrets")

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestDiscoverDeploymentTreatsSystemdSupervisedComposeAsSystemd(t *testing.T) {
+func TestDiscoverDeploymentTreatsSystemdSupervisedComposeAsCompose(t *testing.T) {
 	root := t.TempDir()
 	compose := filepath.Join(root, "active.compose.yaml")
 	if err := os.WriteFile(compose, []byte("services: {}\n"), 0600); err != nil {
@@ -26,8 +26,8 @@ func TestDiscoverDeploymentTreatsSystemdSupervisedComposeAsSystemd(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Mode != ModeSystemd {
-		t.Fatalf("mode=%q, want systemd", d.Mode)
+	if d.Mode != ModeCompose || !d.HasSystemdRunner() {
+		t.Fatalf("mode=%q systemd-runner=%t, want Compose with systemd runner", d.Mode, d.HasSystemdRunner())
 	}
 }
 

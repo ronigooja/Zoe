@@ -97,11 +97,33 @@ type InspectConfig struct {
 	TriageSecretPath        string
 }
 
-func DetectMode() Mode {
+func explicitDeploymentMode() Mode {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("ZOE_DEPLOYMENT_MODE"))) {
 	case "systemd":
 		return ModeSystemd
 	case "compose":
+		return ModeCompose
+	}
+	return ModeUnknown
+}
+
+func composeFileExists(path string) bool {
+	if !filepath.IsAbs(path) {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func DetectMode() Mode {
+	if mode := explicitDeploymentMode(); mode != ModeUnknown {
+		return mode
+	}
+	if composeFileExists(os.Getenv("ZOE_COMPOSE_FILE")) {
+		return ModeCompose
+	}
+	stack, _ := readEnv("/etc/zoe/zoe-stack.env")
+	if composeFileExists(stack["ZOE_COMPOSE_FILE"]) {
 		return ModeCompose
 	}
 	if _, err := os.Stat("/run/systemd/system"); err == nil {
@@ -129,6 +151,10 @@ func (m Manager) Inspect(ctx context.Context, cfg InspectConfig) Status {
 }
 
 func (m Manager) service(ctx context.Context, mode Mode, name string, cfg InspectConfig) ServiceStatus {
+	// Unit names always address systemd, including on Compose stack hosts.
+	if strings.HasSuffix(name, ".service") {
+		mode = ModeSystemd
+	}
 	s := ServiceStatus{Name: name, Source: string(mode), State: "unknown"}
 	var out []byte
 	var err error

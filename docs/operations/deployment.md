@@ -19,11 +19,23 @@ SQLite inspection, and voice pool isolation checks, see the
 - `/etc/zoe` contains deployment configuration and secret references.
 - `/var/lib/zoe` contains authority databases and persistent service data.
 
-The operator classifies a host with a loaded `zoe-runner.service` as a systemd
-deployment, even when `ZOE_COMPOSE_FILE` is present because
-`zoe-compose.service` supervises the stack. A Compose-only deployment has no
-loaded runner unit. Keep `provider-deployment.json` consistent with this layout
-or let the operator rediscover the mode from `zoe-stack.env` and systemd.
+When discovering a deployment, stack mode and runner supervision are independent:
+a Compose stack can have systemd-managed runner, OpenCode, and Compose units.
+The following precedence applies to stack discovery (highest first).
+
+| Priority | Evidence | Result |
+| --- | --- | --- |
+| 1 | Explicit `ZOE_DEPLOYMENT_MODE=systemd` or `compose` | Override stack mode; retain runner supervision metadata. |
+| 2 | Existing regular Compose file selected by environment, stack env, then persisted path | Compose stack, regardless of systemd supervision or persisted mode. |
+| 3 | Loaded runner unit or runner environment file, without a Compose file | Systemd stack. |
+| 4 | No stack evidence; `/run/systemd/system` exists | Systemd fallback; otherwise unknown. |
+| 5 | Persisted descriptor | Path defaults only; stale mode never overrides discovery. |
+
+Discovery self-heals the resolved descriptor without writing during inspection;
+the next successful provider configuration persists the corrected descriptor.
+Systemd unit status and runner/provider restarts always use systemctl, including
+on Compose hosts. Memory configuration uses Compose; triage and recall save
+their model settings in the stack environment without a mode gate.
 
 The installer creates the external Docker network `zoe` when it is missing. The
 existing remote CLIProxyAPI deployment remains outside Zoe's lifecycle.
