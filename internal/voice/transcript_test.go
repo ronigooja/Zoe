@@ -335,7 +335,9 @@ func TestTranscriptRangeReadReturnsOnlyRequestedSeqs(t *testing.T) {
 
 func TestMigrationIsAdditiveAndKeepsExistingVoiceData(t *testing.T) {
 	_, store, _ := handoffHTTPServer(t)
-	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('legacy','default','handoff-session',1,'legacy',1,'keep verbatim',X'01',?,'legacy'); DROP TABLE IF EXISTS voice_call_summaries; DROP TABLE IF EXISTS voice_transcript_turns; DELETE FROM schema_migrations WHERE namespace='voice' AND version=211`, transcriptAt); err != nil {
+	// Reconstruct the version-210 database, removing newer dependent schema
+	// and its migration receipts together rather than leaving a history gap.
+	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('legacy','default','handoff-session',1,'legacy',1,'keep verbatim',X'01',?,'legacy'); DROP TRIGGER voice_summary_enqueue; DROP TRIGGER voice_summary_late_turn; DROP TABLE voice_summary_jobs; DROP TABLE voice_call_summaries; DROP TABLE voice_transcript_turns; DELETE FROM schema_migrations WHERE namespace='voice' AND version>=211`, transcriptAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Migrate(context.Background()); err != nil {
@@ -353,6 +355,53 @@ func TestMigrationIsAdditiveAndKeepsExistingVoiceData(t *testing.T) {
 	}
 	if err := store.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMigrationSummaryJobsUpgrades211AndKeepsExistingVoiceData(t *testing.T) {
+	_, store, _ := handoffHTTPServer(t)
+	ctx := context.Background()
+	// Reconstruct exactly the schema/history before migration 212. Keep the
+	// session, delegated turn, raw transcript, and existing derived summary.
+	if _, err := store.DB().Exec(`DROP TRIGGER voice_summary_enqueue;
+DROP TRIGGER voice_summary_late_turn;
+DROP TABLE voice_summary_jobs;
+DELETE FROM schema_migrations WHERE namespace='voice' AND version=212;
+INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('legacy','default','handoff-session',1,'legacy',1,'keep delegated',X'01',?,'legacy');
+INSERT INTO voice_transcript_turns(workspace_id,session_id,seq,role,text,at,received_at) VALUES('default','handoff-session',7,'user','keep raw',?,?);
+INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,ended_at,first_seq,last_seq,summary,created_at) VALUES('existing','default','handoff-session','topic',?,?,7,7,'keep summary',?);`, transcriptAt, transcriptAt, transcriptAt, transcriptAt, transcriptAt, transcriptAt); err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 211 {
+		t.Fatalf("pre-upgrade version=%d err=%v", version, err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ query, want string }{
+		{`SELECT id FROM voice_sessions WHERE id='handoff-session'`, "handoff-session"},
+		{`SELECT content FROM voice_turns WHERE id='legacy'`, "keep delegated"},
+		{`SELECT text FROM voice_transcript_turns WHERE session_id='handoff-session' AND seq=7`, "keep raw"},
+		{`SELECT summary FROM voice_call_summaries WHERE id='existing' AND first_seq=7 AND last_seq=7`, "keep summary"},
+	} {
+		var got string
+		if err := store.DB().QueryRow(tc.query).Scan(&got); err != nil || got != tc.want {
+			t.Fatalf("preserved data=%q want=%q err=%v", got, tc.want, err)
+		}
+	}
+	if _, err := store.DB().Exec(`UPDATE voice_sessions SET state='ended',ended_at=? WHERE id='handoff-session'; UPDATE voice_sessions SET state='ended' WHERE id='handoff-session'`, transcriptAt); err != nil {
+		t.Fatal(err)
+	}
+	var jobs int
+	if err := store.DB().QueryRow(`SELECT count(*) FROM voice_summary_jobs WHERE session_id='handoff-session' AND generation=1 AND status='pending'`).Scan(&jobs); err != nil || jobs != 1 {
+		t.Fatalf("upgraded enqueue jobs=%d err=%v", jobs, err)
+	}
+	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 212 {
+		t.Fatalf("post-upgrade version=%d err=%v", version, err)
 	}
 }
 
