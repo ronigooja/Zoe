@@ -123,7 +123,7 @@ When a live call has exactly one held task, accept model-classified `confirm` or
 `decline` only for that owner, workspace, session and generation. Eligible tasks
 are `waiting` or `awaiting_user`, with an `awaiting_message` or
 `explicit_confirmation` question, created during this session within
-`Config.ConfirmationWindow` (default ten minutes). Migration 217 persists task
+`Config.ConfirmationWindow` (default ten minutes). Migration 216 persists task
 ID, version and question on the answering turn before model I/O. Recheck all three
 inside handoff's transaction; stale, ambiguous or other-session bindings never
 authorize anything. No sentence keywords decide agreement or refusal.

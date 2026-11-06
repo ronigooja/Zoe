@@ -12,7 +12,7 @@ SQLite inspection, and voice pool isolation checks, see the
 
 ### Live-call held-task controls
 
-When deploying spoken task controls, apply voice migration 217 at normal server
+When deploying spoken task controls, apply voice migration 216 at normal server
 startup. `ZOE_VOICE_CONFIRMATION_WINDOW_SECONDS` bounds same-call held questions
 (default 600; valid range 1-3600). Configure the existing stateless triage model;
 without a classifier, speech does not authorize a held request. `zoe triage test`
