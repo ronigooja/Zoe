@@ -335,6 +335,9 @@ func TestTranscriptRangeReadReturnsOnlyRequestedSeqs(t *testing.T) {
 
 func TestMigrationIsAdditiveAndKeepsExistingVoiceData(t *testing.T) {
 	_, store, _ := handoffHTTPServer(t)
+	if _, err := store.DB().Exec(rollbackVoiceConfirmationBinding); err != nil {
+		t.Fatal(err)
+	}
 	// Reconstruct the version-210 database, removing newer dependent schema
 	// and its migration receipts together rather than leaving a history gap.
 	if _, err := store.DB().Exec(`DROP TABLE voice_instruction_deliveries; DELETE FROM schema_migrations WHERE namespace='voice' AND version=215`); err != nil {
@@ -364,6 +367,9 @@ func TestMigrationIsAdditiveAndKeepsExistingVoiceData(t *testing.T) {
 func TestMigrationSummaryJobsUpgrades211AndKeepsExistingVoiceData(t *testing.T) {
 	_, store, _ := handoffHTTPServer(t)
 	ctx := context.Background()
+	if _, err := store.DB().Exec(rollbackVoiceConfirmationBinding); err != nil {
+		t.Fatal(err)
+	}
 	// Reconstruct exactly the schema/history before migration 212. Keep the
 	// session, delegated turn, raw transcript, and existing derived summary.
 	if _, err := store.DB().Exec(`DROP TABLE voice_instruction_deliveries;
@@ -408,7 +414,7 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 	if err := store.DB().QueryRow(`SELECT count(*) FROM voice_summary_jobs WHERE session_id='handoff-session' AND generation=1 AND status='pending'`).Scan(&jobs); err != nil || jobs != 1 {
 		t.Fatalf("upgraded enqueue jobs=%d err=%v", jobs, err)
 	}
-	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 215 {
+	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 216 {
 		t.Fatalf("post-upgrade version=%d err=%v", version, err)
 	}
 }
@@ -416,6 +422,9 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 func TestMigrationRecallUpgrades212Through214(t *testing.T) {
 	_, store, _ := handoffHTTPServer(t)
 	ctx := context.Background()
+	if _, err := store.DB().Exec(rollbackVoiceConfirmationBinding); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.DB().Exec(`DROP TABLE voice_instruction_deliveries;
 ALTER TABLE voice_turns DROP COLUMN steward_decision;
 ALTER TABLE voice_turns DROP COLUMN resumed_task_id;
@@ -431,7 +440,7 @@ UPDATE voice_sessions SET state='ended',ended_at=? WHERE id='handoff-session';`,
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, version := range []int{212, 213, 214} {
+	for _, version := range []int{212, 213, 214, 215, 216} {
 		var count int
 		if err := store.DB().QueryRow(`SELECT count(*) FROM schema_migrations WHERE namespace='voice' AND version=?`, version).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("migration %d count=%d err=%v", version, count, err)
