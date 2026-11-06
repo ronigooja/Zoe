@@ -8,6 +8,8 @@ Assistant task results are durably recorded with their authoritative event. When
 
 ## System and authority
 
+For delegated task admission, the [stateless Steward contract](architecture/decisions/0012-voice-conversation-layer.md#stateless-task-manager) separates Zoe task management from resident OpenCode Worker execution.
+
 Zoe is a private, self-hosted Linux Go control server with an independent Linux runner, SQLite WAL with `synchronous=FULL`, and native SwiftUI clients for macOS, iPhone, and iPad. The first release is single-instance and multi-project with one fixed owner principal. User/workspace boundaries remain explicit for future evolution.
 
 | Component | Responsibility | Authority boundary |

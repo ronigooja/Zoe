@@ -277,3 +277,22 @@ Environment: Zoe host with release `53daae1`, `zoe-opencode` v2.2.5-ronigooja.3 
 - Not exercised: a live `ask`, Worker question, expiry, or reply against a real OpenCode session.
 
 Consequence recorded in [ADR 0011](../architecture/decisions/0011-profiles-permissions-and-context-hygiene.md): OpenCode permissions are the only enforcement layer by operator decision.
+
+## Stateless Steward task admission fixtures - 2026-11-06
+
+Source: `feat/steward` based on `d444f5b`; environment: local macOS, fake HTTP
+models/gateway and in-memory SQLite. Targeted serial Go checks passed for strict
+stateless decisions, unsupported-route API fallback, errors/timeouts, eight
+ordinary progress/recall sentence kinds, ask delivery once, idempotent spoken
+confirmation through existing append policy and one runner claim, hard-impact
+precedence, edit/shell/subagent permissions, and scripted menu configuration with
+simulated container key ownership and no secret output. The baseline regression
+on `d444f5b` failed at `steward_regression_test.go:10`:
+`ordinary sentence parked: status=waiting, want queued`.
+
+Commands used `nice -n 19 go test -count=1 -p 1 -parallel 2 -timeout 120s` with
+explicit package/test selection; no builds, race checks or whole-repository run.
+This is fixture evidence only. Real gateway speech, real model behavior, existing
+deployment profile migration, unsupported-language templates, and scoped pre-run
+high-impact confirmation remain unverified or incomplete; see the
+[contract](../architecture/decisions/0012-voice-conversation-layer.md#stateless-task-manager).

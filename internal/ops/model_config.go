@@ -168,6 +168,15 @@ func ValidateKeyFile(path string) error {
 // WriteTriageEnvAtomic updates only triage variables and preserves all other
 // lines, comments, file ownership, and existing mode.
 func WriteTriageEnvAtomic(path string, c TriageConfig, disabled bool) error {
+	return writeTaskModelEnvAtomic(path, c, disabled, "TRIAGE")
+}
+
+// WriteStewardEnvAtomic applies only to independently configured Steward variables.
+func WriteStewardEnvAtomic(path string, c TriageConfig, disabled bool) error {
+	return writeTaskModelEnvAtomic(path, c, disabled, "STEWARD")
+}
+
+func writeTaskModelEnvAtomic(path string, c TriageConfig, disabled bool, kind string) error {
 	if disabled {
 		c.BaseURL = ""
 	} else {
@@ -189,6 +198,13 @@ func WriteTriageEnvAtomic(path string, c TriageConfig, disabled bool) error {
 		"ZOE_TRIAGE_THINKING":         c.Thinking,
 		"ZOE_TRIAGE_API_KEY_FILE":     c.SecretPath,
 	}
+	if kind != "TRIAGE" {
+		renamed := map[string]string{}
+		for key, value := range updates {
+			renamed[strings.Replace(key, "TRIAGE", kind, 1)] = value
+		}
+		updates = renamed
+	}
 	lines := strings.Split(string(old), "\n")
 	kept := make([]string, 0, len(lines)+3)
 	for _, line := range lines {
@@ -204,6 +220,7 @@ func WriteTriageEnvAtomic(path string, c TriageConfig, disabled bool) error {
 		kept = kept[:len(kept)-1]
 	}
 	for _, key := range []string{"ZOE_TRIAGE_API_STYLE", "ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_REASONING_EFFORT", "ZOE_TRIAGE_THINKING", "ZOE_TRIAGE_API_KEY_FILE"} {
+		key = strings.Replace(key, "TRIAGE", kind, 1)
 		if updates[key] != "" {
 			kept = append(kept, key+"="+quoteEnv(updates[key]))
 		}

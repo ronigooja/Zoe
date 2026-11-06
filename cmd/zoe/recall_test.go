@@ -17,7 +17,7 @@ func TestMaintenanceMenuListsSummaryAndAnswerItems(t *testing.T) {
 	if err := menuWithRoot(strings.NewReader("0\n"), &out, &errOut, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"12) Configure summary model", "13) Test summary model", "14) Configure answer model", "15) Test answer model", "16) Configure voice gateway", "22) Set client policy"} {
+	for _, label := range []string{"14) Configure summary model", "15) Test summary model", "16) Configure answer model", "17) Test answer model", "18) Configure voice gateway", "24) Set client policy"} {
 		if !strings.Contains(out.String(), label) {
 			t.Errorf("missing %s", label)
 		}
@@ -45,7 +45,7 @@ func TestMaintenanceMenuAnswerFlowWritesEnvAndSecretAndTests(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"status":"answer","text":"In the January call, the meeting was set for Monday."}`})
 	}))
 	defer s.Close()
-	input := strings.NewReader("14\nhttp://remote.invalid\n" + s.URL + "\n\nfast-answer\nwrong\nlow\nwrong\ndisabled\n\nmenu-private\ny\n15\n0\n")
+	input := strings.NewReader("16\nhttp://remote.invalid\n" + s.URL + "\n\nfast-answer\nwrong\nlow\nwrong\ndisabled\n\nmenu-private\ny\n17\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(input, &out, &errOut, root); err != nil {
 		t.Fatal(err)

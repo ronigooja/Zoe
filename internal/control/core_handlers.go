@@ -40,6 +40,20 @@ var explicitConfirmationPhrases = map[string]bool{
 	"确认": true, "确认并继续": true, "是，继续": true,
 }
 
+// IsExplicitConfirmation applies to exact server-owned confirmation phrases.
+func IsExplicitConfirmation(text string) bool {
+	return explicitConfirmationPhrases[strings.ToLower(strings.TrimSpace(text))]
+}
+
+// AppendTaskTx lets authenticated voice replies reuse task.append semantics.
+func (s *Server) AppendTaskTx(ctx context.Context, tx *sql.Tx, c CommandContext, taskID, content string) (contracts.CommandResult, []contracts.Event, error) {
+	payload, err := json.Marshal(appendPayload{TaskID: taskID, Content: content})
+	if err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	return s.commandTaskAppend(ctx, tx, c, contracts.CommandRequest{Payload: payload})
+}
+
 type approvePayload struct {
 	TaskID     string `json:"task_id"`
 	ApprovalID string `json:"approval_id"`

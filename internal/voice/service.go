@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
+	"github.com/ronigooja/Zoe/internal/steward"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
 
@@ -41,10 +42,15 @@ type Config struct {
 	Classifier             Classifier
 	Summarizer             Summarizer
 	SummarySettleDelay     *time.Duration
+	Steward                TaskSteward
 }
 
 type Classifier interface {
 	Classify(context.Context, string) (string, error)
+}
+
+type TaskSteward interface {
+	Decide(context.Context, string) (steward.Decision, error)
 }
 
 type Service struct {
@@ -64,6 +70,7 @@ type Service struct {
 	resultDeliveryEnabled  bool
 	resultDeliveryInterval time.Duration
 	classifier             Classifier
+	steward                TaskSteward
 	triageMu               sync.RWMutex
 	triage                 map[string]triageCacheEntry
 	reaperStop             chan struct{}
@@ -349,7 +356,7 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if cfg.SummarySettleDelay != nil {
 		settle = *cfg.SummarySettleDelay
 	}
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, triage: make(map[string]triageCacheEntry), reaperStop: make(chan struct{}), reaperDone: make(chan struct{}), summary: &summaryWorker{db: db, model: cfg.Summarizer, now: now, settle: settle}, summaryDone: make(chan struct{})}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, steward: cfg.Steward, triage: make(map[string]triageCacheEntry), reaperStop: make(chan struct{}), reaperDone: make(chan struct{}), summary: &summaryWorker{db: db, model: cfg.Summarizer, now: now, settle: settle}, summaryDone: make(chan struct{})}
 }
 
 func triageKey(session string, generation int64, turn string, revision int64) string {

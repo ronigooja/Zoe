@@ -196,6 +196,13 @@ CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at
 	}}); err != nil {
 		return err
 	}
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 214, Name: "voice_steward_decision", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN steward_decision TEXT NOT NULL DEFAULT '';
+ALTER TABLE voice_turns ADD COLUMN resumed_task_id TEXT NOT NULL DEFAULT ''`)
+		return err
+	}}); err != nil {
+		return err
+	}
 	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 211, Name: "voice_transcripts_and_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_transcript_turns (
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),

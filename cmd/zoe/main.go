@@ -141,20 +141,22 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		fmt.Fprintln(out, "  9) Test memory model")
 		fmt.Fprintln(out, "  10) Configure triage model")
 		fmt.Fprintln(out, "  11) Test triage model")
-		fmt.Fprintln(out, "  12) Configure summary model")
-		fmt.Fprintln(out, "  13) Test summary model")
-		fmt.Fprintln(out, "  14) Configure answer model")
-		fmt.Fprintln(out, "  15) Test answer model")
+		fmt.Fprintln(out, "  12) Configure Steward model")
+		fmt.Fprintln(out, "  13) Test Steward model")
+		fmt.Fprintln(out, "  14) Configure summary model")
+		fmt.Fprintln(out, "  15) Test summary model")
+		fmt.Fprintln(out, "  16) Configure answer model")
+		fmt.Fprintln(out, "  17) Test answer model")
 		fmt.Fprintln(out, "Voice:")
-		fmt.Fprintln(out, "  16) Configure voice gateway")
-		fmt.Fprintln(out, "  17) Test voice gateway")
-		fmt.Fprintln(out, "  18) Show voice gateway status")
+		fmt.Fprintln(out, "  18) Configure voice gateway")
+		fmt.Fprintln(out, "  19) Test voice gateway")
+		fmt.Fprintln(out, "  20) Show voice gateway status")
 		fmt.Fprintln(out, "Access:")
-		fmt.Fprintln(out, "  19) Create instance key")
-		fmt.Fprintln(out, "  20) Rotate instance key")
+		fmt.Fprintln(out, "  21) Create instance key")
+		fmt.Fprintln(out, "  22) Rotate instance key")
 		fmt.Fprintln(out, "Client policy:")
-		fmt.Fprintln(out, "  21) Show client policy")
-		fmt.Fprintln(out, "  22) Set client policy")
+		fmt.Fprintln(out, "  23) Show client policy")
+		fmt.Fprintln(out, "  24) Set client policy")
 		fmt.Fprintln(out, "  0) Exit")
 		fmt.Fprint(out, "Select an option: ")
 		line, err := inputLine(in)
@@ -168,11 +170,11 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		if choice == "0" || strings.EqualFold(choice, "q") || strings.EqualFold(choice, "quit") || strings.EqualFold(choice, "exit") {
 			return nil
 		}
-		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "9": "memory test", "16": "voice configure", "17": "voice test", "18": "voice status", "19": "key init", "20": "key rotate", "21": "client-policy show", "22": "client-policy set"}[choice]
+		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "9": "memory test", "18": "voice configure", "19": "voice test", "20": "voice status", "21": "key init", "22": "key rotate", "23": "client-policy show", "24": "client-policy set"}[choice]
 		if !ok {
-			if choice == "12" || choice == "14" {
+			if choice == "14" || choice == "16" {
 				kind := "summary"
-				if choice == "14" {
+				if choice == "16" {
 					kind = "answer"
 				}
 				if err := menuRecallModel(configureMenuIO(root, in, out, errOut), kind); err != nil && !errors.Is(err, io.EOF) {
@@ -180,9 +182,9 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 				}
 				continue
 			}
-			if choice == "13" || choice == "15" {
+			if choice == "15" || choice == "17" {
 				kind := "summary"
-				if choice == "15" {
+				if choice == "17" {
 					kind = "answer"
 				}
 				if err := recallTestOperation(kind, []string{"--root", root}, in, out, errOut); err != nil {
@@ -197,6 +199,18 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 				}
 				continue
 			}
+			if choice == "12" {
+				if err := menuModel(configureMenuIO(root, in, out, errOut), true, true); err != nil && !errors.Is(err, io.EOF) {
+					fmt.Fprintln(errOut, "Error:", err)
+				}
+				continue
+			}
+			if choice == "13" {
+				if err := menuTestSteward(root, out); err != nil {
+					fmt.Fprintln(errOut, "Error:", err)
+				}
+				continue
+			}
 			if choice == "11" {
 				err := triageTestOperation([]string{"--root", root}, in, out, errOut)
 				if err != nil {
@@ -204,7 +218,7 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 				}
 				continue
 			}
-			fmt.Fprintln(errOut, "Please choose a number from 0 to 22.")
+			fmt.Fprintln(errOut, "Please choose a number from 0 to 24.")
 			continue
 		}
 		if err := operations[name](nil, in, out, errOut); err != nil {
