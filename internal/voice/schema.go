@@ -196,13 +196,6 @@ CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at
 	}}); err != nil {
 		return err
 	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 214, Name: "voice_steward_decision", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN steward_decision TEXT NOT NULL DEFAULT '';
-ALTER TABLE voice_turns ADD COLUMN resumed_task_id TEXT NOT NULL DEFAULT ''`)
-		return err
-	}}); err != nil {
-		return err
-	}
 	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 211, Name: "voice_transcripts_and_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_transcript_turns (
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -233,7 +226,7 @@ CREATE INDEX voice_call_summaries_workspace_started ON voice_call_summaries(work
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 212, Name: "voice_summary_jobs", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 212, Name: "voice_summary_jobs", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_summary_jobs (
   session_id TEXT NOT NULL REFERENCES voice_sessions(id),
   generation INTEGER NOT NULL,
@@ -259,6 +252,19 @@ BEGIN
     next_attempt_ms=0,settled_from=NEW.received_at
     WHERE session_id=NEW.session_id AND status='done' AND revision=0;
 END;`)
+		return err
+	}}); err != nil { return err }
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 213, Name: "voice_recall_jobs", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_recall_jobs (
+id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+session_id TEXT NOT NULL, generation INTEGER NOT NULL, turn_id TEXT NOT NULL,
+question TEXT NOT NULL, holding_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+UNIQUE(session_id,generation,turn_id));`)
+		return err
+	}}); err != nil { return err }
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 214, Name: "voice_steward_decision", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN steward_decision TEXT NOT NULL DEFAULT '';
+ALTER TABLE voice_turns ADD COLUMN resumed_task_id TEXT NOT NULL DEFAULT ''`)
 		return err
 	}})
 }

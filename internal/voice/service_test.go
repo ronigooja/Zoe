@@ -582,8 +582,8 @@ func TestHandoffProgressWithoutRecentTaskSaysNothingRunning(t *testing.T) {
 	}
 }
 
-func TestHandoffTaskRecallMemoryAndUnknownCategoriesStillCreateStewardTask(t *testing.T) {
-	for _, category := range []string{"task", "recall", "memory", "unknown"} {
+func TestHandoffTaskMemoryAndUnknownCategoriesStillCreateStewardTask(t *testing.T) {
+	for _, category := range []string{"task", "memory", "unknown"} {
 		t.Run(category, func(t *testing.T) {
 			classifier := &fakeClassifier{category: category}
 			ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier})

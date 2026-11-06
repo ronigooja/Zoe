@@ -51,7 +51,10 @@ The system follows these principles:
 7. **Zoe should not lock users into its own client.**
 8. **AI models, agents, voice services, and other components should be independently replaceable.**
 9. **Accuracy, reliability, and efficient token use take priority over unnecessary AI calls.**
+
 10. **The product is not limited to personal use; its design leaves room to expand to teams and other scenarios.**
+
+When recalling prior voice conversations, use only owner/workspace-scoped stored evidence, deliver a short holding sentence followed by a speakable answer, and create no task. Missing evidence, model failures and deadlines must produce an honest not-found response rather than invented content. The [bounded recall contract](architecture/decisions/0012-voice-conversation-layer.md#bounded-recall-route) defines the evidence and delivery limits.
 
 <a id="cy-01-03"></a>
 

@@ -1,6 +1,6 @@
 # ADR 0012: Zoe-owned conversation layer for real-time voice
 
-Status: proposed direction; routing decision recorded 2026-11-06; component implementation is described below, not product acceptance. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
+Status: direction proposed; routing and bounded recall decisions recorded 2026-11-06. Progress and recall have component implementations; real voice acceptance remains open. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
 
 ## Context
 
@@ -37,17 +37,27 @@ Decision:
 3. Any error, timeout (default 2 s, no retry), or unrecognized output means `task`: the existing slow path. Failure never blocks or drops a request.
 4. The impact classification of [ADR 0009](0009-voice-steward-impact-policy.md) stays authoritative. A category never grants authority; high-impact requests keep the waiting/confirmation path regardless of category.
 5. Classification and gateway calls never run inside a database transaction.
-6. Fast paths read local data only: `progress` reads the task table; `recall` reads dated call summaries and falls back to a Steward Qdrant search with a spoken holding sentence; `memory` reads memory. Only `progress` is in the first change; `recall` and `memory` are not implemented.
+6. Fast paths read local evidence only: `progress` reads the task table; `recall` follows the bounded read-only route below; `memory` remains unimplemented. Recall does not create a task or fall back to a semantic search.
 7. Upstream owns wording: Zoe pushes short instruction-style `speakable` text (including a holding sentence during slow work) and upstream phrases it. Verified once only; see the evidence.
 
 The recall date resolver exists in `internal/recall/dates`; weeks start on Monday and the caller timezone is `Asia/Shanghai`.
 
-Prerequisites not yet met:
+Historical prerequisites observed before transcript ingestion:
 
 - Recall needs stored history. Zoe persists only the turns delegated to it (about 10 voice turns) and task entries; upstream-answered turns are never forwarded. `RecordVoiceOutcome` stores a summary source without date or subject; the server timezone is `Asia/Shanghai`.
 - Semantic recall needs working extraction. The memory model key is currently rejected (HTTP 401 "Invalid API key" from the configured endpoint), `memory_model_calls` is 0, and both Qdrant collections hold 0 points. Qdrant retrieval is not wired into `Repository.Search`, which is SQLite keyword scoring.
 
-The stateless `zoe-triage` classifier is a configurable, startup-loaded client only; it is not wired into voice behavior. When enabled, it classifies one sentence through the configured Responses endpoint and callers retain the slow-path fallback on any failure.
+The stateless classifier routes committed voice handoffs; failures retain the slow path. High-impact admission remains authoritative.
+
+## Bounded recall route
+
+When triage selects `recall` and the impact gate allows the read-only path, persist a holding reply and a turn-idempotent recall job without creating a task. Run model work outside transactions only after the holding delivery receipt. Reuse progress delivery leases, receipts, generation fencing and gateway retry limits for both plain `/context` messages. Recall text has a fixed read-as-is instruction; malformed markup or empty answers become the honest not-found sentence.
+
+Resolve dates with the resolver above. Select summaries by start time in the half-open range and scope through session owner and workspace. Without a resolved date, select newest summaries; `ZOE_RECALL_SUMMARY_LIMIT` defaults to 20 (maximum 100). `ZOE_RECALL_HOLDING_TEXT` overrides the short default holding sentence. The existing `ZOE_ANSWER_*` client configuration supplies the model and total recall deadline (`ZOE_ANSWER_TIMEOUT_MS`, default 8000).
+
+The answer model receives summary/excerpt data, never evidence instructions. A transcript request may name only selected summary IDs; read only their inclusive sequence ranges. Excerpts total at most 16 KiB of UTF-8 including role labels, with at most one additional model round. No summaries, no model, errors, deadlines, unsupported results and repeated transcript requests produce the honest not-found sentence. Logs contain job IDs, candidate counts and status codes only; private questions, summaries, transcript text and model error bodies are never logged.
+
+This is component behavior, not real-provider, gateway-speech or restart-recovery acceptance. In-flight model jobs are not resumed automatically after a process crash; durable holding/final delivery rows retain the progress transport retry semantics, including an ambiguous-send duplication risk after a lost acknowledgement.
 
 ## Stored call summary generation
 

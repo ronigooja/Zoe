@@ -242,6 +242,7 @@ func (s *Service) dispatchFastReplies(ctx context.Context) {
 	for _, d := range batch {
 		s.deliverFastReply(ctx, d.id, d.workspace, d.session, d.generation, d.text, d.intent, d.attempts)
 	}
+	s.dispatchRecall(ctx)
 }
 
 func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session string, generation int64, text, intent string, attempts int) {
