@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/ronigooja/Zoe/internal/triage"
 	"log"
 	"net"
@@ -22,6 +23,7 @@ import (
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/memory"
 	"github.com/ronigooja/Zoe/internal/storage"
+	"github.com/ronigooja/Zoe/internal/summarize"
 	"github.com/ronigooja/Zoe/internal/voice"
 )
 
@@ -107,7 +109,19 @@ func run() error {
 	if triageClient != nil {
 		triageClassifier = triageAdapter{triageClient}
 	}
-	server, err := composeControlServer(store, cfg, voice.Config{IngestEnabled: voiceIngest.Enabled, Classifier: triageClassifier, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	summaryClient, err := summarize.FromEnv(os.Getenv, os.ReadFile)
+	if err != nil {
+		return fmt.Errorf("summary configuration: %w", err)
+	}
+	var summarizer voice.Summarizer
+	if summaryClient != nil {
+		summarizer = summaryClient
+	}
+	summarySettle, err := voice.SummarySettleDelay(os.Getenv("ZOE_SUMMARY_SETTLE_SECONDS"))
+	if err != nil {
+		return err
+	}
+	server, err := composeControlServer(store, cfg, voice.Config{IngestEnabled: voiceIngest.Enabled, Classifier: triageClassifier, Summarizer: summarizer, SummarySettleDelay: &summarySettle, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	}, memory.DerivedConfig{BackupDeleteManifestPath: strings.TrimSpace(os.Getenv("ZOE_BACKUP_DELETE_MANIFEST_PATH"))})
