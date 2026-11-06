@@ -104,6 +104,19 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err err
 		if err := e.rebindFromJournal(ctx, claim.RunID); err != nil {
 			return err
 		}
+		// A crash can leave prompt_sent behind after journaling termination.
+		// Replay the durable outcome in order instead of monitoring the dead
+		// session and inventing a second, potentially contradictory result.
+		history, historyErr := e.Journal.ObservationHistory(ctx, claim.RunID)
+		if historyErr != nil {
+			return historyErr
+		}
+		for _, q := range history {
+			switch q.Body.Kind {
+			case "runtime_terminated", "stop_confirmed", "no_effect_terminal", "create_rejected":
+				return e.flushPending(ctx, claim.RunID)
+			}
+		}
 		defer func() {
 			if err == nil {
 				err = e.flushPending(ctx, claim.RunID)

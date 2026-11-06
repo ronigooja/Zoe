@@ -575,7 +575,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 		{"rejected", "failed"},
 		{"runtime-failed", "failed"},
 		{"stopped", "canceled"},
-		{"awaiting-user", "waiting"},
+		{"awaiting-user", "completed"},
 	} {
 		var state string
 		if err = store.DB().QueryRowContext(ctx, `SELECT state FROM capability_trigger_runs WHERE trigger_run_id=?`, "service-trigger-"+fixture.id).Scan(&state); err != nil || state != fixture.want {
@@ -583,8 +583,8 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 		}
 	}
 	var activeSlots int
-	if err = store.DB().QueryRowContext(ctx, `SELECT count(*) FROM capability_trigger_runs WHERE trigger_id=(SELECT trigger_id FROM capability_trigger_runs WHERE trigger_run_id=?) AND state IN ('claimed','running','uncertain','waiting')`, "service-trigger-awaiting-user").Scan(&activeSlots); err != nil || activeSlots != 1 {
-		t.Fatalf("awaiting_user released concurrency slot: active=%d err=%v", activeSlots, err)
+	if err = store.DB().QueryRowContext(ctx, `SELECT count(*) FROM capability_trigger_runs WHERE trigger_id=(SELECT trigger_id FROM capability_trigger_runs WHERE trigger_run_id=?) AND state IN ('claimed','running','uncertain','waiting')`, "service-trigger-awaiting-user").Scan(&activeSlots); err != nil || activeSlots != 0 {
+		t.Fatalf("completed result retained concurrency slot: active=%d err=%v", activeSlots, err)
 	}
 }
 

@@ -45,6 +45,12 @@ func (processRecoveryRuntime) Terminate(context.Context, runner.RuntimeBinding) 
 	return "S3", nil
 }
 
+type terminalRecoveryRuntime struct{ processRecoveryRuntime }
+
+func (terminalRecoveryRuntime) Status(context.Context, runner.RuntimeBinding) (map[string]opencode.Status, error) {
+	panic("a journaled terminal outcome must be replayed without monitoring")
+}
+
 type rotationRecoveryFixture struct {
 	store   *storage.Store
 	server  *httptest.Server
@@ -147,7 +153,25 @@ func recoveryEngine(f *rotationRecoveryFixture) *runner.Engine {
 }
 
 func processRecoveryEngine(f *rotationRecoveryFixture) *runner.Engine {
-	return &runner.Engine{Control: f.client, Journal: f.journal, Runtime: processRecoveryRuntime{}}
+	return &runner.Engine{Control: f.client, Journal: f.journal, Runtime: terminalRecoveryRuntime{}}
+}
+
+func assertRecoveredTerminalOutcome(t *testing.T, f *rotationRecoveryFixture) {
+	t.Helper()
+	var status string
+	var results, terminations int
+	if err := f.store.DB().QueryRow(`SELECT status FROM runs WHERE id=?`, f.claim.RunID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.DB().QueryRow(`SELECT count(*) FROM runner_observations WHERE run_id=? AND kind='result'`, f.claim.RunID).Scan(&results); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.DB().QueryRow(`SELECT count(*) FROM runner_observations WHERE run_id=? AND kind='runtime_terminated'`, f.claim.RunID).Scan(&terminations); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || results != 0 || terminations != 1 {
+		t.Fatalf("recovered status=%s results=%d terminations=%d", status, results, terminations)
+	}
 }
 
 func journalPendingCount(t *testing.T, f *rotationRecoveryFixture) int {
@@ -274,6 +298,7 @@ func TestProcessLegacyRotationRecoveryRebindsBeforeTermination(t *testing.T) {
 	if err := processRecoveryEngine(f).Process(t.Context(), f.claim); err != nil {
 		t.Fatal(err)
 	}
+	assertRecoveredTerminalOutcome(t, f)
 	if got := serverSession(t, f); got != "S3" {
 		t.Fatalf("server session=%q, want S3", got)
 	}
@@ -296,6 +321,7 @@ func TestProcessAlreadyRotatedRecoveryEmitsNoDuplicates(t *testing.T) {
 	if err := processRecoveryEngine(f).Process(t.Context(), f.claim); err != nil {
 		t.Fatal(err)
 	}
+	assertRecoveredTerminalOutcome(t, f)
 	if got := serverRotationPairs(t, f); !reflect.DeepEqual(got, []string{"A->S1", "S1->S2", "S2->S3"}) {
 		t.Fatalf("rotation pairs=%v, want one each", got)
 	}
@@ -340,10 +366,12 @@ func TestProcessRotationRecoveryIsIdempotent(t *testing.T) {
 	if err := e.Process(t.Context(), f.claim); err != nil {
 		t.Fatal(err)
 	}
+	assertRecoveredTerminalOutcome(t, f)
 	first := serverRotationPairs(t, f)
 	if err := e.Process(t.Context(), f.claim); err != nil {
 		t.Fatal(err)
 	}
+	assertRecoveredTerminalOutcome(t, f)
 	if got := serverRotationPairs(t, f); !reflect.DeepEqual(got, first) {
 		t.Fatalf("second recovery pairs=%v, first=%v", got, first)
 	}
