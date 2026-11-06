@@ -16,6 +16,8 @@ These retained observations still support current implementation conclusions. Ea
 
 ## Current OpenCode acceptance gates
 
+Voice handoff follow-up on `aa18a08`: [local component investigation](evidence/voice-live-handoff-2026-11-06.md) reproduces suppressed high-impact question delivery and missing Steward read-as-is wording, but not the reported missing recall job. Scoped spoken high-impact authorization and live acceptance remain open.
+
 The Zoe-owned runtime remains unaccepted until evidence covers: streaming provider finish and token/usage propagation through the bridge; in-flight crash recovery without duplicate effects; and runner-enforced tool-step/time/budget limits. The four uncertain historical runs were abandoned by operator decision, so no migration gate remains for them. These are open gates, not claims established by the historical records below.
 
 Known limitations of the current source (PR #4, hosted CI passed):

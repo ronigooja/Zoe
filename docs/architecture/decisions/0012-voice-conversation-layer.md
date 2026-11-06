@@ -93,7 +93,10 @@ requests. Existing hard high-impact markers take precedence and always ask.
 When Steward asks an intent question, the task uses existing `awaiting_message`
 and `task.append` resume semantics. Exact server confirmation phrases in a later
 turn on the same owned call append to the waiting task. Questions use the durable
-voice fast-reply delivery queue. A high-impact hold remains the existing scoped
+voice fast-reply delivery queue with the fixed read-as-is instruction. When a hard
+high-impact hold is admitted, enqueue its question through the same queue once
+per stable turn, followed by an explicit paused/not-yet-authorizable notice; do
+not imply that work has started. A high-impact hold remains the existing scoped
 `explicit_confirmation` boundary; creating a valid pre-run scoped challenge is
 still unimplemented and cannot be replaced by an intent reply.
 
