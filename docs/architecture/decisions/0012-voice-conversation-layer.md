@@ -51,7 +51,7 @@ The stateless classifier routes committed voice handoffs; failures retain the sl
 
 When a handoff arrives before classification completes, wait outside the command
 transaction for the durable category and decision. `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS`
-configures both the classification deadline and handoff wait budget (default 4000,
+configures both the classification deadline and handoff wait budget (default 6000 ms,
 range 100–30000). Both triage attempts share the remaining budget, without a
 separate fast-path sub-deadline. Progress text is recomputed immediately before
 every send, so delayed classification does not freeze elapsed seconds. Classification
@@ -68,16 +68,17 @@ model failure persists `unclassified` and retains the existing slow fallback.
 Late classification only persists routing metadata; the retried handoff alone
 admits effects, under the existing stable-turn uniqueness keys. Classification
 logs include `triage_ms`, `steward_ms`, `total_ms`, budget status and storage-error
-status, `attempts`, and `reason` (`none`, `triage_timeout`, or `triage_error`), never
+status, `attempts`, and `reason` (`none`, `triage_timeout`, `triage_error`,
+`steward_timeout`, or `steward_error`), never
 sentence text or model errors.
 
 ## Bounded recall route
 
-When triage selects `recall` and the impact gate allows the read-only path, persist a holding reply and a turn-idempotent recall job without creating a task. Run model work outside transactions only after the holding delivery receipt. Reuse progress delivery leases, receipts, generation fencing and gateway retry limits for both plain `/context` messages. Recall text has a fixed read-as-is instruction; malformed markup or empty answers become the honest not-found sentence.
+When triage selects `recall` and the impact gate allows the read-only path, persist a holding reply and a turn-idempotent recall job without creating a task. Run model work outside transactions only after the holding delivery receipt. Reuse progress delivery leases, receipts, generation fencing and gateway retry limits for both plain `/context` messages. Recall text has a fixed read-as-is instruction; malformed markup or empty answers become the unavailable-check sentence defined below.
 
 Resolve dates with the resolver above. Select summaries by start time in the half-open range and scope through session owner and workspace. Without a resolved date, select newest summaries; `ZOE_RECALL_SUMMARY_LIMIT` defaults to 20 (maximum 100). `ZOE_RECALL_HOLDING_TEXT` overrides the short default holding sentence. The existing `ZOE_ANSWER_*` client configuration supplies the model and total recall deadline (`ZOE_ANSWER_TIMEOUT_MS`, default 8000).
 
-The answer model receives summary/excerpt data, never evidence instructions. A transcript request may name only selected summary IDs; read only their inclusive sequence ranges. Excerpts total at most 16 KiB of UTF-8 including role labels, with at most one additional model round. No summaries, no model, errors, deadlines, unsupported results and repeated transcript requests produce the honest not-found sentence. Logs contain job IDs, candidate counts and status codes only; private questions, summaries, transcript text and model error bodies are never logged.
+The answer model receives summary/excerpt data, never evidence instructions. A transcript request may name only selected summary IDs; read only their inclusive sequence ranges. Excerpts total at most 16 KiB of UTF-8 including role labels, with at most one additional model round. When no summaries exist or the answer reports `not_found`, say "I could not find that in our conversation records." When configuration, storage, timezone, model, deadline or validation failures prevent checking, say "I could not check the records right now, please try again." Both fixed sentences retain the existing English fallback. Logs contain job IDs, candidate counts, status codes and answer-call `elapsed_ms` only; private questions, summaries, transcript text and model error bodies are never logged.
 
 Recall workers share a service-owned cancellation context and a four-slot semaphore, acquired before a durable claim. Stop cancels and joins them before storage closes; shutdown leaves unfinished jobs for recovery. Running jobs recover to the honest fallback at startup or after a clock-injected lease (default twice the total recall timeout). The claim timestamp uses the holding receipt's `updated_at`. Recovery atomically inserts the deterministic final reply ID and marks the job terminal, preserving any existing answer. Final persistence retries three times, then retries the fallback three times; persistent storage failures leave the running job eligible for later recovery. Pending jobs retain normal holding-first dispatch.
 
@@ -108,8 +109,11 @@ When configured, `ZOE_STEWARD_BASE_URL`, `MODEL`, `API_KEY_FILE`, `API_STYLE`,
 `REASONING_EFFORT`, `THINKING`, and `TIMEOUT_MS` (each with the `ZOE_STEWARD_`
 prefix) select an independent model. Base URLs do not require `/v1`; auto style
 tries `/responses` then `/chat/completions` on unsupported-route responses.
-The default Steward HTTP timeout is 2 seconds, within the shared classification
-deadline defined in [routing](#routing-stateless-triage-decided-2026-11-06).
+The default Steward HTTP and whole-decision timeout is 3500 ms (unchanged range
+200-10000), within the shared classification deadline defined in
+[routing](#routing-stateless-triage-decided-2026-11-06). Both API-style attempts
+share the decision deadline. The total budget is not a guarantee that triage and
+Steward can both consume their full timeout; operators can raise it explicitly.
 Errors, timeouts, disabled configuration and unknown outputs dispatch ordinary
 requests. Existing hard high-impact markers take precedence and always ask.
 

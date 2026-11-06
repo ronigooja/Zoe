@@ -16,7 +16,7 @@ func (s *Service) classificationTimeout() time.Duration {
 	if s.recall.ClassificationTimeout > 0 {
 		return s.recall.ClassificationTimeout
 	}
-	return 4 * time.Second
+	return 6 * time.Second
 }
 
 // prepareHandoff waits without holding the single database connection. On budget

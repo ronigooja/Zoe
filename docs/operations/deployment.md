@@ -127,10 +127,15 @@ Triage is disabled when `ZOE_TRIAGE_BASE_URL` is empty. Apply a saved change wit
 
 For committed voice turns, `ZOE_TRIAGE_TIMEOUT_MS` sets the HTTP timeout (default
 3000 ms, range 200–10000). `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS` bounds total
-classification and the handoff wait (default 4000 ms, range 100–30000). One retry
+classification and the handoff wait (default 6000 ms, range 100-30000). One retry
 shares the remaining classification budget; there is no separate 1500 ms cutoff.
+For task classification, `ZOE_STEWARD_TIMEOUT_MS` bounds the HTTP call and the
+whole Steward decision, including API-style negotiation (default 3500 ms, range
+200-10000). Triage and Steward share the total budget, not additive guarantees;
+raise the total explicitly when both calls may consume their full timeouts.
 Exhausted failures retain the slow path and log only bounded classification
-diagnostics, including `reason=triage_timeout` or `reason=triage_error` and `attempts`.
+diagnostics, including `steward_ms`, `reason=triage_timeout`, `triage_error`,
+`steward_timeout` or `steward_error`, and `attempts`.
 
 For triage requests, `ZOE_TRIAGE_THINKING` and `ZOE_TRIAGE_REASONING_EFFORT` (CLI `--thinking` and `--effort`) control the following wire fields. Effort accepts `none`, `low`, `medium`, `high`, `max`, or empty; `minimal` is rejected by the configured OpenAI-style gateway. Values are sent unchanged, not mapped locally.
 

@@ -645,8 +645,18 @@ func (s *Service) classifyCommittedTurn(id string) {
 	} else if s.steward != nil && category == "task" {
 		stewardStarted := time.Now()
 		answer, callErr := s.steward.Decide(ctx, content)
+		if ctx.Err() != nil {
+			callErr = ctx.Err()
+		}
 		decision = steward.Resolve(answer, callErr, false)
 		stewardMS = time.Since(stewardStarted).Milliseconds()
+		if callErr != nil {
+			reason = "steward_error"
+			var timeout interface{ Timeout() bool }
+			if errors.Is(callErr, context.DeadlineExceeded) || (errors.As(callErr, &timeout) && timeout.Timeout()) {
+				reason = "steward_timeout"
+			}
+		}
 	}
 	// Persist using a fresh short context even if model I/O exhausted its deadline.
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), time.Second)

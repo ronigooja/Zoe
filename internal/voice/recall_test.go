@@ -162,6 +162,9 @@ func TestRecallRoute(t *testing.T) {
 				t.Fatalf("holding=%q", pushes[0])
 			}
 			expected := recallNotFound
+			if mode == "unconfigured" || mode == "error" || mode == "timeout" || mode == "unknown_id" || mode == "round_limit" {
+				expected = "I could not check the records right now, please try again."
+			}
 			if mode == "answer" || mode == "transcript" {
 				expected = "We discussed the garden."
 			}
@@ -182,6 +185,12 @@ func TestRecallRoute(t *testing.T) {
 			if strings.Contains(logs.String(), q) || strings.Contains(logs.String(), "private transcript secret") || strings.Contains(logs.String(), "private summary secret") {
 				t.Fatal("private text leaked to logs")
 			}
+			if !strings.Contains(logs.String(), "voice recall id=") || !strings.Contains(logs.String(), "elapsed_ms=") {
+				t.Fatal("recall log missing answer elapsed_ms")
+			}
+			if mode == "timeout" && !strings.Contains(logs.String(), "status=timeout") {
+				t.Fatal("recall deadline missing timeout status")
+			}
 		})
 	}
 }
@@ -189,7 +198,7 @@ func TestRecallRoute(t *testing.T) {
 func TestRecallSpeechRejectsMarkupAndEvidenceIDs(t *testing.T) {
 	for _, text := range []string{"**garden**", "[garden](https://example.com)", "selected-summary"} {
 		got := recallSpeech(text, []answer.Candidate{{ID: "selected-summary"}})
-		if got != recallPrefix+recallNotFound {
+		if got != recallPrefix+recallUnavailable {
 			t.Fatalf("unsafe speech: %q", got)
 		}
 	}
@@ -215,5 +224,36 @@ func TestRecallLatestSummaryLimit(t *testing.T) {
 	text, n, status := svc.recallAnswer(context.Background(), "default", "owner", "remember our conversations")
 	if status != "answer" || n != 2 || text != recallPrefix+"We discussed the garden." {
 		t.Fatalf("status=%s count=%d text=%q", status, n, text)
+	}
+}
+
+func TestRecallFailureSentences(t *testing.T) {
+	for _, status := range []string{"unconfigured", "timezone", "summary_error", "no_summaries", "model_error", "invalid_request", "timeout", "transcript_error", "not_found"} {
+		t.Run(status, func(t *testing.T) {
+			want := recallUnavailable
+			if status == "no_summaries" || status == "not_found" {
+				want = recallNotFound
+			}
+			if got := recallFailureSpeech(status); got != recallPrefix+want {
+				t.Fatalf("%s speech=%q, want %q", status, got, recallPrefix+want)
+			}
+		})
+	}
+}
+
+func TestRecallSummaryReadFailureIsNotMissingEvidence(t *testing.T) {
+	_, store, _ := handoffHTTPServerWithConfig(t, Config{})
+	model := recallModelFunc(func(context.Context, string, []answer.Candidate, []answer.Excerpt) (answer.Result, error) {
+		t.Fatal("model called after summary read failure")
+		return answer.Result{}, nil
+	})
+	svc := newService(store.DB(), Config{Answerer: model})
+	defer svc.Stop()
+	if _, err := store.DB().Exec(`DROP TABLE voice_call_summaries`); err != nil {
+		t.Fatal(err)
+	}
+	text, count, status := svc.recallAnswer(context.Background(), "default", "owner", "private question")
+	if status != "summary_error" || count != 0 || text != recallPrefix+recallUnavailable {
+		t.Fatalf("summary failure status=%s count=%d text=%q", status, count, text)
 	}
 }

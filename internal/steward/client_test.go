@@ -3,6 +3,7 @@ package steward
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -90,4 +91,44 @@ func TestErrorsTimeoutAndUnknownFallback(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDefaultTimeoutHonoursThreeSecondAsk(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3000 * time.Millisecond)
+		_, _ = fmt.Fprint(w, `{"output_text":"ask"}`)
+	}))
+	defer s.Close()
+	decision, err := configured(t, s.URL, "").Decide(context.Background(), "private sentence")
+	if err != nil || Resolve(decision, err, false) != Ask {
+		t.Fatalf("three-second ask lost: decision=%s err=%v", decision, err)
+	}
+}
+
+func TestParsedDefaultStewardTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{{"", 3500 * time.Millisecond}, {"1000", time.Second}, {"10000", 10 * time.Second}} {
+		c := configured(t, "http://localhost", tc.value)
+		c.SetHTTPClient(&http.Client{Transport: stewardDeadlineTransport{t: t, want: tc.want}})
+		_, err := c.Decide(context.Background(), "private sentence")
+		if err == nil {
+			t.Fatal("expected transport error")
+		}
+	}
+}
+
+type stewardDeadlineTransport struct {
+	t    *testing.T
+	want time.Duration
+}
+
+func (f stewardDeadlineTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	deadline, ok := r.Context().Deadline()
+	remaining := time.Until(deadline)
+	if !ok || remaining > f.want || remaining < f.want-100*time.Millisecond {
+		f.t.Errorf("parsed Steward deadline=%v, want %v", remaining, f.want)
+	}
+	return nil, errors.New("private transport failure")
 }

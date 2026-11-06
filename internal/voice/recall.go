@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -15,7 +16,16 @@ import (
 
 const recallExcerptBytes = 16 * 1024
 const recallNotFound = "I could not find that in our conversation records."
+const recallUnavailable = "I could not check the records right now, please try again."
 const recallPrefix = "Read this to the user exactly as written: "
+
+// recallFailureSpeech applies fixed wording without implying a failed check found no evidence.
+func recallFailureSpeech(status string) string {
+	if status == "no_summaries" || status == "not_found" {
+		return recallSpeech(recallNotFound, nil)
+	}
+	return recallSpeech(recallUnavailable, nil)
+}
 
 // recallWorkerLimit bounds model work per service, including persistence retries.
 const recallWorkerLimit = 4
@@ -54,7 +64,7 @@ func (s *Service) recoverRecall(ctx context.Context, startup bool) {
 	}
 	rows.Close()
 	for _, id := range ids {
-		s.persistRecallRetry(ctx, id, recallSpeech(recallNotFound, nil))
+		s.persistRecallRetry(ctx, id, recallSpeech(recallUnavailable, nil))
 	}
 }
 
@@ -106,11 +116,11 @@ func recallSpeech(text string, candidates []answer.Candidate) string {
 	text = recallIDs.ReplaceAllString(text, "")
 	// Reject markup instead of risking reading formatting, links or evidence IDs aloud.
 	if strings.ContainsAny(text, "*#`[]<>_~|") {
-		text = recallNotFound
+		text = recallUnavailable
 	}
 	text = boundedResultText(text)
 	if text == "" {
-		text = recallNotFound
+		text = recallUnavailable
 	}
 	return recallPrefix + text
 }
@@ -183,7 +193,9 @@ func (s *Service) runRecall(id string) {
 	if err := s.db.QueryRowContext(ctx, `SELECT workspace_id,owner_id,session_id,generation,turn_id,question FROM voice_recall_jobs WHERE id=?`, id).Scan(&workspace, &owner, &session, &generation, &turn, &question); err != nil {
 		return
 	}
+	started := time.Now()
 	text, count, status := s.recallAnswer(ctx, workspace, owner, question)
+	elapsedMS := time.Since(started).Milliseconds()
 	// Model deadlines get a fallback, but shutdown leaves the lease for recovery.
 	if s.recallCtx.Err() != nil {
 		return
@@ -191,17 +203,22 @@ func (s *Service) runRecall(id string) {
 	persist, done := context.WithTimeout(s.recallCtx, 8*time.Second)
 	defer done()
 	if !s.persistRecallRetry(persist, id, text) {
-		if !s.persistRecallRetry(persist, id, recallSpeech(recallNotFound, nil)) {
+		if !s.persistRecallRetry(persist, id, recallSpeech(recallUnavailable, nil)) {
 			return
 		}
 		status = "persist_fallback"
 	}
-	log.Printf("voice recall id=%s candidates=%d status=%s", id, count, status)
+	log.Printf("voice recall id=%s candidates=%d status=%s elapsed_ms=%d", id, count, status, elapsedMS)
 	s.dispatchFastReplies(persist)
 }
 
 func (s *Service) recallAnswer(ctx context.Context, workspace, owner, question string) (string, int, string) {
-	fail := func(n int, status string) (string, int, string) { return recallSpeech(recallNotFound, nil), n, status }
+	fail := func(n int, status string) (string, int, string) {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			status = "timeout"
+		}
+		return recallFailureSpeech(status), n, status
+	}
 	if s.recall.Answerer == nil {
 		return fail(0, "unconfigured")
 	}
@@ -250,6 +267,9 @@ func (s *Service) recallAnswer(ctx context.Context, workspace, owner, question s
 	}
 	result, err := s.recall.Answerer.Answer(ctx, question, candidates, nil)
 	if err != nil || ctx.Err() != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fail(n, "timeout")
+		}
 		return fail(n, "model_error")
 	}
 	if result.Status == "need_transcript" {
@@ -292,10 +312,16 @@ func (s *Service) recallAnswer(ctx context.Context, workspace, owner, question s
 		result, err = s.recall.Answerer.Answer(ctx, question, candidates, excerpts)
 	}
 	if err != nil || ctx.Err() != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fail(n, "timeout")
+		}
 		return fail(n, "model_error")
 	}
 	if result.Status != "answer" || strings.TrimSpace(result.Text) == "" {
-		return fail(n, "not_found")
+		if result.Status == "not_found" {
+			return fail(n, "not_found")
+		}
+		return fail(n, "invalid_request")
 	}
 	return recallSpeech(result.Text, candidates), n, "answer"
 }

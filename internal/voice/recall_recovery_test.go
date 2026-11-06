@@ -62,7 +62,7 @@ func TestRecallRecoveryRestartAndLease(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := recallSpeech(recallNotFound, nil)
+			want := recallSpeech(recallUnavailable, nil)
 			if mode == "existing_answer" {
 				want = recallPrefix + "We discussed the garden."
 				_, err = store.DB().Exec(`INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('job-0','default','handoff-session',1,'recall-answer:job-0',?,'recall_answer','pending',?,?,?)`, want, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
@@ -120,7 +120,7 @@ func TestRecallPersistenceRetriesThenFallback(t *testing.T) {
 	}
 	var text string
 	_ = store.DB().QueryRow(`SELECT text FROM voice_fast_replies WHERE id='job-0'`).Scan(&text)
-	if text != recallSpeech(recallNotFound, nil) || calls.Load() != 1 {
+	if text != recallSpeech(recallUnavailable, nil) || calls.Load() != 1 {
 		t.Fatalf("fallback text=%q model calls=%d", text, calls.Load())
 	}
 }

@@ -1,5 +1,11 @@
 # Acceptance evidence register
 
+## Recall failure wording and Steward budget component checks - 2026-11-06
+
+Source: `feat/recall-reasons`, based on `55919f4`; local macOS with synthetic HTTP/model fixtures only. New tests against unchanged baseline implementation failed at `recall_test.go:172` (model errors spoken as not found), `recall_test.go:189` (missing elapsed timing), `live_handoff_test.go:26` (4 s classification default), `live_handoff_test.go:50` (missing Steward failure reason), `client_test.go:104` (3 s ask lost), and `client_test.go:125` (Steward deadline did not match configured/default timeout). A separate HTTP handoff fixture failed at `live_handoff_test.go:47` because the delayed ask silently queued a task. These are pre-format red-run line numbers.
+
+Focused recall/recovery, Steward transport/deadline, classification budget/logging and handoff tests passed through `/tmp/zoe-gotest.sh`, one package per invocation. Touched-package `go vet`, `gofmt -l`, whitespace and documentation checks passed locally. This establishes component behavior only; no CI, build, race/full suite, deployment, real-provider or spoken gateway acceptance was performed.
+
 ## Call summary worker component checks — 2026-11-06
 
 Hosted run [42155881820](https://github.com/ronigooja/Zoe/actions/runs/42155881820) on `42893c9` exposed two stale fixtures: the additive migration test removed receipt 211 while retaining 212, and the CLI summary probe asserted superseded prompt wording. The repair reconstructs a consistent version-210 fixture, adds a version-211-to-212 upgrade check preserving session/delegated/raw/summary data and verifying deduplicated enqueue after migration, and asserts the current runtime prompt without weakening JSON/call-count checks. On local macOS, each exact failing test passed, then `nice -n 19 go test -count=1 -p 1 -parallel 2 -timeout 120s ./internal/voice/ ./cmd/zoe/ -run 'TestSummary|TestMigration'` passed once. Hosted race/full-suite verification remains pending; no deployment or product acceptance is claimed.

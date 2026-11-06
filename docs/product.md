@@ -54,7 +54,7 @@ The system follows these principles:
 
 10. **The product is not limited to personal use; its design leaves room to expand to teams and other scenarios.**
 
-When recalling prior voice conversations, use only owner/workspace-scoped stored evidence, deliver a short holding sentence followed by a speakable answer, and create no task. Missing evidence, model failures and deadlines must produce an honest not-found response rather than invented content. The [bounded recall contract](architecture/decisions/0012-voice-conversation-layer.md#bounded-recall-route) defines the evidence and delivery limits.
+When recalling prior voice conversations, use only owner/workspace-scoped stored evidence, deliver a short holding sentence followed by a speakable answer, and create no task. Missing evidence produces an honest not-found response; failures and deadlines instead report that records could not be checked, never inventing content or claiming there is no record. The [bounded recall contract](architecture/decisions/0012-voice-conversation-layer.md#bounded-recall-route) defines the evidence and delivery limits.
 
 <a id="cy-01-03"></a>
 

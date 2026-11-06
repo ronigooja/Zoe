@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +19,69 @@ import (
 	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/steward"
 )
+
+func TestDefaultClassificationBudget(t *testing.T) {
+	svc := &Service{}
+	if got := svc.classificationTimeout(); got != 6*time.Second {
+		t.Fatalf("default classification budget=%v, want 6s", got)
+	}
+	svc.recall.ClassificationTimeout = 7 * time.Second
+	if got := svc.classificationTimeout(); got != 7*time.Second {
+		t.Fatalf("configured classification budget=%v, want 7s", got)
+	}
+}
+
+func TestThreeSecondStewardAskHonouredByHandoff(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3000 * time.Millisecond)
+		_, _ = fmt.Fprint(w, `{"output_text":"ask"}`)
+	}))
+	defer model.Close()
+	env := map[string]string{"ZOE_STEWARD_BASE_URL": model.URL, "ZOE_STEWARD_MODEL": "fake-steward", "ZOE_STEWARD_API_KEY_FILE": "/fake/key"}
+	client, err := steward.FromEnv(func(k string) string { return env[k] }, func(string) ([]byte, error) { return []byte("fake-key"), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: &fakeClassifier{category: "task"}, Steward: client})
+	receipt := commitAndHandoff(t, ts, key, "three-second-ask", "please handle this")
+	var status string
+	if err := store.DB().QueryRow(`SELECT status FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "waiting" {
+		t.Fatalf("three-second ask silently dispatched: task status=%s", status)
+	}
+}
+
+func TestStewardFailureReasonLogs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{{"steward_timeout", context.DeadlineExceeded}, {"steward_error", errors.New("private transcript secret")}} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, store, _ := handoffHTTPServerWithConfig(t, Config{})
+			const content = "private question for the steward"
+			hash := sha256.Sum256([]byte(content))
+			_, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('steward-log','default','handoff-session',1,'steward-log',1,?,?,?,'steward-log')`, content, hash[:], time.Now().UTC().Format(time.RFC3339Nano))
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc := newService(store.DB(), Config{Classifier: &fakeClassifier{category: "task"}, Steward: &fakeSteward{err: tc.err}})
+			defer svc.Stop()
+			var logs bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&logs)
+			defer log.SetOutput(previous)
+			svc.classifyCommittedTurn("steward-log")
+			if !strings.Contains(logs.String(), "steward_ms=") || !strings.Contains(logs.String(), "reason="+tc.name) {
+				t.Fatalf("missing Steward reason: %s", logs.String())
+			}
+			if strings.Contains(logs.String(), content) || strings.Contains(logs.String(), "private transcript secret") {
+				t.Fatal("private text logged")
+			}
+		})
+	}
+}
 
 // delayedLiveClassifier reproduces a model completing after handoff starts.
 type delayedLiveClassifier struct{ delay time.Duration }
