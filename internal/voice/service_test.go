@@ -598,7 +598,9 @@ func TestHandoffTaskMemoryAndUnknownCategoriesStillCreateStewardTask(t *testing.
 }
 
 func TestHandoffClassifierErrorOrTimeoutFallsBackToSlowPath(t *testing.T) {
-	for i, classifier := range []*fakeClassifier{{err: errors.New("classifier failed")}, {delay: 2 * time.Second, category: "progress"}} {
+	// A client timeout can occur before the shared classification budget is
+	// exhausted. Both attempts must fail before the slow fallback is admitted.
+	for i, classifier := range []*fakeClassifier{{err: errors.New("classifier failed")}, {delay: 20 * time.Millisecond, err: context.DeadlineExceeded}} {
 		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
 			ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: classifier})
 			receipt := commitAndHandoff(t, ts, key, fmt.Sprintf("classifier-failure-%d", i), "please handle this")
@@ -606,6 +608,9 @@ func TestHandoffClassifierErrorOrTimeoutFallsBackToSlowPath(t *testing.T) {
 			_ = store.DB().QueryRow(`SELECT count(*) FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&count)
 			if count != 1 {
 				t.Fatalf("tasks=%d", count)
+			}
+			if classifier.calls.Load() != 2 {
+				t.Fatalf("classifier calls=%d, want initial attempt and one retry", classifier.calls.Load())
 			}
 		})
 	}
@@ -652,11 +657,13 @@ func TestFailedClassificationIsNotRetriedEveryTick(t *testing.T) {
 	commitAndHandoff(t, ts, key, "failed-once", "please handle this")
 	var category string
 	_ = store.DB().QueryRow(`SELECT triage_category FROM voice_turns WHERE turn_id='failed-once'`).Scan(&category)
-	if category != "unclassified" || classifier.calls.Load() != 1 {
+	if category != "unclassified" || classifier.calls.Load() != 2 {
 		t.Fatalf("category=%q calls=%d", category, classifier.calls.Load())
 	}
-	newService(store.DB(), Config{Classifier: classifier}).classifyCommittedTurns(context.Background())
-	if classifier.calls.Load() != 1 {
+	svc := newService(store.DB(), Config{Classifier: classifier})
+	defer svc.Stop()
+	svc.classifyCommittedTurns(context.Background())
+	if classifier.calls.Load() != 2 {
 		t.Fatalf("failed classification retried: calls=%d", classifier.calls.Load())
 	}
 }
