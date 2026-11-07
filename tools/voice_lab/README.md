@@ -133,6 +133,11 @@ tools/voice_lab/
 
 ## Dependencies
 
+An offline Codex CLI transport-fingerprint investigation is recorded in
+[FINGERPRINT_FEASIBILITY.md](FINGERPRINT_FEASIBILITY.md). Stock curl_cffi 0.17.0
+did not match either reference TLS hash; the live transports and default persona
+remain unchanged pending a decision about approximate versus exact parity.
+
 Dependencies are pinned in `requirements.txt`. The gateway host has Python 3.11 and none of these installed; installation goes into a virtual environment under `/tmp/voice-lab`, removed afterwards. Whether the chosen WebRTC library negotiates audio and ICE with the upstream through the account proxy is UNVERIFIED and is the main implementation risk; E0 exists to find out.
 
 When using SOCKS proxies, `websockets` requires `python-socks`.

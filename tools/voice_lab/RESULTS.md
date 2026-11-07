@@ -1,5 +1,9 @@
 # Voice lab results
 
+Offline transport-fingerprint findings are separate from these live results:
+[Codex feasibility](FINGERPRINT_FEASIBILITY.md). No Codex fingerprint profile has
+been tested against AVAS, and the investigation did not change live transports.
+
 Observations from live runs against the upstream AVAS realtime service, 2026-11-07. One pool account, through its stored egress proxy, one call at a time, synthetic speech only. Samples are small (usually three calls per cell), so results show tendencies, not rates. The `instructions` text used in most runs is `cases/instructions_v2.txt`.
 
 Not covered: human voices, interruption of speech already being spoken, sending context while the user is silent, call duration limits, a second delegation in one call.
