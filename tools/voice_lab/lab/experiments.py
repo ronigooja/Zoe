@@ -90,7 +90,7 @@ async def _frames(ctx, sideband, text, identifier=None):
         await sideband.send(frame)
 
 
-async def _call(ctx, session, wav, mode=None, sentence=None):
+async def _call(ctx, session, wav, mode=None, sentence=None, probe=None):
     peer = sideband = None
     reader = None
     queue = asyncio.Queue()
@@ -129,6 +129,8 @@ async def _call(ctx, session, wav, mode=None, sentence=None):
         result['sideband_connected'] = True
         reader = asyncio.create_task(read_events(), name='voice-lab-sideband-reader')
         await peer.set_answer(created.answer_sdp)
+        if probe is not None:
+            await probe.ready(sideband, peer, result)
         if mode == 'silence':
             await asyncio.sleep(ctx.silence_s)
         else:
@@ -157,6 +159,10 @@ async def _call(ctx, session, wav, mode=None, sentence=None):
                     break
                 event = queued[0]
                 result['events'].append(event)
+                if probe is not None:
+                    if await probe.event(event):
+                        break
+                    continue
                 if turn(event, 'user') and delegation_deadline is None:
                     delegation_deadline = asyncio.get_running_loop().time() + ctx.delegation_grace_s
                 new_id = delegation_id(event)
@@ -188,6 +194,8 @@ async def _call(ctx, session, wav, mode=None, sentence=None):
                             result['second_reply_seen'] = True
         result['received_audio_ms'] = peer.received_audio_ms
     finally:
+        if probe is not None:
+            await probe.close()
         if reader is not None:
             reader.cancel()
             await asyncio.gather(reader, return_exceptions=True)

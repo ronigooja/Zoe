@@ -105,6 +105,13 @@ class Peer:
         self._received_audio_ms = 0.0
         self._closed = False
 
+    async def play_wav(self, path):
+        """Replace microphone input after connection; negotiated format stays fixed."""
+        read_wav(path)
+        if self._track is None or self._closed:
+            raise LabError('Create an offer before playing audio')
+        self._track.frames = iter(pcm_frames(path))
+
     @property
     def received_audio_ms(self):
         return self._received_audio_ms

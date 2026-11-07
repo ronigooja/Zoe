@@ -86,6 +86,16 @@ E6. `initial_items`. Create a call with one `user` item stating a fact, then ask
 
 E7. `ack_filler`. Same as E2 with `delegation.ack_filler` set true and false. Observe any spoken filler and event differences.
 
+P1. Cancel state: `probes.py --experiment P1 --audio DIR` joins `01.wav` (weather) and `02.wav` (cancel) with `--gap-s` silence, then sends `--state-file` bound to the open delegation `--delay-s` seconds after the second final user turn. It plays `03.wav` (progress) after sending state and records `progress_answer`; prepare these three WAVs in that order, independently of the E2 utterance set.
+
+P2. Missing fact: `--experiment P2 --audio question.wav --items-file cases/items_plate_home.txt` seeds user facts and records delegation and final assistant text. Compare separate invocations with `--instructions-file cases/instructions_v2.txt` and `cases/instructions_v3.txt`; the human verifies that the question is absent from the facts.
+
+P3. Mid-call instructions: `--experiment P3 --audio first.wav --second-audio later.wav --update-instructions-file cases/instructions_override.txt` sends one `session.update`, then plays the later utterance. `--update-trigger event` waits for the first delegation or final assistant answer; `--update-trigger timer --update-after-s 3` instead uses elapsed time after connection; all later event types, error messages/codes and final assistant text are retained for human judgment (mid-call AVAS support is UNVERIFIED).
+
+P4. Mid-call facts: the same controls as P3, with `--experiment P4 --update-items-file cases/items_plate_home.txt`, send `session.update.session.initial_items` built from `role|text` lines. Observe acknowledgments, errors and later assistant text; acceptance is not inferred from a successful send.
+
+For P1-P4, `--repeat N` defaults to three independent calls and result directories; stdout contains counts only. Each call is bounded by `--timeout-s` plus independent cleanup budgets, uses the normal account/persona redaction rules, and records evidence rather than semantic pass/fail; dry runs print file names and text lengths only. `probes.py` and `run.py` share the same CLI; no probes were run live during implementation.
+
 Order: E0, E1, then E2 to E7 only after E1 produces a delegation from synthetic speech. If E1 never does, the experiments switch to typed input if the sideband accepts a user text item (UNVERIFIED), and the plan is revised in this document before more code is written.
 
 ## Result files

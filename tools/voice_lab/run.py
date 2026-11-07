@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument('--experiment', required=True, choices=[f'E{i}' for i in range(8)])
+    result.add_argument('--experiment', required=True, choices=[f'E{i}' for i in range(8)] + [f'P{i}' for i in range(1, 5)])
     result.add_argument('--account-id', required=True, type=int)
     for name in ('db-copy', 'key-file', 'persona-file'):
         result.add_argument('--' + name, required=True)
@@ -23,6 +23,16 @@ def parser():
     result.add_argument('--instructions-file', type=Path, default=ROOT / 'cases' / 'instructions.txt')
     result.add_argument('--timeout-s', type=float, default=45.0)
     result.add_argument('--dry-run', action='store_true')
+    result.add_argument('--repeat', type=int, default=3)
+    result.add_argument('--delay-s', type=float, default=1.0)
+    result.add_argument('--gap-s', type=float, default=3.0)
+    result.add_argument('--update-after-s', type=float, default=3.0)
+    result.add_argument('--update-trigger', choices=('event', 'timer'), default='event')
+    result.add_argument('--second-audio', type=Path)
+    result.add_argument('--state-file', type=Path, default=ROOT / 'cases' / 'state_cancel.txt')
+    result.add_argument('--items-file', type=Path, default=ROOT / 'cases' / 'items_plate_home.txt')
+    result.add_argument('--update-instructions-file', type=Path, default=ROOT / 'cases' / 'instructions_override.txt')
+    result.add_argument('--update-items-file', type=Path, default=ROOT / 'cases' / 'items_plate_home.txt')
     return result
 
 
@@ -33,6 +43,17 @@ def validate(args, argument_parser):
         argument_parser.error('--timeout-s must be finite, positive, and at most 300')
     if args.experiment != 'E0' and args.audio is None:
         argument_parser.error('--audio is required except for E0')
+    if args.experiment.startswith('P'):
+        if not 1 <= args.repeat <= 100:
+            argument_parser.error('--repeat must be between 1 and 100')
+        for value in (args.delay_s, args.gap_s, args.update_after_s):
+            if not math.isfinite(value) or not 0 <= value <= 300:
+                argument_parser.error('Probe delays must be finite and between 0 and 300')
+        if args.experiment in ('P3', 'P4') and args.second_audio is None:
+            argument_parser.error('--second-audio is required for update probes')
+        if args.experiment == 'P1' and args.audio.suffix.lower() == '.wav':
+            argument_parser.error('P1 requires a directory containing 01.wav, 02.wav, 03.wav')
+        return
     if args.audio is not None:
         if args.experiment == 'E1' and args.audio.suffix.lower() != '.wav':
             argument_parser.error('E1 requires a WAV path')
@@ -41,6 +62,9 @@ def validate(args, argument_parser):
 
 
 def plan(args):
+    if args.experiment.startswith('P'):
+        from lab.probes import plan as probe_plan
+        return probe_plan(args)
     instructions = args.instructions_file.read_text(encoding='utf-8')
     utterances = (ROOT / 'cases' / 'utterances.txt').read_text(encoding='utf-8').splitlines()
     return {'experiment': args.experiment, 'utterances': utterances,
@@ -75,7 +99,19 @@ async def execute(args):
                       user_text_frame=user_text_frame,
                       paths={'cases': ROOT / 'cases', 'audio': args.audio,
                              'instructions': args.instructions_file}, timeout_s=args.timeout_s)
+    if args.experiment.startswith('P'):
+        from lab.probes import run_probe
+        return await run_probe(context, args)
     return await EXPERIMENTS[args.experiment](context)
+
+
+async def repeated(args):
+    results = [await execute(args) for _ in range(args.repeat)]
+    return {'pass': all(result['pass'] for result in results),
+            'counts': {'runs': len(results), 'completed': sum(bool(r['pass']) for r in results),
+                       'delegated': sum(bool(r.get('delegated')) for r in results),
+                       'errors': sum(bool(r.get('error') or r.get('reader_error') or r.get('post_update_errors'))
+                                     for r in results)}}
 
 
 def main(argv=None):
@@ -86,7 +122,7 @@ def main(argv=None):
         print(json.dumps(plan(args), ensure_ascii=True, indent=2))
         return 0
     try:
-        observations = asyncio.run(execute(args))
+        observations = asyncio.run(repeated(args) if args.experiment.startswith('P') else execute(args))
     except (LabError, ValueError):
         print('Experiment failed; sensitive error details suppressed.')
         return 1
@@ -94,7 +130,10 @@ def main(argv=None):
         # Exception messages may contain request URLs or credentials.
         print('Experiment failed; sensitive error details suppressed.')
         return 1
-    print(args.experiment + ': ' + ('PASS' if observations['pass'] else 'FAIL'))
+    if args.experiment.startswith('P'):
+        print(' '.join(key + '=' + str(value) for key, value in observations['counts'].items()))
+    else:
+        print(args.experiment + ': ' + ('PASS' if observations['pass'] else 'FAIL'))
     return 0 if observations['pass'] else 1
 
 
