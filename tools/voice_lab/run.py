@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument('--experiment', required=True, choices=[f'E{i}' for i in range(8)] + [f'P{i}' for i in range(1, 5)])
+    result.add_argument('--experiment', required=True, choices=[f'E{i}' for i in range(8)] + [f'P{i}' for i in range(1, 9)])
     result.add_argument('--account-id', required=True, type=int)
     for name in ('db-copy', 'key-file', 'persona-file'):
         result.add_argument('--' + name, required=True)
@@ -29,6 +29,12 @@ def parser():
     result.add_argument('--update-after-s', type=float, default=3.0)
     result.add_argument('--update-trigger', choices=('event', 'timer'), default='event')
     result.add_argument('--second-audio', type=Path)
+    result.add_argument('--channel', choices=('instructions', 'thinking', 'commentary'), default='instructions')
+    result.add_argument('--bind', choices=('none', 'open'), default='none')
+    result.add_argument('--text-file', type=Path, default=ROOT / 'cases' / 'append_override.txt')
+    result.add_argument('--spoken-window-s', type=float, default=6.0)
+    result.add_argument('--ack-delay-ms', type=int)
+    result.add_argument('--empty-thinking', action='store_true')
     result.add_argument('--state-file', type=Path, default=ROOT / 'cases' / 'state_cancel.txt')
     result.add_argument('--items-file', type=Path, default=ROOT / 'cases' / 'items_plate_home.txt')
     result.add_argument('--update-instructions-file', type=Path, default=ROOT / 'cases' / 'instructions_override.txt')
@@ -46,10 +52,12 @@ def validate(args, argument_parser):
     if args.experiment.startswith('P'):
         if not 1 <= args.repeat <= 100:
             argument_parser.error('--repeat must be between 1 and 100')
-        for value in (args.delay_s, args.gap_s, args.update_after_s):
+        for value in (args.delay_s, args.gap_s, args.update_after_s, args.spoken_window_s):
             if not math.isfinite(value) or not 0 <= value <= 300:
                 argument_parser.error('Probe delays must be finite and between 0 and 300')
-        if args.experiment in ('P3', 'P4') and args.second_audio is None:
+        if args.ack_delay_ms is not None and args.ack_delay_ms < 0:
+            argument_parser.error('--ack-delay-ms must be non-negative')
+        if args.experiment in ('P3', 'P4', 'P5', 'P8') and args.second_audio is None:
             argument_parser.error('--second-audio is required for update probes')
         if args.experiment == 'P1' and args.audio.suffix.lower() == '.wav':
             argument_parser.error('P1 requires a directory containing 01.wav, 02.wav, 03.wav')
@@ -110,7 +118,7 @@ async def repeated(args):
     return {'pass': all(result['pass'] for result in results),
             'counts': {'runs': len(results), 'completed': sum(bool(r['pass']) for r in results),
                        'delegated': sum(bool(r.get('delegated')) for r in results),
-                       'errors': sum(bool(r.get('error') or r.get('reader_error') or r.get('post_update_errors'))
+                        'errors': sum(bool(r.get('error') or r.get('reader_error') or r.get('post_update_errors') or r.get('errors'))
                                      for r in results)}}
 
 

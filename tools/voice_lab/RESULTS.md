@@ -4,6 +4,8 @@ Observations from live runs against the upstream AVAS realtime service, 2026-11-
 
 Not covered: human voices, interruption of speech already being spoken, sending context while the user is silent, call duration limits, a second delegation in one call.
 
+P5-P8 implementation adds offline fake-based coverage only. Append channels, the spawn prompt, and `acknowledgement_delay_ms` have not been tested against AVAS; no live findings are claimed for these probes.
+
 ## Protocol facts
 
 - Create call: HTTP 201 with an SDP answer and a `Location` header ending in the call id (`rtc_...`). The sideband connects with 101. A SOCKS account proxy needs `python-socks` for the WebSocket client.

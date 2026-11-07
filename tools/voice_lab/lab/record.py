@@ -28,7 +28,7 @@ def redact(text: str, secrets: list[str]) -> str:
 
 
 def make_run_dir(results_dir: str, experiment: str) -> Path:
-    if experiment not in {f'E{i}' for i in range(8)} | {f'P{i}' for i in range(1, 5)}:
+    if experiment not in {f'E{i}' for i in range(8)} | {f'P{i}' for i in range(1, 9)}:
         raise ValueError('Unknown experiment')
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
     path = Path(results_dir) / f'{stamp}-{experiment}'

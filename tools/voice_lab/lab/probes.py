@@ -56,6 +56,19 @@ def update_frame(name, args):
     return {'type': 'session.update', 'session': session}
 
 
+def append_frame(channel, text, identifier=None):
+    """GPT-Live live-conversations docs shape; UNVERIFIED on AVAS.
+
+    Source: https://developers.openai.com/api/docs/guides/live-conversations
+    Mirror context append's input_text content; the channel is in the type.
+    Keep empty text for P7 and send one frame, without context splitting.
+    """
+    if channel not in ('instructions', 'thinking', 'commentary'):
+        raise ValueError('Unknown append channel')
+    return {'type': f'session.{channel}.append', 'delegation_id': identifier,
+            'content': [{'type': 'input_text', 'text': text}]}
+
+
 class Controller:
     def __init__(self, name, args, ctx):
         self.name, self.args, self.ctx = name, args, ctx
@@ -124,14 +137,130 @@ class Controller:
                 self.result['action_error'] = type(outcome[0]).__name__
 
 
+class AppendController(Controller):
+    """P8 shares P5 behavior, with fixed instructions/unbound defaults."""
+
+    async def ready(self, sideband, peer, result):
+        await super().ready(sideband, peer, result)
+        self.window_start = None
+        self.second_started = False
+        result.update({'frame_sent': False, 'post_append_event_types': [],
+                       'post_append_errors': [], 'spoken': False, 'filler': False,
+                       'filler_text': [], 'errors': []})
+
+    async def observe_window(self, seconds, second=False):
+        await asyncio.sleep(seconds)
+        field = 'spoken' if second else 'filler'
+        self.result[field] |= self.peer.received_audio_ms > self.audio_start
+        self.result[field + '_window_complete'] = True
+        if second:
+            self.second_started = True
+            await self.peer.play_wav(self.args.second_audio)
+
+    async def event(self, event):
+        if self.task is not None and self.task.done():
+            self.task.result()
+        now = asyncio.get_running_loop().time()
+        kind = event.get('type', '<unknown>') if isinstance(event, dict) else '<unknown>'
+        if kind == 'error':
+            self.result['errors'].append(event)
+        if self.sent:
+            self.result['post_append_event_types'].append(kind)
+            if kind == 'error':
+                self.result['post_append_errors'].append(event)
+        if self.window_start is not None:
+            seconds = 5.0 if self.name == 'P7' else self.args.spoken_window_s
+            in_window = now - self.window_start < seconds and not self.second_started
+            if in_window and (kind in ('session.output_audio.delta', 'output_transcript.added') or
+                              turn(event, 'assistant')):
+                field = 'filler' if self.name == 'P7' else 'spoken'
+                self.result[field] = True
+                if self.name == 'P7':
+                    text = turn_text(event) if turn(event, 'assistant') else event.get('transcript', event.get('text', ''))
+                    if isinstance(text, str) and text:
+                        self.result['filler_text'].append(text)
+        identifier = delegation_id(event)
+        if identifier and self.window_start is None:
+            self.identifier = identifier
+            self.window_start = now
+            self.audio_start = self.peer.received_audio_ms
+            if self.name != 'P7' or self.args.empty_thinking:
+                channel = 'thinking' if self.name == 'P7' else ('instructions' if self.name == 'P8' else self.args.channel)
+                bound = identifier if self.name == 'P7' or (self.name != 'P8' and self.args.bind == 'open') else None
+                text = '' if self.name == 'P7' else self.args.text_file.read_text(encoding='utf-8')
+                frame = append_frame(channel, text, bound)
+                await self.sideband.send(frame)
+                self.sent = True
+                self.result.update({'frame_sent': True, 'sent_frame': frame})
+                if self.name != 'P7':
+                    self.window_start = asyncio.get_running_loop().time()
+            self.task = asyncio.create_task(self.observe_window(
+                max(0, 5.0 - (asyncio.get_running_loop().time() - self.window_start))
+                if self.name == 'P7' else self.args.spoken_window_s, self.name != 'P7'))
+        if self.second_started and turn(event, 'assistant'):
+            self.result['later_assistant_text'].append(turn_text(event))
+        # Keep collecting all post-frame events until the bounded call ends.
+        return False
+
+
+class SpawnController(Controller):
+    async def ready(self, sideband, peer, result):
+        await super().ready(sideband, peer, result)
+        self.started = asyncio.get_running_loop().time()
+        self.timeline = []
+
+    async def event(self, event):
+        self.timeline.append((asyncio.get_running_loop().time() - self.started, event))
+        return False
+
+    async def close(self):
+        await super().close()
+        if not hasattr(self, 'timeline'):
+            return
+        rows = [{'audio': path.name, 'delegation_created': False, 'user_transcript': '',
+                 'assistant_text': [], 'delegation_match': []} for path in self.audio_paths]
+        current = 0
+        users = 0
+        ids = {}
+        for elapsed, event in self.timeline:
+            if turn(event, 'user'):
+                current = min(users, len(rows) - 1)
+                users += 1
+                rows[current]['user_transcript'] = turn_text(event)
+                rows[current]['user_t_s'] = elapsed
+                identifier = event.get('turn', {}).get('id')
+                if identifier:
+                    ids[identifier] = current
+            elif turn(event, 'assistant'):
+                rows[current]['assistant_text'].append(turn_text(event))
+        current = 0
+        users = 0
+        for elapsed, event in self.timeline:
+            if turn(event, 'user'):
+                current = min(users, len(rows) - 1)
+                users += 1
+            if delegation_id(event):
+                item = event.get('item', {})
+                linked = item.get('user_bidi_turn_id', event.get('user_bidi_turn_id'))
+                index = ids.get(linked, current)
+                rows[index]['delegation_created'] = True
+                rows[index]['delegation_match'].append({
+                    'id': delegation_id(event), 't_s': elapsed,
+                    'method': 'turn_id' if linked in ids else 'order/time'})
+        self.result['utterances'] = rows
+        self.result['matching_note'] = 'Turn id when available; otherwise latest final user turn (first before any user). Overlapping turns require human review.'
+
+
 async def run_probe(ctx, args):
     """Each repetition owns exactly one call and one Recorder directory."""
     name = args.experiment
     instructions = args.instructions_file.read_text(encoding='utf-8')
     items = read_items(args.items_file) if name == 'P2' else []
-    session = ctx.upstream.build_session(instructions=instructions, initial_items=items)
+    options = {'acknowledgement_delay_ms': args.ack_delay_ms} if name == 'P7' else {}
+    session = ctx.upstream.build_session(instructions=instructions, initial_items=items, **options)
     ctx.recorder.write_session(session)
-    controller = Controller(name, args, ctx)
+    controller_type = AppendController if name in ('P5', 'P7', 'P8') else SpawnController if name == 'P6' else Controller
+    controller = controller_type(name, args, ctx)
     result = None
     try:
         with tempfile.TemporaryDirectory(prefix='voice-lab-probe-') as temporary:
@@ -139,6 +268,14 @@ async def run_probe(ctx, args):
             if name == 'P1':
                 wav = join_wavs([args.audio / '01.wav', args.audio / '02.wav'],
                                 Path(temporary) / 'weather-cancel.wav', args.gap_s)
+            if name == 'P6':
+                paths = sorted(args.audio.glob('[0-9][0-9].wav')) if args.audio.is_dir() else [args.audio]
+                if not paths:
+                    raise LabError('P6 requires numbered WAV files')
+                if args.audio.is_dir() and [p.name for p in paths] != [f'{i:02d}.wav' for i in range(1, len(paths) + 1)]:
+                    raise LabError('P6 WAV numbering must start at 01 without gaps')
+                controller.audio_paths = paths
+                wav = join_wavs(paths, Path(temporary) / 'utterances.wav', args.gap_s) if args.audio.is_dir() else args.audio
             result = await asyncio.wait_for(
                 _call(replace(ctx, observation_s=args.timeout_s), session, wav, probe=controller),
                 args.timeout_s + 2 * ctx.cleanup_timeout_s + 5)
@@ -155,7 +292,7 @@ async def run_probe(ctx, args):
 
 def plan(args):
     files = {}
-    for field in ('instructions_file', 'items_file', 'update_instructions_file', 'update_items_file', 'state_file'):
+    for field in ('instructions_file', 'items_file', 'update_instructions_file', 'update_items_file', 'state_file', 'text_file'):
         path = getattr(args, field, None)
         if path is not None:
             files[field] = {'name': path.name, 'length': len(path.read_text(encoding='utf-8'))}
@@ -165,4 +302,8 @@ def plan(args):
             files[field] = {'name': path.name}
     return {'experiment': args.experiment, 'repeat': args.repeat, 'files': files,
             'delay_s': args.delay_s, 'update_trigger': args.update_trigger,
-            'update_after_s': args.update_after_s, 'timeout_s': args.timeout_s}
+            'update_after_s': args.update_after_s, 'timeout_s': args.timeout_s,
+            'channel': 'instructions' if args.experiment == 'P8' else args.channel,
+            'bind': 'none' if args.experiment == 'P8' else args.bind,
+            'spoken_window_s': args.spoken_window_s, 'ack_delay_ms': args.ack_delay_ms,
+            'empty_thinking': args.empty_thinking}

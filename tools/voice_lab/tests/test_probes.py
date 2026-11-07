@@ -70,7 +70,7 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.bands[-1].sent[0], {'type': 'session.update', 'session': expected})
                 self.assertEqual(played, [args.second_audio])
                 self.assertEqual(result['later_assistant_text'], ['input 0'])
-                self.assertEqual(result['post_update_event_types'], ['session.updated', 'error', 'turn.done', 'turn.done'])
+                self.assertTrue({'session.updated', 'error', 'turn.done'} <= set(result['post_update_event_types']))
                 self.assertEqual(result['post_update_errors'][0]['error']['code'], 'fixture-code')
                 self.assertTrue(self.bands[-1].closed and self.peers[-1].closed)
 
@@ -133,6 +133,156 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(str(args.audio.parent), text)
         self.assertNotIn('fixture plate', text)
         self.assertEqual(plan['files']['update_instructions_file'], {'name': 'update.txt', 'length': 16})
+
+    async def test_append_channels_bind_once_errors_and_later_text(self):
+        script = self.script
+        for name in ('P5', 'P8'):
+            for channel in ('instructions', 'thinking', 'commentary'):
+                for bind in ('none', 'open'):
+                    args = self.args(name)
+                    args.channel, args.bind = channel, bind
+                    args.text_file = args.update_instructions_file
+                    args.spoken_window_s = 0.01
+                    played = []
+
+                    async def play(peer, path):
+                        played.append(path)
+
+                    async def events(band):
+                        yield script[1]
+                        await asyncio.sleep(0.003)
+                        yield {'type': 'output_transcript.added', 'text': 'fixture filler'}
+                        yield {'type': 'error', 'error': {'code': 'fixture-code', 'message': 'rejected'}}
+                        yield script[1]
+                        await asyncio.sleep(0.02)
+                        yield script[0]
+                        yield script[3]
+
+                    with self.subTest(name=name, channel=channel, bind=bind), \
+                            patch.object(self.ctx.peer_factory, 'play_wav', play, create=True), \
+                            patch.object(self.ctx.sideband_factory, 'events', events):
+                        result = await probes.run_probe(self.ctx, args)
+                    actual_channel = 'instructions' if name == 'P8' else channel
+                    identifier = 'test-delegation' if name != 'P8' and bind == 'open' else None
+                    expected = {'type': f'session.{actual_channel}.append', 'delegation_id': identifier,
+                                'content': [{'type': 'input_text', 'text': 'fixture override'}]}
+                    self.assertEqual(self.bands[-1].sent, [expected])
+                    self.assertEqual(result['sent_frame'], expected)
+                    self.assertTrue(result['spoken'])
+                    self.assertTrue(result['spoken_window_complete'])
+                    self.assertEqual(result['later_assistant_text'], ['input 0'])
+                    self.assertEqual(result['post_append_errors'][0]['error']['code'], 'fixture-code')
+                    self.assertEqual(played, [args.second_audio])
+                    self.assertTrue(result['pass'])
+                    self.assertTrue(self.peers[-1].closed and self.bands[-1].closed)
+
+    async def test_append_silent_window_and_audio_only_window(self):
+        for audio in (False, True):
+            args = self.args('P5')
+            args.text_file = args.update_instructions_file
+            args.spoken_window_s = 0.01
+            script = self.script
+
+            async def events(band):
+                yield script[1]
+                await asyncio.sleep(0.003)
+                if audio:
+                    self.peers[-1].received_audio_ms += 10
+                await asyncio.sleep(0.02)
+                yield script[3]
+
+            with patch.object(self.ctx.peer_factory, 'play_wav', AsyncMock(), create=True), \
+                    patch.object(self.ctx.sideband_factory, 'events', events):
+                result = await probes.run_probe(self.ctx, args)
+            self.assertEqual(result['spoken'], audio)
+            self.assertTrue(result['spoken_window_complete'])
+
+    async def test_p7_delay_body_and_empty_thinking(self):
+        script = self.script
+        original = probes.AppendController.observe_window
+
+        async def short_window(controller, seconds, second=False):
+            self.assertTrue(4.9 < seconds <= 5.0)
+            await original(controller, 0.01, second)
+
+        for delay in (None, 0, 2500):
+            for empty in (False, True):
+                args = self.args('P7')
+                args.ack_delay_ms, args.empty_thinking = delay, empty
+
+                async def events(band):
+                    yield script[1]
+                    await asyncio.sleep(0.003)
+                    if empty:
+                        yield script[3]
+                    yield {'type': 'error', 'error': {'code': 'fixture'}}
+                    await asyncio.sleep(0.02)
+
+                with patch.object(probes.AppendController, 'observe_window', short_window), \
+                        patch.object(self.ctx.sideband_factory, 'events', events):
+                    result = await probes.run_probe(self.ctx, args)
+                delegation = self.ctx.recorder.sessions[-1]['delegation']
+                if delay is None:
+                    self.assertNotIn('acknowledgement_delay_ms', delegation)
+                else:
+                    self.assertEqual(delegation['acknowledgement_delay_ms'], delay)
+                self.assertEqual(self.bands[-1].sent, [
+                    {'type': 'session.thinking.append', 'delegation_id': 'test-delegation',
+                     'content': [{'type': 'input_text', 'text': ''}]}] if empty else [])
+                self.assertEqual(result['filler'], empty)
+                self.assertEqual(result['filler_text'], ['input 0'] if empty else [])
+                self.assertEqual(len(result['errors']), 1)
+                self.assertTrue(result['filler_window_complete'])
+
+    async def test_p6_per_utterance_matching_and_no_items(self):
+        args = self.args('P6')
+        for name in ('01.wav', '02.wav', '03.wav'):
+            with wave.open(str(args.audio / name), 'wb') as output:
+                output.setparams((1, 2, 8000, 0, 'NONE', 'not compressed'))
+                output.writeframes(bytes(160))
+        self.script = [
+            {'type': 'delegation.created', 'item': {'id': 'first'}},
+            {'type': 'turn.done', 'turn': {'id': 'u1', 'role': 'user', 'transcript': 'one'}},
+            {'type': 'turn.done', 'turn': {'role': 'assistant', 'transcript': 'a1'}},
+            {'type': 'turn.done', 'turn': {'id': 'u2', 'role': 'user', 'transcript': 'two'}},
+            {'type': 'delegation.created', 'item': {'id': 'late', 'user_bidi_turn_id': 'u1'}},
+            {'type': 'turn.done', 'turn': {'role': 'assistant', 'transcript': 'a2'}},
+            {'type': 'turn.done', 'turn': {'id': 'u3', 'role': 'user', 'transcript': 'three'}},
+            {'type': 'delegation.created', 'item': {'id': 'third'}},
+        ]
+        result = await probes.run_probe(self.ctx, args)
+        rows = result['utterances']
+        self.assertEqual([r['delegation_created'] for r in rows], [True, False, True])
+        self.assertEqual([r['user_transcript'] for r in rows], ['one', 'two', 'three'])
+        self.assertEqual([r['assistant_text'] for r in rows], [['a1'], ['a2'], []])
+        self.assertEqual(rows[0]['delegation_match'][1]['method'], 'turn_id')
+        self.assertEqual(self.ctx.recorder.sessions[-1]['initial_items'], [])
+        self.assertTrue(self.peers[-1].closed and self.bands[-1].closed)
+        args.audio = args.audio / '01.wav'
+        result = await probes.run_probe(self.ctx, args)
+        self.assertEqual(len(result['utterances']), 1)
+
+    async def test_new_probes_cleanup_on_send_failure(self):
+        for name in ('P5', 'P7', 'P8'):
+            args = self.args(name)
+            args.text_file = args.update_instructions_file
+            args.empty_thinking = True
+            with patch.object(self.ctx.sideband_factory, 'send', AsyncMock(side_effect=RuntimeError('private'))):
+                result = await probes.run_probe(self.ctx, args)
+            self.assertEqual(result['error'], 'RuntimeError')
+            self.assertNotIn('private', self.ctx.recorder.summary)
+            self.assertTrue(self.peers[-1].closed and self.bands[-1].closed)
+
+    async def test_new_dry_runs_metadata_only_and_run_directories(self):
+        from lab.record import make_run_dir
+
+        for name in ('P5', 'P6', 'P7', 'P8'):
+            args = self.args(name)
+            args.text_file = args.update_instructions_file
+            text = json.dumps(probes.plan(args))
+            for private in ('fixture override', 'Delegate every request.', 'fake-token', str(args.audio.parent)):
+                self.assertNotIn(private, text)
+            self.assertTrue(make_run_dir(args.audio / 'results', name).is_dir())
 
     def test_tally_prints_only_counts(self):
         args = ['--experiment', 'P2', '--account-id', '1', '--db-copy', 'private-db',

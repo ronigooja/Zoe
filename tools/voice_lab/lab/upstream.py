@@ -13,12 +13,17 @@ AVAS_URL = ('https://chatgpt.com/backend-api/codex/realtime/calls'
 
 def build_session(instructions: str = '', voice: str = 'cove',
                   initial_items: list | None = None, ack_filler: bool | None = None,
-                  model: str = 'gpt-live-1-codex') -> dict:
+                  model: str = 'gpt-live-1-codex',
+                  acknowledgement_delay_ms: int | None = None) -> dict:
     delegation = {'type': 'client'}
     if ack_filler is not None:
         if not isinstance(ack_filler, bool):
             raise ValueError('ack_filler must be boolean')
         delegation['ack_filler'] = ack_filler
+    if acknowledgement_delay_ms is not None:
+        if type(acknowledgement_delay_ms) is not int or acknowledgement_delay_ms < 0:
+            raise ValueError('acknowledgement_delay_ms must be a non-negative integer')
+        delegation['acknowledgement_delay_ms'] = acknowledgement_delay_ms
     return {'model': model, 'instructions': instructions,
             'audio': {'output': {'voice': voice}}, 'delegation': delegation,
             'initial_items': list(initial_items) if initial_items is not None else []}

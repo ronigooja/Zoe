@@ -94,7 +94,19 @@ P3. Mid-call instructions: `--experiment P3 --audio first.wav --second-audio lat
 
 P4. Mid-call facts: the same controls as P3, with `--experiment P4 --update-items-file cases/items_plate_home.txt`, send `session.update.session.initial_items` built from `role|text` lines. Observe acknowledgments, errors and later assistant text; acceptance is not inferred from a successful send.
 
-For P1-P4, `--repeat N` defaults to three independent calls and result directories; stdout contains counts only. Each call is bounded by `--timeout-s` plus independent cleanup budgets, uses the normal account/persona redaction rules, and records evidence rather than semantic pass/fail; dry runs print file names and text lengths only. `probes.py` and `run.py` share the same CLI; no probes were run live during implementation.
+P5. Append channels: weather `--audio`, then one frame after the first delegation using `--channel instructions|thinking|commentary`, `--bind none|open`, and `--text-file` (use `cases/append_state.txt` for state). Observe `spoken` during `--spoken-window-s` (default 6), then play `--second-audio`; retain sent frame, later event types, errors, and assistant text.
+The frame shape follows [GPT-Live docs](https://developers.openai.com/api/docs/guides/live-conversations), not verified AVAS behavior. A successful send is not acceptance.
+
+P6. Spawn prompt: `--instructions-file cases/instructions_spawn.txt --audio FILE_OR_DIR`, without seeded items. A directory joins consecutive `01.wav`, `02.wav`, etc. with `--gap-s`, using the P1 WAV helper.
+Record each utterance's user transcript, delegation flag, and assistant text; match by turn id when available, otherwise final-user order/time. Overlapping or delayed turns require human review.
+
+P7. Acknowledgment delay: weather `--audio`, optionally `--ack-delay-ms N` sets `delegation.acknowledgement_delay_ms`; absent means omit the field. `--empty-thinking` sends one empty thinking append bound to the first delegation.
+Record `filler`, its transcript, and all errors over the five seconds after delegation. Delay and append support are UNVERIFIED on AVAS.
+
+P8. Mid-call instruction append: alias of P5 with channel fixed to instructions and unbound, using `--text-file cases/append_override.txt`, followed by `--second-audio` after the spoken window.
+Record later assistant text for human judgment; neither protocol acceptance nor compliance is inferred automatically.
+
+For P1-P8, `--repeat N` defaults to three independent calls and result directories; stdout contains counts only. Each call is bounded by `--timeout-s` plus independent cleanup budgets, uses the normal account/persona redaction rules, and records evidence rather than semantic pass/fail; dry runs print file names and text lengths only. `probes.py` and `run.py` share the same CLI; no probes were run live during implementation. For P5/P7/P8, choose a timeout long enough for the delegation, observation window, and later utterance; a false spoken/filler flag with no window-complete flag is only a partial observation.
 
 Order: E0, E1, then E2 to E7 only after E1 produces a delegation from synthetic speech. If E1 never does, the experiments switch to typed input if the sideband accepts a user text item (UNVERIFIED), and the plan is revised in this document before more code is written.
 
