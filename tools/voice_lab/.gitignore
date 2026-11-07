@@ -1,0 +1,4 @@
+results/
+audio/
+__pycache__/
+*.pyc

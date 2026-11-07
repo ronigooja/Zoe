@@ -1,0 +1,5 @@
+cryptography==46.0.3
+websockets==15.0.1
+aiortc==1.14.0
+httpx[socks]==0.28.1
+python-socks==3.2.1
