@@ -23,6 +23,7 @@ def parser():
     result.add_argument('--instructions-file', type=Path, default=ROOT / 'cases' / 'instructions.txt')
     result.add_argument('--timeout-s', type=float, default=45.0)
     result.add_argument('--dry-run', action='store_true')
+    result.add_argument('--fingerprint', choices=('codex', 'legacy-browser'), default='codex')
     result.add_argument('--repeat', type=int, default=3)
     result.add_argument('--delay-s', type=float, default=1.0)
     result.add_argument('--gap-s', type=float, default=3.0)
@@ -87,7 +88,7 @@ def plan(args):
 
 async def execute(args):
     # Import optional dependencies only after argument validation and the dry-run exit.
-    from lab.account import load_account
+    from lab.account import load_account, load_persona
     from lab.record import Recorder, make_run_dir
     from lab import upstream
     from lab.sideband import Sideband, context_frames, user_text_frame
@@ -95,12 +96,13 @@ async def execute(args):
     from lab.experiments import Context, EXPERIMENTS
 
     account = load_account(args.db_copy, args.key_file, args.account_id)
-    persona = json.loads(Path(args.persona_file).read_text(encoding='utf-8'))
-    if not isinstance(persona, dict):
-        raise ValueError('persona must be an object')
+    persona = load_persona(args.persona_file, args.fingerprint)
+    if args.fingerprint == 'codex':
+        persona.account_id = account.codex_account_id()
     recorder = Recorder(make_run_dir(args.results_dir, args.experiment),
                         [account.token, account.proxy, account.device_id] +
-                        [value for key, value in persona.items() if key.lower() == 'oai-device-id'])
+                        (list(persona.values()) + [persona.account_id] if args.fingerprint == 'codex' else
+                         [value for key, value in persona.items() if key.lower() == 'oai-device-id']))
     context = Context(account=account, persona=persona, peer_factory=Peer,
                       transport=None, connector=None, recorder=recorder, upstream=upstream,
                       sideband_factory=Sideband, context_frames=context_frames,

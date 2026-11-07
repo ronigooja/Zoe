@@ -41,11 +41,11 @@ Sources: Codex CLI source in `codex-rs/` (`codex-api/src/endpoint/realtime_call.
 
 Create call, as the gateway does it today:
 - `POST https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas`, JSON body `{"sdp": <offer>, "session": <session>}`.
-- Headers: `authorization: Bearer <token>`, `openai-alpha: quicksilver=v2`, `originator: codex_cli_rs`, `content-type: application/json`, plus the browser-persona header set from gateway `authHeaders` (`oai-device-id`, `oai-session-id`, `oai-language`, user agent and client hints). The operator supplies persona values using `--persona-file PATH`, a local JSON object mapping header names to string values; no identity values are hardcoded. Required fields are `user-agent`, `oai-session-id`, and `oai-language`; the device identity comes from the account or persona. Other supported fields include `sec-ch-ua*`, `sec-fetch-*`, `oai-client-version`, `oai-client-build-number`, and the ordinary browser headers used by `authHeaders`. Credentials do not belong in this JSON file.
+- The default Codex headers and persona rules are defined in [Dependencies](#dependencies). For `legacy-browser` comparison only, the older gateway `authHeaders` persona requires `user-agent`, `oai-session-id`, and `oai-language`, with device identity from the account or persona and optional browser/client-hint headers. Credentials do not belong in either persona file.
 - The request goes through the account proxy when one is stored.
 - Response: SDP answer in the body, call id in the `Location` header (last path segment, `rtc_...`).
 
-Codex CLI sends the same create call as multipart (`sdp` and `session` parts) on the API route. The lab uses the JSON shape because that is what the gateway sends and the account route accepts. Whether the multipart shape behaves differently is UNVERIFIED and not tested.
+The supplied Codex CLI 0.167.0 capture uses JSON root keys `sdp, session`. The lab retains its existing body semantics: it lacks captured `session.type` and `audio.input.format.{type,rate}`, and adds `delegation` and `initial_items`. Whether these differences affect behavior is UNVERIFIED; fingerprint selection does not change them.
 
 `session` object, from Codex `session_json`:
 - `instructions` (string): the system prompt. Codex fills it from `backend_prompt.md` plus an optional startup context block.
@@ -133,16 +133,31 @@ tools/voice_lab/
 
 ## Dependencies
 
-An offline Codex CLI transport-fingerprint investigation is recorded in
-[FINGERPRINT_FEASIBILITY.md](FINGERPRINT_FEASIBILITY.md). Stock curl_cffi 0.17.0
-did not match either reference TLS hash; the live transports and default persona
-remain unchanged pending a decision about approximate versus exact parity.
+For new runs, `--fingerprint codex` is the default and uses curl_cffi 0.17.0 for
+both POST and WebSocket. This is header-faithful but TLS-approximate, not an exact
+Codex clone; measured differences and validation limits are recorded in
+[FINGERPRINT_FEASIBILITY.md](FINGERPRINT_FEASIBILITY.md). Live AVAS behavior with
+this profile is UNVERIFIED. `--fingerprint legacy-browser` retains the old
+httpx/websockets combination for comparison only and is not recommended.
+
+For the Codex profile, `--persona-file` is a JSON object containing only optional
+`user-agent`, `originator`, `x-session-id`, `session-id`, and `thread-id` strings;
+an empty object uses the documented Codex UA and originator defaults. Browser,
+credential, and account headers are rejected. Unspecified IDs share one fresh
+UUID per call; equality in the real binary is UNVERIFIED. Fixed IDs are intended
+only for controlled comparisons. Account routing identity is read from the
+access token's account claim, not from the persona; missing metadata fails closed.
+Dry runs do not load account or persona files and do not emit their values.
+
+Only POST and WebSocket receive the account proxy URL. The unchanged aiortc
+media path uses normal ICE/WebRTC with no proxy argument or TURN servers;
+account-proxied audio is not established by this source.
 
 Dependencies are pinned in `requirements.txt`. The gateway host has Python 3.11 and none of these installed; installation goes into a virtual environment under `/tmp/voice-lab`, removed afterwards. Whether the chosen WebRTC library negotiates audio and ICE with the upstream through the account proxy is UNVERIFIED and is the main implementation risk; E0 exists to find out.
 
 When using SOCKS proxies, `websockets` requires `python-socks`.
 
-Pinned choices in `requirements.txt`: `cryptography` for AES-GCM, `websockets` for asynchronous sideband connections, `aiortc` for WebRTC media, and `httpx[socks]` for HTTP with HTTP/SOCKS proxy support. Live dependencies must be imported lazily; offline tests require only the standard library and `cryptography`.
+Pinned choices in `requirements.txt`: `cryptography` for AES-GCM, `curl_cffi` for Codex HTTP/WebSocket, `aiortc` for WebRTC media, and `websockets`, `httpx[socks]`, and `python-socks` for legacy comparison. Live dependencies are imported lazily; the fingerprint fake-transport tests also need curl_cffi installed.
 
 ## Tests
 

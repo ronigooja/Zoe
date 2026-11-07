@@ -5,9 +5,48 @@ import json
 from .errors import LabError
 from .record import slim_event
 from .upstream import build_message_item
+from .fingerprint import is_codex, headers as codex_headers, settings
 
 
 SIDEBAND_URL = 'wss://api.openai.com/v1/live/'
+
+
+class CurlConnection:
+    def __init__(self, session, connection):
+        self.session, self.connection = session, connection
+
+    async def send(self, raw):
+        await self.connection.send_str(raw)
+
+    async def recv(self):
+        from curl_cffi.const import CurlWsFlag
+        from curl_cffi.requests import WebSocketClosed
+        try:
+            raw, flags = await self.connection.recv()
+        except WebSocketClosed:
+            return None
+        if flags & CurlWsFlag.CLOSE:
+            return None
+        return raw
+
+    async def close(self):
+        try:
+            await self.connection.close()
+        finally:
+            await self.session.close()
+
+
+async def curl_connector(url, headers, proxy):
+    from curl_cffi.requests import AsyncSession
+    options, kwargs = settings(websocket=True)
+    session = AsyncSession(trust_env=False, curl_options=options)
+    try:
+        connection = await session.ws_connect(url, headers=headers, proxy=proxy or None,
+                                              timeout=30, **kwargs)
+        return CurlConnection(session, connection)
+    except BaseException:
+        await session.close()
+        raise
 
 
 def split_text(text: str, limit: int = 500) -> list[str]:
@@ -68,7 +107,7 @@ class Sideband:
         self._token = token
         self._persona = persona
         self._proxy = proxy
-        self._connector = connector or websocket_connector
+        self._connector = connector or (curl_connector if is_codex(persona) else websocket_connector)
         self._recorder = recorder
         self._connection = None
         self._closed = False
@@ -79,11 +118,13 @@ class Sideband:
         if self._closed:
             raise LabError('Sideband is closed')
         persona = {key.lower(): value for key, value in self._persona.items()}
-        if not persona.get('user-agent'):
+        if not persona.get('user-agent') and not is_codex(self._persona):
             raise LabError('Sideband persona requires user-agent')
         headers = {'Authorization': 'Bearer ' + self._token,
                    'openai-alpha': 'quicksilver=v2', 'originator': 'codex_cli_rs',
-                   'user-agent': persona['user-agent']}
+                   'user-agent': persona.get('user-agent', '')}
+        if is_codex(self._persona):
+            headers = codex_headers(self._persona, self._token)
         try:
             self._connection = await self._connector(
                 SIDEBAND_URL + self._call_id, headers, self._proxy)

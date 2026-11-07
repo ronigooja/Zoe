@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from .errors import LabError
+from .fingerprint import is_codex, headers as codex_headers, settings
 
 
 AVAS_URL = ('https://chatgpt.com/backend-api/codex/realtime/calls'
@@ -41,6 +42,7 @@ class CreateRequest:
     url: str
     headers: dict = field(repr=False)
     body: bytes = field(repr=False)
+    fingerprint: str = 'legacy-browser'
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,10 @@ def resolve_device_id(device_id: str, persona: dict) -> str:
 
 def build_create_request(token: str, device_id: str, persona: dict, sdp: str,
                          session: dict, url: str = AVAS_URL) -> CreateRequest:
+    if is_codex(persona):
+        body = json.dumps({'sdp': sdp, 'session': session}, ensure_ascii=False,
+                          separators=(',', ':')).encode('utf-8')
+        return CreateRequest(url, codex_headers(persona, token, body_length=len(body)), body, 'codex')
     headers = {key.lower(): value for key, value in persona.items()}
     headers.update({'authorization': 'Bearer ' + token,
                     'oai-device-id': resolve_device_id(device_id, persona),
@@ -81,6 +87,14 @@ def parse_call_id(location: str) -> str:
 
 async def http_transport(request, proxy=''):
     """Open HTTP with explicit proxy routing, never ambient proxy settings."""
+    if request.fingerprint == 'codex':
+        from curl_cffi.requests import AsyncSession
+        options, kwargs = settings()
+        async with AsyncSession(trust_env=False, curl_options=options) as client:
+            response = await client.post(request.url, headers=request.headers,
+                                         data=request.body, proxy=proxy or None,
+                                         timeout=45, **kwargs)
+            return response.status_code, dict(response.headers), response.content
     try:
         import httpx
     except ImportError:
@@ -106,7 +120,8 @@ async def create_call(request, transport=None, proxy: str = '', *, secrets=()) -
     if not 200 <= status < 300:
         sensitive = list(secrets) + [proxy]
         for key, value in request.headers.items():
-            if key.lower() in {'authorization', 'oai-device-id'}:
+            if key.lower() in {'authorization', 'oai-device-id', 'chatgpt-account-id',
+                               'user-agent', 'x-session-id', 'session-id', 'thread-id'}:
                 sensitive.append(value)
                 if key.lower() == 'authorization' and value.startswith('Bearer '):
                     sensitive.append(value[7:])

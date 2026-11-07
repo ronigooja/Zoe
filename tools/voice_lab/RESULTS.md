@@ -1,8 +1,8 @@
 # Voice lab results
 
-Offline transport-fingerprint findings are separate from these live results:
-[Codex feasibility](FINGERPRINT_FEASIBILITY.md). No Codex fingerprint profile has
-been tested against AVAS, and the investigation did not change live transports.
+Offline transport-fingerprint findings are separate from these historical live
+results: [Codex feasibility](FINGERPRINT_FEASIBILITY.md). The new approximate Codex
+profile has not been tested against AVAS; these results used the older profile.
 
 Observations from live runs against the upstream AVAS realtime service, 2026-11-07. One pool account, through its stored egress proxy, one call at a time, synthetic speech only. Samples are small (usually three calls per cell), so results show tendencies, not rates. The `instructions` text used in most runs is `cases/instructions_v2.txt`.
 
@@ -13,7 +13,7 @@ P5-P8 implementation adds offline fake-based coverage only. Append channels, the
 ## Protocol facts
 
 - Create call: HTTP 201 with an SDP answer and a `Location` header ending in the call id (`rtc_...`). The sideband connects with 101. A SOCKS account proxy needs `python-socks` for the WebSocket client.
-- Audio flows through the proxy. Media needs the ordered data channel `oai-events`.
+- The committed aiortc media path has no account-proxy integration and no TURN servers. The earlier claim that audio flows through the account proxy is unsupported by this implementation; system-level routing was not measured. Media needs the ordered data channel `oai-events`.
 - Sideband event types seen: `session.started`, `session.input_audio.append`, `session.output_audio.delta`, `input_transcript.added`, `turn.created`, `turn.delta`, `delegation.created`, `output_transcript.added`, `turn.done`, `session.context.appended`, `delegation.context.appended`, `session.usage.updated` (about every 15 seconds), `error`.
 - The final text of a user or assistant turn is `turn.done` with `turn.transcript` and `turn.role`. A delegation carries the full user sentence in `item.content[0].text`, `handoff_id`, `target: client`, and `user_bidi_turn_id`; it arrives about 1.2 seconds after the last transcript fragment.
 - Synthetic Chinese speech is transcribed and does trigger delegations.

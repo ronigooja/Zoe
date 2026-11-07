@@ -8,6 +8,7 @@ from pathlib import Path
 from .errors import LabError
 from .record import slim_event
 from .upstream import resolve_device_id
+from .fingerprint import for_call, is_codex
 
 HARD_CAP_S = 1800.0
 
@@ -110,19 +111,23 @@ async def _call(ctx, session, wav, mode=None, sentence=None, probe=None):
 
     try:
         # Validate identity before even creating a peer (ICE can use the network).
-        device_id = resolve_device_id(ctx.account.device_id, ctx.persona)
+        persona = for_call(ctx.persona)
+        if is_codex(persona) and hasattr(ctx.recorder, 'secrets'):
+            ctx.recorder.secrets = tuple(ctx.recorder.secrets) + tuple(persona.values()) + (persona.account_id,)
+        device_id = '' if is_codex(persona) else resolve_device_id(ctx.account.device_id, persona)
         peer = ctx.peer_factory(recorder=ctx.recorder)
         offer = await peer.create_offer(wav)
         request = ctx.upstream.build_create_request(
-            ctx.account.token, device_id, ctx.persona, offer, session)
+            ctx.account.token, device_id, persona, offer, session)
         created = await ctx.upstream.create_call(
             request, ctx.transport, proxy=ctx.account.proxy,
             secrets=[ctx.account.token, ctx.account.proxy, ctx.account.device_id] +
-                    [value for key, value in ctx.persona.items() if key.lower() == 'oai-device-id'])
+                    ([persona.account_id] + list(persona.values()) if is_codex(persona) else
+                     [value for key, value in persona.items() if key.lower() == 'oai-device-id']))
         result['create_ok'] = 200 <= created.status < 300 and bool(created.call_id)
         if not result['create_ok']:
             return result
-        sideband = ctx.sideband_factory(created.call_id, ctx.account.token, ctx.persona,
+        sideband = ctx.sideband_factory(created.call_id, ctx.account.token, persona,
                                         proxy=ctx.account.proxy, connector=ctx.connector,
                                         recorder=ctx.recorder)
         await sideband.connect()

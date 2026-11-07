@@ -1,6 +1,20 @@
 # Codex fingerprint feasibility
 
-Applies when evaluating a replacement transport for the voice lab against the supplied Codex CLI 0.167.0 macOS arm64 capture. This is an offline feasibility result, not AVAS acceptance evidence. No production transport, persona validation, session semantics, or experiment behavior was changed. The implementation stops at feasibility A because exact TLS parity is blocked; proceeding with a deliberately approximate profile requires an explicit decision.
+Applies when evaluating the voice lab against the supplied Codex CLI 0.167.0 macOS arm64 capture. This is offline evidence, not AVAS acceptance evidence. Following explicit approval, the approximate profile is implemented as the default for both transports; legacy-browser remains selectable. Session body and media behavior are unchanged.
+
+## Approved approximate profile verification
+
+OBSERVED: the implementation verifier ran once, including four bounded gap probes. Adding the named SCSV cipher did not emit 255. Reducing the POST signature list did not eliminate padding. Both named and numeric attempts to add WebSocket PSS-PSS algorithms failed before a parseable ClientHello. INFERRED: these remain TLS-engine limitations for the tested options; unsupported signature names/IDs are the likely boundary, not a cipher-suite failure. Exact engine error diagnosis and individual-algorithm isolation remain UNVERIFIED.
+
+OBSERVED POST: JA3 `ae5ca63f3c7ca1d2fc1cd10f92330dcc`, JA4 `t12d210800_f000828355c1_b9b2cd098495`; DIFFERS from reference JA3 `e4d448cdfe06dc1243c1eb026c74ac9a`, JA4 `t12d220700_0d4ca5d4ec72_3304d8368043` by missing SCSV and added padding.
+
+OBSERVED WebSocket: JA3 `59bde577bd23dc375013ae6564d619b2`, JA4 `t13d091000_f91f431d341e_f9531d972513`; DIFFERS from reference JA4 `t13d101000_61a7ad8aa9b6_0d308c48d2a3` by missing SCSV and final three signature algorithms. JA3 changes with extension order. The implementation randomizes the explicit ten-extension allowlist once per connection, rather than enabling the engine's unrestricted permutation. Randomization distribution and repeated-connection behavior are UNVERIFIED. No reference WebSocket JA3 hash was supplied.
+
+OBSERVED: the same run validated both published hash samples (2/2) and exact WebSocket header order/case; POST custom header order matched with required HTTP/1.1 Host last. Both transports omit ALPN. The verifier uses the production TLS settings but synthetic sync clients; async lifecycle is covered only by fake tests.
+
+OBSERVED: the one allowed full offline suite run executed 88 tests and failed with 16 failures and 17 errors. Inspection identified a changed legacy secret-list contract and Codex default-UA validation; both were corrected afterward. The final source was not rerun, so no passing final-suite claim is made. New fake tests cover ordered headers, absent browser fields, per-call/fixed IDs, persona allowlists, dry-run privacy, proxy pass-through, close handling, and connect cancellation. Existing tests retain legacy and E/P orchestration coverage.
+
+The sections below preserve the initial feasibility investigation; statements that integration was not implemented describe that earlier stage, not the approved implementation above.
 
 ## Evidence
 

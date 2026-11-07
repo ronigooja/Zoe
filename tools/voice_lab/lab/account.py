@@ -52,6 +52,18 @@ class Account:
     def __repr__(self):
         return '<Account redacted>'
 
+    def codex_account_id(self):
+        """When using Codex, extract routing metadata, not verified JWT claims."""
+        try:
+            payload = self.token.split('.')[1]
+            claims = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+            value = claims['https://api.openai.com/auth']['chatgpt_account_id']
+            if not isinstance(value, str) or not value or any(c in value for c in '\r\n'):
+                raise ValueError()
+            return value
+        except Exception:
+            raise ValueError('Codex profile requires account routing metadata') from None
+
 
 def load_account(db_copy: str, key_file: str, account_id: int) -> Account:
     """Caller must supply a disposable, consistent SQLite backup, not a live DB."""
@@ -91,22 +103,27 @@ PERSONA_HEADERS = frozenset({
 })
 
 
-def load_persona(path):
+def load_persona(path, fingerprint='legacy-browser'):
     """Read a JSON header-name to header-value map; do not load gateway config."""
     try:
         raw = json.loads(Path(path).read_text(encoding='utf-8'))
         if not isinstance(raw, dict):
             raise ValueError()
         result = {}
+        from .fingerprint import CODEX_PERSONA_HEADERS, Persona, USER_AGENT
+        allowed = CODEX_PERSONA_HEADERS if fingerprint == 'codex' else PERSONA_HEADERS
         for name, value in raw.items():
-            if not isinstance(name, str) or name.lower() not in PERSONA_HEADERS:
+            if not isinstance(name, str) or name.lower() not in allowed:
                 raise ValueError()
             if not isinstance(value, str) or '\r' in value or '\n' in value:
                 raise ValueError()
             result[name.lower()] = value
-        required = {'user-agent', 'oai-session-id', 'oai-language'}
+        required = set() if fingerprint == 'codex' else {'user-agent', 'oai-session-id', 'oai-language'}
         if not required.issubset(result):
             raise ValueError()
-        return result
+        if fingerprint == 'codex':
+            result.setdefault('user-agent', USER_AGENT)
+            result.setdefault('originator', 'codex_cli_rs')
+        return Persona(result, fingerprint)
     except Exception:
         raise ValueError('Persona must be a JSON map of gateway persona headers') from None

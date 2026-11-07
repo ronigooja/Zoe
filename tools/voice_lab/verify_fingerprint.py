@@ -162,12 +162,8 @@ def measure(context):
           'rsa_pkcs1_sha512', 'rsa_pkcs1_sha384', 'rsa_pkcs1_sha256'],
          '51-35-0-43-23-13-11-5-10-45'),
     ]:
-        fp = Fingerprint(tls_ciphers=[TLS_CIPHER_NAME_MAP[x] for x in ciphers if x != 255],
-                         tls_supported_groups=groups, tls_signature_hashes=signatures,
-                         tls_alpn=False, tls_extension_order=extensions,
-                         tls_session_ticket=kind == 'websocket',
-                         tls_signed_cert_timestamps=kind == 'post')
-        options = {CurlOpt.SSLVERSION: 6 | (6 << 16)} if kind == 'post' else {}
+        from lab.fingerprint import settings
+        options, kwargs = settings(websocket=kind == 'websocket')
         order = (['openai-alpha', 'x-session-id', 'session-id', 'thread-id', 'authorization',
                   'chatgpt-account-id', 'content-type', 'originator', 'user-agent', 'accept', 'content-length']
                  if kind == 'post' else
@@ -182,12 +178,11 @@ def measure(context):
         with Session(trust_env=False, curl_options=options) as session:
             def client(port):
                 url = ('https' if kind == 'post' else 'wss') + f'://localhost:{port}/'
-                kwargs = dict(impersonate=fp, default_headers=False, http_version='v1',
-                              timeout=2, verify=False, accept_encoding=None, headers=headers)
+                request_kwargs = dict(kwargs, timeout=2, verify=False, headers=headers)
                 if kind == 'post':
-                    session.post(url, data=b'{}', **kwargs)
+                    session.post(url, data=b'{}', **request_kwargs)
                 else:
-                    session.ws_connect(url, **kwargs)
+                    session.ws_connect(url, **request_kwargs)
             result = capture_http(client, context)
         reference = json.loads((Path(__file__).parent / 'cases' / 'codex_fingerprint.json').read_text())[kind]
         output = {key: result[key] for key in ('ja3_md5', 'ja4', 'cipher_count', 'extension_count', 'header_order', 'client_error', 'capture_error') if key in result}
@@ -196,6 +191,38 @@ def measure(context):
         if kind == 'post':
             post_result = result
     return post_result, result
+
+
+def gap_probes(context):
+    """One bounded retry per suspected gap; synthetic loopback inputs only."""
+    from curl_cffi import CurlOpt
+    from curl_cffi.requests import Session
+    from lab.fingerprint import settings
+    for label in ('scsv', 'padding', 'pss-pss', 'pss-pss-numeric'):
+        websocket = label.startswith('pss')
+        options, kwargs = settings(websocket)
+        fp = kwargs['impersonate']
+        if label == 'scsv':
+            fp.tls_ciphers.insert(0, 'TLS_EMPTY_RENEGOTIATION_INFO_SCSV')
+        elif label == 'padding':
+            # Explicit extension order already excludes 21; repeat with a
+            # shorter supported signature list to test size-driven padding.
+            fp.tls_signature_hashes = ['rsa_pkcs1_sha256']
+        elif label == 'pss-pss':
+            fp.tls_signature_hashes += ['rsa_pss_pss_sha256', 'rsa_pss_pss_sha384', 'rsa_pss_pss_sha512']
+        else:
+            options[CurlOpt.SSL_SIGNATURE_ALGORITHMS] = '0x0503:0x0403:0x0603:0x0807:0x0806:0x0805:0x0804:0x0601:0x0501:0x0401:0x0904:0x0905:0x0906'
+        with Session(trust_env=False, curl_options=options) as session:
+            def client(port):
+                request = dict(kwargs, timeout=2, verify=False)
+                url = ('wss' if websocket else 'https') + f'://localhost:{port}/'
+                if websocket:
+                    session.ws_connect(url, **request)
+                else:
+                    session.post(url, data=b'{}', **request)
+            result = capture_http(client, context)
+        print(json.dumps({'gap_probe': label, **{key: result[key] for key in
+                         ('ja3_md5', 'ja4', 'cipher_count', 'extension_count', 'client_error', 'capture_error') if key in result}}, sort_keys=True))
 
 
 if __name__ == '__main__':
@@ -209,4 +236,5 @@ if __name__ == '__main__':
                        stderr=subprocess.DEVNULL)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(cert, key)
+        gap_probes(context)
         measure(context)

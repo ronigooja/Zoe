@@ -62,6 +62,7 @@ class RunTests(unittest.TestCase):
                    ('lab.account', 'lab.record', 'lab.upstream', 'lab.sideband', 'lab.webrtc', 'lab.experiments')}
         account = SimpleNamespace(token='test-token', proxy='test-proxy', device_id='test-device')
         modules['lab.account'].load_account = lambda *args: account
+        modules['lab.account'].load_persona = lambda *args: {'oai-device-id': 'persona-device'}
         captures = {}
 
         def recorder(path, secrets):
@@ -82,6 +83,7 @@ class RunTests(unittest.TestCase):
 
         modules['lab.experiments'].EXPERIMENTS = {'E0': experiment}
         args = run.parser().parse_args(self.args())
+        args.fingerprint = 'legacy-browser'
         # Also shadow package attributes: another test may already have imported a real module.
         import lab
         with patch.dict(sys.modules, modules), patch.object(lab, 'upstream', modules['lab.upstream'], create=True), \
@@ -115,7 +117,8 @@ class RunTests(unittest.TestCase):
 
     def test_device_ids_are_redacted_from_all_recorded_outputs(self):
         account = SimpleNamespace(token='fixture-token', proxy='', device_id='account-device')
-        persona = {'OAI-Device-ID': 'persona-device'}
+        persona = {'OAI-Device-ID': 'persona-device', 'user-agent': 'fixture-agent',
+                   'oai-session-id': 'fixture-session', 'oai-language': 'en'}
         payload = 'account-device persona-device'
 
         async def experiment(context):
@@ -125,6 +128,7 @@ class RunTests(unittest.TestCase):
             return {'pass': True}
 
         args = run.parser().parse_args(self.args())
+        args.fingerprint = 'legacy-browser'
         with tempfile.TemporaryDirectory(prefix='voice-lab-redaction-') as directory:
             with patch('lab.account.load_account', return_value=account), \
                     patch('lab.record.make_run_dir', return_value=Path(directory)), \
