@@ -10,6 +10,8 @@ Not covered: human voices, interruption of speech already being spoken, sending 
 
 P5-P8 implementation adds offline fake-based coverage only. Append channels, the spawn prompt, and `acknowledgement_delay_ms` have not been tested against AVAS; no live findings are claimed for these probes.
 
+P9/P10 add offline fake-based coverage only; response creation behavior and all function-output field shapes remain UNVERIFIED. The operator-reported AVAS rejection listed `response.create` and `delegation.function_call_output.create` among accepted frame types, not accepted field shapes. Codex `codex-api` protocol.rs defines only `{"type":"response.create"}`; no function-output definition was found in Codex source. Neither probe was run against AVAS during implementation.
+
 ## Protocol facts
 
 - Create call: HTTP 201 with an SDP answer and a `Location` header ending in the call id (`rtc_...`). The sideband connects with 101. A SOCKS account proxy needs `python-socks` for the WebSocket client.

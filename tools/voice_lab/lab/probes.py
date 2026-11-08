@@ -69,6 +69,20 @@ def append_frame(channel, text, identifier=None):
             'content': [{'type': 'input_text', 'text': text}]}
 
 
+def function_output_frame(shape, identifier, text):
+    """For P10, all three shapes are GUESSES; AVAS fields are UNVERIFIED.
+
+    Codex source does not define delegation.function_call_output.create.
+    """
+    if shape not in ('A', 'B', 'C'):
+        raise ValueError('Unknown function output shape')
+    frame = {'type': 'delegation.function_call_output.create',
+             'call_id' if shape == 'C' else 'delegation_item_id': identifier}
+    frame.update({'content': [{'type': 'input_text', 'text': text}]} if shape == 'B'
+                 else {'output': text})
+    return frame
+
+
 class Controller:
     def __init__(self, name, args, ctx):
         self.name, self.args, self.ctx = name, args, ctx
@@ -155,7 +169,8 @@ class AppendController(Controller):
         self.result[field + '_window_complete'] = True
         if second:
             self.second_started = True
-            await self.peer.play_wav(self.args.second_audio)
+            if self.args.second_audio is not None:
+                await self.peer.play_wav(self.args.second_audio)
 
     async def event(self, event):
         if self.task is not None and self.task.done():
@@ -181,26 +196,94 @@ class AppendController(Controller):
                         self.result['filler_text'].append(text)
         identifier = delegation_id(event)
         if identifier and self.window_start is None:
-            self.identifier = identifier
-            self.window_start = now
-            self.audio_start = self.peer.received_audio_ms
-            if self.name != 'P7' or self.args.empty_thinking:
-                channel = 'thinking' if self.name == 'P7' else ('instructions' if self.name == 'P8' else self.args.channel)
-                bound = identifier if self.name == 'P7' or (self.name != 'P8' and self.args.bind == 'open') else None
-                text = '' if self.name == 'P7' else self.args.text_file.read_text(encoding='utf-8')
-                frame = append_frame(channel, text, bound)
-                await self.sideband.send(frame)
-                self.sent = True
-                self.result.update({'frame_sent': True, 'sent_frame': frame})
-                if self.name != 'P7':
-                    self.window_start = asyncio.get_running_loop().time()
-            self.task = asyncio.create_task(self.observe_window(
-                max(0, 5.0 - (asyncio.get_running_loop().time() - self.window_start))
-                if self.name == 'P7' else self.args.spoken_window_s, self.name != 'P7'))
+            await self.start_window(identifier, now)
         if self.second_started and turn(event, 'assistant'):
             self.result['later_assistant_text'].append(turn_text(event))
         # Keep collecting all post-frame events until the bounded call ends.
         return False
+
+
+    async def start_window(self, identifier, now):
+        self.identifier = identifier
+        self.window_start = now
+        self.audio_start = self.peer.received_audio_ms
+        if self.name != 'P7' or self.args.empty_thinking:
+            channel = 'thinking' if self.name == 'P7' else ('instructions' if self.name == 'P8' else self.args.channel)
+            bound = identifier if self.name == 'P7' or (self.name != 'P8' and self.args.bind == 'open') else None
+            text = '' if self.name == 'P7' else self.args.text_file.read_text(encoding='utf-8')
+            frame = append_frame(channel, text, bound)
+            await self.sideband.send(frame)
+            self.sent = True
+            self.result.update({'frame_sent': True, 'sent_frame': frame})
+            if self.name != 'P7':
+                self.window_start = asyncio.get_running_loop().time()
+        self.task = asyncio.create_task(self.observe_window(
+            max(0, 5.0 - (asyncio.get_running_loop().time() - self.window_start))
+            if self.name == 'P7' else self.args.spoken_window_s, self.name != 'P7'))
+
+
+class ProtocolController(AppendController):
+    """P9/P10 reuse append observation and cleanup without assuming acceptance."""
+
+    async def ready(self, sideband, peer, result):
+        await super().ready(sideband, peer, result)
+        self.pre_create_start = None
+        result.update({'frames_sent': [], 'pre_create_spoken': False,
+                       'pre_create_window_complete': False,
+                       'pre_create_assistant_text': [], 'spoken_window_assistant_text': [],
+                       'post_frame_non_error_event_types': []})
+
+    async def send_frame(self, frame):
+        await self.sideband.send(frame)
+        self.sent = True
+        self.result['frame_sent'] = True
+        self.result['frames_sent'].append(frame['type'])
+
+    async def start_window(self, identifier, now):
+        if self.identifier is not None:
+            return
+        self.identifier = identifier
+        if self.name == 'P9':
+            if self.args.with_context == 'state':
+                text = self.args.text_file.read_text(encoding='utf-8')
+                frames = self.ctx.context_frames(text)
+                if len(frames) != 1:
+                    raise LabError('P9 context requires exactly one frame')
+                await self.send_frame(frames[0])
+            self.pre_create_start = now
+            self.pre_create_audio = self.peer.received_audio_ms
+        else:
+            await self.send_frame(function_output_frame(
+                self.args.shape, identifier, self.args.text_file.read_text(encoding='utf-8')))
+            self.window_start = asyncio.get_running_loop().time()
+            self.audio_start = self.peer.received_audio_ms
+        self.task = asyncio.create_task(self.run_window())
+
+    async def run_window(self):
+        if self.name == 'P9':
+            await asyncio.sleep(self.args.create_delay_s)
+            self.result['pre_create_spoken'] |= self.peer.received_audio_ms > self.pre_create_audio
+            await self.send_frame({'type': 'response.create'})
+            self.result['pre_create_window_complete'] = True
+            self.pre_create_start = None
+            self.window_start = asyncio.get_running_loop().time()
+            self.audio_start = self.peer.received_audio_ms
+        await self.observe_window(self.args.spoken_window_s, second=True)
+
+    async def event(self, event):
+        kind = event.get('type', '<unknown>') if isinstance(event, dict) else '<unknown>'
+        if self.pre_create_start is not None and (kind in (
+                'session.output_audio.delta', 'output_transcript.added') or turn(event, 'assistant')):
+            self.result['pre_create_spoken'] = True
+            if turn(event, 'assistant'):
+                self.result['pre_create_assistant_text'].append(turn_text(event))
+        if (self.window_start is not None and not self.second_started and
+                asyncio.get_running_loop().time() - self.window_start < self.args.spoken_window_s and
+                turn(event, 'assistant')):
+            self.result['spoken_window_assistant_text'].append(turn_text(event))
+        if self.sent and kind != 'error':
+            self.result['post_frame_non_error_event_types'].append(kind)
+        return await super().event(event)
 
 
 class SpawnController(Controller):
@@ -259,7 +342,9 @@ async def run_probe(ctx, args):
     options = {'acknowledgement_delay_ms': args.ack_delay_ms} if name == 'P7' else {}
     session = ctx.upstream.build_session(instructions=instructions, initial_items=items, **options)
     ctx.recorder.write_session(session)
-    controller_type = AppendController if name in ('P5', 'P7', 'P8') else SpawnController if name == 'P6' else Controller
+    controller_type = (ProtocolController if name in ('P9', 'P10') else
+                       AppendController if name in ('P5', 'P7', 'P8') else
+                       SpawnController if name == 'P6' else Controller)
     controller = controller_type(name, args, ctx)
     result = None
     try:
@@ -306,4 +391,6 @@ def plan(args):
             'channel': 'instructions' if args.experiment == 'P8' else args.channel,
             'bind': 'none' if args.experiment == 'P8' else args.bind,
             'spoken_window_s': args.spoken_window_s, 'ack_delay_ms': args.ack_delay_ms,
-            'empty_thinking': args.empty_thinking}
+            'empty_thinking': args.empty_thinking,
+            **({'with_context': args.with_context, 'create_delay_s': args.create_delay_s,
+                'shape': args.shape} if args.experiment in ('P9', 'P10') else {})}

@@ -106,7 +106,13 @@ Record `filler`, its transcript, and all errors over the five seconds after dele
 P8. Mid-call instruction append: alias of P5 with channel fixed to instructions and unbound, using `--text-file cases/append_override.txt`, followed by `--second-audio` after the spoken window.
 Record later assistant text for human judgment; neither protocol acceptance nor compliance is inferred automatically.
 
-For P1-P8, `--repeat N` defaults to three independent calls and result directories; stdout contains counts only. Each call is bounded by `--timeout-s` plus independent cleanup budgets, uses the normal account/persona redaction rules, and records evidence rather than semantic pass/fail; dry runs print file names and text lengths only. `probes.py` and `run.py` share the same CLI; no probes were run live during implementation. For P5/P7/P8, choose a timeout long enough for the delegation, observation window, and later utterance; a false spoken/filler flag with no window-complete flag is only a partial observation.
+P9. Response creation (UNVERIFIED on AVAS): weather `--audio`, optionally `--with-context state --text-file cases/state_text_p9.txt` sends one unbound context frame, then exactly `{"type":"response.create"}` after `--create-delay-s` (default 1).
+Record sent types, separate pre-create and post-create spoken windows, errors and assistant text; `--spoken-window-s` defaults to 6, then optional `--second-audio` records a later answer. Codex `codex-api` protocol.rs defines only the type field; AVAS field support is not established.
+
+P10. Function output (UNVERIFIED): weather `--audio`, then one `delegation.function_call_output.create` using `--text-file cases/function_output_p10.txt` and `--shape A|B|C` (default A): delegation_item_id/output, delegation_item_id/content input_text, or call_id/output.
+All three field shapes are GUESSES, absent from Codex source. Record full error code/param/message (including messages up to 300 characters), spoken activity, later non-error event types and assistant text after optional `--second-audio`.
+
+For P1-P10, `--repeat N` defaults to three independent calls and result directories; stdout contains counts only. Each call is bounded by `--timeout-s` plus independent cleanup budgets, uses the normal account/persona redaction rules, and records evidence rather than semantic pass/fail; dry runs print file names and text lengths only. `probes.py` and `run.py` share the same CLI; no probes were run live during implementation. For P5/P7/P8/P9/P10, choose a timeout long enough for the delegation, observation window, and later utterance; a false spoken/filler flag with no window-complete flag is only a partial observation.
 
 Order: E0, E1, then E2 to E7 only after E1 produces a delegation from synthetic speech. If E1 never does, the experiments switch to typed input if the sideband accepts a user text item (UNVERIFIED), and the plan is revised in this document before more code is written.
 
