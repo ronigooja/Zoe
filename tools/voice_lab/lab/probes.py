@@ -338,7 +338,8 @@ async def run_probe(ctx, args):
     """Each repetition owns exactly one call and one Recorder directory."""
     name = args.experiment
     instructions = args.instructions_file.read_text(encoding='utf-8')
-    items = read_items(args.items_file) if name == 'P2' else []
+    items = (read_items(args.items_file) if name == 'P2' else
+             read_items(args.p6_items_file) if name == 'P6' and getattr(args, 'p6_items_file', None) else [])
     options = {'acknowledgement_delay_ms': args.ack_delay_ms} if name == 'P7' else {}
     session = ctx.upstream.build_session(instructions=instructions, initial_items=items, **options)
     ctx.recorder.write_session(session)

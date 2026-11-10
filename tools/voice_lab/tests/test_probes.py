@@ -235,6 +235,18 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(result['errors']), 1)
                 self.assertTrue(result['filler_window_complete'])
 
+    async def test_p6_seeds_items_only_when_requested(self):
+        args = self.args('P6')
+        for name in ('01.wav',):
+            with wave.open(str(args.audio / name), 'wb') as output:
+                output.setparams((1, 2, 8000, 0, 'NONE', 'not compressed'))
+                output.writeframes(bytes(160))
+        args.audio = args.audio / '01.wav'
+        args.p6_items_file = args.items_file
+        self.script = [{'type': 'turn.done', 'turn': {'id': 'u1', 'role': 'user', 'transcript': 'one'}}]
+        await probes.run_probe(self.ctx, args)
+        self.assertEqual(len(self.ctx.recorder.sessions[-1]['initial_items']), 2)
+
     async def test_p6_per_utterance_matching_and_no_items(self):
         args = self.args('P6')
         for name in ('01.wav', '02.wav', '03.wav'):

@@ -41,6 +41,7 @@ def parser():
     result.add_argument('--shape', choices=('A', 'B', 'C'), default='A')
     result.add_argument('--state-file', type=Path, default=ROOT / 'cases' / 'state_cancel.txt')
     result.add_argument('--items-file', type=Path, default=ROOT / 'cases' / 'items_plate_home.txt')
+    result.add_argument('--p6-items-file', type=Path, help='Optional initial_items for P6 only; without it P6 seeds none.')
     result.add_argument('--update-instructions-file', type=Path, default=ROOT / 'cases' / 'instructions_override.txt')
     result.add_argument('--update-items-file', type=Path, default=ROOT / 'cases' / 'items_plate_home.txt')
     return result

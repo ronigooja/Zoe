@@ -97,7 +97,7 @@ P4. Mid-call facts: the same controls as P3, with `--experiment P4 --update-item
 P5. Append channels: weather `--audio`, then one frame after the first delegation using `--channel instructions|thinking|commentary`, `--bind none|open`, and `--text-file` (use `cases/append_state.txt` for state). Observe `spoken` during `--spoken-window-s` (default 6), then play `--second-audio`; retain sent frame, later event types, errors, and assistant text.
 The frame shape follows [GPT-Live docs](https://developers.openai.com/api/docs/guides/live-conversations), not verified AVAS behavior. A successful send is not acceptance.
 
-P6. Spawn prompt: `--instructions-file cases/instructions_spawn.txt --audio FILE_OR_DIR`, without seeded items. A directory joins consecutive `01.wav`, `02.wav`, etc. with `--gap-s`, using the P1 WAV helper.
+P6. Spawn prompt: `--instructions-file cases/instructions_spawn.txt --audio FILE_OR_DIR`, without seeded items unless `--p6-items-file FILE` is given (`role|text` lines, e.g. `cases/items_prod_rule.txt`). A directory joins consecutive `01.wav`, `02.wav`, etc. with `--gap-s`, using the P1 WAV helper.
 Record each utterance's user transcript, delegation flag, and assistant text; match by turn id when available, otherwise final-user order/time. Overlapping or delayed turns require human review.
 
 P7. Acknowledgment delay: weather `--audio`, optionally `--ack-delay-ms N` sets `delegation.acknowledgement_delay_ms`; absent means omit the field. `--empty-thinking` sends one empty thinking append bound to the first delegation.
