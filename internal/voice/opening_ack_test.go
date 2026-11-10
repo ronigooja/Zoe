@@ -15,7 +15,8 @@ func TestVoiceAVASCreateAcknowledgement(t *testing.T) {
 		name, acknowledgement, want string
 		chars                       int
 	}{
-		{"missing", "null", "unsupported", 0},
+		{"missing", "null", "unverified", 0},
+		{"unsupported", `{"supported":false}`, "unsupported", 0},
 		{"applied", `{"applied":true}`, "delivered", 17},
 		{"silent-applied", `{"applied":true,"silent":true}`, "delivered", 17},
 		{"unverified", `{"applied":true,"silent":"unverified"}`, "unverified", 17},

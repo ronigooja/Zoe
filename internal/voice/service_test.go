@@ -865,7 +865,7 @@ func TestVoiceOpeningContextAVASIsCreationContextAnd501IsNonFatal(t *testing.T) 
 			var body struct {
 				OpeningContext *openingContext `json:"opening_context"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OpeningContext == nil || len(body.OpeningContext.Items) != 1 {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OpeningContext == nil || len(body.OpeningContext.Items) != 2 {
 				t.Errorf("AVAS create missing opening_context: err=%v body=%+v", err, body)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"answer_sdp": "v=0\r\n", "voice_session_id": "gw-avas"})
@@ -893,8 +893,8 @@ func TestVoiceOpeningContextAVASIsCreationContextAnd501IsNonFatal(t *testing.T) 
 	if err := store.DB().QueryRow(`SELECT opening_context_delivery FROM voice_sessions WHERE id=?`, created.SessionID).Scan(&delivery); err != nil {
 		t.Fatal(err)
 	}
-	if delivery != "unsupported" {
-		t.Fatalf("delivery=%q; AVAS creation context must not claim live delivery", delivery)
+	if delivery != "unverified" {
+		t.Fatalf("delivery=%q; AVAS creation context without acknowledgement must remain unverified", delivery)
 	}
 }
 

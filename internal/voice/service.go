@@ -182,10 +182,13 @@ type openingContext struct {
 	Items   []openingContextItem `json:"items"`
 }
 type openingContextResult struct {
-	Applied bool `json:"applied"`
-	Version int  `json:"version,omitempty"`
-	Silent  any  `json:"silent,omitempty"`
+	Applied   bool  `json:"applied"`
+	Version   int   `json:"version,omitempty"`
+	Silent    any   `json:"silent,omitempty"`
+	Supported *bool `json:"supported,omitempty"`
 }
+
+const delegationRuleItem = `用户要求取消或停止进行中的任务时,先委托,不要自己回答。用户询问任务进度或结果时,先委托,不要自己回答。用户询问关于他本人的任何信息时,先委托,等结果再回答,不要自己回答。`
 
 func openingCharsFor(c *openingContext) int {
 	if c == nil {
@@ -199,6 +202,9 @@ func openingCharsFor(c *openingContext) int {
 }
 
 func (s *Service) buildOpeningContext(ctx context.Context, p contracts.Principal) *openingContext {
+	if s.upstreamRoute == "avas" {
+		return s.buildAVASOpeningContext(ctx, p)
+	}
 	if s.contextAssembler == nil || s.openingBudget <= 0 {
 		return nil
 	}
@@ -238,6 +244,56 @@ func (s *Service) buildOpeningContext(ctx context.Context, p contracts.Principal
 	}
 	if len(c.Items) == 0 {
 		return nil
+	}
+	return c
+}
+
+func (s *Service) buildAVASOpeningContext(ctx context.Context, p contracts.Principal) *openingContext {
+	version := 1
+	_ = s.db.QueryRowContext(ctx, `SELECT coalesce(max(opening_context_version),0)+1 FROM voice_sessions WHERE workspace_id=? AND owner_id=?`, p.WorkspaceID, p.SubjectID).Scan(&version)
+	c := &openingContext{Kind: "full", Version: version, Items: []openingContextItem{{Role: "user", Text: delegationRuleItem}}}
+	used := openingCharsFor(c)
+	// For AVAS, the mandatory rule is the minimum budget; only optional facts
+	// and tasks are dropped when a configured budget is smaller than the rule.
+	appendItem := func(text string) bool {
+		cost := len([]rune(text))
+		if len(c.Items) >= 128 || used+cost > s.openingBudget {
+			return false
+		}
+		c.Items = append(c.Items, openingContextItem{Role: "user", Text: text})
+		used += cost
+		return true
+	}
+	if s.contextAssembler != nil {
+		assembled, err := s.contextAssembler(ctx, p, "", p.SubjectID, "", contracts.MemoryContextDefaultBudgetTokens)
+		if err == nil {
+			facts := 0
+			for _, item := range assembled.Items {
+				key, content := strings.TrimSpace(item.Key), strings.TrimSpace(item.Content)
+				if key == "" || content == "" {
+					continue
+				}
+				// AVAS facts use key:content, omitting internal subject IDs and
+				// the assembler's machine-style equals sign.
+				if facts == 5 || !appendItem(key+":"+content) {
+					break
+				}
+				facts++
+			}
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT title FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND status IN ('active','queued','waiting','awaiting_user','paused') ORDER BY updated_at DESC,id LIMIT 8`, p.WorkspaceID, p.SubjectID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var title string
+			if rows.Scan(&title) != nil || strings.TrimSpace(title) == "" {
+				continue
+			}
+			if !appendItem("进行中的任务:" + strings.TrimSpace(title)) {
+				break
+			}
+		}
 	}
 	return c
 }
@@ -790,6 +846,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	if s.upstreamRoute == "avas" {
 		openingDelivery = []byte("unsupported")
 		if opening != nil {
+			openingDelivery = []byte("unverified")
 			openingVersion = opening.Version
 			openingChars = openingCharsFor(opening)
 		}
@@ -807,6 +864,9 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	}
 	if upstream.OpeningContext != nil && (upstream.OpeningContext.Silent == nil || upstream.OpeningContext.Silent == true) && upstream.OpeningContext.Applied {
 		openingDelivery = []byte("delivered")
+	}
+	if s.upstreamRoute == "avas" && upstream.OpeningContext != nil && upstream.OpeningContext.Supported != nil && !*upstream.OpeningContext.Supported {
+		openingDelivery = []byte("unsupported")
 	}
 	// The gateway's account ID is sensitive correlation data. Persist only the
 	// answer and opaque lease identity; the account ID is hashed below.
