@@ -503,9 +503,12 @@ type progressQueryer interface {
 func (s *Service) progressReplyQuery(ctx context.Context, db progressQueryer, workspace, owner, session string, now time.Time) (string, error) {
 	cutoff := now.Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
 	ageCutoff := now.Add(-s.recall.ProgressMaxTaskAge).UTC().Format(time.RFC3339Nano)
-	var status, started, created string
-	err := db.QueryRowContext(ctx, `SELECT t.status,coalesce(t.started_at,''),t.created_at FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND l.session_id=? AND t.created_at>=? AND t.status IN ('active','queued','waiting') ORDER BY coalesce(t.started_at,t.created_at) DESC LIMIT 1`, workspace, owner, session, ageCutoff).Scan(&status, &started, &created)
+	var status, started, created, taskID string
+	err := db.QueryRowContext(ctx, `SELECT t.status,coalesce(t.started_at,''),t.created_at,t.id FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND l.session_id=? AND t.created_at>=? AND t.status IN ('active','queued','waiting') ORDER BY coalesce(t.started_at,t.created_at) DESC LIMIT 1`, workspace, owner, session, ageCutoff).Scan(&status, &started, &created, &taskID)
 	if err == nil && (status == "active" || status == "queued" || status == "waiting") {
+		if stopping, stopErr := s.taskStopRequested(ctx, db, workspace, taskID); stopErr == nil && stopping {
+			return "已经请求停止，正在停下。", nil
+		}
 		stamp := started
 		if stamp == "" {
 			stamp = created
@@ -532,6 +535,13 @@ func (s *Service) progressReplyQuery(ctx context.Context, db progressQueryer, wo
 		return "", err
 	}
 	return "现在没有在处理的任务。", nil
+}
+
+// taskStopRequested reports a live run that was asked to stop but has not been confirmed stopped.
+func (s *Service) taskStopRequested(ctx context.Context, db progressQueryer, workspace, taskID string) (bool, error) {
+	var n int
+	err := db.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE workspace_id=? AND task_id=? AND desired_control='stop' AND status IN ('dispatching','active','uncertain')`, workspace, taskID).Scan(&n)
+	return n > 0, err
 }
 
 func (s *Service) progressReply(ctx context.Context, workspace, owner, session string) string {
