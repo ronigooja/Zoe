@@ -121,7 +121,7 @@ func TestResultDeliveryLiveCallSendsOneBoundedMessage(t *testing.T) {
 	if r.paths[0] != "/v1/voice/sessions/gw-s1/context" || r.auth[0] != "Bearer gw-key" {
 		t.Fatalf("path=%q auth=%q", r.paths[0], r.auth[0])
 	}
-	if want := "Zoe result for the user: Tokyo will be rainy today. Please tell them briefly."; r.texts[0] != want {
+	if want := "Tokyo will be rainy today."; r.texts[0] != want {
 		t.Fatalf("text=%q want %q", r.texts[0], want)
 	}
 	if status, _, attempts := r.row(t, "entry-1"); status != "delivered" || attempts != 1 {
