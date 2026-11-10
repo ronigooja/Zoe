@@ -69,7 +69,7 @@ func TestRecallRoute(t *testing.T) {
 						return answer.Result{Status: "need_transcript", SummaryIDs: []string{"selected-summary"}}, nil
 					}
 				}
-				return answer.Result{Status: "answer", Text: "We discussed the garden."}, nil
+				return answer.Result{Status: "answer", Text: "我们聊过花园。"}, nil
 			})
 			cfg := Config{Classifier: &fakeClassifier{category: "recall"}, GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), Now: func() time.Time { return now }, Answerer: model, RecallTimeout: 100 * time.Millisecond}
 			if mode == "unconfigured" {
@@ -158,17 +158,17 @@ func TestRecallRoute(t *testing.T) {
 			if len(pushes) != 2 {
 				t.Fatalf("holding then answer: got %d pushes", len(pushes))
 			}
-			if pushes[0] != recallPrefix+"I will check our earlier conversations." {
+			if pushes[0] != "I will check our earlier conversations." {
 				t.Fatalf("holding=%q", pushes[0])
 			}
 			expected := recallNotFound
 			if mode == "unconfigured" || mode == "error" || mode == "timeout" || mode == "unknown_id" || mode == "round_limit" {
-				expected = "I could not check the records right now, please try again."
+				expected = "我现在没法查看对话记录，请稍后再试。"
 			}
 			if mode == "answer" || mode == "transcript" {
-				expected = "We discussed the garden."
+				expected = "对话记录里记着：我们聊过花园。"
 			}
-			if pushes[1] != recallPrefix+expected {
+			if pushes[1] != expected {
 				t.Fatalf("answer=%q", pushes[1])
 			}
 			if calls > 2 {
@@ -198,7 +198,7 @@ func TestRecallRoute(t *testing.T) {
 func TestRecallSpeechRejectsMarkupAndEvidenceIDs(t *testing.T) {
 	for _, text := range []string{"**garden**", "[garden](https://example.com)", "selected-summary"} {
 		got := recallSpeech(text, []answer.Candidate{{ID: "selected-summary"}})
-		if got != recallPrefix+recallUnavailable {
+		if got != recallUnavailable {
 			t.Fatalf("unsafe speech: %q", got)
 		}
 	}
@@ -218,11 +218,11 @@ func TestRecallLatestSummaryLimit(t *testing.T) {
 		if len(c) != 2 || c[0].ID != "summary-0" || c[1].ID != "summary-1" {
 			t.Fatalf("latest summary limit: %+v", c)
 		}
-		return answer.Result{Status: "answer", Text: "We discussed the garden."}, nil
+		return answer.Result{Status: "answer", Text: "我们聊过花园。"}, nil
 	})
 	svc := newService(store.DB(), Config{Now: func() time.Time { return now }, Answerer: model, RecallSummaryLimit: 2})
 	text, n, status := svc.recallAnswer(context.Background(), "default", "owner", "remember our conversations")
-	if status != "answer" || n != 2 || text != recallPrefix+"We discussed the garden." {
+	if status != "answer" || n != 2 || text != "对话记录里记着：我们聊过花园。" {
 		t.Fatalf("status=%s count=%d text=%q", status, n, text)
 	}
 }
@@ -234,8 +234,8 @@ func TestRecallFailureSentences(t *testing.T) {
 			if status == "no_summaries" || status == "not_found" {
 				want = recallNotFound
 			}
-			if got := recallFailureSpeech(status); got != recallPrefix+want {
-				t.Fatalf("%s speech=%q, want %q", status, got, recallPrefix+want)
+			if got := recallFailureSpeech(status); got != want {
+				t.Fatalf("%s speech=%q, want %q", status, got, want)
 			}
 		})
 	}
@@ -253,7 +253,7 @@ func TestRecallSummaryReadFailureIsNotMissingEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, count, status := svc.recallAnswer(context.Background(), "default", "owner", "private question")
-	if status != "summary_error" || count != 0 || text != recallPrefix+recallUnavailable {
+	if status != "summary_error" || count != 0 || text != recallUnavailable {
 		t.Fatalf("summary failure status=%s count=%d text=%q", status, count, text)
 	}
 }
