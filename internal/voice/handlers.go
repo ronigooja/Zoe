@@ -20,6 +20,7 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/steward"
+	"github.com/ronigooja/Zoe/internal/triage"
 )
 
 func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -415,7 +416,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		// Source-only extraction currently has no worker materialization contract.
 		// Never acknowledge a save that the existing pipeline cannot perform.
 		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
-		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,'memory_write','pending',?,?,?)`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, recallPrefix+memorySaveUnavailable, at, at, at)
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,'memory_write','pending',?,?,?)`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, memorySaveUnavailable, at, at, at)
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, err
 	}
 	if (category == "recall" || category == "memory_read") && impact != "high" {
@@ -423,13 +424,13 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
 		holding := s.recall.RecallHoldingText
 		if strings.TrimSpace(holding) == "" {
-			holding = "I will check our earlier conversations."
+			holding = "我查一下我们之前的对话。"
 		}
 		intent := "recall_holding"
 		if category == "memory_read" {
-			holding, intent = "I will check my saved notes.", "memory_read_holding"
+			holding, intent = "我查一下保存的笔记。", "memory_read_holding"
 		}
-		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?)`, id, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, recallSpeech(holding, nil), intent, at, at, at)
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?)`, id, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, holding, intent, at, at, at)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
@@ -482,7 +483,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 			intent = "explicit_confirmation"
 		}
 		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
-		if _, err = tx.ExecContext(ctx, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?) ON CONFLICT(session_id,generation,turn_id) DO NOTHING`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, recallPrefix+text, intent, at, at, at); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?) ON CONFLICT(session_id,generation,turn_id) DO NOTHING`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, text, intent, at, at, at); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 	}
@@ -633,6 +634,10 @@ func (s *Service) classifyCommittedTurn(id string) {
 	var err error
 	attempts := 0
 	reason := "none"
+	configuredBudget, effectiveBudget := time.Duration(0), time.Duration(0)
+	ctx = triage.ObserveCallBudget(ctx, func(configured, effective time.Duration) {
+		configuredBudget, effectiveBudget = configured, effective
+	})
 	triageStarted := time.Now()
 	if s.classifier != nil {
 		// Both attempts share the remaining classification budget. Progress
@@ -669,18 +674,32 @@ func (s *Service) classifyCommittedTurn(id string) {
 		}
 	}
 	triageMS := time.Since(triageStarted).Milliseconds()
+	observationErr := err
+	elapsedMS := triageMS
 	stewardMS := int64(0)
 	decision := steward.Dispatch
 	if classifyHandoff(content) == "high" {
 		decision = steward.Ask
 	} else if s.steward != nil && category == "task" {
+		if observer, ok := s.steward.(interface {
+			CallBudget(context.Context) (time.Duration, time.Duration)
+		}); ok {
+			configuredBudget, effectiveBudget = observer.CallBudget(ctx)
+		} else {
+			configuredBudget = 0 // Custom stewards do not expose their configuration.
+			if deadline, ok := ctx.Deadline(); ok {
+				effectiveBudget = max(0, time.Until(deadline))
+			}
+		}
 		stewardStarted := time.Now()
 		answer, callErr := s.steward.Decide(ctx, content)
+		observationErr = callErr
 		if ctx.Err() != nil {
 			callErr = ctx.Err()
 		}
 		decision = steward.Resolve(answer, callErr, false)
 		stewardMS = time.Since(stewardStarted).Milliseconds()
+		elapsedMS = stewardMS
 		if callErr != nil {
 			reason = "steward_error"
 			var timeout interface{ Timeout() bool }
@@ -698,7 +717,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 			s.cacheTriage(triageKey(session, generation, turn, revision), category)
 		}
 	}
-	log.Printf("voice_classification id=%s triage_ms=%d steward_ms=%d total_ms=%d budget_hit=%t storage_error=%t reason=%s attempts=%d", id, triageMS, stewardMS, time.Since(started).Milliseconds(), ctx.Err() != nil, writeErr != nil, reason, attempts)
+	log.Printf("voice_classification id=%s triage_ms=%d steward_ms=%d total_ms=%d budget_hit=%t storage_error=%t reason=%s attempts=%d configured_ms=%d effective_ms=%d elapsed_ms=%d error_kind=%s", id, triageMS, stewardMS, time.Since(started).Milliseconds(), ctx.Err() != nil, writeErr != nil, reason, attempts, configuredBudget.Milliseconds(), effectiveBudget.Milliseconds(), elapsedMS, triage.ErrorKind(observationErr))
 }
 
 func (s *Service) handleTurns(w http.ResponseWriter, r *http.Request) {

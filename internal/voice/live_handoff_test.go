@@ -312,7 +312,7 @@ func TestLiveHoldQuestionDeliveredOnce(t *testing.T) {
 			svc := newService(store.DB(), cfg)
 			svc.dispatchFastReplies(context.Background())
 			svc.dispatchFastReplies(context.Background())
-			if posts != 1 || !strings.HasPrefix(spoken, recallPrefix) || !strings.Contains(spoken, steward.Question(tc.text)) {
+			if posts != 1 || spoken != steward.Question(tc.text) {
 				t.Fatalf("question delivery posts=%d text=%q", posts, spoken)
 			}
 		})
