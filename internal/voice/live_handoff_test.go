@@ -174,7 +174,7 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(pushes) != 2 || pushes[1] != recallPrefix+"上次通话我们聊了今天的天气。" {
+	if len(pushes) != 2 || pushes[1] != "对话记录里记着：上次通话我们聊了今天的天气。" {
 		t.Fatalf("holding then grounded answer: %q", pushes)
 	}
 	if strings.Contains(logs.String(), question) || !strings.Contains(logs.String(), "triage_ms=") || !strings.Contains(logs.String(), "steward_ms=0") || !strings.Contains(logs.String(), "wait_ms=") {
