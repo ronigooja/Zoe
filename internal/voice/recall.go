@@ -17,7 +17,6 @@ import (
 const recallExcerptBytes = 16 * 1024
 const recallNotFound = "我没有在我们的对话记录里找到相关内容。"
 const recallUnavailable = "我现在没法查看对话记录，请稍后再试。"
-const recallPrefix = "Read this to the user exactly as written: "
 
 // recallFailureSpeech applies fixed wording without implying a failed check found no evidence.
 func recallFailureSpeech(status string) string {
