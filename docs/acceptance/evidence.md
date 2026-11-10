@@ -239,7 +239,7 @@ Environment: production gateway image from gateway source `82aed1b` (`VOICE_UPST
 - Verified once: after the gateway fix `79ca0ed`, sideband events reach the AVAS delegation mapper. The earlier silent call was caused by the observer never seeing sideband events.
 - The result reached the call through `/context`, not sideband `delegation.context.append`. Whether upstream speaks `speakable` delegation content remains unverified.
 - The spoken summary understated rain ("very low probability") against the Steward answer (peak probability 100%, heavy morning rain); the upstream rewrites results and Zoe does not control the wording.
-- `POST /v1/voice/sessions/{id}/opening-context` returned 501 at call start; cause not investigated, so opening context was not delivered.
+- `POST /v1/voice/sessions/{id}/opening-context` returned 501 at call start. Later finding (2026-11-10): that is the gateway's designed AVAS answer, and Zoe was then built for the `wm` route because `ZOE_VOICE_UPSTREAM_ROUTE` was never passed to the server container; see the 2026-11-10 record below.
 - Not exercised: the gateway 422 `upstream_rejected` path, account fallback, `GET /v1/voice/requests/{id}/outcome` against Zoe attestation, and the recovery sweep. The pool lock was cleared with one operator `voice.pool.reconcile` for session `1b086abb` (cause of the earlier upstream rejection unproven; the gateway logs of that call were purged).
 - Limits: one call, one account, one request. No product milestone is accepted by this record.
 
@@ -260,7 +260,7 @@ Environment: temporary gateway image from branch `probe/instruction-v1` (head `b
 - Verified: the same upstream invented progress statements when the instruction did not define the answer ("almost there"). Wording not specified by Zoe is not reliable.
 - Verified: `delegation.created` carries the raw transcript. A tag-prefix instruction ("start the delegation with [progress]") produced no tags in five delegations. Upstream cannot route; Zoe must classify ([ADR 0012](../architecture/decisions/0012-voice-conversation-layer.md)).
 - Observed once, unexplained: on one call an empty-text delegation and an upstream "bye" appeared before the user spoke, and the client data channel closed about 40 s later (`data_channel_failed`, a-to-b). Not reproduced on the next call; cause unknown, client diagnostics not read.
-- Not exercised: pushing text while the user is speaking, several pushes in one call, opening context effect (it is sent as `session.initial_items` at creation; the separate `/opening-context` returns 501 on AVAS by design, and Zoe records `unsupported` without retrying).
+- Not exercised: pushing text while the user is speaking, several pushes in one call, opening context effect. The opening context is sent as upstream `initial_items` at creation; the gateway's separate `/opening-context` endpoint returns 501 on AVAS by design.
 - Limits: three calls, one account, one language. No product milestone is accepted by this record.
 
 ## Memory model and Qdrant state — 2026-11-06
@@ -323,3 +323,24 @@ Source: recall-route candidate based on `d444f5b`, local macOS, fake clock/gatew
 Recovery follow-up based on `ec67341`, local macOS: targeted `TestRecall` fixtures cover startup/expired-lease fallback, preserved existing answers, insert-failure retries/fallback, four-worker admission and shutdown cancellation/join. With the new tests against unchanged `ec67341` implementations, `recall_recovery_test.go:91` reported running jobs without recovered replies, line 112 timed out waiting for persistence fallback, and lines 155/165 reported 12 claimed jobs and workers still active after Stop. These negative controls establish regression sensitivity only; hosted integration and live transport acceptance remain open.
 
 Rebase integration on `45fbc5b`, local macOS: serial `go build -p 1 ./...` and the requested operator `TestMenu` selection passed. The single voice `TestRecall|TestMigration|TestHandoff` run passed migration/upgrade, handoff and recovery cases but failed recall route delivery because the fake voice clock preceded control-plane command acceptance. The fixture now explicitly makes holding replies due; it was not rerun under the requested no-repeats rule. The added version-212 upgrade fixture verifies receipts 212/213/214, retained summary jobs and usable recall/Steward schema. Summary generation, Steward wiring, chat removal and migration numbers are preserved. Targeted vet, formatting and documentation checks passed; no CI was dispatched.
+
+## Voice lab and live calls, AVAS route — 2026-11-07 to 2026-11-11
+
+Environment: gateway image `main-d425d00`, one pool account (id 4), synthetic Mandarin speech for lab runs, the Mac client for real calls. Lab runs are test-only and were deleted from the gateway host afterwards. Full tables: [lab results](../../tools/voice_lab/RESULTS.md).
+
+Lab (synthetic speech, small samples, no instruction-free control group unless stated):
+
+- Official mid-call append frames other than `session.context.append` and `delegation.context.append` were rejected by upstream (18 of 18). `session.update`, `response.create` ("requires a session with Responses delegation"), and `delegation.function_call_output.create` ("Missing required parameter: 'item'") were rejected; `acknowledgement_delay_ms` with any value made the sideband connection fail.
+- A rule in `initial_items` (role `user`) moved delegation; the same rule in `instructions` did not. Personal information: delegated 3 of 36 with empty items, 23 of 24 with the item rule. Combined cancel, progress, and personal rule: cancel 3 of 6, progress 4 of 5 delegated, chat 0 of 18 over-delegated.
+- Event identity: the user turn ID is stable from `turn.created` to `turn.done`; `delegation.created` carries it as `user_bidi_turn_id`; the delegation `item.id` is a different value. In one call `delegation.created` arrived about 470 ms before the user `turn.done`; upstream's assistant turn began within about 10 ms after `turn.done`.
+- With empty instructions and no items, one request per call: a weather request was delegated in 2 of 3 and answered with a question about the city in 1 of 3; a web-search request was delegated 3 of 3. In none of the six did upstream give weather or search content itself. Six calls only; real human speech not measured.
+- In a call with the rule item, upstream said a task "stopped" when no task was running.
+
+Real calls with the Mac client (Zoe `b2d3807` and `255bd89`, then `7bc915d`):
+
+- Before the route variable reached the container, `opening_context_delivery` was `unsupported` and the stored items were the `wm` format. After `ZOE_VOICE_UPSTREAM_ROUTE=avas` reached the container, delivery was `delivered`, and the stored items began with the delegation rule.
+- Personal information was delegated and `memory_read` returned the stored home address; a question about a fact that was not stored returned the fixed "not saved" statement. Cancel produced the fixed statement that a stop was requested and the task was winding down, and the task ended `canceled`.
+- The first call with the new items listed eight tasks, several duplicated or abandoned from earlier calls; after the filter fix the items held only the rule and one fact.
+- Steward calls: 2910 ms and 2647 ms with a 4000 ms limit, then one call that used the full 4000 ms and timed out. With the code of that time, the timeout dispatched the user's whole sentence, which began with a withdrawal, as a task (later canceled). Zoe now creates no task on a Steward failure (commit `3fe3666`, not yet deployed at the time of writing).
+- Not exercised: real human speech outside the Mac client user, several delegations per call, a state sentence arriving after the next question, interruption, long calls, UDP media after the gateway moved to host networking.
+- Limits: a handful of calls, one account, one user. No product milestone is accepted by this record.

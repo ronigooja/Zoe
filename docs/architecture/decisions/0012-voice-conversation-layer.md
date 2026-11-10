@@ -25,7 +25,7 @@ The problem is control, not speed: the upstream model leads the conversation and
 6. Authority is unchanged: voice and the conversation layer create no commands directly. Impact-level rules of [ADR 0009](0009-voice-steward-impact-policy.md) apply to the slow path only; the fast path is read-only.
 7. The gateway stays transport-only (media, accounts, sideband). It carries no conversation logic.
 
-When creating a voice session, Zoe pushes its standing delegation instruction through the gateway before returning SDP, records delivery per session/media generation/instruction hash, and retries a failed push once on connection; this is transport evidence only, not proof that upstream obeys (configuration: [deployment](../../operations/deployment.md#voice-delegation-instruction)).
+When creating a voice session on the AVAS route, Zoe sends two things in the create request: `instructions` (identity and speech style only) and `opening_context` items, which the gateway forwards as upstream `initial_items` (role `user`). The first item is the fixed delegation rule: cancel, progress, and any question about the user personally are delegated, not answered by the model. At most five shallow memory facts (`key:content`) and the current tasks (`active`, `queued`, and `waiting`/`awaiting_user` updated within 30 minutes, de-duplicated by title) follow, within the item and character budgets; the rule is never dropped. Delivery is recorded as `delivered`, `unverified`, or `unsupported` from the gateway response. No post-create push or retry is used. This is transport evidence only, not proof that upstream obeys (configuration: [deployment](../../operations/deployment.md#voice-delegation-instruction)). Measured behavior is in [lab results](../../../tools/voice_lab/RESULTS.md).
 
 
 ## Routing: stateless triage (decided 2026-11-06)
@@ -95,12 +95,16 @@ question, and the default memory token budget. This is source-verified SQLite
 retrieval, not Qdrant semantic search. Use the existing `ZOE_ANSWER_*` client with
 a separate memory prompt: the question and items are untrusted data, never
 instructions; output only `answer` or `not_found`. Empty retrieval or model
-`not_found` says `I do not have that saved.` Configuration, retrieval, model,
-malformed-output, deadline, and recovered-job failures instead say
-`I could not check right now.` Logs contain IDs, counts, and fixed statuses only.
+`not_found` sends a fixed plain Chinese statement that nothing is saved.
+Configuration, retrieval, model, malformed-output, deadline, and recovered-job
+failures send a fixed plain Chinese statement that the check was not possible.
+An answer is sent as a short Chinese lead-in plus the answer text. Every sentence
+sent upstream is a plain statement with no command to the model and no English
+prefix. Logs contain IDs, counts, and fixed statuses only. The read runs with the
+narrowest scope it needs (`memory:read:personal`) for the owner only.
 
-When triage selects `memory_write`, the current component returns
-`I could not save that right now.` once per turn through the plain fast-reply
+When triage selects `memory_write`, the current component sends a fixed plain Chinese
+statement that it cannot save once per turn through the plain fast-reply
 queue, without a Worker task or save claim. Write ingestion is blocked:
 `Repository.RecordVoiceOutcome` creates a source-only extract job, but
 `derivedService.materializeTx` requires an existing current claim/revision and
@@ -126,6 +130,20 @@ When validating model output, strict JSON decoding rejects missing/unknown field
 
 When new (not duplicate) turns arrive during or after the first summary, schedule exactly one replacement revision after the same settle delay, retaining previous rows until replacement commits. Multiple late turns coalesce into that revision. Turns arriving during or after the replacement remain in the authoritative transcript but do not trigger a third pass. The existing 10-minute ingestion window is unchanged. This bounded regeneration rule applies equally to initially empty calls; summary recall must not assume the derived store is exhaustive.
 
+## Delegation is upstream's responsibility (decided 2026-11-11)
+
+Zoe classifies only the sentences upstream delegated. It does not classify every final user transcript.
+
+Reasons:
+
+- Triage is stateless and sees one sentence. Without history it cannot tell, for example, a withdrawal of a task from a refusal of an offer. Classifying every sentence would increase misclassification, and the triage definitions have no "not a request" category, so unrelated speech would become tasks.
+- The rule item in `initial_items` is the mechanism that moves cancel, progress, and personal questions toward delegation. Measured with synthetic speech: personal facts 23/24 delegated; with the combined rule, cancel 3/6, progress 4/5, and chat 0/18 over-delegated. No instruction-free control group was run and no real human speech was measured, so the rule's reliability is not established.
+- Known gap: a cancel or progress question that upstream answers itself never reaches Zoe, and a running task is not stopped. This is accepted and observed through live calls.
+
+Considered and not built: gateway emission of `user_audio_turn.final` for every final transcript, with a stable ID. Measured IDs, for later use: the user turn ID is stable from `turn.created` to `turn.done`; a delegation carries it as `user_bidi_turn_id`; the delegation `item.id` is a different value, and the gateway currently uses that value as the final-turn ID. `delegation.created` arrived about 470 ms before the user `turn.done` in one call. Upstream began speaking within about 10 ms after `turn.done`, so classification of a non-delegated sentence could only correct afterwards, never precede upstream's answer.
+
+When Steward times out or fails, Zoe creates no task. It records the decision `error` on the turn and sends a fixed plain Chinese statement that processing failed and the developer should be told. The failure detail stays in logs (`steward_call` with `configured_ms`, `effective_ms`, `elapsed_ms`, and a sanitized `error_kind`), never in speech. High-impact requests keep the confirmation path regardless.
+
 ## Open questions (to measure before implementation)
 
 ### Stateless task manager
@@ -141,7 +159,7 @@ When configured, `ZOE_STEWARD_BASE_URL`, `MODEL`, `API_KEY_FILE`, `API_STYLE`,
 `REASONING_EFFORT`, `THINKING`, and `TIMEOUT_MS` (each with the `ZOE_STEWARD_`
 prefix) select an independent model. Base URLs do not require `/v1`; auto style
 tries `/responses` then `/chat/completions` on unsupported-route responses.
-The default Steward HTTP and whole-decision timeout is 3500 ms (unchanged range
+The default Steward HTTP and whole-decision timeout is 4000 ms (unchanged range
 200-10000), within the shared classification deadline defined in
 [routing](#routing-stateless-triage-decided-2026-11-06). Both API-style attempts
 share the decision deadline. The total budget is not a guarantee that triage and
@@ -169,12 +187,17 @@ This authorizes only starting this task, never future runtime permissions.
 Runtime requests retain a real run/action digest, `runtime:permission` scope,
 version and expiry. No broader voice principal or endpoint permission is added.
 
-When triage returns `decline`, reuse `task.stop` with the fixed reply
-`OK, cancelled`. For `cancel`, stop only the newest nonterminal task linked to
-this owner and live generation, with `OK, stopped`; no match produces
-`Nothing is running.` Stop cancels tasks without live runs directly; live runs
-receive the existing desired-stop control and become canceled only after runner
-termination. Stable-turn retries do not repeat effects.
+When triage returns `decline`, reuse `task.stop` with a fixed plain Chinese reply.
+For `cancel`, stop only the newest nonterminal task linked to this owner and live
+generation through the normal stop path, then state the true state afterwards.
+Upstream cannot be prevented from speaking its own words, so Zoe supplies the
+facts and never lets a stop be reported before it happened. States: no task
+linked (nothing is running); stop requested and the live run still winding down;
+task confirmed canceled; task already complete or failed (stated as such, not as
+stopped). Stop cancels tasks without live runs directly; live runs receive the
+existing desired-stop control and become canceled only after runner termination.
+A progress question while a stop is pending says the stop was requested, not that
+work continues. Stable-turn retries do not repeat effects.
 
 When a held answer is unknown or times out, no task starts or resumes. Re-ask
 at most once per question/version with fixed text. A handoff deadline before

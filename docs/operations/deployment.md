@@ -30,8 +30,16 @@ retry is used. Migration 215 and its historical delivery rows remain intact; thi
 path no longer writes separate delivery rows. Successful transport does not prove
 silence or compliance: whether upstream obeys must be verified in live calls.
 
-When inspecting AVAS opening-context evidence, `unsupported` means no recognized
-create-response acknowledgement, not that Zoe attempted a live context push.
+On the AVAS route the same request also carries `opening_context` items, which the
+gateway forwards as upstream `initial_items`: first the fixed delegation rule
+(cancel, progress, and personal questions are delegated), then at most five
+shallow memory facts and the current tasks. The rule is not configurable by
+`ZOE_VOICE_INSTRUCTION_TEXT`. When inspecting delivery in `voice_sessions.opening_context_delivery`:
+`delivered` means the gateway acknowledged `applied`; `unverified` means it did not
+acknowledge or reported `silent: "unverified"`; `unsupported` means nothing was
+sent or the gateway said it is unsupported. A route mismatch (see
+`ZOE_VOICE_UPSTREAM_ROUTE` below) leaves the AVAS items unsent. Zoe never pushes
+opening context after creation on AVAS.
 The gateway must return `opening_context: {"applied": true}` (with `silent`
 omitted, null, or true) for `delivered`; `silent: "unverified"` remains unverified.
 Return top-level `context_chars` to report the gateway's applied character count;
@@ -210,7 +218,7 @@ For committed voice turns, `ZOE_TRIAGE_TIMEOUT_MS` sets the HTTP timeout (defaul
 classification and the handoff wait (default 6000 ms, range 100-30000). One retry
 shares the remaining classification budget; there is no separate 1500 ms cutoff.
 For task classification, `ZOE_STEWARD_TIMEOUT_MS` bounds the HTTP call and the
-whole Steward decision, including API-style negotiation (default 3500 ms, range
+whole Steward decision, including API-style negotiation (default 4000 ms, range
 200-10000). Triage and Steward share the total budget, not additive guarantees;
 raise the total explicitly when both calls may consume their full timeouts.
 Exhausted failures retain the slow path and log only bounded classification

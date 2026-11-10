@@ -36,7 +36,7 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 	}
 	timeoutMS := strings.TrimSpace(getenv("ZOE_STEWARD_TIMEOUT_MS"))
 	if timeoutMS == "" {
-		timeoutMS = "3500"
+		timeoutMS = "4000"
 	}
 	c, err := triage.FromEnv(func(key string) string {
 		if key == "ZOE_TRIAGE_TIMEOUT_MS" {

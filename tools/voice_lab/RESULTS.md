@@ -2,15 +2,13 @@
 
 Offline transport-fingerprint findings are separate from these historical live
 results: [Codex feasibility](FINGERPRINT_FEASIBILITY.md). The new approximate Codex
-profile has not been tested against AVAS; these results used the older profile.
+profile was later used for the P9, P10, items, and event-identity runs below; the earlier runs used the older profile.
 
 Observations from live runs against the upstream AVAS realtime service, 2026-11-07. One pool account, through its stored egress proxy, one call at a time, synthetic speech only. Samples are small (usually three calls per cell), so results show tendencies, not rates. The `instructions` text used in most runs is `cases/instructions_v2.txt`.
 
 Not covered: human voices, interruption of speech already being spoken, sending context while the user is silent, call duration limits, a second delegation in one call.
 
-P5-P8 implementation adds offline fake-based coverage only. Append channels, the spawn prompt, and `acknowledgement_delay_ms` have not been tested against AVAS; no live findings are claimed for these probes.
-
-P9/P10 add offline fake-based coverage only; response creation behavior and all function-output field shapes remain UNVERIFIED. The operator-reported AVAS rejection listed `response.create` and `delegation.function_call_output.create` among accepted frame types, not accepted field shapes. Codex `codex-api` protocol.rs defines only `{"type":"response.create"}`; no function-output definition was found in Codex source. Neither probe was run against AVAS during implementation.
+P5-P10 live findings are in the section below. `response.create` and function-output field shapes are still not established: both were rejected, and the second rejection did not reveal the field shape.
 
 ## Protocol facts
 
@@ -56,3 +54,21 @@ Same result sentence, three calls per cell.
 - Cancel and progress cannot depend on the model delegating them. The transcript already reaches Zoe, so Zoe has to classify each user turn and tell the model the true state through context.
 - Personal facts placed in `initial_items` are answered by the model without asking Zoe, so a lookup route is reached only for facts that are not in the items.
 - The items are a snapshot taken when the call starts.
+
+## Probes P5-P10 and later runs (2026-11-08 to 2026-11-11)
+
+Account 4, Codex-style fingerprint profile (approximate, see FINGERPRINT_FEASIBILITY.md), synthetic speech, small samples.
+
+- P5/P8 (official append channels): `session.instructions`, `thinking`, and `commentary` appends were rejected by upstream in 18 of 18 calls; the error lists the frame types the server accepts. `session.update` (instructions or initial items) was also unusable. Only `session.context.append` and `delegation.context.append` work mid-call.
+- P6 (`<|SpawnThinking|>` template in instructions): it did not make cancel, progress, or personal questions delegated.
+- P7: any `acknowledgement_delay_ms` value made the sideband connection fail.
+- P9: `response.create` was rejected 6 of 6 ("requires a session with Responses delegation").
+- P10: `delegation.function_call_output.create` failed 9 of 9 with "Missing required parameter: 'item'"; the item shape is untested.
+- Empty `initial_items`, personal information: delegated 3 of 36 across the v2, v4, and v5 instruction texts.
+- Rule only in `initial_items` (role `developer` or `user`): personal information delegated 23 of 24. The same rule in `instructions` had no effect.
+- Combined rule (cancel, progress, personal) with the v2 instructions: cancel delegated 3 of 6, progress 4 of 5, chat sentences over-delegated 0 of 18. No instruction-free control group was run.
+- Event identity (P6 with the rule items, three utterances in one call): the user `turn.created`/`turn.done` carry the same turn ID. `delegation.created` carries it as `user_bidi_turn_id`; its own `item.id` has a different prefix and value. `input_transcript.added` items are per-fragment IDs. `delegation.created` came before the user `turn.done` in the measured call (about 470 ms for the first utterance). The assistant turn began 3 to 9 ms after the user `turn.done` in all measured calls.
+- P6 optional `--p6-items-file` seeds `initial_items`; without it P6 seeds none.
+- Empty instructions, no items, one request per call (three calls each): weather delegated 2 of 3 and answered with a question about the city once; web search delegated 3 of 3. Upstream never gave weather or search content itself in these six calls. Real human speech and interruption were not tested.
+- With the rule item present and no task running, upstream still said "stopped" after a withdrawal. Only Zoe can supply true task state.
+- Synthetic speech sometimes shortens an utterance in transcription (a progress question was heard without its first syllable in one delegated turn).
