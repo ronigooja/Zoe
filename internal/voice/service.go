@@ -282,17 +282,28 @@ func (s *Service) buildAVASOpeningContext(ctx context.Context, p contracts.Princ
 			}
 		}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT title FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND status IN ('active','queued','waiting','awaiting_user','paused') ORDER BY updated_at DESC,id LIMIT 8`, p.WorkspaceID, p.SubjectID)
+	// Running or queued tasks are always listed; waiting tasks only when updated
+	// within the last 30 minutes, so abandoned tasks do not read as current work.
+	recent := s.now().Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
+	rows, err := s.db.QueryContext(ctx, `SELECT title FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND (status IN ('active','queued') OR (status IN ('waiting','awaiting_user') AND updated_at>=?)) ORDER BY updated_at DESC,id LIMIT 32`, p.WorkspaceID, p.SubjectID, recent)
 	if err == nil {
 		defer rows.Close()
-		for rows.Next() {
+		seen := map[string]bool{}
+		listed := 0
+		for rows.Next() && listed < 8 {
 			var title string
-			if rows.Scan(&title) != nil || strings.TrimSpace(title) == "" {
+			if rows.Scan(&title) != nil {
 				continue
 			}
-			if !appendItem("进行中的任务:" + strings.TrimSpace(title)) {
+			title = strings.TrimSpace(title)
+			if title == "" || seen[title] {
+				continue
+			}
+			seen[title] = true
+			if !appendItem("进行中的任务:" + title) {
 				break
 			}
+			listed++
 		}
 	}
 	return c
