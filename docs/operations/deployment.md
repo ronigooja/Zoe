@@ -95,7 +95,7 @@ If the gateway runs client-direct, keep it `false`.
 server-side voice reaping: active sessions with no recent heartbeat are reclaimed
 through the normal release flow; unverified termination remains quarantined and
 keeps the voice pool blocked.
-`ZOE_VOICE_UPSTREAM_ROUTE` must match the gateway's `VOICE_UPSTREAM_ROUTE` (default `wm`); if they differ, Zoe calls opening-context on an AVAS gateway, receives 501, records `unsupported`, and the call still works but the opening context is not delivered.
+`ZOE_VOICE_UPSTREAM_ROUTE` must match the gateway's `VOICE_UPSTREAM_ROUTE`. The Linux compose file passes it to the server with default `avas`; the server binary itself falls back to `wm` when the variable is absent. If they differ, Zoe builds the wrong opening context (on `wm` it calls opening-context on an AVAS gateway, receives 501, and records `unsupported`); the call still works but the AVAS `initial_items` are not sent.
 
 Check service status without printing environment files or secret values:
 
