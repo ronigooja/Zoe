@@ -78,7 +78,7 @@ func TestMemoryRoutes(t *testing.T) {
 				if mode == "not_found" {
 					return answer.Result{Status: "not_found"}, nil
 				}
-				return answer.Result{Status: "answer", Text: "Your favorite drink is Americano."}, nil
+				return answer.Result{Status: "answer", Text: "你喜欢美式咖啡。"}, nil
 			}}
 			if mode == "unconfigured" {
 				cfg.Answerer = nil
@@ -125,14 +125,17 @@ func TestMemoryRoutes(t *testing.T) {
 			want := memoryUnavailable
 			switch mode {
 			case "answer":
-				want = "Your favorite drink is Americano."
+				want = "保存的笔记里记着：你喜欢美式咖啡。"
 			case "empty", "not_found":
 				want = memoryNotFound
 			case "write_unavailable":
 				want = memorySaveUnavailable
 			}
 			mu.Lock()
-			if len(pushes) != wantPushes || pushes[len(pushes)-1] != recallPrefix+want {
+			if mode == "write_unavailable" {
+				want = recallPrefix + want // The holding/write caller is outside the memory-read path.
+			}
+			if len(pushes) != wantPushes || pushes[len(pushes)-1] != want {
 				t.Errorf("pushes=%v", pushes)
 			}
 			mu.Unlock()
@@ -206,7 +209,7 @@ func TestMemoryRecoveryUsesUnavailableNotNotFound(t *testing.T) {
 	if err := store.DB().QueryRow(`SELECT text FROM voice_fast_replies WHERE intent_kind='recall_answer'`).Scan(&text); err != nil {
 		t.Fatal(err)
 	}
-	if text != recallPrefix+memoryUnavailable {
+	if text != memoryUnavailable {
 		t.Fatalf("recovery text=%q", text)
 	}
 }

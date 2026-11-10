@@ -15,8 +15,8 @@ import (
 )
 
 const recallExcerptBytes = 16 * 1024
-const recallNotFound = "I could not find that in our conversation records."
-const recallUnavailable = "I could not check the records right now, please try again."
+const recallNotFound = "我没有在我们的对话记录里找到相关内容。"
+const recallUnavailable = "我现在没法查看对话记录，请稍后再试。"
 const recallPrefix = "Read this to the user exactly as written: "
 
 // recallFailureSpeech applies fixed wording without implying a failed check found no evidence.
@@ -137,7 +137,7 @@ func recallSpeech(text string, candidates []answer.Candidate) string {
 	if text == "" {
 		text = recallUnavailable
 	}
-	return recallPrefix + text
+	return text
 }
 
 type recallCandidate struct {
@@ -348,5 +348,9 @@ func (s *Service) recallAnswer(ctx context.Context, workspace, owner, question s
 		}
 		return fail(n, "invalid_request")
 	}
-	return recallSpeech(result.Text, candidates), n, "answer"
+	text := recallSpeech(result.Text, candidates)
+	if text != recallUnavailable {
+		text = "对话记录里记着：" + text
+	}
+	return text, n, "answer"
 }

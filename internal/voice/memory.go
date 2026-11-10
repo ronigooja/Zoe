@@ -9,9 +9,9 @@ import (
 	"github.com/ronigooja/Zoe/internal/answer"
 )
 
-const memoryNotFound = "I do not have that saved."
-const memoryUnavailable = "I could not check right now."
-const memorySaveUnavailable = "I could not save that right now."
+const memoryNotFound = "我还没有保存这条信息。"
+const memoryUnavailable = "我现在没法查看保存的笔记。"
+const memorySaveUnavailable = "我现在没法保存这条信息。"
 
 type MemoryAnswerer interface {
 	AnswerMemory(context.Context, string, []contracts.MemoryContextItem) (answer.Result, error)
@@ -27,7 +27,7 @@ func (s *Service) memoryAnswer(ctx context.Context, workspace, owner, question s
 	if s.contextAssembler == nil {
 		return fail(0, "unconfigured")
 	}
-	p := contracts.Principal{WorkspaceID: workspace, SubjectID: owner}
+	p := contracts.Principal{WorkspaceID: workspace, SubjectID: owner, Scopes: []string{"memory:read:personal"}}
 	memory, err := s.contextAssembler(ctx, p, "", owner, question, contracts.MemoryContextDefaultBudgetTokens)
 	if err != nil || ctx.Err() != nil {
 		return fail(0, "context_error")
@@ -53,5 +53,5 @@ func (s *Service) memoryAnswer(ctx context.Context, workspace, owner, question s
 	if r.Status != "answer" || strings.TrimSpace(r.Text) == "" || len(r.SummaryIDs) != 0 || strings.ContainsAny(r.Text, "*#`[]<>_~|") {
 		return fail(n, "invalid_answer")
 	}
-	return recallPrefix + boundedResultText(r.Text), n, "answer"
+	return "保存的笔记里记着：" + boundedResultText(r.Text), n, "answer"
 }
