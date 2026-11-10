@@ -83,7 +83,7 @@ func TestErrorsTimeoutAndUnknownFallback(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
 			d, err := configured(t, s.URL, "200").Decide(ctx, "ordinary sentence")
-			if err == nil || Resolve(d, err, false) != Dispatch || Resolve(d, err, true) != Ask {
+			if err == nil || Resolve(d, err, false) != Error || Resolve(d, err, true) != Ask {
 				t.Fatalf("decision=%s err=%v", d, err)
 			}
 			if strings.Contains(err.Error(), "private-fixture-key") {

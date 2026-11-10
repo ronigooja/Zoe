@@ -87,16 +87,16 @@ func TestStewardHardRuleOverridesDispatch(t *testing.T) {
 	}
 }
 
-func TestStewardUnavailableDoesNotParkOrdinaryTasks(t *testing.T) {
+func TestStewardUnavailableCreatesNoTask(t *testing.T) {
 	for _, err := range []error{errors.New("provider unavailable"), context.DeadlineExceeded} {
 		ts, store, key := handoffHTTPServerWithConfig(t, Config{Steward: &fakeSteward{decision: steward.Ask, err: err}})
-		r := commitAndHandoff(t, ts, key, "failed-steward", "what did we discuss last week")
-		var status string
-		if e := store.DB().QueryRow(`SELECT status FROM tasks WHERE id=?`, r.ResourceID).Scan(&status); e != nil {
+		commitAndHandoff(t, ts, key, "failed-steward", "what did we discuss last week")
+		var tasks int
+		if e := store.DB().QueryRow(`SELECT count(*) FROM tasks`).Scan(&tasks); e != nil {
 			t.Fatal(e)
 		}
-		if status != "queued" {
-			t.Fatalf("error %v parked ordinary work: %s", err, status)
+		if tasks != 0 {
+			t.Fatalf("error %v created %d tasks", err, tasks)
 		}
 	}
 }

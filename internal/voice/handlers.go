@@ -412,6 +412,12 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	}
 	content = strings.TrimSpace(content)
 	impact := classifyHandoff(content)
+	if stewardDecision == string(steward.Error) && impact != "high" {
+		if err := s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech); err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
+		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, nil
+	}
 	if category == "memory_write" && impact != "high" {
 		// Source-only extraction currently has no worker materialization contract.
 		// Never acknowledge a save that the existing pipeline cannot perform.
@@ -491,6 +497,9 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	events = append(events, contracts.Event{Type: "voice.turn.handoff", AggregateType: "voice_session", AggregateID: p.SessionID, AggregateVersion: p.Generation, Payload: handoffEvent})
 	return contracts.CommandResult{ResourceType: "task", ResourceID: admission.Task.ID, ResourceVersion: admission.Task.Version}, events, nil
 }
+
+// stewardErrorSpeech is a plain statement; the Steward error detail stays in the logs.
+const stewardErrorSpeech = "处理出错了,请反馈给开发者。"
 
 func (s *Service) progressReplyTx(ctx context.Context, tx *sql.Tx, workspace, owner, session, turn string, now time.Time) (string, error) {
 	return s.progressReplyQuery(ctx, tx, workspace, owner, session, now)
