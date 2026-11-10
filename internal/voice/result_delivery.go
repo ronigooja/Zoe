@@ -345,7 +345,7 @@ func (s *Service) deliverResult(ctx context.Context, id, workspace, task, run, s
 		s.finishResult(id, "skipped_stale", "stale_generation")
 		return
 	}
-	body, _ := json.Marshal(map[string]string{"text": "Zoe result for the user: " + text + " Please tell them briefly."})
+	body, _ := json.Marshal(map[string]string{"text": text})
 	resp, _, callErr := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions/"+url.PathEscape(gateway)+"/context", body)
 	if resp != nil {
 		resp.Body.Close()

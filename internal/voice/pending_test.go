@@ -79,11 +79,8 @@ func TestHeldDeclineAndSessionCancel(t *testing.T) {
 			var status, text string
 			_ = store.DB().QueryRow(`SELECT status FROM tasks WHERE id=?`, first.ResourceID).Scan(&status)
 			_ = store.DB().QueryRow(`SELECT text FROM voice_fast_replies WHERE turn_id='answer'`).Scan(&text)
-			want := "OK, cancelled"
-			if category == "cancel" {
-				want = "OK, stopped"
-			}
-			if status != "canceled" || text != recallPrefix+want {
+			want := "任务已经停止。"
+			if status != "canceled" || text != want {
 				t.Fatalf("status=%s reply=%q", status, text)
 			}
 		})
@@ -178,7 +175,7 @@ func TestPendingSafety(t *testing.T) {
 			if scenario == "cancel-none" || scenario == "cancel-other-session" {
 				var text string
 				_ = store.DB().QueryRow(`SELECT text FROM voice_fast_replies WHERE turn_id='answer'`).Scan(&text)
-				if text != recallPrefix+"Nothing is running." {
+				if text != "现在没有在运行的任务。" {
 					t.Fatalf("reply=%q", text)
 				}
 			}
