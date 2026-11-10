@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -65,6 +66,67 @@ type Client struct {
 	styleMu         sync.RWMutex
 	apiKey          string
 	http            *http.Client
+	timeout         time.Duration
+}
+
+// CallBudget applies before a classifier call; an injected HTTP timeout can only
+// shorten the effective budget, never replace the configured timeout in logs.
+func (c *Client) CallBudget(ctx context.Context) (configured, effective time.Duration) {
+	if c != nil {
+		configured = c.timeout
+	}
+	effective = configured
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < effective {
+			effective = remaining
+		}
+	}
+	if c != nil && c.http != nil && c.http.Timeout > 0 && c.http.Timeout < effective {
+		effective = c.http.Timeout
+	}
+	if effective < 0 {
+		effective = 0
+	}
+	return
+}
+
+type callError struct {
+	kind string
+	err  error
+}
+
+type budgetObserverKey struct{}
+
+// ObserveCallBudget applies when a caller needs transport budgets through an
+// adapter that does not expose the concrete classifier client.
+func ObserveCallBudget(ctx context.Context, observe func(time.Duration, time.Duration)) context.Context {
+	return context.WithValue(ctx, budgetObserverKey{}, observe)
+}
+
+func (e *callError) Error() string { return "classifier request failed: " + e.kind }
+func (e *callError) Unwrap() error { return e.err }
+
+// ErrorKind applies to diagnostic records; it never includes provider data or URLs.
+func ErrorKind(err error) string {
+	if err == nil {
+		return "none"
+	}
+	var timeout interface{ Timeout() bool }
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+		return "deadline_exceeded"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	var status *HTTPError
+	if errors.As(err, &status) {
+		return "http_status"
+	}
+	var classified *callError
+	if errors.As(err, &classified) {
+		return classified.kind
+	}
+	return "transport"
 }
 
 func (c *Client) Style() string {
@@ -149,6 +211,7 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 		thinking:        thinking,
 		apiKey:          key,
 		http:            &http.Client{Transport: transport, Timeout: timeout},
+		timeout:         timeout,
 	}, nil
 }
 
@@ -188,7 +251,15 @@ func (c *Client) ClassifyPending(ctx context.Context, text, question string) (Ca
 
 // Complete applies to independent bounded classifiers sharing this transport.
 // It sends no conversation identifiers or previous messages.
-func (c *Client) Complete(ctx context.Context, text, prompt string) (string, error) {
+func (c *Client) Complete(ctx context.Context, text, prompt string) (output string, resultErr error) {
+	started := time.Now()
+	configured, effective := c.CallBudget(ctx)
+	if observe, ok := ctx.Value(budgetObserverKey{}).(func(time.Duration, time.Duration)); ok {
+		observe(configured, effective)
+	}
+	defer func() {
+		log.Printf("triage_call configured_ms=%d effective_ms=%d elapsed_ms=%d error_kind=%s", configured.Milliseconds(), effective.Milliseconds(), time.Since(started).Milliseconds(), ErrorKind(resultErr))
+	}()
 	if c == nil || c.http == nil || c.baseURL == "" || c.model == "" || c.apiKey == "" {
 		return "", errors.New("triage client is not configured")
 	}
@@ -213,9 +284,14 @@ func (c *Client) Complete(ctx context.Context, text, prompt string) (string, err
 		c.apiStyle = "responses"
 	}
 	if style == "chat" {
-		return chatOutput(body)
+		output, resultErr = chatOutput(body)
+	} else {
+		output, resultErr = responsesOutput(body)
 	}
-	return responsesOutput(body)
+	if resultErr != nil {
+		resultErr = &callError{kind: "decode", err: resultErr}
+	}
+	return output, resultErr
 }
 
 func (c *Client) call(ctx context.Context, style, text, prompt string) (Category, []byte, int, error) {

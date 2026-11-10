@@ -131,10 +131,10 @@ func TestMemoryRoutes(t *testing.T) {
 			case "write_unavailable":
 				want = memorySaveUnavailable
 			}
-			mu.Lock()
-			if mode == "write_unavailable" {
-				want = recallPrefix + want // The holding/write caller is outside the memory-read path.
+			if mode != "write_unavailable" {
+				want = recallPrefix + want
 			}
+			mu.Lock()
 			if len(pushes) != wantPushes || pushes[len(pushes)-1] != want {
 				t.Errorf("pushes=%v", pushes)
 			}

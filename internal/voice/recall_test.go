@@ -158,7 +158,7 @@ func TestRecallRoute(t *testing.T) {
 			if len(pushes) != 2 {
 				t.Fatalf("holding then answer: got %d pushes", len(pushes))
 			}
-			if pushes[0] != "I will check our earlier conversations." {
+			if pushes[0] != "我查一下我们之前的对话。" {
 				t.Fatalf("holding=%q", pushes[0])
 			}
 			expected := recallNotFound

@@ -4,7 +4,7 @@ package steward
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -55,21 +55,27 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 func (c *Client) SetHTTPClient(h *http.Client) { c.transport.SetHTTPClient(h) }
 func (c *Client) Style() string                { return c.transport.Style() }
 
+// CallBudget applies to admission diagnostics before Decide starts its deadline.
+func (c *Client) CallBudget(ctx context.Context) (time.Duration, time.Duration) {
+	return c.transport.CallBudget(ctx)
+}
+
 // Decide applies to a single transcript, with no accumulated conversational state.
 // The deadline covers API-style negotiation as well as the request itself.
-func (c *Client) Decide(ctx context.Context, sentence string) (Decision, error) {
+func (c *Client) Decide(ctx context.Context, sentence string) (decision Decision, resultErr error) {
 	if c == nil || c.transport == nil {
 		return Dispatch, errors.New("steward is disabled")
 	}
+	started := time.Now()
+	configured, effective := c.transport.CallBudget(ctx)
+	defer func() {
+		log.Printf("steward_call configured_ms=%d effective_ms=%d elapsed_ms=%d error_kind=%s", configured.Milliseconds(), effective.Milliseconds(), time.Since(started).Milliseconds(), triage.ErrorKind(resultErr))
+	}()
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	output, err := c.transport.Complete(ctx, sentence, instructions)
 	if err != nil {
-		var timeout interface{ Timeout() bool }
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
-			return Dispatch, fmt.Errorf("steward request failed: %w", context.DeadlineExceeded)
-		}
-		return Dispatch, errors.New("steward request failed")
+		return Dispatch, &requestError{err: err}
 	}
 	switch strings.TrimSpace(output) {
 	case "dispatch":
@@ -80,6 +86,11 @@ func (c *Client) Decide(ctx context.Context, sentence string) (Decision, error) 
 		return Dispatch, errors.New("invalid steward decision")
 	}
 }
+
+type requestError struct{ err error }
+
+func (e *requestError) Error() string { return "steward request failed: " + triage.ErrorKind(e.err) }
+func (e *requestError) Unwrap() error { return e.err }
 
 // Resolve applies hard rules above the model; ordinary failures never park work.
 func Resolve(decision Decision, err error, highImpact bool) Decision {
@@ -93,12 +104,7 @@ func Resolve(decision Decision, err error, highImpact bool) Decision {
 }
 
 // Question applies a fixed speakable template, never model-generated prose.
-// English is the fallback for languages without a supported template.
+// The voice upstream always receives plain Chinese, regardless of input language.
 func Question(sentence string) string {
-	for _, r := range sentence {
-		if r >= 0x3400 && r <= 0x9fff {
-			return "要我现在去处理这个请求吗？"
-		}
-	}
-	return "Shall I go do that now?"
+	return "要我现在去处理这个请求吗？"
 }
