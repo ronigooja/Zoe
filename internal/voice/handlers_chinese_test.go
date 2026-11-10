@@ -29,7 +29,7 @@ func TestHandlersPlainChineseSpeech(t *testing.T) {
 			if err := store.DB().QueryRow(`SELECT text FROM voice_fast_replies WHERE turn_id=?`, tc.name).Scan(&got); err != nil {
 				t.Fatal(err)
 			}
-			if got != tc.want || strings.Contains(got, "Read this to the user") || strings.HasPrefix(got, recallPrefix) || regexp.MustCompile(`[A-Za-z]`).MatchString(got) {
+			if got != tc.want || strings.Contains(got, "Read this to the user") || strings.HasPrefix(got, "Read this to the user exactly as written: ") || regexp.MustCompile(`[A-Za-z]`).MatchString(got) {
 				t.Fatalf("upstream speech=%q, want plain Chinese %q", got, tc.want)
 			}
 		})
@@ -44,7 +44,7 @@ func TestHandlersMemorySaveHasNoPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The memory package owns the sentence; the handler must not add instructions.
-	if got != memorySaveUnavailable || strings.Contains(got, "Read this to the user") || strings.HasPrefix(got, recallPrefix) {
+	if got != memorySaveUnavailable || strings.Contains(got, "Read this to the user") || strings.HasPrefix(got, "Read this to the user exactly as written: ") {
 		t.Fatalf("memory save speech was prefixed: %q", got)
 	}
 }

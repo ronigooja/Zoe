@@ -64,7 +64,7 @@ func TestRecallRecoveryRestartAndLease(t *testing.T) {
 			}
 			want := recallSpeech(recallUnavailable, nil)
 			if mode == "existing_answer" {
-				want = recallPrefix + "We discussed the garden."
+				want = "对话记录里记着：We discussed the garden."
 				_, err = store.DB().Exec(`INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('job-0','default','handoff-session',1,'recall-answer:job-0',?,'recall_answer','pending',?,?,?)`, want, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 				if err != nil {
 					t.Fatal(err)
