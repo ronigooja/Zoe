@@ -20,7 +20,7 @@ The problem is control, not speed: the upstream model leads the conversation and
 1. Zoe owns what is said. The upstream model listens and speaks; it does not decide content that Zoe can answer.
 2. Every client-target delegation is routed by the Zoe control plane into one of two paths:
    - **Fast path**: answered within a latency budget from local authoritative data only (memory, task state, simple facts). The answer is returned as a short `speakable` context append.
-   - **Slow path**: starts or appends to a `zoe-steward` task as in [ADR 0009](0009-voice-steward-impact-policy.md). The immediate `speakable` reply states that work has started. Attach behavior is **superseded-by-0013 (target)**: stop/new with merged goal or previous result, not an appended message assumed to reach a running Worker.
+   - **Slow path**: starts or appends to a `zoe-steward` task as in [ADR 0009](0009-voice-steward-impact-policy.md). The immediate `speakable` reply states that work has started. Attach behavior is **superseded-by-0013 (target)**; deployed and interim behavior is defined in the [task-manager contract](#deployed-roster-aware-task-manager).
 3. Deployed progress chooses four fixed sentences from task status/age only, without result content or delivery state. Scope task links to the current voice session, workspace and owner and exclude tasks created more than `Config.ProgressMaxTaskAge` ago (default `DefaultProgressMaxTaskAge`, six hours). Current-call running tasks report elapsed seconds; otherwise current-call completed or awaiting-user tasks updated within 30 minutes report the result ready, and no qualifying task reports nothing running. Apply the same query at admission and delivery recomputation. This can misreport a clarifying question as a delivered result; the register/Steward progress route is **superseded-by-0013 (target)**, not deployed.
 4. Results are written for speech: short sentences, key figures first, one `speakable` append per chunk. Steward output that is long is summarized by Zoe, not by the upstream model.
 5. Delivery channel: when a call is live, results use the gateway's sideband or `/context` channel; otherwise a notification. Spoken delivery never marks a task complete; only authoritative task events do ([ADR 0009](0009-voice-steward-impact-policy.md) item 5).
@@ -165,6 +165,12 @@ the explicit-confirmation waiting path. Failure/timeout creates no task and
 sends fixed speech meaning "processing error, report to the developer".
 The roster references, register input and attach semantics are
 **superseded-by-0013 (target)**; the alias-free design is not implemented.
+
+Deployed `attach` to queued/active/waiting work uses normal stop plus a new task
+with merged goal (old goal plus new sentence). A complete task produces a new task
+carrying the previous result. Retain this interim behavior until the runner
+delivers appended entries to running work; the target, completed source investigation and remaining live-verification limits
+are defined in [ADR 0013 decision 5](0013-context-register.md#5-steward-and-task-references).
 
 When configured, `ZOE_STEWARD_BASE_URL`, `MODEL`, `API_KEY_FILE`, `API_STYLE`,
 `REASONING_EFFORT`, `THINKING`, and `TIMEOUT_MS` (each with the `ZOE_STEWARD_`

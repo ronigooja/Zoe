@@ -31,7 +31,9 @@ The compact left edge is `M`; its right edge is exactly the raw left edge. Failu
 
 When processing conversation into memory, run every 24 hours; this redefines cadence and is not tied to today's always-polling worker. Each run consumes conversation between the previous `M` and its run time, plus tasks completed in that period, each with the user's original task-creating sentence and its result. Inference: conversation carries only upstream's paraphrase, while the full result lives only in the `tasks` table; conversation alone is therefore insufficient. Memory processing writes memory, never Steward.
 
-On success, advance `M` to that run time in the same write. On failure, do not move `M`; compact coverage continues to include everything after `M`, potentially exceeding 24 hours. A length cap is an implementation detail. The existing Mem0-based worker's own extraction prompt was not read. The memory-write contract remains a separate project; this decision does not unblock it. The draft extraction instruction below is untested.
+The 24-hour memory batch includes materializing extracted claims (user confirmation, 2026-11-12). Implementation must follow the existing claim/proposal/authority model in [internal/memory](../../../internal/memory/) and report any authority-rule limit rather than bypass it.
+
+On success, advance `M` to that run time in the same write. On failure, do not move `M`; compact coverage continues to include everything after `M`, potentially exceeding 24 hours. A length cap is an implementation detail. The existing Mem0-based worker's own extraction prompt was not read. The draft extraction instruction below is untested.
 
 ### 4. Register outputs
 
@@ -41,11 +43,17 @@ At voice session creation, the register is also the source of upstream `initial_
 
 ### 5. Steward and task references
 
-Steward only manages tasks and pulls the roster itself: status, pending question, result excerpt and delivery state. Its inputs are the original sentence, register restatement and roster. Tasks are identified/described only by the user's original task-creating sentence (the task title), status and creation time; question/result/delivery fields are task facts, not alternate identifiers. No code-generated identifier, alias or short key appears in any model context; remove `t1..tN`. This rule applies to triage, register and Steward.
+Refactored by user decision, 2026-11-12: Steward only manages tasks. Using the register restatement, code searches the database task table with full-text search plus a time range, across all calls of the user (`workspace + owner`). This is database retrieval, never a code-side semantic judgment. The roster is the few retrieved candidates, not a current-call-only roster, a fixed full list, or the former at-most-ten-task design. Its inputs to the Steward model are the original sentence, register restatement and candidate facts: original task-creating sentence, status, created/finished time, pending question, result excerpt and later additions by the user. The model decides the action; no candidates means `new`.
 
-When selecting a task, the model quotes its original sentence verbatim. Code checks exact string equality: lookup, never semantic matching. For `new | attach | answer`, the roster is limited to the current call; `report` uses the all-task lookup in decision 7. Except for a `report` no-match, no match is a Steward failure: no task and fixed error speech. When several original sentences are identical, select the newest task. Actions are `new | attach | answer | report | none`; Steward can manage many parallel tasks. `none` no longer includes sentences that only ask about the state of a task.
+Tasks are identified only by the user's original task-creating sentence; the other fields are task facts, not alternate identifiers. No code-generated identifier, alias or short key appears in any model context; remove `t1..tN`. This rule applies to triage, register and Steward. When selecting a task, the model quotes its original sentence verbatim. Code checks exact string equality against the retrieved candidates: lookup, never semantic matching. Except for a `report` no-match (decision 7), no match is a Steward failure: no task and fixed error speech. When several original sentences are identical, select the newest task. Actions are `new | attach | answer | none | report`; `report`, `attach` and `answer` use the same retrieval. Steward can manage many parallel tasks. `none` no longer includes sentences that only ask about the state of a task.
 
-When `attach` targets queued/active/waiting work, use normal stop plus a new task with merged goal (old goal plus new sentence). For a complete task, create a new task carrying the previous result. Rationale: a message appended to running work never reaches Worker; only `awaiting_message` answers and context rotation deliver such input.
+The busy-session source investigation is complete. Verified in OpenCode V2 at `anomalyco/opencode` commit `6d02304`: `POST /api/session/{id}/prompt` accepts a message to a busy session. Default `delivery` is `steer`: injection at the next step boundary of the running turn, without interruption; `queue` defers to the next turn. An optional caller-supplied message `id` provides first-admission-wins reconciliation. Sources: `packages/core/src/session/session.ts`, `inbox.ts`, `run-coordinator.ts`, and `packages/protocol/src/groups/session.ts`.
+
+Verified Zoe integration defect: Zoe already uses that endpoint for every Worker prompt ([client](../../../internal/agents/opencode/client.go)), but nothing delivers appended `task_entries` to a running run. The runner monitor polls only `runs.desired_control`; no delivered-entry cursor exists.
+
+Target: the runner delivers undelivered `user_message` entries to the running session with `steer`, exactly once per (run, entry). Entries already included in initial, rotation or answer prompts are marked delivered. Once this delivery ships, `attach` to a running task appends instead of stopping it and creating a merged task. Until then, retain the [DEPLOYED interim stop plus merged-new-task behavior](0012-voice-conversation-layer.md#deployed-roster-aware-task-manager) for queued/active/waiting work. A completed task still produces a new task carrying the previous result.
+
+Not determined: deployed OpenCode version and live behavior, exactly-once delivery across session replacement, and behavior while a permission or question is pending. Inference: steering text is admitted while a permission or question is pending but does not resolve it. These limits do not reopen the completed source investigation or establish live acceptance.
 
 ### 6. Progress
 
@@ -57,7 +65,7 @@ The reply language follows the input. This departs from the earlier rule that Zo
 
 When the user asks about past work, including how an earlier task was handled, triage outputs `unclear`. The register restates the question, quoting the original task-creating sentence verbatim when it is inside the conversation window after `M`; for work older than `M`, it outputs `memory <key>` to request memory content before returning its restatement to Steward. The register still does not read tasks.
 
-Steward selects `report` with the task's original sentence. Code looks up exact equality across all tasks of the user (`workspace + owner`), not only the current call; the current-call roster restriction in decision 5 does not apply. `report` triggers the progress/history reply call with the task facts defined in decision 6, plus memory content when memory was read. No match supplies empty task facts to the model, which states that no such task was found; failure produces fixed error speech. Reporting does not create or modify a task.
+Steward selects `report` with the task's original sentence, using the shared retrieval and exact-equality check in decision 5. `report` triggers the progress/history reply call with the task facts defined in decision 6, plus memory content when memory was read. No match supplies empty task facts to the model, which states that no such task was found; failure produces fixed error speech. Reporting does not create or modify a task.
 
 Open items: Worker step-level event storage is not determined; only `tasks.result` and `task_entries` were confirmed. Task retention period is **NOT DETERMINED**.
 
@@ -86,6 +94,8 @@ The Steward instruction text is pending the user's decision; none is proposed he
 ## Consequences and unverified boundaries
 
 - Compaction quality and attribution accuracy are unmeasured.
+- The retrieval design is untested. Full-text recall for Chinese wording and synonyms is unmeasured; a missed search becomes `new`.
+- Risk: a misjudged cross-call `attach` can stop a task from an earlier call while the interim stop/new behavior remains in use.
 - Added latency per `unclear` sentence is unmeasured; 2-4 s is an estimate only, inside the 35 s classification budget, not a latency guarantee.
 - Upstream still speaks before Zoe classifies and cannot be prevented from doing so. Fixed Zoe wording is not proof that upstream will speak it verbatim.
 - Stable ordering, failure-safe contiguous coverage, and memory-write integration require implementation; no CI, deployment or product acceptance is claimed here.
