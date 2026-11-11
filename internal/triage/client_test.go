@@ -396,7 +396,7 @@ func TestInstructionDefinesBaseCategoriesWithoutExamples(t *testing.T) {
 			t.Errorf("instruction has no definition for %s", category)
 		}
 	}
-	for _, phrase := range []string{"state, duration, or result", "past conversations or calls", "stable personal fact or preference", "requiring tools, research, files, devices, or the web", "any delegated request outside the other categories", "withdraws or stops previously requested work"} {
+	for _, phrase := range []string{"state, progress, or completion", "content of past conversations or stored facts", "stable personal fact or preference", "new or changed work", "any delegated request outside the other categories", "withdraws or stops previously requested work"} {
 		if !strings.Contains(instructions, phrase) {
 			t.Errorf("instruction lacks definition phrase %q", phrase)
 		}
@@ -417,6 +417,27 @@ func TestInstructionDefinesBaseCategoriesWithoutExamples(t *testing.T) {
 func TestInstructionStaysCompact(t *testing.T) {
 	if len([]byte(instructions)) > 2500 {
 		t.Fatalf("instruction is %d bytes", len([]byte(instructions)))
+	}
+}
+
+func TestPromptSeparatesWorkStateRecallAndChangedWork(t *testing.T) {
+	definitions := []string{
+		"progress: asks about the state, progress, or completion of work already requested earlier, in any wording and regardless of topic.",
+		"recall: asks about the content of past conversations or stored facts, not about the state of requested work and not a correction or new instruction.",
+		"task: any delegated request outside the other categories, including new or changed work. A correction of what earlier work should be about is task. High-impact or destructive requests are task.",
+	}
+	for _, pending := range []bool{false, true} {
+		prompt := classificationPrompt(pending)
+		for _, definition := range definitions {
+			if !strings.Contains(prompt, definition) {
+				t.Errorf("pending=%t prompt lacks definition %q", pending, definition)
+			}
+		}
+		for _, r := range prompt {
+			if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r) {
+				t.Errorf("pending=%t prompt contains CJK rune %U", pending, r)
+			}
+		}
 	}
 }
 

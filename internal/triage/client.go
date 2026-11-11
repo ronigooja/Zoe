@@ -32,11 +32,11 @@ const (
 )
 
 const instructions = `Classify one sentence delegated by the upstream voice model. Upstream alone decides when to delegate. The input is speech-to-text and may contain typos, filler words, or no punctuation.
-progress: asks about the state, duration, or result of work already requested.
-recall: asks what was said or done earlier in past conversations or calls.
+progress: asks about the state, progress, or completion of work already requested earlier, in any wording and regardless of topic.
+recall: asks about the content of past conversations or stored facts, not about the state of requested work and not a correction or new instruction.
 memory_write: asks to store or update a stable personal fact or preference.
 memory_read: asks to retrieve a saved stable personal fact or preference.
-task: any delegated request outside the other categories, including new work or lookup requiring tools, research, files, devices, or the web. High-impact or destructive requests are task.
+task: any delegated request outside the other categories, including new or changed work. A correction of what earlier work should be about is task. High-impact or destructive requests are task.
 cancel: the speaker withdraws or stops previously requested work.
 If a request could be both progress and a new task, or you are unsure, choose task. Reply with exactly one lowercase word from the allowed words. Output nothing else and do not explain.`
 
