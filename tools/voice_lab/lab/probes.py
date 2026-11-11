@@ -110,7 +110,9 @@ class Controller:
             if not self.identifier:
                 raise LabError('No open delegation for state sentence')
             text = self.args.state_file.read_text(encoding='utf-8')
-            for frame in self.ctx.context_frames(text, delegation_id=self.identifier):
+            channel = getattr(self.args, 'context_channel', 'speakable')
+            extra = {} if channel == 'speakable' else {'channel': channel}
+            for frame in self.ctx.context_frames(text, delegation_id=self.identifier, **extra):
                 await self.sideband.send(frame)
             self.sent = True
             self.result['state_sent'] = True

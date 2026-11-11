@@ -86,7 +86,7 @@ E6. `initial_items`. Create a call with one `user` item stating a fact, then ask
 
 E7. `ack_filler`. Same as E2 with `delegation.ack_filler` set true and false. Observe any spoken filler and event differences.
 
-P1. Cancel state: `probes.py --experiment P1 --audio DIR` joins `01.wav` (weather) and `02.wav` (cancel) with `--gap-s` silence, then sends `--state-file` bound to the open delegation `--delay-s` seconds after the second final user turn. It plays `03.wav` (progress) after sending state and records `progress_answer`; prepare these three WAVs in that order, independently of the E2 utterance set.
+P1. Cancel state: `probes.py --experiment P1 --audio DIR` joins `01.wav` (weather) and `02.wav` (cancel) with `--gap-s` silence, then sends `--state-file` bound to the open delegation `--delay-s` seconds after the second final user turn. It plays `03.wav` (progress) after sending state and records `progress_answer`; prepare these three WAVs in that order, independently of the E2 utterance set. `--context-channel speakable|commentary` (default `speakable`) selects the channel of the state append.
 
 P2. Missing fact: `--experiment P2 --audio question.wav --items-file cases/items_plate_home.txt` seeds user facts and records delegation and final assistant text. Compare separate invocations with `--instructions-file cases/instructions_v2.txt` and `cases/instructions_v3.txt`; the human verifies that the question is absent from the facts.
 
