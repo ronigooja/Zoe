@@ -27,7 +27,8 @@ const (
 	Confirm      Category = "confirm"
 	Decline      Category = "decline"
 	Cancel       Category = "cancel"
-	BaseWords             = "progress, recall, memory_write, memory_read, task, cancel"
+	Unclear      Category = "unclear"
+	BaseWords             = "progress, recall, memory_write, memory_read, task, cancel, unclear"
 	PendingWords          = BaseWords + ", confirm, decline"
 )
 
@@ -38,6 +39,7 @@ memory_write: asks to store or update a stable personal fact or preference.
 memory_read: asks to retrieve a saved stable personal fact or preference.
 task: any delegated request outside the other categories, including new or changed work. A correction of what earlier work should be about is task. High-impact or destructive requests are task.
 cancel: the speaker withdraws or stops previously requested work.
+unclear: the sentence refers to something not stated in the sentence itself and cannot be classified into another category without earlier conversation. A sentence that is clear on its own must not be unclear; prefer the specific category.
 If a request could be both progress and a new task, or you are unsure, choose task. Reply with exactly one lowercase word from the allowed words. Output nothing else and do not explain.`
 
 const pendingInstructions = `
@@ -437,7 +439,7 @@ func parseCategory(output string) (Category, error) {
 		return "", errors.New("triage response was not one word")
 	}
 	switch Category(word) {
-	case Progress, Recall, MemoryWrite, MemoryRead, Task, Confirm, Decline, Cancel:
+	case Progress, Recall, MemoryWrite, MemoryRead, Task, Confirm, Decline, Cancel, Unclear:
 		return Category(word), nil
 	default:
 		return "", errors.New("triage response was an unknown category")
