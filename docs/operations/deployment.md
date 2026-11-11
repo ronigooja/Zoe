@@ -14,10 +14,12 @@ SQLite inspection, and voice pool isolation checks, see the
 
 When creating a voice session, `ZOE_VOICE_INSTRUCTION_TEXT` optionally overrides
 the built-in Chinese delegation rule (valid UTF-8, at most 6000 bytes). An unset
-or empty value uses the default: upstream answers greetings, thanks, casual chat
-and opinions directly, delegates research, actions, task progress, past-call
-recall and personal-memory requests, and waits for Zoe rather than inventing a
-result or claiming records are unavailable. Literal `off` omits `instructions`.
+or empty value uses the default, which states identity and tone and the split of
+work: actions and tasks go to the backend, upstream answers directly only what
+needs no information, does not claim it cannot do things, treats backend results
+as authoritative, and does not state a task stopped or finished unless told. It
+does not carry the cancel, progress, and personal-question delegation rule; that
+rule is sent as the first `initial_items` entry (see below). Literal `off` omits `instructions`.
 Use maintenance menu item **21) Configure voice instruction** to view the effective
 default, custom text or disabled state and save a single-line replacement; empty
 input removes the key to restore the default. The atomic stack-env writer escapes
