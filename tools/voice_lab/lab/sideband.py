@@ -69,10 +69,12 @@ def split_text(text: str, limit: int = 500) -> list[str]:
     return pieces
 
 
-def context_frames(text: str, delegation_id: str | None = None) -> list[dict]:
+def context_frames(text: str, delegation_id: str | None = None, channel: str = 'speakable') -> list[dict]:
+    if channel not in ('speakable', 'commentary'):
+        raise ValueError('Unknown context channel')
     frames = []
     for piece in split_text(text):
-        frame = {'type': 'session.context.append', 'channel': 'speakable',
+        frame = {'type': 'session.context.append', 'channel': channel,
                  'content': [{'type': 'input_text', 'text': piece}]}
         if delegation_id is not None:
             frame.update(type='delegation.context.append', delegation_item_id=delegation_id)

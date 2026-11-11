@@ -36,6 +36,9 @@ class FrameTests(unittest.TestCase):
         self.assertEqual(context_frames('hello'), [frame])
         self.assertEqual(context_frames('hello', 'delegation-1'), [
             {**frame, 'type': 'delegation.context.append', 'delegation_item_id': 'delegation-1'}])
+        self.assertEqual(context_frames('hello', channel='commentary')[0]['channel'], 'commentary')
+        with self.assertRaises(ValueError):
+            context_frames('hello', channel='other')
         self.assertEqual(context_frames(''), [])
         self.assertEqual(context_frames('  '), [])
         self.assertEqual(len(context_frames('x' * 501)), 2)

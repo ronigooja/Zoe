@@ -104,6 +104,33 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bands[0].sent[0]['delegation_item_id'], 'test-delegation')
         self.assertEqual(len(self.peers), 1)
 
+    async def test_p1_state_channel_is_selectable(self):
+        self.ctx.context_frames = context_frames
+        for channel in ('speakable', 'commentary'):
+            args = self.args('P1')
+            args.context_channel = channel
+            for name in ('01.wav', '02.wav', '03.wav'):
+                with wave.open(str(args.audio / name), 'wb') as output:
+                    output.setparams((1, 2, 8000, 0, 'NONE', 'not compressed'))
+                    output.writeframes(bytes(160))
+            script = self.script
+
+            async def events(band):
+                yield script[1]
+                yield script[0]
+                yield script[0]
+                await asyncio.sleep(0.005)
+                yield script[0]
+                yield script[3]
+
+            async def play(peer, path):
+                return None
+
+            with patch.object(self.ctx.peer_factory, 'play_wav', play, create=True), \
+                    patch.object(self.ctx.sideband_factory, 'events', events):
+                await probes.run_probe(self.ctx, args)
+            self.assertEqual(self.bands[-1].sent[0]['channel'], channel)
+
     async def test_cleanup_on_send_error_and_timeout(self):
         args = self.args('P3')
         args.update_trigger = 'timer'

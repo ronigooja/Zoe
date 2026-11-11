@@ -37,6 +37,7 @@ def parser():
     result.add_argument('--ack-delay-ms', type=int)
     result.add_argument('--empty-thinking', action='store_true')
     result.add_argument('--with-context', choices=('state',))
+    result.add_argument('--context-channel', choices=('speakable', 'commentary'), default='speakable', help='Channel of the P1 state context append.')
     result.add_argument('--create-delay-s', type=float, default=1.0)
     result.add_argument('--shape', choices=('A', 'B', 'C'), default='A')
     result.add_argument('--state-file', type=Path, default=ROOT / 'cases' / 'state_cancel.txt')
