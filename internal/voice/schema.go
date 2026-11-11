@@ -291,9 +291,24 @@ ALTER TABLE voice_turns ADD COLUMN handoff_handled INTEGER NOT NULL DEFAULT 0`)
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 217, Name: "voice_steward_assignment", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 217, Name: "voice_steward_assignment", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN steward_action TEXT NOT NULL DEFAULT '';
 ALTER TABLE voice_turns ADD COLUMN steward_task_id TEXT NOT NULL DEFAULT ''`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 218, Name: "voice_context_register", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_register_memory_boundaries (
+workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
+boundary_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
+PRIMARY KEY(workspace_id,owner_subject_id));
+CREATE TABLE voice_context_registers (
+workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
+compact TEXT NOT NULL DEFAULT '', compact_through TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
+built_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', version INTEGER NOT NULL DEFAULT 0,
+source_hash TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0,
+PRIMARY KEY(workspace_id,owner_subject_id));`)
 		return err
 	}})
 }
