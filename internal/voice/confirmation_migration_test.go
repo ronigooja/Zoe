@@ -7,7 +7,7 @@ import (
 
 // rollbackVoiceConfirmationBinding applies when fixtures reconstruct a schema
 // before migration 216; remove its schema and receipt together.
-const rollbackVoiceConfirmationBinding = `ALTER TABLE voice_turns DROP COLUMN pending_task_id;
+const rollbackVoiceConfirmationBinding = rollbackVoiceAssignment + `ALTER TABLE voice_turns DROP COLUMN pending_task_id;
 ALTER TABLE voice_turns DROP COLUMN pending_task_version;
 ALTER TABLE voice_turns DROP COLUMN pending_question;
 ALTER TABLE voice_turns DROP COLUMN handoff_handled;

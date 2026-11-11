@@ -10,10 +10,11 @@ import (
 	"testing"
 )
 
-func TestStewardSpokenConfirmationUsesExistingAppend(t *testing.T) {
+func TestWorkerSpokenConfirmationUsesExistingAppend(t *testing.T) {
 	f := &pendingClassifier{category: "task"}
 	ts, store, key := handoffHTTPServerWithConfig(t, Config{Steward: &fakeSteward{decision: steward.Ask}, Classifier: f})
 	first := commitAndHandoff(t, ts, key, "intent-question", "please handle this")
+	rosterExec(t, store.DB(), `UPDATE tasks SET status='waiting',interaction_state='awaiting_message',interaction_question='Which project?' WHERE id=?`, first.ResourceID)
 	f.category = "confirm"
 	answer := commitAndHandoff(t, ts, key, "intent-answer", "yes, proceed")
 	hash := sha256.Sum256([]byte("yes, proceed"))

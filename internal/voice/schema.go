@@ -282,11 +282,18 @@ PRIMARY KEY(session_id,media_generation,instruction_version));`)
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 216, Name: "voice_pending_confirmation_binding", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 216, Name: "voice_pending_confirmation_binding", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN pending_task_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE voice_turns ADD COLUMN pending_task_version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE voice_turns ADD COLUMN pending_question TEXT NOT NULL DEFAULT '';
 ALTER TABLE voice_turns ADD COLUMN handoff_handled INTEGER NOT NULL DEFAULT 0`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 217, Name: "voice_steward_assignment", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN steward_action TEXT NOT NULL DEFAULT '';
+ALTER TABLE voice_turns ADD COLUMN steward_task_id TEXT NOT NULL DEFAULT ''`)
 		return err
 	}})
 }

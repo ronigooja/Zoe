@@ -57,6 +57,7 @@ If unsure whether it concerns a listed task choose new. Reply with exactly one a
 type Client struct {
 	transport *triage.Client
 	timeout   time.Duration
+	http      *http.Client
 }
 
 // FromEnv applies to ZOE_STEWARD_* only. Empty base URL disables the model.
@@ -66,11 +67,16 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 	}
 	timeoutMS := strings.TrimSpace(getenv("ZOE_STEWARD_TIMEOUT_MS"))
 	if timeoutMS == "" {
-		timeoutMS = "4000"
+		timeoutMS = "30000"
+	}
+	ms, parseErr := strconv.Atoi(timeoutMS)
+	if parseErr != nil || ms < 200 || ms > 60000 {
+		return nil, errors.New("ZOE_STEWARD_TIMEOUT_MS must be between 200 and 60000")
 	}
 	c, err := triage.FromEnv(func(key string) string {
 		if key == "ZOE_TRIAGE_TIMEOUT_MS" {
-			return timeoutMS
+			// Steward owns its deadline; retain Triage's independent range.
+			return strconv.Itoa(min(ms, 10000))
 		}
 		return getenv(strings.Replace(key, "ZOE_TRIAGE_", "ZOE_STEWARD_", 1))
 	}, readFile)
@@ -80,16 +86,31 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 	if c == nil {
 		return nil, nil
 	}
-	ms, _ := strconv.Atoi(timeoutMS) // The shared transport validates the unchanged range.
-	return &Client{transport: c, timeout: time.Duration(ms) * time.Millisecond}, nil
+	timeout := time.Duration(ms) * time.Millisecond
+	h := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}, Timeout: timeout}
+	c.SetHTTPClient(h)
+	return &Client{transport: c, timeout: timeout, http: h}, nil
 }
 
-func (c *Client) SetHTTPClient(h *http.Client) { c.transport.SetHTTPClient(h) }
-func (c *Client) Style() string                { return c.transport.Style() }
+func (c *Client) SetHTTPClient(h *http.Client) {
+	if h != nil {
+		c.http = h
+		c.transport.SetHTTPClient(h)
+	}
+}
+func (c *Client) Style() string { return c.transport.Style() }
 
 // CallBudget applies to admission diagnostics before Decide starts its deadline.
 func (c *Client) CallBudget(ctx context.Context) (time.Duration, time.Duration) {
-	return c.transport.CallBudget(ctx)
+	configured := c.timeout
+	effective := configured
+	if deadline, ok := ctx.Deadline(); ok {
+		effective = min(effective, max(0, time.Until(deadline)))
+	}
+	if c.http != nil && c.http.Timeout > 0 {
+		effective = min(effective, c.http.Timeout)
+	}
+	return configured, effective
 }
 
 // Decide applies to a single transcript, with no accumulated conversational state.
@@ -99,12 +120,13 @@ func (c *Client) Decide(ctx context.Context, sentence string) (decision Decision
 		return Dispatch, errors.New("steward is disabled")
 	}
 	started := time.Now()
-	configured, effective := c.transport.CallBudget(ctx)
+	configured, effective := c.CallBudget(ctx)
 	defer func() {
 		log.Printf("steward_call configured_ms=%d effective_ms=%d elapsed_ms=%d error_kind=%s", configured.Milliseconds(), effective.Milliseconds(), time.Since(started).Milliseconds(), triage.ErrorKind(resultErr))
 	}()
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+	ctx = triage.ObserveCallBudget(ctx, func(time.Duration, time.Duration) {})
 	output, err := c.transport.Complete(ctx, sentence, instructions)
 	if err != nil {
 		return Dispatch, &requestError{err: err}
@@ -125,12 +147,13 @@ func (c *Client) Assign(ctx context.Context, sentence string, roster []RosterTas
 		return Assignment{}, errors.New("steward is disabled")
 	}
 	started := time.Now()
-	configured, effective := c.transport.CallBudget(ctx)
+	configured, effective := c.CallBudget(ctx)
 	defer func() {
 		log.Printf("steward_call configured_ms=%d effective_ms=%d elapsed_ms=%d error_kind=%s", configured.Milliseconds(), effective.Milliseconds(), time.Since(started).Milliseconds(), triage.ErrorKind(resultErr))
 	}()
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+	ctx = triage.ObserveCallBudget(ctx, func(time.Duration, time.Duration) {})
 	if len(roster) > 10 {
 		roster = roster[:10]
 	}

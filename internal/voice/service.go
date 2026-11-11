@@ -65,6 +65,7 @@ type Classifier interface {
 
 type TaskSteward interface {
 	Decide(context.Context, string) (steward.Decision, error)
+	Assign(context.Context, string, []steward.RosterTask) (steward.Assignment, error)
 }
 
 type Service struct {

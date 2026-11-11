@@ -87,10 +87,11 @@ func TestHeldDeclineAndSessionCancel(t *testing.T) {
 	}
 }
 
-func TestSpokenConfirmStewardAsk(t *testing.T) {
+func TestSpokenConfirmExistingWorkerQuestion(t *testing.T) {
 	f := &pendingClassifier{category: "task"}
 	ts, store, key := handoffHTTPServerWithConfig(t, Config{Classifier: f, Steward: &fakeSteward{decision: steward.Ask}})
 	first := commitAndHandoff(t, ts, key, "ask", "please handle this")
+	rosterExec(t, store.DB(), `UPDATE tasks SET status='waiting',interaction_state='awaiting_message',interaction_question='Which project?' WHERE id=?`, first.ResourceID)
 	f.category = "confirm"
 	answer := commitAndHandoff(t, ts, key, "answer", "yes")
 	var status string

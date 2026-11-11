@@ -141,7 +141,7 @@ func run() error {
 		return err
 	}
 	var answerer voice.Answerer
-	classificationTimeout, err := modelclient.Timeout("ZOE_VOICE_CLASSIFICATION", os.Getenv, 6000, 100, 30000)
+	classificationTimeout, err := modelclient.Timeout("ZOE_VOICE_CLASSIFICATION", os.Getenv, 35000, 100, 60000)
 	if err != nil {
 		return err
 	}

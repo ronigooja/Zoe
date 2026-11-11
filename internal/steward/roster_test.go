@@ -171,7 +171,7 @@ func TestAssignLogsExcludePrivateData(t *testing.T) {
 			t.Fatal("private data in diagnostic output")
 		}
 	}
-	for _, field := range []string{"steward_call configured_ms=4000", "effective_ms=", "elapsed_ms=", "error_kind="} {
+	for _, field := range []string{"steward_call configured_ms=30000", "effective_ms=", "elapsed_ms=", "error_kind="} {
 		if !strings.Contains(logs.String(), field) {
 			t.Errorf("missing log field %q", field)
 		}

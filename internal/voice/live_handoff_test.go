@@ -22,8 +22,8 @@ import (
 
 func TestDefaultClassificationBudget(t *testing.T) {
 	svc := &Service{}
-	if got := svc.classificationTimeout(); got != 6*time.Second {
-		t.Fatalf("default classification budget=%v, want 6s", got)
+	if got := svc.classificationTimeout(); got != 35*time.Second {
+		t.Fatalf("default classification budget=%v, want 35s", got)
 	}
 	svc.recall.ClassificationTimeout = 7 * time.Second
 	if got := svc.classificationTimeout(); got != 7*time.Second {
@@ -31,10 +31,10 @@ func TestDefaultClassificationBudget(t *testing.T) {
 	}
 }
 
-func TestThreeSecondStewardAskHonouredByHandoff(t *testing.T) {
+func TestThreeSecondStewardNewHonouredByHandoff(t *testing.T) {
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(3000 * time.Millisecond)
-		_, _ = fmt.Fprint(w, `{"output_text":"ask"}`)
+		_, _ = fmt.Fprint(w, `{"output_text":"new"}`)
 	}))
 	defer model.Close()
 	env := map[string]string{"ZOE_STEWARD_BASE_URL": model.URL, "ZOE_STEWARD_MODEL": "fake-steward", "ZOE_STEWARD_API_KEY_FILE": "/fake/key"}
@@ -48,8 +48,8 @@ func TestThreeSecondStewardAskHonouredByHandoff(t *testing.T) {
 	if err := store.DB().QueryRow(`SELECT status FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status != "waiting" {
-		t.Fatalf("three-second ask silently dispatched: task status=%s", status)
+	if status != "queued" {
+		t.Fatalf("three-second assignment not dispatched: task status=%s", status)
 	}
 }
 
@@ -96,6 +96,11 @@ func (f delayedLiveClassifier) Classify(ctx context.Context, _ string) (string, 
 }
 
 type delayedLiveSteward struct{ delay time.Duration }
+
+func (f delayedLiveSteward) Assign(ctx context.Context, sentence string, _ []steward.RosterTask) (steward.Assignment, error) {
+	_, err := f.Decide(ctx, sentence)
+	return steward.Assignment{Action: steward.ActionNew}, err
+}
 
 func (f delayedLiveSteward) Decide(ctx context.Context, _ string) (steward.Decision, error) {
 	select {
@@ -242,7 +247,7 @@ func TestLiveNonTaskRoutingSkipsStewardAndMemoryRoutesFast(t *testing.T) {
 				if err := store.DB().QueryRow(`SELECT status FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&status); err != nil {
 					t.Fatal(err)
 				}
-				if status != "waiting" {
+				if status != "queued" {
 					t.Fatalf("task decision not awaited: %s", status)
 				}
 			} else {
@@ -263,7 +268,7 @@ func TestLiveHoldQuestionDeliveredOnce(t *testing.T) {
 		name, text, intent string
 		cfg                Config
 	}{
-		{"steward", "please handle this", "steward_ask", Config{Steward: &fakeSteward{decision: steward.Ask}}},
+		{"steward-high-impact", "delete the old project", "explicit_confirmation", Config{Steward: &fakeSteward{decision: steward.Ask}}},
 		{"hard-impact-no-steward", "帮我删除下载文件夹里的所有文件", "explicit_confirmation", Config{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

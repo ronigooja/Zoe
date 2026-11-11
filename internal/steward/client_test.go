@@ -109,7 +109,7 @@ func TestParsedDefaultStewardTimeout(t *testing.T) {
 	for _, tc := range []struct {
 		value string
 		want  time.Duration
-	}{{"", 4000 * time.Millisecond}, {"1000", time.Second}, {"10000", 10 * time.Second}} {
+	}{{"", 30000 * time.Millisecond}, {"1000", time.Second}, {"10000", 10 * time.Second}, {"60000", 60 * time.Second}} {
 		c := configured(t, "http://localhost", tc.value)
 		c.SetHTTPClient(&http.Client{Transport: stewardDeadlineTransport{t: t, want: tc.want}})
 		_, err := c.Decide(context.Background(), "private sentence")

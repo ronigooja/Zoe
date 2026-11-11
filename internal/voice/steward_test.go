@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,9 +15,24 @@ import (
 )
 
 type fakeSteward struct {
-	decision steward.Decision
-	err      error
-	calls    atomic.Int32
+	decision   steward.Decision
+	assignment steward.Assignment
+	mu         sync.Mutex
+	roster     []steward.RosterTask
+	err        error
+	calls      atomic.Int32
+}
+
+func (f *fakeSteward) Assign(_ context.Context, _ string, roster []steward.RosterTask) (steward.Assignment, error) {
+	f.calls.Add(1)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.roster = append([]steward.RosterTask(nil), roster...)
+	a := f.assignment
+	if a.Action == "" {
+		a.Action = steward.ActionNew
+	}
+	return a, f.err
 }
 
 func (f *fakeSteward) Decide(context.Context, string) (steward.Decision, error) {
@@ -40,7 +56,7 @@ func TestStewardOrdinaryTaskSentencesDispatch(t *testing.T) {
 	}
 }
 
-func TestStewardAskDeliversOnceAndExistingAppendResumes(t *testing.T) {
+func TestStewardLegacyAskNoLongerHoldsOrdinaryTask(t *testing.T) {
 	f := &fakeSteward{decision: steward.Ask}
 	var posts atomic.Int32
 	gateway := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { posts.Add(1); w.WriteHeader(200) }))
@@ -53,26 +69,14 @@ func TestStewardAskDeliversOnceAndExistingAppendResumes(t *testing.T) {
 	if err := store.DB().QueryRow(`SELECT status,interaction_state,interaction_question FROM tasks WHERE id=?`, r.ResourceID).Scan(&status, &interaction, &question); err != nil {
 		t.Fatal(err)
 	}
-	if status != "waiting" || interaction != "awaiting_message" || question != steward.Question("please handle this") {
+	if status != "queued" || interaction != "none" || question != "" {
 		t.Fatalf("status=%s interaction=%s question=%s", status, interaction, question)
 	}
 	svc := newService(store.DB(), cfg)
 	svc.dispatchFastReplies(context.Background())
 	svc.dispatchFastReplies(context.Background())
-	if posts.Load() != 1 {
+	if posts.Load() != 0 {
 		t.Fatalf("question delivered %d times", posts.Load())
-	}
-	for i := 0; i < 2; i++ {
-		code, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "confirm-ask", "task.append", map[string]any{"task_id": r.ResourceID, "content": "yes, proceed"})
-		if code != 200 {
-			t.Fatalf("append=%d %s", code, raw)
-		}
-	}
-	_ = store.DB().QueryRow(`SELECT status FROM tasks WHERE id=?`, r.ResourceID).Scan(&status)
-	var count int
-	_ = store.DB().QueryRow(`SELECT count(*) FROM task_entries WHERE task_id=? AND content='yes, proceed'`, r.ResourceID).Scan(&count)
-	if status != "queued" || count != 1 {
-		t.Fatalf("resume status=%s append count=%d", status, count)
 	}
 }
 
@@ -80,9 +84,9 @@ func TestStewardHardRuleOverridesDispatch(t *testing.T) {
 	f := &fakeSteward{decision: steward.Dispatch}
 	ts, store, key := handoffHTTPServerWithConfig(t, Config{Steward: f})
 	r := commitAndHandoff(t, ts, key, "high-steward", "delete the old project")
-	var status string
-	_ = store.DB().QueryRow(`SELECT status FROM tasks WHERE id=?`, r.ResourceID).Scan(&status)
-	if status != "waiting" || f.calls.Load() != 0 {
+	var status, interaction string
+	_ = store.DB().QueryRow(`SELECT status,interaction_state FROM tasks WHERE id=?`, r.ResourceID).Scan(&status, &interaction)
+	if status != "waiting" || interaction != "explicit_confirmation" || f.calls.Load() != 0 {
 		t.Fatalf("status=%s model calls=%d", status, f.calls.Load())
 	}
 }

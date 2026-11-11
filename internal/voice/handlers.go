@@ -354,8 +354,8 @@ type handoffPayload struct {
 
 // commandHandoff is the server-owned boundary between a stable voice turn and
 // Worker. It deliberately does not accept an impact level or routing decision
-// from the caller. Ordinary requests dispatch unless the stateless Steward asks
-// an intent question; hard high-impact holds require scoped confirmation.
+// from the caller. Stored assignments route ordinary requests; hard high-impact
+// holds require scoped confirmation.
 func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest, server *control.Server) (contracts.CommandResult, []contracts.Event, error) {
 	if !control.HasScope(cmd.Principal, "client:command") && !control.HasScope(cmd.Principal, "voice:turn:commit") {
 		return contracts.CommandResult{}, nil, apiError(http.StatusForbidden, "forbidden", "voice handoff scope is required", nil)
@@ -383,9 +383,9 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if state != "active" || generation != p.Generation {
 		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_generation_stale", "voice handoff belongs to an inactive media generation", nil)
 	}
-	var taskID, content, storedCategory, stewardDecision string
+	var taskID, content, storedCategory, stewardDecision, stewardAction, stewardTaskID string
 	var storedHash []byte
-	if err := tx.QueryRowContext(ctx, `SELECT coalesce(l.task_id,nullif(v.resumed_task_id,''),''),v.content,v.content_hash,coalesce(v.triage_category,''),v.steward_decision FROM voice_turns v LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&taskID, &content, &storedHash, &storedCategory, &stewardDecision); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(l.task_id,nullif(v.resumed_task_id,''),''),v.content,v.content_hash,coalesce(v.triage_category,''),v.steward_decision,v.steward_action,v.steward_task_id FROM voice_turns v LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&taskID, &content, &storedHash, &storedCategory, &stewardDecision, &stewardAction, &stewardTaskID); errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(http.StatusNotFound, "voice_turn_not_found", "confirmed voice turn revision was not found", nil)
 	} else if err != nil {
 		return contracts.CommandResult{}, nil, err
@@ -458,14 +458,57 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		handoffEvent, _ := json.Marshal(map[string]any{"route": "fast", "category": category, "turn_id": p.TurnID, "revision": p.Revision})
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, []contracts.Event{{Type: "voice.turn.handoff", AggregateType: "voice_session", AggregateID: p.SessionID, AggregateVersion: p.Generation, Payload: handoffEvent}}, nil
 	}
+	goal := content
+	var assignmentEvents []contracts.Event
+	if impact != "high" {
+		if stewardAction == string(steward.ActionNone) {
+			_, err := tx.ExecContext(ctx, `UPDATE voice_turns SET handoff_handled=1 WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
+			return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, err
+		}
+		if stewardTaskID != "" && (stewardAction == string(steward.ActionAnswer) || stewardAction == string(steward.ActionAttach)) {
+			var status, interaction, question, oldGoal, result string
+			err := tx.QueryRowContext(ctx, `SELECT t.status,t.interaction_state,t.interaction_question,t.goal,coalesce(t.result,'') FROM tasks t WHERE t.workspace_id=? AND t.owner_subject_id=? AND t.id=? AND EXISTS (SELECT 1 FROM voice_task_links l WHERE l.workspace_id=t.workspace_id AND l.task_id=t.id AND l.session_id=? AND l.generation=?)`, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, stewardTaskID, p.SessionID, p.Generation).Scan(&status, &interaction, &question, &oldGoal, &result)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return contracts.CommandResult{}, nil, err
+			}
+			if err == nil && stewardAction == string(steward.ActionAnswer) && (status == "waiting" || status == "awaiting_user") && interaction == "awaiting_message" && question != "" {
+				r, events, err := server.AppendTaskTx(ctx, tx, cmd, stewardTaskID, content)
+				if err == nil {
+					_, err = tx.ExecContext(ctx, `UPDATE voice_turns SET resumed_task_id=?,handoff_handled=1 WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, stewardTaskID, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
+				}
+				return r, events, err
+			}
+			if err == nil && stewardAction == string(steward.ActionAttach) {
+				switch status {
+				case "queued", "active", "waiting", "awaiting_user":
+					_, events, stopErr := server.StopTaskTx(ctx, tx, cmd, stewardTaskID)
+					var conflict *control.APIError
+					if stopErr != nil && (!errors.As(stopErr, &conflict) || conflict.Code != "state_conflict") {
+						return contracts.CommandResult{}, nil, stopErr
+					}
+					assignmentEvents = append(assignmentEvents, events...)
+					goal = oldGoal + "\n" + content
+				case "complete":
+					runes := []rune(result)
+					if len(runes) > 600 {
+						runes = runes[:600]
+					}
+					goal = content + "\n上一个任务的结果:\n" + string(runes)
+				}
+			}
+		}
+	}
 	ref, _ := json.Marshal(voiceTaskSourceReference{Kind: "voice_turn", SessionID: p.SessionID, Generation: p.Generation, TurnID: p.TurnID, Revision: p.Revision, ContentHash: p.ContentHash})
-	admission, err := server.AdmitTaskTx(ctx, tx, control.AdmissionContext{Principal: cmd.Principal, Source: "voice", SourceRef: ref, IdempotencyKey: cmd.CommandID, ProfileID: "zoe-steward", Title: content, Goal: content, InitialMessage: content, AcceptedAt: cmd.AcceptedAt})
+	if goal != content {
+		ctx = context.WithValue(ctx, voiceAdmissionGoalKey{}, goal)
+	}
+	admission, err := server.AdmitTaskTx(ctx, tx, control.AdmissionContext{Principal: cmd.Principal, Source: "voice", SourceRef: ref, IdempotencyKey: cmd.CommandID, ProfileID: "zoe-steward", Title: content, Goal: goal, InitialMessage: goal, AcceptedAt: cmd.AcceptedAt})
 	if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
-	events := admission.Events
+	events := append(assignmentEvents, admission.Events...)
 	status := "queued"
-	if impact == "high" || stewardDecision == "ask" {
+	if impact == "high" {
 		status = "waiting"
 		// Admission consent is scoped to this request, never a runtime action.
 		question := steward.Question(content)
@@ -483,7 +526,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 				return contracts.CommandResult{}, nil, err
 			}
 		}
-		// Both admission holds reach the live call before a scoped answer.
+		// High-impact admission holds reach the live call before a scoped answer.
 		intent, text := "steward_ask", question
 		if impact == "high" {
 			intent = "explicit_confirmation"
@@ -697,6 +740,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 	elapsedMS := triageMS
 	stewardMS := int64(0)
 	decision := steward.Dispatch
+	var assignment steward.Assignment
 	if classifyHandoff(content) == "high" {
 		decision = steward.Ask
 	} else if s.steward != nil && category == "task" {
@@ -711,12 +755,22 @@ func (s *Service) classifyCommittedTurn(id string) {
 			}
 		}
 		stewardStarted := time.Now()
-		answer, callErr := s.steward.Decide(ctx, content)
-		observationErr = callErr
+		roster, callErr := s.callRoster(ctx, s.db, workspace, owner, session, generation, s.now())
+		if callErr == nil {
+			tasks := make([]steward.RosterTask, len(roster))
+			for i, task := range roster {
+				tasks[i] = steward.RosterTask{ID: task.ID, Title: task.Title, Status: task.Status, Question: task.Question, Result: task.Result}
+			}
+			assignment, callErr = s.steward.Assign(ctx, content, tasks)
+		}
 		if ctx.Err() != nil {
 			callErr = ctx.Err()
 		}
-		decision = steward.Resolve(answer, callErr, false)
+		observationErr = callErr
+		if callErr != nil {
+			decision = steward.Error
+			assignment = steward.Assignment{}
+		}
 		stewardMS = time.Since(stewardStarted).Milliseconds()
 		elapsedMS = stewardMS
 		if callErr != nil {
@@ -730,7 +784,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 	// Persist using a fresh short context even if model I/O exhausted its deadline.
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), time.Second)
 	defer writeCancel()
-	res, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_decision=? WHERE id=? AND triage_category IS NULL`, category, string(decision), id)
+	res, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_decision=?,steward_action=?,steward_task_id=? WHERE id=? AND triage_category IS NULL`, category, string(decision), string(assignment.Action), assignment.TaskID, id)
 	if writeErr == nil {
 		if n, _ := res.RowsAffected(); n == 1 {
 			s.cacheTriage(triageKey(session, generation, turn, revision), category)
@@ -853,6 +907,10 @@ type voiceTaskSourceReference struct {
 	ContentHash string `json:"content_hash,omitempty"`
 }
 
+// voiceAdmissionGoalKey applies only to a goal computed by commandHandoff in the
+// same transaction, never to caller-supplied task source fields.
+type voiceAdmissionGoalKey struct{}
+
 // admitVoiceTask binds a confirmed stable turn to the task inside the same
 // transaction as task.create. Revision is provenance; it is deliberately not
 // part of the uniqueness key, so a later transcript revision cannot dispatch
@@ -908,6 +966,10 @@ func (s *Service) admitVoiceTask(ctx context.Context, tx *sql.Tx, principal cont
 	request.Title = title
 	request.Goal = content
 	request.InitialMessage = content
+	if goal, ok := ctx.Value(voiceAdmissionGoalKey{}).(string); ok {
+		request.Goal = goal
+		request.InitialMessage = goal
+	}
 	eventPayload, _ := json.Marshal(map[string]any{"task_id": taskID, "voice_session_id": ref.SessionID, "generation": ref.Generation, "turn_id": ref.TurnID, "turn_revision": ref.Revision, "content_hash": hex.EncodeToString(contentHash), "status": "task_created"})
 	event := contracts.Event{Type: "voice.task.created", AggregateType: "voice_session", AggregateID: ref.SessionID, AggregateVersion: ref.Generation, Payload: eventPayload, OccurredAt: acceptedAt}
 	_, err = tx.ExecContext(ctx, `INSERT INTO voice_task_links(workspace_id,session_id,generation,turn_id,turn_revision,task_id,linked_by_device_id,command_id,linked_at) VALUES(?,?,?,?,?,?,?,?,?)`, principal.WorkspaceID, ref.SessionID, ref.Generation, ref.TurnID, ref.Revision, taskID, principal.DeviceID, taskID, acceptedAt.UTC().Format(time.RFC3339Nano))

@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -15,13 +16,13 @@ func TestHandlersPlainChineseSpeech(t *testing.T) {
 	}{
 		{"recall", "recall", "what did we discuss", "我查一下我们之前的对话。", false},
 		{"memory_read", "memory_read", "what do you remember", "我查一下保存的笔记。", false},
-		{"steward", "task", "handle this", "要我现在去处理这个请求吗？", true},
+		{"steward-error", "task", "handle this", stewardErrorSpeech, true},
 		{"confirmation", "task", "delete the project", "要我现在去处理这个请求吗？", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Config{Classifier: &fakeClassifier{category: tc.category}}
 			if tc.ask {
-				cfg.Steward = &fakeSteward{decision: steward.Ask}
+				cfg.Steward = &fakeSteward{decision: steward.Ask, err: context.DeadlineExceeded}
 			}
 			ts, store, key := handoffHTTPServerWithConfig(t, cfg)
 			commitAndHandoff(t, ts, key, tc.name, tc.content)
