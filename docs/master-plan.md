@@ -19,8 +19,9 @@ Milestones sequence delivery without reducing product scope. The [acceptance mat
 
 Call-end summary jobs and the in-process worker have focused synthetic coverage; [the generation contract](architecture/decisions/0012-voice-conversation-layer.md#stored-call-summary-generation) defines settling, retries, and bounded regeneration. Live model, gateway timing, hosted integration, and recall acceptance remain open.
 
-Stateless Steward task admission and the compatible Worker executor profile are
-implemented in source; see the [contract and current limitations](architecture/decisions/0012-voice-conversation-layer.md#stateless-task-manager).
+Roster-aware Steward task management and the compatible Worker executor profile are
+deployed on `bb07671`; see the [contract and current limitations](architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager).
+The [context-register target](architecture/decisions/0013-context-register.md) is **Accepted, not implemented**; compaction, attribution and added latency are unmeasured.
 Pre-run scoped high-impact confirmation and live Worker/voice acceptance remain open.
 
 The bounded recall route, leased fallback recovery and bounded shutdown-joined workers have local fake-gateway/model regression coverage; see [its contract](architecture/decisions/0012-voice-conversation-layer.md#bounded-recall-route). Hosted integration and real speech/provider behavior remain open.

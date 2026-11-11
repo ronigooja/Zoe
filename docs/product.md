@@ -315,7 +315,7 @@ If the execution environment becomes unavailable because a device is powered off
 
 **CY-04-02.** Keep agent execution, services, data, memory, permissions, events, status, and health on the server.
 
-For delegated voice tasks, Zoe owns stateless Steward admission and the resident OpenCode Worker executes work; the current bootstrap policy and limits are defined once in the [task-manager contract](architecture/decisions/0012-voice-conversation-layer.md#stateless-task-manager).
+For delegated voice tasks, Zoe owns roster-aware Steward task management and the resident OpenCode Worker executes work; deployed behavior and limits are defined once in the [task-manager contract](architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager). The context-register and alias-free task-reference target is **Accepted, not implemented** in [ADR 0013](architecture/decisions/0013-context-register.md).
 
 The client is primarily responsible for interaction and presentation.
 

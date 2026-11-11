@@ -344,3 +344,28 @@ Real calls with the Mac client (Zoe `b2d3807` and `255bd89`, then `7bc915d`):
 - Steward calls: 2910 ms and 2647 ms with a 4000 ms limit, then one call that used the full 4000 ms and timed out. With the code of that time, the timeout dispatched the user's whole sentence, which began with a withdrawal, as a task (later canceled). Zoe now creates no task on a Steward failure (commit `3fe3666`, not yet deployed at the time of writing).
 - Not exercised: real human speech outside the Mac client user, several delegations per call, a state sentence arriving after the next question, interruption, long calls, UDP media after the gateway moved to host networking.
 - Limits: a handful of calls, one account, one user. No product milestone is accepted by this record.
+
+Historical-scope note: the malformed function-output rejection above is superseded
+by the [GPT-Live follow-up](#gpt-live-investigation-avas-route--2026-11-12), not evidence
+that the type is unsupported. The 4000 ms budget and undeployed-failure-fix note
+describe that checkpoint only; the [deployed contract](../architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager)
+records the subsequent `bb07671` behavior.
+
+## Context-register real-call findings — 2026-11-12
+
+Category: real-call observations and source review, not product acceptance. Source: operator-supplied investigation of Mac-client calls on `6f11472` and `bb07671`, compared before/after narrowed attach/triage prompts; call records were not re-read by this documentation change. Private transcript text and account data are omitted.
+
+- Verified in the supplied call investigation: the previous call had 25 turns; wrong attaches stopped four tasks, and two later sentences attached to an older topic.
+- Verified in the supplied call investigation: after narrowed prompts on `bb07671`, 12 committed turns produced zero tasks stopped by attach; a progress question received speech meaning "result already given" although the sole result was a clarifying question; a follow-up sentence was judged `none`.
+- Verified by source review: deployed Steward is roster-aware; [its contract](../architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager) records actions, bounded aliases, migration 217, budgets and no-task failures. Progress chooses only from task status/age, not result content/delivery state.
+- Inferred: partial conversational views explain these attribution/progress failures; the calls do not measure whether the proposed register would fix them. About 60 s of Mac-client waiting is inferred from shared URLSession defaults, not measured.
+- Limits: two calls, one user; no new live checks, CI, deployment or product acceptance. [ADR 0013](../architecture/decisions/0013-context-register.md) is **Accepted, not implemented**.
+
+## GPT-Live investigation, AVAS route — 2026-11-12
+
+Category: protocol/lab observations and public-document/source review, not end-to-end acceptance. Environment: operator-supplied follow-up to gateway `main-d425d00` lab runs; exact follow-up gateway/Zoe source revision was not supplied. Action: probe public GPT-Live events, create-field names and rule placement using synthetic speech. [Lab record](../../tools/voice_lab/RESULTS.md#gpt-live-follow-up--2026-11-12) owns detailed outcomes.
+
+- Verified in the supplied lab observations: AVAS accepts four tested event shapes and rejects public thinking/commentary appends with `invalid_value`; earlier malformed function-output probes were not proof of unsupported event types.
+- Verified by the supplied public-doc review: GPT-Live names `input`, not `initial_items`; the `input` variant had no observations, so working support is unverified.
+- Verified in the supplied lab observations: five rule placements each delegated 7/9 to 9/9 in nine synthetic-speech calls; the documented SpawnThinking template did not beat the current rule with two calls per cell.
+- Inferred: these tiny synthetic samples do not establish a superior placement, reliable real-speech delegation or equivalence between public GPT-Live and AVAS. Gateway/upstream context ceilings, exact follow-up revision and human-speech behavior remain unverified. No CI or acceptance claim is added.

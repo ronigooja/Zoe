@@ -42,6 +42,8 @@ acknowledge or reported `silent: "unverified"`; `unsupported` means nothing was
 sent or the gateway said it is unsupported. A route mismatch (see
 `ZOE_VOICE_UPSTREAM_ROUTE` below) leaves the AVAS items unsent. Zoe never pushes
 opening context after creation on AVAS.
+The register-based source and mid-call additions in [ADR 0013](../architecture/decisions/0013-context-register.md)
+are **Accepted, not implemented**; they do not change these deployed instructions.
 The gateway must return `opening_context: {"applied": true}` (with `silent`
 omitted, null, or true) for `delivered`; `silent: "unverified"` remains unverified.
 Return top-level `context_chars` to report the gateway's applied character count;
@@ -217,15 +219,22 @@ Triage is disabled when `ZOE_TRIAGE_BASE_URL` is empty. Apply a saved change wit
 
 For committed voice turns, `ZOE_TRIAGE_TIMEOUT_MS` sets the HTTP timeout (default
 3000 ms, range 200–10000). `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS` bounds total
-classification and the handoff wait (default 6000 ms, range 100-30000). One retry
+classification and the handoff wait (default 35000 ms, range 100-60000). One retry
 shares the remaining classification budget; there is no separate 1500 ms cutoff.
 For task classification, `ZOE_STEWARD_TIMEOUT_MS` bounds the HTTP call and the
-whole Steward decision, including API-style negotiation (default 4000 ms, range
-200-10000). Triage and Steward share the total budget, not additive guarantees;
+whole Steward decision, including API-style negotiation (default 30000 ms, range
+200-60000). Triage and Steward share the total budget, not additive guarantees;
 raise the total explicitly when both calls may consume their full timeouts.
-Exhausted failures retain the slow path and log only bounded classification
+Exhausted triage failures retain the slow path; Steward failure/timeout creates
+no task and sends fixed processing-error/developer-report speech. Log only bounded classification
 diagnostics, including `steward_ms`, `reason=triage_timeout`, `triage_error`,
 `steward_timeout` or `steward_error`, and `attempts`.
+
+The [deployed roster-aware Steward contract](../architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager)
+defines migration 217, roster bounds, actions and high-impact bypass. Its aliases
+and partial context remain deployed on `bb07671`; replacement is **Accepted, not implemented**
+in [ADR 0013](../architecture/decisions/0013-context-register.md). The Mac client's
+roughly 60 s URLSession wait is a code-based inference, not a measured deadline.
 
 For triage requests, `ZOE_TRIAGE_THINKING` and `ZOE_TRIAGE_REASONING_EFFORT` (CLI `--thinking` and `--effort`) control the following wire fields. Effort accepts `none`, `low`, `medium`, `high`, `max`, or empty; `minimal` is rejected by the configured OpenAI-style gateway. Values are sent unchanged, not mapped locally.
 

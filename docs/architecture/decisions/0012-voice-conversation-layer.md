@@ -2,11 +2,13 @@
 
 Status: direction proposed; routing and bounded recall decisions recorded 2026-11-06. Progress and recall have component implementations; real voice acceptance remains open. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
 
+Status note (2026-11-12): routing/context, Steward references/attach, progress and memory cadence are **superseded-by-0013 (target)**, [Accepted, not implemented](0013-context-register.md). Descriptions explicitly labeled deployed below remain the `bb07671` baseline, not implementation claims for 0013. Recall, authority, transport and held-task safeguards are not superseded.
+
 ## Context
 
 Observed on the AVAS route (one call each, single account):
 
-- Today every committed voice turn creates a `zoe-steward` task. A task answered about 2 minutes later; during that time the upstream model could only improvise (a filler such as "soon").
+- At that historical checkpoint every committed voice turn created a `zoe-steward` task. A task answered about 2 minutes later; during that time the upstream model could only improvise (a filler such as "soon").
 - The upstream model rewrote a long Steward answer and contradicted it (rain probability).
 - Memory is loaded once at call start as opening context ([ADR 0006](0006-memory-authority-and-derived-stores.md)). There is no memory access during a call.
 - Probe on 2026-11-06: after `delegation.created`, a `delegation.context.append` on channel `speakable` was confirmed by upstream in 139 ms and spoken verbatim, preceded by an upstream-added lead-in sentence. Speech of about 30 characters took about 6 s to play; this is playback time, not waiting.
@@ -18,14 +20,16 @@ The problem is control, not speed: the upstream model leads the conversation and
 1. Zoe owns what is said. The upstream model listens and speaks; it does not decide content that Zoe can answer.
 2. Every client-target delegation is routed by the Zoe control plane into one of two paths:
    - **Fast path**: answered within a latency budget from local authoritative data only (memory, task state, simple facts). The answer is returned as a short `speakable` context append.
-   - **Slow path**: starts or appends to a `zoe-steward` task as in [ADR 0009](0009-voice-steward-impact-policy.md). The immediate `speakable` reply states that work has started.
-3. Progress is a first-class input. A question about a running task (for example "is it done yet") is a fast-path question answered from the task record, never from model guesswork. When answering progress, scope task links to the current voice session, workspace and owner and exclude tasks created more than `Config.ProgressMaxTaskAge` ago (default `DefaultProgressMaxTaskAge`, six hours). Current-call running tasks report elapsed seconds; otherwise current-call completed or awaiting-user tasks updated within 30 minutes report the result ready, and no qualifying task reports nothing running. Apply the same query at admission and delivery recomputation.
+   - **Slow path**: starts or appends to a `zoe-steward` task as in [ADR 0009](0009-voice-steward-impact-policy.md). The immediate `speakable` reply states that work has started. Attach behavior is **superseded-by-0013 (target)**: stop/new with merged goal or previous result, not an appended message assumed to reach a running Worker.
+3. Deployed progress chooses four fixed sentences from task status/age only, without result content or delivery state. Scope task links to the current voice session, workspace and owner and exclude tasks created more than `Config.ProgressMaxTaskAge` ago (default `DefaultProgressMaxTaskAge`, six hours). Current-call running tasks report elapsed seconds; otherwise current-call completed or awaiting-user tasks updated within 30 minutes report the result ready, and no qualifying task reports nothing running. Apply the same query at admission and delivery recomputation. This can misreport a clarifying question as a delivered result; the register/Steward progress route is **superseded-by-0013 (target)**, not deployed.
 4. Results are written for speech: short sentences, key figures first, one `speakable` append per chunk. Steward output that is long is summarized by Zoe, not by the upstream model.
 5. Delivery channel: when a call is live, results use the gateway's sideband or `/context` channel; otherwise a notification. Spoken delivery never marks a task complete; only authoritative task events do ([ADR 0009](0009-voice-steward-impact-policy.md) item 5).
 6. Authority is unchanged: voice and the conversation layer create no commands directly. Impact-level rules of [ADR 0009](0009-voice-steward-impact-policy.md) apply to the slow path only; the fast path is read-only.
 7. The gateway stays transport-only (media, accounts, sideband). It carries no conversation logic.
 
 When creating a voice session on the AVAS route, Zoe sends two things in the create request: `instructions` (identity and speech style only) and `opening_context` items, which the gateway forwards as upstream `initial_items` (role `user`). The first item is the fixed delegation rule: cancel, progress, and any question about the user personally are delegated, not answered by the model. At most five shallow memory facts (`key:content`) and the current tasks (`active`, `queued`, and `waiting`/`awaiting_user` updated within 30 minutes, de-duplicated by title) follow, within the item and character budgets; the rule is never dropped. Delivery is recorded as `delivered`, `unverified`, or `unsupported` from the gateway response. No post-create push or retry is used. This is transport evidence only, not proof that upstream obeys (configuration: [deployment](../../operations/deployment.md#voice-delegation-instruction)). Measured behavior is in [lab results](../../../tools/voice_lab/RESULTS.md).
+
+The opening-context source is **superseded-by-0013 (target)**; the deployed snapshot above has no persistent conversation register.
 
 
 ## Routing: stateless triage (decided 2026-11-06)
@@ -34,13 +38,13 @@ Observed on the AVAS route ([evidence](../../acceptance/evidence.md#instruction-
 
 Decision:
 
-1. For client-target delegations, the upstream voice model alone decides when to delegate; Zoe does not classify chat. Zoe routes each received delegation with a stateless LLM call returning `progress`, `recall`, `memory_write`, `memory_read`, `task`, or `cancel`. The legacy `memory` category is unknown and follows the existing retry/unclassified slow task fallback. Only when exactly one eligible held request exists, also offer `confirm` and `decline`, with its pending question as data beside the current utterance. The prompt contains definitions only, without example sentences. No history or accumulated context is sent. No keyword rules infer read/write or agreement semantics. See [held-task controls](#held-task-controls).
+1. Deployed: for client-target delegations, the upstream voice model alone decides when to delegate; Zoe does not classify chat. Zoe routes each received delegation with a stateless LLM call returning `progress`, `recall`, `memory_write`, `memory_read`, `task`, or `cancel`. The legacy `memory` category is unknown and follows the existing retry/unclassified slow task fallback. Only when exactly one eligible held request exists, also offer `confirm` and `decline`, with its pending question as data beside the current utterance. The prompt contains definitions only, without example sentences. No history or accumulated context is sent. No keyword rules infer read/write or agreement semantics. See [held-task controls](#held-task-controls). Adding `unclear` and register attribution is **superseded-by-0013 (target)**, not a current category.
 2. The model endpoint, model, and key file are configured like the memory model (`ZOE_TRIAGE_BASE_URL`, `ZOE_TRIAGE_MODEL`, `ZOE_TRIAGE_API_KEY_FILE`); empty base URL disables triage. The connection is long-lived and reused; requests are independent.
 3. For committed-turn classification, retry a failed or unrecognized result once within the remaining classification budget. The triage HTTP timeout defaults to 3000 ms (`ZOE_TRIAGE_TIMEOUT_MS`, range 200–10000). Exhausted failures persist `unclassified` and retain the existing slow task path. Failure never drops a request.
 4. The impact classification of [ADR 0009](0009-voice-steward-impact-policy.md) stays authoritative. A category never grants authority; high-impact requests keep the waiting/confirmation path regardless of category.
 5. Classification and gateway calls never run inside a database transaction.
 6. Fast paths read local evidence only: `progress` reads the task table; `recall` follows the bounded read-only route below; `memory_read` uses the existing owner-scoped context assembler with the question as query. Memory routes do not create Worker tasks. Memory writes remain blocked as described below.
-7. Upstream owns wording: Zoe pushes short instruction-style `speakable` text (including a holding sentence during slow work) and upstream phrases it. Verified once only; see the evidence.
+7. Historical instruction-style wording is no longer the deployed fixed-reply contract: Zoe sends plain Chinese statements, including fixed error/progress speech. Upstream can still add or rewrite wording; fixed payloads are not a speech-verbatim guarantee.
 
 The recall date resolver exists in `internal/recall/dates`; weeks start on Monday and the caller timezone is `Asia/Shanghai`.
 
@@ -53,8 +57,8 @@ The stateless classifier routes committed voice handoffs; failures retain the sl
 
 When a handoff arrives before classification completes, wait outside the command
 transaction for the durable category and decision. `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS`
-configures both the classification deadline and handoff wait budget (default 6000 ms,
-range 100–30000). Both triage attempts share the remaining budget, without a
+configures both the classification deadline and handoff wait budget (default 35000 ms,
+range 100–60000). Both triage attempts share the remaining budget, without a
 separate fast-path sub-deadline. Progress text is recomputed immediately before
 every send, so delayed classification does not freeze elapsed seconds. Classification
 and handoff waiting stay outside transactions and do not hold up unrelated turns.
@@ -146,26 +150,35 @@ When Steward times out or fails, Zoe creates no task. It records the decision `e
 
 ## Open questions (to measure before implementation)
 
-### Stateless task manager
+<a id="stateless-task-manager"></a>
 
-When a delegation reaches the task path, the Zoe-owned Steward receives only the
-current transcript sentence, with no history, memory, project layer, result
-validation, or result rewriting. Its exact output is `dispatch` or `ask`;
-whitespace is stripped, but case changes, punctuation, explanations and unknown
-values are rejected. Zoe supplies a fixed English or Chinese intent question;
-unsupported languages currently use the English fallback.
+### Deployed roster-aware task manager
+
+Deployed on `bb07671`: when a delegation reaches the low-impact task path, Steward
+receives the current sentence and a newest-first roster of at most ten tasks.
+It uses actions `new | attach | answer | none` and per-request aliases `t1..t10`;
+titles are bounded to 60 runes, pending questions to 120, result excerpts to 200.
+There is no accumulated conversation context. Migration 217 adds
+`voice_turns.steward_action` and `steward_task_id`. Low-impact Steward `ask` no
+longer creates a waiting task. High-impact requests bypass Steward and retain
+the explicit-confirmation waiting path. Failure/timeout creates no task and
+sends fixed speech meaning "processing error, report to the developer".
+The roster references, register input and attach semantics are
+**superseded-by-0013 (target)**; the alias-free design is not implemented.
 
 When configured, `ZOE_STEWARD_BASE_URL`, `MODEL`, `API_KEY_FILE`, `API_STYLE`,
 `REASONING_EFFORT`, `THINKING`, and `TIMEOUT_MS` (each with the `ZOE_STEWARD_`
 prefix) select an independent model. Base URLs do not require `/v1`; auto style
 tries `/responses` then `/chat/completions` on unsupported-route responses.
-The default Steward HTTP and whole-decision timeout is 4000 ms (unchanged range
-200-10000), within the shared classification deadline defined in
+The default Steward HTTP and whole-decision timeout is 30000 ms (range
+200-60000), within the shared classification deadline defined in
 [routing](#routing-stateless-triage-decided-2026-11-06). Both API-style attempts
 share the decision deadline. The total budget is not a guarantee that triage and
 Steward can both consume their full timeout; operators can raise it explicitly.
-Errors, timeouts, disabled configuration and unknown outputs dispatch ordinary
-requests. Existing hard high-impact markers take precedence and always ask.
+Errors, timeouts, disabled configuration and unknown outputs create no task.
+Hard high-impact markers take precedence and preserve explicit confirmation.
+The Mac API client uses shared `URLSession` without a custom request timeout;
+about 60 s of client waiting is inferred from its default, not measured live.
 
 ### Held-task controls
 
@@ -178,8 +191,8 @@ ID, version and question on the answering turn before model I/O. Recheck all thr
 inside handoff's transaction; stale, ambiguous or other-session bindings never
 authorize anything. No sentence keywords decide agreement or refusal.
 
-When Steward asks, `confirm` reuses `task.append` with a canonical server-owned
-confirmation. A hard-impact admission creates a `task:admit` scoped challenge:
+For high-impact held admission, `confirm` reuses `task.append` with a canonical
+server-owned confirmation. A hard-impact admission creates a `task:admit` scoped challenge:
 its run reference is `admission:<task-id>`, not a runtime run; its digest binds
 task ID, goal, question, expected version, scope and expiry. The existing append
 validator records `task_confirmations`, clears the interaction and queues work.

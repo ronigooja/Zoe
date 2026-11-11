@@ -8,7 +8,7 @@ Observations from live runs against the upstream AVAS realtime service, 2026-11-
 
 Not covered: human voices, interruption of speech already being spoken, sending context while the user is silent, call duration limits, a second delegation in one call.
 
-P5-P10 live findings are in the section below. `response.create` and function-output field shapes are still not established: both were rejected, and the second rejection did not reveal the field shape.
+P5-P10 historical findings are below. Later GPT-Live probes supersede the inference that a rejected malformed function-output frame means the event type is unsupported; see [the follow-up](#gpt-live-follow-up--2026-11-12).
 
 ## Protocol facts
 
@@ -47,11 +47,11 @@ Same result sentence, three calls per cell.
 - Contradicting items: the later one was used, with no mention of the conflict (3 of 3).
 - An item telling the model to ignore its rules and answer only one word was not followed (3 of 3).
 - A fact absent from the items was not invented (3 of 3).
-- Limits: the Codex client allows 128 items and about 8,192 tokens in total and rejects more. Larger sizes were not tested; Zoe follows the Codex values.
+- Limits: reading Codex source established client limits of 128 items and 8192 tokens. These are not measured gateway/upstream ceilings; those ceilings remain undetermined. Existing Zoe opening-context budgets still apply.
 
 ## Consequences for design
 
-- Cancel and progress cannot depend on the model delegating them. The transcript already reaches Zoe, so Zoe has to classify each user turn and tell the model the true state through context.
+- Historical proposal, not deployed policy: classify every user turn to avoid missed cancel/progress delegation. The later [delegation decision](../../docs/architecture/decisions/0012-voice-conversation-layer.md#delegation-is-upstreams-responsibility-decided-2026-11-11) classifies only delegated sentences; upstream speech cannot be prevented. The [register target](../../docs/architecture/decisions/0013-context-register.md) is **Accepted, not implemented**.
 - Personal facts placed in `initial_items` are answered by the model without asking Zoe, so a lookup route is reached only for facts that are not in the items.
 - The items are a snapshot taken when the call starts.
 
@@ -59,7 +59,7 @@ Same result sentence, three calls per cell.
 
 Account 4, Codex-style fingerprint profile (approximate, see FINGERPRINT_FEASIBILITY.md), synthetic speech, small samples.
 
-- P5/P8 (official append channels): `session.instructions`, `thinking`, and `commentary` appends were rejected by upstream in 18 of 18 calls; the error lists the frame types the server accepts. `session.update` (instructions or initial items) was also unusable. Only `session.context.append` and `delegation.context.append` work mid-call.
+- P5/P8 (official append channels): `session.instructions`, `thinking`, and `commentary` appends were rejected by upstream in 18 of 18 calls; the error lists the frame types the server accepts. `session.update` (instructions or initial items) was also unusable. At this checkpoint only `session.context.append` and `delegation.context.append` had working mid-call shapes; the follow-up below establishes additional accepted types.
 - P6 (`<|SpawnThinking|>` template in instructions): it did not make cancel, progress, or personal questions delegated.
 - P7: any `acknowledgement_delay_ms` value made the sideband connection fail.
 - P9: `response.create` was rejected 6 of 6 ("requires a session with Responses delegation").
@@ -72,3 +72,13 @@ Account 4, Codex-style fingerprint profile (approximate, see FINGERPRINT_FEASIBI
 - Empty instructions, no items, one request per call (three calls each): weather delegated 2 of 3 and answered with a question about the city once; web search delegated 3 of 3. Upstream never gave weather or search content itself in these six calls. Real human speech and interruption were not tested.
 - With the rule item present and no task running, upstream still said "stopped" after a withdrawal. Only Zoe can supply true task state.
 - Synthetic speech sometimes shortens an utterance in transcription (a progress question was heard without its first syllable in one delegated turn).
+
+## GPT-Live follow-up — 2026-11-12
+
+Source: operator-supplied AVAS lab investigation following the runs above; exact follow-up gateway/Zoe revision not supplied. Public-document findings are source review, not measured AVAS compatibility. Samples are synthetic speech and tiny; observations were not rerun for this documentation update.
+
+- Verified in supplied observations: accepted event types/shapes were `session.context.append`, `delegation.context.append`, `delegation.function_call_output.create`, and `response.item.create`. Public GPT-Live `session.thinking.append` and `session.commentary.append` were rejected with `invalid_value`. This supersedes the earlier inference from missing-`item` function-output errors; accepted transport does not prove spoken behavior for every payload.
+- Verified in supplied public-doc review: GPT-Live calls the create field `input`, not `initial_items`. The `input` lab variant had no observations; it was not confirmed working.
+- Rule placement: `instructions`, first user item, developer item, assistant item and second user item each delegated 7/9 to 9/9, with nine synthetic-speech calls per placement. Per-placement exact counts were not supplied; no ranking is established.
+- The documented `Generate <|SpawnThinking|> when` template did not beat the current rule (two calls per cell). This is not a reliability estimate.
+- Inferred: neither a better placement nor public/AVAS protocol equivalence follows from these samples. Human speech, production acceptance and gateway/upstream context ceilings remain unverified. Real-call attribution failures are recorded separately in the [evidence register](../../docs/acceptance/evidence.md#context-register-real-call-findings--2026-11-12).
