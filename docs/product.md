@@ -242,8 +242,8 @@ permission-denied, and stopped states truthfully; it must not claim active voice
 device, network, account, or server condition is unavailable. Automatic reconnect is appropriate for temporary
  failures; permission or policy failures require a Settings/system-settings recovery path. Text chat remains
 usable whenever voice is unavailable. Continuous voice transports audio and spoken output only; authorization
-follows the impact levels in [ADR 0009](architecture/decisions/0009-voice-steward-impact-policy.md), and voice never
-confirms high-impact work. Do not add persistent labels, large waveforms, timers, voice cards, or separate
+follows the target authority boundary in [ADR 0013](architecture/decisions/0013-context-register.md), **Accepted, not implemented**.
+Do not add persistent labels, large waveforms, timers, voice cards, or separate
 persistent control strips. Settings controls and status messages need accessible names/state values, keyboard
 access, and help on demand; color alone must not carry state. Detailed voice, transport, account, and server
 errors are not a client presentation responsibility: the client shows only a concise actionable state and
@@ -253,8 +253,7 @@ proceeds within its granted scope. Keep ordinary progress concise; emphasize dec
 actionable failures, and recorded results. Ordinary assistant replies and ordinary task results are
 server-authored content, not client-side Accept/Reject workflows. Users continue through chat by asking for
 changes, continuation, or missing information; ambiguous words do not authorize a business decision.
-High-impact or irreversible actions require scoped, explicit conversational confirmation tied to the
-task/run/action, expected version, and expiry. Continuous voice does not alter these boundaries.
+The deployed impact-confirmation gate remains historical in ADR 0012, not a target interaction requirement.
 - **Focus on outcomes.** Summarize programming work using its goal, current stage, outcome, validation summary, and decisions that require the user. Users should be able to understand what was accomplished and what remains unresolved through these summaries, without reviewing source code. The same conversation and task surfaces must support research and other authorized work.
 - **Client errors are concise; diagnostics are automatic.** This applies to every native-client error surface,
  including connection, voice, task, notification, export, capability, storage, and transport failures. The
@@ -270,7 +269,7 @@ The authenticated client synchronizes its server-controlled diagnostic policy an
 ### Client behavior boundaries
 
 - **Truthful state.** Voice reports connecting, active, interrupted, reconnecting, unavailable, permission-denied, and stopped states only when they are true; permission or policy failures need a recovery path, temporary failures may reconnect, and text input remains usable whenever voice is unavailable. Normal connected state has no banner; offline, stale, and failed operations stay visible with an action.
-- **Impact-level authorization.** A spoken request is the instruction for low-impact, reversible work; the server sets impact levels from the profile's capabilities and scopes ([ADR 0009](architecture/decisions/0009-voice-steward-impact-policy.md)). Voice never confirms high-impact work. High-impact or irreversible actions require scoped, explicit confirmation tied to the task/run/action, expected version, and expiry; ambiguous words authorize nothing.
+- **Request authority.** A spoken request is the instruction; target handling follows ADR 0013, not an impact-confirmation workflow. Clients never create authority from spoken output or transport continuity.
 - **Server-authored content.** Clients render persisted server data and never fabricate messages, progress, assistant answers, or inactive actions. Ordinary results are server-authored content with no client Accept/Reject workflow; follow-ups are interpreted by the server in task context. Contracts: [HTTP contract](../contracts/http.go) and [task-entry handlers](../internal/control/task_entries.go).
 - **Submissions.** A submission is accepted, failed, or unknown. Drafts clear only after durable acceptance; unknown submissions reconcile the original journaled receipt instead of issuing a new command, and the draft stays visible with confirmation pending. Drafts are cleared when the server or identity changes.
 - **Concise errors, automatic diagnostics.** Every client error surface shows only a short state and an actionable recovery or retry instruction, never detailed server, infrastructure, runtime, queue-reason, capacity, transport, account, or local exception text, credentials, headers, response bodies, transcripts, audio, or SDP/ICE. Redacted detail is encrypted, queued, and sent best effort to the authenticated diagnostic endpoint without blocking the user or changing command authority or receipt/retry semantics.
@@ -283,7 +282,7 @@ Real-device, simulator, build, and service evidence stays separate in [the evide
 
 When voice calls are ingested, the server retains both speakers' full text under the [transcript lifecycle contract](operations/data-lifecycle.md#voice-transcript-authority-and-ingestion), independently of task delegation and raw audio.
 
-When voice calls end, the server derives dated topic summaries mapped to authoritative raw turns under the [stored summary generation contract](architecture/decisions/0012-voice-conversation-layer.md#stored-call-summary-generation). Summary generation does not change command authority or confirmed user decisions.
+In the deployed baseline, call end triggers dated topic summaries mapped to authoritative raw turns under the [stored summary generation contract](architecture/decisions/0012-voice-conversation-layer.md#stored-call-summary-generation). This is not the target memory cadence: [ADR 0013](architecture/decisions/0013-context-register.md#3-memory-cadence) defines the accepted, unimplemented batch. Summary generation does not change command authority or confirmed user decisions.
 
 The server baseline and migration requirements are defined in [§4.1](#41-independent-background-operation), [§4.2](#42-separation-of-client-and-server), and [§4.3](#43-environment-migration). Native Apple clients do not host the control server. Migration and restore must preserve linked identities and prevent two active copies of the authority.
 
@@ -665,14 +664,14 @@ The system must update status based on actual execution.
 
 It must not mark work as complete without verification merely because an Agent said “done.”
 
-Task status is separate from server-owned interaction state. Interaction state may indicate
+Task status is separate from server-owned interaction state. Deployed interaction state may indicate
 `awaiting_message`, `explicit_confirmation`, or exceptional `approval_required`; ordinary completed results
 have no interaction requirement. The API name `awaiting_user` remains supported for compatibility and may be
 used as a legacy status/label, but it must not be treated as a client-owned workflow. When a waiting task
 accepts `task.append`, the server persists the user message, preserves prior result and evidence history,
 applies policy and optimistic-version checks, and emits the authoritative event; the client does not
 synthesize a task-history entry or decide whether the message is clarification, change, continuation, or
-confirmation.
+confirmation. The target removes the impact-confirmation waiting path under ADR 0013; this compatibility description does not reinstate it.
 
 <a id="cy-08-03"></a>
 
@@ -1109,9 +1108,9 @@ Zoe can run programs, modify files, and operate external applications, so it mus
 
 ### 14.1 Separate Permissions
 
-**CY-14-01.** Apply least privilege per agent and service; Super authority does not implicitly transfer to workers.
+**CY-14-01.** Apply the configured agent/service permission policy; Super authority does not implicitly transfer to workers.
 
-Different Agents and background services should receive only permissions relevant to their work; a permission held by Super must not automatically give every Worker the same permission.
+For the resident voice Worker, the existing full-permission decision in [ADR 0012](architecture/decisions/0012-voice-conversation-layer.md#held-task-controls) takes precedence over the earlier least-privilege proposal. A permission held by Super does not itself grant Worker authority.
 
 <a id="cy-14-02"></a>
 
@@ -1119,11 +1118,9 @@ Different Agents and background services should receive only permissions relevan
 
 ### 14.2 Operation Authorization
 
-**CY-14-02.** Authorize read, write, send, delete, generate, and deploy actions separately, with risk-based confirmation; high-impact execution requires scoped explicit conversational confirmation.
+**CY-14-02.** Apply configured execution permissions; target requests follow ADR 0013 without a separate high-impact confirmation gate.
 
-Authorize each operation according to its risk. Reading versus sending email, reading versus deleting a file, and writing versus deploying a program are separate permissions. Software installation, high-risk system commands, sensitive configuration changes, and irreversible external operations follow the user's authorization rules.
-
-For a high-impact or irreversible action, confirmation is an execution authorization, not acceptance of a result. The server defines the confirmation scope, task/run/action identity, expected version, expiry, and audit record. Ambiguous assent such as “okay,” “fine,” or an equivalent brief affirmative must not execute the action without contextual resolution.
+The former risk-based confirmation requirement is superseded for the target, **Accepted, not implemented**, by [ADR 0013](architecture/decisions/0013-context-register.md#1-register-first-triage-deleted). Deployed challenge/audit behavior remains documented in ADR 0012; it is not a target requirement or result-acceptance workflow.
 
 <a id="cy-14-03"></a>
 
@@ -1131,9 +1128,9 @@ For a high-impact or irreversible action, confirmation is an execution authoriza
 
 ### 14.3 User Control
 
-**CY-14-03.** Let users inspect, change, revoke grants, stop tasks/services, audit actions, and confirm high-risk work.
+**CY-14-03.** Let users inspect, change or revoke grants, stop tasks/services, and audit actions.
 
-Users should be able to view and adjust existing permission scope, revoke permissions, stop tasks and services, view important operation records, and confirm high-risk operations.
+Users should be able to view and adjust existing permission scope, revoke permissions, stop tasks and services, and view important operation records.
 
 A single vague authorization must not give a long-running service unlimited operating permissions.
 

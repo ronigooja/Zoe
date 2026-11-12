@@ -2,6 +2,8 @@
 
 Status: accepted direction; implementation and acceptance remain open. Supersedes the explicit-submission sentences in [ADR 0005](0005-voice-task-and-lease-boundaries.md). Principles: [target architecture](../../design/target-architecture.md). Delivery status: [master plan](../../master-plan.md); evidence: [evidence register](../../acceptance/evidence.md).
 
+Target status (2026-11-12): the impact policy in decision 4 and its high-impact floor below are **superseded-by-0013 (target)**, [Accepted, not implemented](0013-context-register.md#1-register-first-triage-deleted). This removes impact classification, explicit-confirmation waiting tasks, confirm/decline handling and fixed assent text; these remain historical/deployed descriptions only. Other authority and receipt boundaries are unchanged.
+
 ## Context
 
 Requiring explicit transcript submission for every voice request made speaking a request insufficient and left voice with no path to the task authority. Voice also cannot do the work: it has no verified tools. Thinking belongs to agents.
@@ -11,7 +13,7 @@ Requiring explicit transcript submission for every voice request made speaking a
 1. Voice is the front desk: it listens, speaks, and hands the user's words to the control plane. It holds no authority and performs no work.
 2. For delegated tasks, Steward is Zoe-owned task management, not an OpenCode agent or result reviewer. Its deployed roster-aware actions and failure behavior are defined in [ADR 0012](0012-voice-conversation-layer.md#deployed-roster-aware-task-manager); the former single-sentence `dispatch`/`ask` design is historical. Context and task-reference decisions are **superseded-by-0013 (target)**, [Accepted, not implemented](0013-context-register.md). Worker is the existing resident OpenCode service, using the configured task model and permitted subagents. No Super/project coordinator is introduced. The stable `zoe-steward` executor profile ID remains for compatibility; it denotes Worker execution.
 3. A spoken request is the instruction. The control plane creates the command on an authenticated path bound to the call and turn identity, with stable turn identity, revisions, and deduplication unchanged. Voice and the steward never create commands directly.
-4. Authorization follows server-set impact levels derived from the profile's declared capabilities and scopes, never from the model's description. Low-impact, reversible work executes on the spoken request. High-impact or irreversible work requires a scoped confirmation challenge bound to task, run, action, expected version, and expiry, answered by voice or screen and recorded by the server. Ambiguous words authorize nothing.
+4. Historical/deployed impact policy, superseded for the target above: authorization follows server-set impact levels derived from the profile's declared capabilities and scopes, never from the model's description. Low-impact, reversible work executes on the spoken request. High-impact or irreversible work requires a scoped confirmation challenge bound to task, run, action, expected version, and expiry, answered by voice or screen and recorded by the server. Ambiguous words authorize nothing.
 5. Spoken output and transport continuity never establish completion or approval; only authoritative task events do.
 6. The active-run ceiling is an operator setting; the default is set in [ADR 0011](0011-profiles-permissions-and-context-hygiene.md).
 

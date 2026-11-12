@@ -73,6 +73,8 @@ On macOS the server/AI owns a versioned declarative screen document and opaque i
 
 ## Voice and business work
 
+When applying the target voice design, [ADR 0013](architecture/decisions/0013-context-register.md) is **Accepted, not implemented** and supersedes triage, impact confirmation, opening instructions and task/context routing below. The following impact gates, fallback and interaction-state descriptions are the deployed baseline, not target requirements.
+
 Zoe-compatible `ronigooja/chatgpt-web-voice` fork is the selected gateway/account pool. The current voice topology and lease boundary are defined by [ADR 0005](architecture/decisions/0005-voice-task-and-lease-boundaries.md); deployment details live in [voice deployment](../deploy/voice/README.md).
 
 When gateway transcript ingestion is enabled, full call-text authority and its independent service credential follow the [transcript lifecycle contract](operations/data-lifecycle.md#voice-transcript-authority-and-ingestion); transcript storage is separate from command-authorizing committed delegation turns.
@@ -93,7 +95,7 @@ The control plane owns interaction state separately from task execution status. 
 
 The persistent per-user conversation register and revised memory batch in [ADR 0013](architecture/decisions/0013-context-register.md#3-memory-cadence) are **Accepted, not implemented**. That decision defines the in-scope claim materialization and authority constraints, not the current memory worker's behavior.
 
-The Go authority owns memory sources, versions, and tombstones. Accepted changes are synchronously visible there; Mem0/Qdrant maintenance is asynchronous. Explicit user decisions register through policy; model-derived claims remain candidates. Source events, execution facts, and inferences remain distinguishable. Formal decisions and task state reference authoritative ledger records rather than summaries.
+The Go authority owns memory sources, versions, and tombstones. Accepted changes are synchronously visible there; Mem0/Qdrant maintenance is asynchronous. Explicit user decisions register through policy; model-derived claims remain candidates in the existing paths, except for the target batch-trusted revisions in ADR 0013. Source events, execution facts, and inferences remain distinguishable. Formal decisions and task state reference authoritative ledger records rather than summaries.
 
 The pipeline is `source event → authority → transactional outbox → extraction/indexing → scoped retrieval → permission/version recheck → context assembly`. Context is built per task/runtime/project/permission scope. Retrieval omission or conflict is uncertainty, not permission to invent history. A curator runs on demand for summaries, conflicts, expiry, and relationship judgment, within the same global runtime cap.
 

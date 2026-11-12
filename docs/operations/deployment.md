@@ -4,6 +4,8 @@ This runbook describes the local Linux installation and the macOS client on
 `zhuwei@macair`. For the distinction between documentation and acceptance, see
 the [evidence register](../acceptance/evidence.md).
 
+When operating voice routing, the instructions, triage, held-task controls and fallback paths below describe deployed `bb07671`, not the replacement target. [ADR 0013](../architecture/decisions/0013-context-register.md) is **Accepted, not implemented** and is the single source for the superseding decisions; do not apply them as deployment instructions.
+
 For client error investigation, authenticated diagnostic uploads, bounded
 SQLite inspection, and voice pool isolation checks, see the
 [client diagnostics runbook](diagnostics.md).
