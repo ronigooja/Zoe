@@ -45,7 +45,7 @@ func TestModelKeyFileIsWrittenOwnedByContainerUserMode0600(t *testing.T) {
 		}
 		return nil
 	}, true)
-	if err := WriteTriageSecretAtomic(p, []byte("new")); err != nil {
+	if err := WriteModelSecretAtomic(p, []byte("new")); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(p)
@@ -103,7 +103,7 @@ func TestKeyWriteFailsClearlyAndKeepsOldFileWhenChownFails(t *testing.T) {
 				t.Fatal(err)
 			}
 			injectModelKeyChown(t, func(string, int, int) error { return os.ErrPermission }, root)
-			err := WriteTriageSecretAtomic(p, []byte("new"))
+			err := WriteModelSecretAtomic(p, []byte("new"))
 			if err == nil || !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), "65532:65532") || !strings.Contains(err.Error(), "run as root") {
 				t.Fatalf("unclear failure: %v", err)
 			}
@@ -119,7 +119,7 @@ func TestKeyWriteFailsClearlyAndKeepsOldFileWhenChownFails(t *testing.T) {
 	}
 }
 
-func TestTriageTestFailsEarlyWhenKeyFileUnreadableByServerUser(t *testing.T) {
+func TestCompactTestFailsEarlyWhenKeyFileUnreadableByServerUser(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "key")
 	if err := os.WriteFile(p, []byte("never-print-this-key"), 0600); err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestTriageTestFailsEarlyWhenKeyFileUnreadableByServerUser(t *testing.T) {
 	requests := 0
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++; w.WriteHeader(401) }))
 	defer s.Close()
-	_, err := TestTriage(context.Background(), TriageConfig{BaseURL: s.URL, Model: "m", SecretPath: p}, s.Client())
+	_, err := TestMenuModel(context.Background(), ModelConfig{BaseURL: s.URL, Model: "m", SecretPath: p}, "Compact", s.Client())
 	if err == nil || !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "not readable by server user 65532:65532") || !strings.Contains(err.Error(), "sudo chown") || strings.Contains(err.Error(), "never-print-this-key") || requests != 0 {
 		t.Fatalf("err=%v requests=%d", err, requests)
 	}
@@ -139,7 +139,7 @@ func TestUpdateStopsBeforeServiceChangesWhenModelKeyUnreadable(t *testing.T) {
 	if err := os.WriteFile(key, []byte("never-print-this-key"), 0000); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL=https://gateway.example\nZOE_TRIAGE_MODEL=m\nZOE_TRIAGE_API_KEY_FILE="+key+"\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_COMPACT_BASE_URL=https://gateway.example\nZOE_COMPACT_MODEL=m\nZOE_COMPACT_API_KEY_FILE="+key+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	commands := 0

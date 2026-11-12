@@ -365,7 +365,7 @@ func TestUpdateRollbackReportsFailingStepAndCommandOutput(t *testing.T) {
 	}
 }
 
-func TestWriteDeploymentFilesIncludesConfiguredTriageEntriesOnly(t *testing.T) {
+func TestWriteDeploymentFilesIncludesConfiguredRegisterEntriesOnly(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		configured bool
@@ -380,7 +380,7 @@ func TestWriteDeploymentFilesIncludesConfiguredTriageEntriesOnly(t *testing.T) {
 			}
 			stack := "ZOE_SERVER_PORT=8787\n"
 			if tc.configured {
-				stack += "ZOE_TRIAGE_BASE_URL=https://gateway.example/v1\nZOE_TRIAGE_MODEL=triage-model\nZOE_TRIAGE_TIMEOUT_MS=500\nZOE_TRIAGE_API_KEY_FILE=/etc/zoe/secrets/triage-api-key\n"
+				stack += "ZOE_REGISTER_BASE_URL=https://gateway.example/v1\nZOE_REGISTER_MODEL=register-model\nZOE_REGISTER_TIMEOUT_MS=500\nZOE_REGISTER_API_KEY_FILE=/etc/zoe/secrets/register-api-key\n"
 			}
 			if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte(stack), 0600); err != nil {
 				t.Fatal(err)
@@ -397,7 +397,7 @@ func TestWriteDeploymentFilesIncludesConfiguredTriageEntriesOnly(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, key := range []string{"ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_TIMEOUT_MS", "ZOE_TRIAGE_API_KEY_FILE"} {
+			for _, key := range []string{"ZOE_REGISTER_BASE_URL", "ZOE_REGISTER_MODEL", "ZOE_REGISTER_TIMEOUT_MS", "ZOE_REGISTER_API_KEY_FILE"} {
 				_, present := values[key]
 				if present != tc.configured {
 					t.Errorf("%s present=%v, want %v", key, present, tc.configured)

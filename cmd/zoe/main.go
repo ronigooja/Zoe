@@ -1,6 +1,6 @@
 // Command zoe is the operator entry point for local Zoe maintenance.
 // With no arguments it opens a small menu so operators do not need to
-// remember sub-command names. Every menu action also has a scriptable form.
+// remember sub-command names. Selected actions also have a scriptable form.
 package main
 
 import (
@@ -22,8 +22,6 @@ type operation func(args []string, in io.Reader, out, errOut io.Writer) error
 // menu while remaining usable from scripts.
 var operations = map[string]operation{
 	"setup":              unavailable("setup"),
-	"triage configure":   unavailable("triage configure"),
-	"triage test":        unavailable("triage test"),
 	"summary configure":  unavailable("summary configure"),
 	"summary test":       unavailable("summary test"),
 	"answer configure":   unavailable("answer configure"),
@@ -115,7 +113,7 @@ func normalizeCommand(value string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: zoe [setup|install|update|uninstall|provider configure|provider test|memory configure|memory test|triage configure|triage test|summary configure|summary test|answer configure|answer test|key init|key rotate|status|voice configure|voice test|voice status|client-policy show|client-policy set]")
+	return errors.New("usage: zoe [setup|install|update|uninstall|provider configure|provider test|memory configure|memory test|summary configure|summary test|answer configure|answer test|key init|key rotate|status|voice configure|voice test|voice status|client-policy show|client-policy set]")
 }
 
 func menu(in io.Reader, out, errOut io.Writer) error {
@@ -135,29 +133,31 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		fmt.Fprintln(out, "  4) Update host")
 		fmt.Fprintln(out, "  5) Uninstall host")
 		fmt.Fprintln(out, "Models:")
-		fmt.Fprintln(out, "  6) Configure task model")
-		fmt.Fprintln(out, "  7) Test task model")
-		fmt.Fprintln(out, "  8) Configure memory model")
-		fmt.Fprintln(out, "  9) Test memory model")
-		fmt.Fprintln(out, "  10) Configure triage model")
-		fmt.Fprintln(out, "  11) Test triage model")
-		fmt.Fprintln(out, "  12) Configure Steward model")
+		fmt.Fprintln(out, "  6) Configure Worker model (runs tasks)")
+		fmt.Fprintln(out, "  7) Test Worker model")
+		fmt.Fprintln(out, "  8) Configure Register model (routes every sentence)")
+		fmt.Fprintln(out, "  9) Test Register model")
+		fmt.Fprintln(out, "  10) Configure Compact model (hourly conversation compaction)")
+		fmt.Fprintln(out, "  11) Test Compact model")
+		fmt.Fprintln(out, "  12) Configure Steward model (task routing and replies)")
 		fmt.Fprintln(out, "  13) Test Steward model")
-		fmt.Fprintln(out, "  14) Configure summary model")
-		fmt.Fprintln(out, "  15) Test summary model")
-		fmt.Fprintln(out, "  16) Configure answer model")
-		fmt.Fprintln(out, "  17) Test answer model")
+		fmt.Fprintln(out, "  14) Configure Memory extraction model (24-hour batch and memory worker)")
+		fmt.Fprintln(out, "  15) Test Memory extraction model")
+		fmt.Fprintln(out, "  16) Configure Memory answer model (recall and memory questions)")
+		fmt.Fprintln(out, "  17) Test Memory answer model")
+		fmt.Fprintln(out, "  18) Configure Call summary model (summary after a call ends)")
+		fmt.Fprintln(out, "  19) Test Call summary model")
 		fmt.Fprintln(out, "Voice:")
-		fmt.Fprintln(out, "  18) Configure voice gateway")
-		fmt.Fprintln(out, "  19) Test voice gateway")
-		fmt.Fprintln(out, "  20) Show voice gateway status")
-		fmt.Fprintln(out, "  21) Configure voice instruction")
+		fmt.Fprintln(out, "  20) Configure voice gateway")
+		fmt.Fprintln(out, "  21) Test voice gateway")
+		fmt.Fprintln(out, "  22) Show voice gateway status")
+		fmt.Fprintln(out, "  23) Configure voice instruction")
 		fmt.Fprintln(out, "Access:")
-		fmt.Fprintln(out, "  22) Create instance key")
-		fmt.Fprintln(out, "  23) Rotate instance key")
+		fmt.Fprintln(out, "  24) Create instance key")
+		fmt.Fprintln(out, "  25) Rotate instance key")
 		fmt.Fprintln(out, "Client policy:")
-		fmt.Fprintln(out, "  24) Show client policy")
-		fmt.Fprintln(out, "  25) Set client policy")
+		fmt.Fprintln(out, "  26) Show client policy")
+		fmt.Fprintln(out, "  27) Set client policy")
 		fmt.Fprintln(out, "  0) Exit")
 		fmt.Fprint(out, "Select an option: ")
 		line, err := inputLine(in)
@@ -171,15 +171,15 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		if choice == "0" || strings.EqualFold(choice, "q") || strings.EqualFold(choice, "quit") || strings.EqualFold(choice, "exit") {
 			return nil
 		}
-		if choice == "21" {
+		if choice == "23" {
 			if err := menuVoiceInstruction(configureMenuIO(root, in, out, errOut)); err != nil && !errors.Is(err, io.EOF) {
 				fmt.Fprintln(errOut, "Error:", err)
 			}
 			continue
 		}
-		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "9": "memory test", "18": "voice configure", "19": "voice test", "20": "voice status", "22": "key init", "23": "key rotate", "24": "client-policy show", "25": "client-policy set"}[choice]
+		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "15": "memory test", "20": "voice configure", "21": "voice test", "22": "voice status", "24": "key init", "25": "key rotate", "26": "client-policy show", "27": "client-policy set"}[choice]
 		if !ok {
-			if choice == "14" || choice == "16" {
+			if choice == "18" || choice == "16" {
 				kind := "summary"
 				if choice == "16" {
 					kind = "answer"
@@ -189,7 +189,7 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 				}
 				continue
 			}
-			if choice == "15" || choice == "17" {
+			if choice == "19" || choice == "17" {
 				kind := "summary"
 				if choice == "17" {
 					kind = "answer"
@@ -199,33 +199,22 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 				}
 				continue
 			}
-			if choice == "8" || choice == "10" {
-				err := menuModel(configureMenuIO(root, in, out, errOut), choice == "10")
+			if choice == "8" || choice == "10" || choice == "12" || choice == "14" {
+				kind := map[string]string{"8": "Register", "10": "Compact", "12": "Steward", "14": "Memory"}[choice]
+				err := menuModel(configureMenuIO(root, in, out, errOut), kind)
 				if err != nil && !errors.Is(err, io.EOF) {
 					fmt.Fprintln(errOut, "Error:", err)
 				}
 				continue
 			}
-			if choice == "12" {
-				if err := menuModel(configureMenuIO(root, in, out, errOut), true, true); err != nil && !errors.Is(err, io.EOF) {
+			if choice == "9" || choice == "11" || choice == "13" {
+				kind := map[string]string{"9": "Register", "11": "Compact", "13": "Steward"}[choice]
+				if err := menuTestModel(root, out, kind); err != nil {
 					fmt.Fprintln(errOut, "Error:", err)
 				}
 				continue
 			}
-			if choice == "13" {
-				if err := menuTestSteward(root, out); err != nil {
-					fmt.Fprintln(errOut, "Error:", err)
-				}
-				continue
-			}
-			if choice == "11" {
-				err := triageTestOperation([]string{"--root", root}, in, out, errOut)
-				if err != nil {
-					fmt.Fprintln(errOut, "Error:", err)
-				}
-				continue
-			}
-			fmt.Fprintln(errOut, "Please choose a number from 0 to 25.")
+			fmt.Fprintln(errOut, "Please choose a number from 0 to 27.")
 			continue
 		}
 		if err := operations[name](nil, in, out, errOut); err != nil {

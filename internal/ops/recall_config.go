@@ -36,7 +36,7 @@ func (c RecallModelConfig) Normalized(kind string) (RecallModelConfig, error) {
 	if err != nil {
 		return c, err
 	}
-	validated, err := (TriageConfig{BaseURL: c.BaseURL, Model: c.Model, ReasoningEffort: c.ReasoningEffort, Thinking: c.Thinking, SecretPath: c.SecretPath}).Normalized()
+	validated, err := (ModelConfig{BaseURL: c.BaseURL, Model: c.Model, ReasoningEffort: c.ReasoningEffort, Thinking: c.Thinking, SecretPath: c.SecretPath}).Normalized()
 	if err != nil {
 		return c, err
 	}
@@ -120,7 +120,7 @@ func SaveRecallModel(ctx context.Context, d Deployment, kind string, c RecallMod
 		return err
 	}
 	if len(secret) > 0 {
-		if err = WriteTriageSecretAtomic(c.SecretPath, secret); err != nil {
+		if err = WriteModelSecretAtomic(c.SecretPath, secret); err != nil {
 			return err
 		}
 	} else if err = ValidateKeyFile(c.SecretPath); err != nil {

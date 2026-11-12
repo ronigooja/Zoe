@@ -1,0 +1,41 @@
+# Operator model menu
+
+When configuring model endpoints, run `zoe` without arguments. The menu names
+models by purpose; Configure and Test are paired:
+
+| Configure / Test | Purpose | Configuration |
+| --- | --- | --- |
+| 6 / 7 | Worker: runs tasks | Existing `provider configure` / `provider test` |
+| 8 / 9 | Register: routes every sentence | `ZOE_REGISTER_*` |
+| 10 / 11 | Compact: hourly conversation compaction | `ZOE_COMPACT_*` |
+| 12 / 13 | Steward: task routing and replies | `ZOE_STEWARD_*` |
+| 14 / 15 | Memory extraction: 24-hour batch and memory worker | `ZOE_MEM0_LLM_*` |
+| 16 / 17 | Memory answer: recall and memory questions | `ZOE_ANSWER_*` |
+| 18 / 19 | Call summary: summary after a call ends | `ZOE_SUMMARY_*` |
+
+When using Register or Compact, each group independently requires `BASE_URL`,
+`MODEL`, and `API_KEY_FILE`. Optional suffixes are `REASONING_EFFORT`, `THINKING`,
+and `TIMEOUT_MS`. Neither group falls back to another group's configuration.
+Missing required variables fail Test with the variable name and a reminder that
+the server will not start without it. The server requires both groups.
+
+When configuring these menu-only groups, Enter keeps the current value, hidden
+key input rotates only the selected credential, and empty key input retains it.
+Default secret paths are `/etc/zoe/secrets/register-api-key` and
+`/etc/zoe/secrets/compact-api-key`. Keys use mode `0600` and server ownership
+`65532:65532`, matching Steward. Changes preserve unrelated env lines and the
+env file's mode. Apply saved settings with `zoe update` to restart/redeploy the
+server; Configure does not restart services.
+
+When testing Register or Compact, Zoe sends one real connectivity request through
+`internal/modelclient`, using only the selected group's endpoint and key.
+The probe uses `/responses` relative to the configured base URL; a failed route
+fails the probe rather than issuing a second request. No Register, Compact, or
+Steward CLI subcommands or flags are provided.
+
+When migrating old host env files, legacy `ZOE_TRIAGE_*` lines are left untouched
+and ignored. The old triage Configure/Test menu entries and CLI commands no
+longer exist. Call summary remains supported by the existing summary pipeline.
+
+When navigating non-model entries, Voice is 20-23, Access is 24-25, Client policy
+is 26-27, and Exit is 0; Overview and System retain entries 1-5.

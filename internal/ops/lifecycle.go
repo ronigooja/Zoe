@@ -248,9 +248,13 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 		o.HealthTimeout = 90 * time.Second
 	}
 	d := Deployment{Root: o.Root, StackEnv: filepath.Join(o.Root, "zoe-stack.env")}
-	triage, triageErr := d.TriageConfig()
-	if triageErr != nil {
-		return triageErr
+	register, err := d.MenuModelConfig("Register")
+	if err != nil {
+		return err
+	}
+	compact, err := d.MenuModelConfig("Compact")
+	if err != nil {
+		return err
 	}
 	memory, memoryErr := d.MemoryConfig()
 	if memoryErr != nil {
@@ -268,7 +272,7 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if err != nil {
 		return err
 	}
-	warnings := ModelKeyWarnings(triage, steward, TriageConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, TriageConfig{BaseURL: summary.BaseURL, SecretPath: summary.SecretPath}, TriageConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath})
+	warnings := ModelKeyWarnings(register, compact, steward, ModelConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, ModelConfig{BaseURL: summary.BaseURL, SecretPath: summary.SecretPath}, ModelConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath})
 	for _, warning := range warnings {
 		if o.Out != nil {
 			fmt.Fprintln(o.Out, warning)
@@ -997,7 +1001,7 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 			}
 		}
 	}
-	for _, key := range []string{"ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_TRIAGE_API_STYLE", "ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_REASONING_EFFORT", "ZOE_TRIAGE_THINKING", "ZOE_TRIAGE_TIMEOUT_MS", "ZOE_TRIAGE_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE"} {
+	for _, key := range []string{"ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_REGISTER_BASE_URL", "ZOE_REGISTER_MODEL", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_REGISTER_THINKING", "ZOE_REGISTER_TIMEOUT_MS", "ZOE_REGISTER_API_KEY_FILE", "ZOE_COMPACT_BASE_URL", "ZOE_COMPACT_MODEL", "ZOE_COMPACT_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_COMPACT_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE"} {
 		if value := strings.TrimSpace(oldStack[key]); value != "" {
 			stack[key] = value
 		}
@@ -1163,7 +1167,7 @@ func isOperatorOwnedEnvKey(key string) bool {
 		return true
 	case "ZOE_VOICE_INGEST_TOKEN_FILE", "ZOE_VOICE_INGEST_ID", "ZOE_VOICE_INGEST_WORKSPACES":
 		return true
-	case "ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_TRIAGE_API_STYLE", "ZOE_TRIAGE_BASE_URL", "ZOE_TRIAGE_MODEL", "ZOE_TRIAGE_REASONING_EFFORT", "ZOE_TRIAGE_THINKING", "ZOE_TRIAGE_TIMEOUT_MS", "ZOE_TRIAGE_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE":
+	case "ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_REGISTER_BASE_URL", "ZOE_REGISTER_MODEL", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_REGISTER_THINKING", "ZOE_REGISTER_TIMEOUT_MS", "ZOE_REGISTER_API_KEY_FILE", "ZOE_COMPACT_BASE_URL", "ZOE_COMPACT_MODEL", "ZOE_COMPACT_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_COMPACT_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE":
 		return true
 	default:
 		return false

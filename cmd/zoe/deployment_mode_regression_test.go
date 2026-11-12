@@ -28,12 +28,12 @@ func TestDeploymentModeHybridModelConfiguration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, kind := range []string{"triage", "summary", "answer"} {
+	for _, kind := range []string{"Register", "Compact", "summary", "answer"} {
 		t.Run(kind, func(t *testing.T) {
 			args := []string{"--root", root, "--base-url", "https://gateway.example/v1", "--model", kind + "-model", "--key-stdin"}
 			var err error
-			if kind == "triage" {
-				err = triageConfigureOperation(args, strings.NewReader("private-key"), io.Discard, io.Discard)
+			if kind == "Register" || kind == "Compact" {
+				err = menuModel(ConfigureMenuIO{Root: root, In: strings.NewReader("https://gateway.example/v1\n" + kind + "-model\nnone\ndisabled\n\nn\n"), Out: io.Discard, ErrOut: io.Discard, PromptSecret: func(io.Writer) ([]byte, error) { return []byte("private-key"), nil }}, kind)
 			} else {
 				err = recallConfigureOperation(kind, args, strings.NewReader("private-key"), io.Discard, io.Discard)
 			}
@@ -50,7 +50,7 @@ func TestDeploymentModeHybridModelConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"TRIAGE", "SUMMARY", "ANSWER"} {
+	for _, name := range []string{"REGISTER", "COMPACT", "SUMMARY", "ANSWER"} {
 		if !strings.Contains(string(b), "ZOE_"+name+"_MODEL=") {
 			t.Errorf("missing %s configuration", name)
 		}

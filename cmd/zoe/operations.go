@@ -27,8 +27,6 @@ func init() {
 	_ = RegisterOperation("provider test", providerTestOperation)
 	_ = RegisterOperation("memory configure", memoryConfigureOperation)
 	_ = RegisterOperation("memory test", memoryTestOperation)
-	_ = RegisterOperation("triage configure", triageConfigureOperation)
-	_ = RegisterOperation("triage test", triageTestOperation)
 	_ = RegisterOperation("key init", keyInitOperation)
 	_ = RegisterOperation("key rotate", keyRotateOperation)
 	_ = RegisterOperation("status", statusOperation)
@@ -535,141 +533,6 @@ func memoryConfigureOperationWithSkip(args []string, in io.Reader, out, errOut i
 	return nil
 }
 
-func triageConfigureOperation(args []string, in io.Reader, out, errOut io.Writer) error {
-	fs := flag.NewFlagSet("triage configure", flag.ContinueOnError)
-	fs.SetOutput(errOut)
-	root := fs.String("root", "/etc/zoe", "deployment configuration root")
-	base := fs.String("base-url", "", "triage model base URL")
-	legacyURL := fs.String("url", "", "triage model base URL")
-	model := fs.String("model", "", "triage model")
-	effort := fs.String("effort", "", "reasoning effort (none, low, medium, high, max, or empty)")
-	thinking := fs.String("thinking", "", "thinking mode (enabled, disabled, or empty)")
-	keyFile := fs.String("key-file", "", "existing private triage key file")
-	secretFile := fs.String("secret-file", "", "private triage key destination")
-	keyStdin := fs.Bool("key-stdin", false, "read the private triage key from stdin")
-	disable := fs.Bool("disable", false, "disable triage without deleting other values")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return errors.New("unexpected arguments")
-	}
-	if *base == "" {
-		*base = *legacyURL
-	}
-	if *keyFile != "" && *secretFile != "" {
-		return errors.New("use only one of --key-file and --secret-file")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	d, err := ops.DiscoverDeployment(ctx, opsManager(), *root)
-	if err != nil {
-		return err
-	}
-	cfg, err := d.TriageConfig()
-	if err != nil {
-		return err
-	}
-	if *base != "" {
-		cfg.BaseURL = *base
-	}
-	if *model != "" {
-		cfg.Model = *model
-	}
-	if hasFlag(args, "--effort") {
-		cfg.ReasoningEffort = *effort
-	}
-	if hasFlag(args, "--thinking") {
-		cfg.Thinking = *thinking
-		if cfg.Thinking != "" && cfg.Thinking != "enabled" && cfg.Thinking != "disabled" {
-			return errors.New("triage thinking must be enabled, disabled, or empty")
-		}
-	}
-	if *keyFile != "" {
-		cfg.SecretPath = *keyFile
-	}
-	if *secretFile != "" {
-		cfg.SecretPath = *secretFile
-	}
-	if cfg.SecretPath == "" {
-		cfg.SecretPath = filepath.Join(*root, "secrets", "triage-api-key")
-	}
-	if *disable {
-		if err := ops.WriteTriageEnvAtomic(d.StackEnv, cfg, true); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, "Triage model disabled.")
-		fmt.Fprintln(out, "Apply with: zoe update")
-		return nil
-	}
-	if err := ops.ValidateTriageBaseURL(cfg.BaseURL, ""); err != nil {
-		return err
-	}
-	if strings.TrimSpace(cfg.Model) == "" {
-		return errors.New("triage model is required")
-	}
-	if err := ops.ValidateReasoningEffort(cfg.ReasoningEffort); err != nil {
-		return err
-	}
-	if *keyStdin {
-		secret, readErr := io.ReadAll(in)
-		if readErr != nil {
-			return errors.New("cannot read key from stdin")
-		}
-		defer func() {
-			for i := range secret {
-				secret[i] = 0
-			}
-		}()
-		if err := ops.WriteTriageSecretAtomic(cfg.SecretPath, secret); err != nil {
-			return err
-		}
-	} else {
-		if err := ops.ValidateKeyFile(cfg.SecretPath); err != nil {
-			return err
-		}
-	}
-	if err := ops.WriteTriageEnvAtomic(d.StackEnv, cfg, false); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "Triage model configured: model=%s base-url-host=%s key-file-present=yes\n", safeLabel(cfg.Model), safeHost(cfg.BaseURL))
-	fmt.Fprintln(out, "Apply with: zoe update")
-	return nil
-}
-
-func triageTestOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
-	fs := flag.NewFlagSet("triage test", flag.ContinueOnError)
-	fs.SetOutput(errOut)
-	root := fs.String("root", "/etc/zoe", "deployment configuration root")
-	text := fs.String("text", "好了吗", "spoken sentence to classify")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return errors.New("unexpected arguments")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	d, err := ops.DiscoverDeployment(ctx, opsManager(), *root)
-	if err != nil {
-		return err
-	}
-	cfg, err := d.TriageConfig()
-	if err != nil {
-		return err
-	}
-	r, testErr := ops.TestTriage(ctx, cfg, nil, *text)
-	class := "FAIL"
-	if testErr == nil {
-		class = "PASS"
-	}
-	fmt.Fprintf(out, "%s style=%s HTTP %dxx latency=%dms category=%s\n", class, safeLabel(r.Style), r.HTTPStatus/100, r.Latency.Milliseconds(), safeLabel(r.Category))
-	if testErr != nil {
-		fmt.Fprintln(errOut, safeLabel(testErr.Error()))
-	}
-	return testErr
-}
-
 func safeHost(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -1040,13 +903,6 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	inspect.MemoryBaseURL = memory.BaseURL
 	inspect.MemoryModel = memory.Model
 	inspect.MemoryReasoningEffort = memory.ReasoningEffort
-	triage, triageErr := d.TriageConfig()
-	if triageErr != nil {
-		return triageErr
-	}
-	inspect.TriageBaseURL = triage.BaseURL
-	inspect.TriageModel = triage.Model
-	inspect.TriageSecretPath = triage.SecretPath
 	status := opsManager().Inspect(ctx, inspect)
 	summary, err := d.SummaryConfig()
 	if err != nil {
@@ -1056,7 +912,7 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	for _, warning := range ops.ModelKeyWarnings(triage, ops.TriageConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, ops.TriageConfig{BaseURL: summary.BaseURL, SecretPath: summary.SecretPath}, ops.TriageConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath}) {
+	for _, warning := range ops.ModelKeyWarnings(ops.ModelConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, ops.ModelConfig{BaseURL: summary.BaseURL, SecretPath: summary.SecretPath}, ops.ModelConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath}) {
 		fmt.Fprintln(out, warning)
 	}
 	fmt.Fprintf(out, "Deployment: %s\n", status.Mode)
@@ -1083,22 +939,16 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 		memoryHost = u.Hostname()
 	}
 	fmt.Fprintf(out, "Memory: host=%s model=%s effort=%s secret-file=%s mode-0600=%t last-check=%s\n", safeLabel(memoryHost), safeLabel(status.Memory.Model), safeLabel(status.Memory.ReasoningEffort), safeLabel(status.Memory.Secret.Path), status.Memory.Secret.Exists && status.Memory.Secret.Mode == "0600", safeLabel(status.Memory.LastCheck))
-	triageHost := safeHost(inspect.TriageBaseURL)
-	triagePresent := false
-	if inspect.TriageSecretPath != "" {
-		if info, statErr := os.Stat(inspect.TriageSecretPath); statErr == nil && info.Mode().IsRegular() {
-			triagePresent = true
+	for _, kind := range []string{"Register", "Compact", "Steward"} {
+		c, err := d.MenuModelConfig(kind)
+		if err != nil {
+			return err
 		}
+		for _, warning := range ops.ModelKeyWarnings(c) {
+			fmt.Fprintln(out, warning)
+		}
+		fmt.Fprintf(out, "%s: host=%s model=%s effort=%s thinking=%s\n", kind, safeLabel(safeHost(c.BaseURL)), safeLabel(c.Model), safeLabel(c.ReasoningEffort), safeLabel(c.Thinking))
 	}
-	triageState := "disabled"
-	if inspect.TriageBaseURL != "" {
-		triageState = "enabled"
-	}
-	style := triage.APIStyle
-	if style == "" {
-		style = "auto"
-	}
-	fmt.Fprintf(out, "Triage: %s style=%s host=%s model=%s effort=%s thinking=%s key-file-present=%t\n", triageState, safeLabel(style), safeLabel(triageHost), safeLabel(inspect.TriageModel), safeLabel(triage.ReasoningEffort), safeLabel(triage.Thinking), triagePresent)
 	if err := printRecallStatus(d, out); err != nil {
 		return err
 	}
