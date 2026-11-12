@@ -351,7 +351,7 @@ func handoffHTTPServerWithConfig(t *testing.T, voiceCfg Config) (*httptest.Serve
 			_ = json.NewEncoder(w).Encode(map[string]string{"output_text": string(out)})
 		}))
 		t.Cleanup(model.Close)
-		voiceCfg.RegisterConfig = &RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000}
+		voiceCfg.RegisterConfig = &RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000}
 		if voiceCfg.Steward == nil {
 			voiceCfg.Steward = &fakeSteward{}
 		}

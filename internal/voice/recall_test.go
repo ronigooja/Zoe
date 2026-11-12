@@ -75,7 +75,7 @@ func TestRecallRoute(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"route":"recall","restatement":""}`})
 			}))
 			defer router.Close()
-			cfg := Config{RegisterConfig: &RegisterConfig{Model: RegisterModelConfig{BaseURL: router.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000}, GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), Now: func() time.Time { return now }, Answerer: model, RecallTimeout: 100 * time.Millisecond}
+			cfg := Config{RegisterConfig: &RegisterConfig{Model: RegisterModelConfig{BaseURL: router.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: router.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000}, GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), Now: func() time.Time { return now }, Answerer: model, RecallTimeout: 100 * time.Millisecond}
 			if mode == "unconfigured" {
 				cfg.Answerer = nil
 			}
