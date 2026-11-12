@@ -32,6 +32,11 @@ services:
       ZOE_MEMORY_RUNNER_ID: ${ZOE_MEMORY_RUNNER_ID:-memory-worker}
       ZOE_MEMORY_RUNNER_WORKSPACES: ${ZOE_MEMORY_RUNNER_WORKSPACES:-default}
       ZOE_MEMORY_RUNNER_SCOPES: memory:jobs:claim,memory:jobs:complete,memory:propose
+      ZOE_MEMORY_BATCH_INTERVAL_HOURS: ${ZOE_MEMORY_BATCH_INTERVAL_HOURS:-24}
+      ZOE_MEM0_LLM_BASE_URL: ${ZOE_MEM0_LLM_BASE_URL:?set the existing external model gateway URL}
+      ZOE_MEM0_LLM_MODEL: ${ZOE_MEM0_LLM_MODEL:?set a deployment-selected memory model}
+      ZOE_MEM0_LLM_REASONING_EFFORT: ${ZOE_MEM0_LLM_REASONING_EFFORT:-}
+      ZOE_MEM0_LLM_API_KEY_FILE: /run/secrets/mem0_llm_api_key
       ZOE_VOICE_GATEWAY_URL: ${ZOE_VOICE_GATEWAY_URL:-}
       ZOE_VOICE_UPSTREAM_ROUTE: ${ZOE_VOICE_UPSTREAM_ROUTE:-avas}
       ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS: ${ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS:-35000}
@@ -80,6 +85,8 @@ services:
         target: runner_token
       - source: memory_runner_token
         target: memory_runner_token
+      - source: mem0_llm_api_key
+        target: mem0_llm_api_key
       - source: voice_gateway_api_key
         target: voice_gateway_api_key
       - source: voice_ingest_token

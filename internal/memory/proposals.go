@@ -41,6 +41,22 @@ func (r *Repository) CreateProposal(ctx context.Context, runner contracts.Runner
 		return Proposal{}, err
 	}
 	defer tx.Rollback()
+	proposal, err := r.createProposalTx(ctx, tx, req)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Proposal{}, err
+	}
+	return proposal, nil
+}
+
+// createProposalTx applies the existing source, baseline and review contract
+// when a repository-owned batch needs one atomic write for several proposals.
+func (r *Repository) createProposalTx(ctx context.Context, tx *sql.Tx, req runnerProposalRequest) (Proposal, error) {
+	if err := req.validate(); err != nil {
+		return Proposal{}, err
+	}
 	if err := r.replayPendingDeletionsTx(ctx, tx); err != nil {
 		return Proposal{}, err
 	}
@@ -87,9 +103,6 @@ func (r *Repository) CreateProposal(ctx context.Context, runner contracts.Runner
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO memory_proposals(id,workspace_id,version,source_id,source_version,extractor_version,proposed_scope_kind,proposed_scope_id,proposed_principal_id,subject,claim_key,content,status,baseline_claim_id,baseline_revision,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, proposal.ID, proposal.WorkspaceID, proposal.Version, proposal.SourceID, proposal.SourceVersion, proposal.ExtractorVersion, proposal.Scope.Kind, proposal.Scope.ID, proposal.Scope.PrincipalID, proposal.Subject, proposal.Key, proposal.Content, proposal.Status, nullString(proposal.BaselineClaimID), nullInt64(proposal.BaselineRevision), proposal.CreatedAt.Format(time.RFC3339Nano))
 	if err != nil {
-		return Proposal{}, err
-	}
-	if err := tx.Commit(); err != nil {
 		return Proposal{}, err
 	}
 	return proposal, nil

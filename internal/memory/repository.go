@@ -133,9 +133,8 @@ func (r *Repository) RecordVoiceOutcome(ctx context.Context, p contracts.Princip
 	if err := insertSourceTx(ctx, tx, p.WorkspaceID, source); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO memory_jobs(id,workspace_id,kind,entity_id,entity_version,target,payload,status,available_at,created_at,updated_at) VALUES(?,?, 'extract',?,?,?,?,'pending',?,?,?)`, uuid.NewString(), p.WorkspaceID, source.ID, 1, "voice_call_outcome", []byte(summary+"\nOutcome: "+outcome), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
-		return err
-	}
+	// Transcript and completed-task evidence is consumed by the owner batch;
+	// an outcome paraphrase must not trigger per-job extraction.
 	return tx.Commit()
 }
 
@@ -868,6 +867,16 @@ func sourceStillAvailable(ctx context.Context, q querySource, workspace string, 
 	switch source.Kind {
 	case "user_note":
 		return true, nil
+	case "memory_batch":
+		var input []byte
+		err := q.QueryRowContext(ctx, `SELECT input FROM memory_batch_inputs WHERE workspace_id=? AND source_id=? AND source_version=?`, workspace, source.ID, source.Version).Scan(&input)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return hashBytes(input) == source.ContentHash, nil
 	case "task_entry":
 		id := strings.TrimPrefix(source.Reference, "task_entry:")
 		err := q.QueryRowContext(ctx, `SELECT content FROM task_entries WHERE id=? AND workspace_id=?`, id, workspace).Scan(&current)

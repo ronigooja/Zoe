@@ -312,7 +312,7 @@ func (s *derivedService) claim(ctx context.Context, p contracts.RunnerPrincipal,
 			break
 		}
 		rows, err := tx.QueryContext(ctx, `SELECT id,workspace_id,kind,entity_id,entity_version,target,payload,attempts FROM memory_jobs
-WHERE workspace_id=? AND attempts<? AND ((status IN ('pending','retry') AND available_at<=?) OR (status='leased' AND lease_until<=?))
+WHERE workspace_id=? AND NOT(kind='extract' AND target='voice_call_outcome') AND attempts<? AND ((status IN ('pending','retry') AND available_at<=?) OR (status='leased' AND lease_until<=?))
 ORDER BY available_at,created_at,id LIMIT ?`, workspace, s.cfg.MaxAttempts, nowText, nowText, limit-len(jobs))
 		if err != nil {
 			return nil, err
