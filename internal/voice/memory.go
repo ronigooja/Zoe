@@ -47,10 +47,10 @@ func (s *Service) memoryAnswer(ctx context.Context, workspace, owner, question s
 		}
 		return fail(n, "model_error")
 	}
-	if r.Status == "not_found" && r.Text == "" && len(r.SummaryIDs) == 0 {
+	if r.Status == "not_found" && r.Text == "" {
 		return fail(n, "not_found")
 	}
-	if r.Status != "answer" || strings.TrimSpace(r.Text) == "" || len(r.SummaryIDs) != 0 || strings.ContainsAny(r.Text, "*#`[]<>_~|") {
+	if r.Status != "answer" || strings.TrimSpace(r.Text) == "" || strings.ContainsAny(r.Text, "*#`[]<>_~|") {
 		return fail(n, "invalid_answer")
 	}
 	return "保存的笔记里记着：" + boundedResultText(r.Text), n, "answer"

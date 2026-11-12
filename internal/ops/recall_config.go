@@ -12,21 +12,19 @@ import (
 
 	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/modelclient"
-	"github.com/ronigooja/Zoe/internal/summarize"
 )
 
-const DefaultSummarySecretPath = "/etc/zoe/secrets/summary-api-key"
 const DefaultAnswerSecretPath = "/etc/zoe/secrets/answer-api-key"
 
-// RecallModelConfig applies to independently configured summary and answer endpoints.
+// RecallModelConfig applies to the answer endpoint.
 type RecallModelConfig struct {
 	BaseURL, Model, ReasoningEffort, Thinking, SecretPath string
 	TimeoutMS                                             int
 }
 
 func recallPrefix(kind string) (string, error) {
-	if kind != "summary" && kind != "answer" {
-		return "", errors.New("model kind must be summary or answer")
+	if kind != "answer" {
+		return "", errors.New("model kind must be answer")
 	}
 	return "ZOE_" + strings.ToUpper(kind), nil
 }
@@ -47,11 +45,7 @@ func (c RecallModelConfig) Normalized(kind string) (RecallModelConfig, error) {
 		}
 		return strconv.Itoa(c.TimeoutMS)
 	}
-	if kind == "summary" {
-		_, err = modelclient.Timeout(prefix, get, 120000, 5000, 600000)
-	} else {
-		_, err = modelclient.Timeout(prefix, get, 8000, 500, 30000)
-	}
+	_, err = modelclient.Timeout(prefix, get, 8000, 500, 30000)
 	return c, err
 }
 
@@ -84,8 +78,7 @@ func (d Deployment) RecallModelConfig(kind string) (RecallModelConfig, error) {
 	return c, nil
 }
 
-func (d Deployment) SummaryConfig() (RecallModelConfig, error) { return d.RecallModelConfig("summary") }
-func (d Deployment) AnswerConfig() (RecallModelConfig, error)  { return d.RecallModelConfig("answer") }
+func (d Deployment) AnswerConfig() (RecallModelConfig, error) { return d.RecallModelConfig("answer") }
 
 // SaveRecallModel applies one model change under the deployment lock and restores
 // both files if persistence fails. It never changes another model credential.
@@ -100,15 +93,7 @@ func SaveRecallModel(ctx context.Context, d Deployment, kind string, c RecallMod
 		return err
 	}
 	defer unlock()
-	otherKind := "summary"
-	if kind == "summary" {
-		otherKind = "answer"
-	}
-	other, err := d.RecallModelConfig(otherKind)
-	if err != nil {
-		return err
-	}
-	if filepath.Clean(other.SecretPath) == filepath.Clean(c.SecretPath) || filepath.Clean(d.StackEnv) == filepath.Clean(c.SecretPath) {
+	if filepath.Clean(d.StackEnv) == filepath.Clean(c.SecretPath) {
 		return errors.New("recall model secret paths must be independent")
 	}
 	env, err := snapshot(d.StackEnv)
@@ -208,18 +193,7 @@ func TestRecallModel(ctx context.Context, kind string, c RecallModelConfig, clie
 	get := func(key string) string { return values[key] }
 	start := time.Now()
 	result := RecallProbeResult{}
-	if kind == "summary" {
-		impl, e := summarize.FromEnv(get, os.ReadFile)
-		if e != nil {
-			return result, e
-		}
-		if impl == nil {
-			return result, errors.New("summary model is disabled")
-		}
-		impl.SetHTTPClient(client)
-		_, err = impl.Summarize(ctx, []summarize.Turn{{Seq: 1, Role: "user", Text: "The project meeting is on Monday."}, {Seq: 2, Role: "assistant", Text: "The project meeting is scheduled for Monday."}})
-		result.Style = impl.Style()
-	} else {
+	{
 		impl, e := answer.FromEnv(get, os.ReadFile)
 		if e != nil {
 			return result, e
@@ -228,7 +202,7 @@ func TestRecallModel(ctx context.Context, kind string, c RecallModelConfig, clie
 			return result, errors.New("answer model is disabled")
 		}
 		impl.SetHTTPClient(client)
-		_, err = impl.Answer(ctx, "When is the project meeting?", []answer.Candidate{{ID: "fixture-1", Topic: "Project meeting", StartTime: "2026-01-01T10:00:00Z", EndTime: "2026-01-01T10:01:00Z", Summary: "The project meeting is on Monday."}}, nil)
+		_, err = impl.Answer(ctx, "When is the project meeting?", nil, "The project meeting is on Monday.")
 		result.Style = impl.Style()
 	}
 	result.Latency = time.Since(start)

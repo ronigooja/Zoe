@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -16,6 +17,9 @@ func recallRecoveryFixture(t *testing.T, cfg Config, count int) (*storage.Store,
 	_, store, _ := handoffHTTPServerWithConfig(t, Config{})
 	if cfg.Now == nil {
 		cfg.Now = func() time.Time { return time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC) }
+	}
+	cfg.ContextAssembler = func(context.Context, contracts.Principal, string, string, string, int) (contracts.MemoryContext, error) {
+		return contracts.MemoryContext{Items: []contracts.MemoryContextItem{{Content: "garden"}}}, nil
 	}
 	svc := newService(store.DB(), cfg)
 	t.Cleanup(svc.Stop)
@@ -30,10 +34,6 @@ func recallRecoveryFixture(t *testing.T, cfg Config, count int) (*storage.Store,
 		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	_, err := store.DB().Exec(`INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,ended_at,first_seq,last_seq,summary,created_at) VALUES('summary','default','handoff-session','topic',?,?,1,1,'garden',?)`, at, at, at)
-	if err != nil {
-		t.Fatal(err)
 	}
 	return store, svc
 }
@@ -62,7 +62,7 @@ func TestRecallRecoveryRestartAndLease(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := recallSpeech(recallUnavailable, nil)
+			want := recallSpeech(recallUnavailable)
 			if mode == "existing_answer" {
 				want = "对话记录里记着：We discussed the garden."
 				_, err = store.DB().Exec(`INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('job-0','default','handoff-session',1,'recall-answer:job-0',?,'recall_answer','pending',?,?,?)`, want, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
@@ -96,7 +96,7 @@ func TestRecallRecoveryRestartAndLease(t *testing.T) {
 
 func TestRecallPersistenceRetriesThenFallback(t *testing.T) {
 	var calls atomic.Int32
-	model := recallModelFunc(func(context.Context, string, []answer.Candidate, []answer.Excerpt) (answer.Result, error) {
+	model := recallModelFunc(func(context.Context, string, []contracts.MemoryContextItem, string) (answer.Result, error) {
 		calls.Add(1)
 		return answer.Result{Status: "answer", Text: "We discussed the garden."}, nil
 	})
@@ -120,7 +120,7 @@ func TestRecallPersistenceRetriesThenFallback(t *testing.T) {
 	}
 	var text string
 	_ = store.DB().QueryRow(`SELECT text FROM voice_fast_replies WHERE id='job-0'`).Scan(&text)
-	if text != recallSpeech(recallUnavailable, nil) || calls.Load() != 1 {
+	if text != recallSpeech(recallUnavailable) || calls.Load() != 1 {
 		t.Fatalf("fallback text=%q model calls=%d", text, calls.Load())
 	}
 }
@@ -130,7 +130,7 @@ func TestRecallWorkersBoundedAndStopJoins(t *testing.T) {
 	entered := make(chan struct{}, 12)
 	release := make(chan struct{})
 	defer close(release)
-	model := recallModelFunc(func(ctx context.Context, _ string, _ []answer.Candidate, _ []answer.Excerpt) (answer.Result, error) {
+	model := recallModelFunc(func(ctx context.Context, _ string, _ []contracts.MemoryContextItem, _ string) (answer.Result, error) {
 		n := active.Add(1)
 		defer active.Add(-1)
 		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
@@ -173,5 +173,29 @@ func TestRecallWorkersBoundedAndStopJoins(t *testing.T) {
 	_ = store.DB().QueryRow(`SELECT count(*) FROM voice_recall_jobs WHERE status='pending'`).Scan(&pending)
 	if done != 0 || pending != 8 {
 		t.Fatalf("shutdown finalized work: done=%d pending=%d", done, pending)
+	}
+}
+
+func TestRecallReplayDoesNotRepeatModelOrAnswer(t *testing.T) {
+	var calls atomic.Int32
+	model := recallModelFunc(func(context.Context, string, []contracts.MemoryContextItem, string) (answer.Result, error) {
+		calls.Add(1)
+		return answer.Result{Status: "answer", Text: "我们聊过花园。"}, nil
+	})
+	store, svc := recallRecoveryFixture(t, Config{Answerer: model}, 1)
+	svc.dispatchRecall(context.Background())
+	waitRecall(t, func() bool {
+		var state string
+		_ = store.DB().QueryRow(`SELECT status FROM voice_recall_jobs WHERE id='job-0'`).Scan(&state)
+		return state == "done"
+	})
+	svc.dispatchRecall(context.Background())
+	svc.recoverRecall(context.Background(), true)
+	var replies int
+	if err := store.DB().QueryRow(`SELECT count(*) FROM voice_fast_replies WHERE intent_kind='recall_answer'`).Scan(&replies); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || replies != 1 {
+		t.Fatalf("model calls=%d replies=%d", calls.Load(), replies)
 	}
 }

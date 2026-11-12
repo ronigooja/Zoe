@@ -59,7 +59,6 @@ type exportCounter struct {
 	VoiceLinks       int64 `json:"voice_associations"`
 	VoiceResults     int64 `json:"voice_result_deliveries"`
 	VoiceTranscripts int64 `json:"voice_transcript_turns"`
-	VoiceSummaries   int64 `json:"voice_call_summaries"`
 	Capabilities     int64 `json:"capability_authorizations"`
 }
 
@@ -414,7 +413,7 @@ func buildExportManifest(id string, p contracts.Principal, scope string, cursor 
 			"export_audit_event_cursor": strconv.FormatInt(cursor+1, 10), "export_audit_event_id": id,
 			"export_audit_event_type": "data.export.prepared", "source": "sqlite_authority",
 		},
-		"content":     map[string]any{"inventory": []string{"projects", "tasks", "task_dependencies", "task_entries", "approvals", "runs", "evidence", "memory_claims", "memory_revisions", "memory_sources", "voice_associations", "voice_result_deliveries", "voice_transcript_turns", "voice_call_summaries", "capability_authorizations"}, "counts": counts},
+		"content":     map[string]any{"inventory": []string{"projects", "tasks", "task_dependencies", "task_entries", "approvals", "runs", "evidence", "memory_claims", "memory_revisions", "memory_sources", "voice_associations", "voice_result_deliveries", "voice_transcript_turns", "capability_authorizations"}, "counts": counts},
 		"permissions": map[string]any{"scope": scope, "row_visibility": "principal_authorized", "secret_values": "excluded"},
 		"artifacts":   map[string]any{"bytes": "referenced_not_included", "voice_audio_bytes": "omitted"},
 		"derived":     map[string]any{"mem0": "not_included_rebuildable", "qdrant": "not_included_rebuildable", "cache": "not_included"},

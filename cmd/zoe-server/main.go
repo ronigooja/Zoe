@@ -25,7 +25,6 @@ import (
 	"github.com/ronigooja/Zoe/internal/memory"
 	"github.com/ronigooja/Zoe/internal/modelclient"
 	"github.com/ronigooja/Zoe/internal/storage"
-	"github.com/ronigooja/Zoe/internal/summarize"
 	"github.com/ronigooja/Zoe/internal/voice"
 )
 
@@ -107,18 +106,6 @@ func run() error {
 		MaxRuns:            maxRuns,
 		WaitLimit:          waitLimit,
 	}
-	summaryClient, err := summarize.FromEnv(os.Getenv, os.ReadFile)
-	if err != nil {
-		return fmt.Errorf("summary configuration: %w", err)
-	}
-	var summarizer voice.Summarizer
-	if summaryClient != nil {
-		summarizer = summaryClient
-	}
-	summarySettle, err := voice.SummarySettleDelay(os.Getenv("ZOE_SUMMARY_SETTLE_SECONDS"))
-	if err != nil {
-		return err
-	}
 	stewardClient, err := steward.FromEnv(os.Getenv, os.ReadFile)
 	if err != nil {
 		log.Fatalf("steward configuration: %v", err)
@@ -143,14 +130,7 @@ func run() error {
 	if answerClient != nil {
 		answerer = answerClient
 	}
-	recallLimit := 20
-	if raw := strings.TrimSpace(os.Getenv("ZOE_RECALL_SUMMARY_LIMIT")); raw != "" {
-		recallLimit, err = strconv.Atoi(raw)
-		if err != nil || recallLimit < 1 || recallLimit > 100 {
-			return errors.New("ZOE_RECALL_SUMMARY_LIMIT must be between 1 and 100")
-		}
-	}
-	server, err := composeControlServer(store, cfg, voice.Config{InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, Summarizer: summarizer, SummarySettleDelay: &summarySettle, Answerer: answerer, RecallTimeout: answerTimeout, RecallSummaryLimit: recallLimit, RecallHoldingText: os.Getenv("ZOE_RECALL_HOLDING_TEXT"), GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	server, err := composeControlServer(store, cfg, voice.Config{InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, Answerer: answerer, RecallTimeout: answerTimeout, RecallHoldingText: os.Getenv("ZOE_RECALL_HOLDING_TEXT"), GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	}, memory.DerivedConfig{BackupDeleteManifestPath: strings.TrimSpace(os.Getenv("ZOE_BACKUP_DELETE_MANIFEST_PATH"))})

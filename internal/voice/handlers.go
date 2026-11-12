@@ -455,7 +455,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	{
 		if stewardAction == string(steward.ActionReport) {
 			var reply string
-			if err := tx.QueryRowContext(ctx, `SELECT pending_question FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&reply); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT report_text FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&reply); err != nil {
 				return contracts.CommandResult{}, nil, err
 			}
 			reply = strings.TrimSpace(reply)
@@ -652,7 +652,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 	}
 	writeCtx, stop := context.WithTimeout(context.Background(), time.Second)
 	defer stop()
-	_, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_decision=?,steward_action=?,steward_task_id=?,pending_question=? WHERE id=? AND triage_category IS NULL`, route.Route, decision, string(choice.Action), taskID, choice.Reply, id)
+	_, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_decision=?,steward_action=?,steward_task_id=?,report_text=? WHERE id=? AND triage_category IS NULL`, route.Route, decision, string(choice.Action), taskID, choice.Reply, id)
 	log.Printf("voice_routing id=%s failed=%t storage_error=%t", id, err != nil, writeErr != nil)
 }
 

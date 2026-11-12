@@ -385,7 +385,7 @@ func TestRegisterMigration219PreservesOldRowsAndReplays(t *testing.T) {
 CREATE TABLE voice_register_memory_boundaries(workspace_id TEXT,owner_subject_id TEXT,boundary_at TEXT);
 INSERT INTO voice_register_memory_boundaries VALUES('default','owner','2026-11-12T09:00:00Z');
 INSERT INTO voice_context_registers(workspace_id,owner_subject_id,compact,version) VALUES('default','owner','keep compact',7);
-DELETE FROM schema_migrations WHERE namespace='voice' AND version=219`)
+DELETE FROM schema_migrations WHERE namespace='voice' AND version>=219`)
 	if err := f.store.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}

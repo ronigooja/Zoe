@@ -904,15 +904,11 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	inspect.MemoryModel = memory.Model
 	inspect.MemoryReasoningEffort = memory.ReasoningEffort
 	status := opsManager().Inspect(ctx, inspect)
-	summary, err := d.SummaryConfig()
-	if err != nil {
-		return err
-	}
 	answer, err := d.AnswerConfig()
 	if err != nil {
 		return err
 	}
-	for _, warning := range ops.ModelKeyWarnings(ops.ModelConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, ops.ModelConfig{BaseURL: summary.BaseURL, SecretPath: summary.SecretPath}, ops.ModelConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath}) {
+	for _, warning := range ops.ModelKeyWarnings(ops.ModelConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, ops.ModelConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath}) {
 		fmt.Fprintln(out, warning)
 	}
 	fmt.Fprintf(out, "Deployment: %s\n", status.Mode)

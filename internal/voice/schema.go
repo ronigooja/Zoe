@@ -313,7 +313,7 @@ PRIMARY KEY(workspace_id,owner_subject_id));`)
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 219, Name: "voice_register_memory_provenance", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 219, Name: "voice_register_memory_provenance", Up: func(ctx context.Context, tx *sql.Tx) error {
 		// Upgrade fixtures can replay this migration while retaining the register.
 		rows, err := tx.QueryContext(ctx, `PRAGMA table_info(voice_context_registers)`)
 		if err != nil {
@@ -341,6 +341,41 @@ PRIMARY KEY(workspace_id,owner_subject_id));`)
 			}
 		}
 		_, err = tx.ExecContext(ctx, `DROP TABLE IF EXISTS voice_register_memory_boundaries`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 220, Name: "voice_remove_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS voice_summary_enqueue;
+DROP TRIGGER IF EXISTS voice_summary_late_turn;
+DROP TABLE IF EXISTS voice_summary_jobs;
+DROP TABLE IF EXISTS voice_call_summaries;`); err != nil {
+			return err
+		}
+		// Upgrade fixtures replay migrations while retaining existing voice turns.
+		rows, err := tx.QueryContext(ctx, `PRAGMA table_info(voice_turns)`)
+		if err != nil {
+			return err
+		}
+		found := false
+		for rows.Next() {
+			var cid, notnull, pk int
+			var name, kind string
+			var value sql.NullString
+			if err := rows.Scan(&cid, &name, &kind, &notnull, &value, &pk); err != nil {
+				rows.Close()
+				return err
+			}
+			found = found || name == "report_text"
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if !found {
+			_, err = tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN report_text TEXT NOT NULL DEFAULT ''`)
+		}
 		return err
 	}})
 }

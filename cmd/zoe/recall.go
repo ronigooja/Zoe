@@ -15,7 +15,7 @@ import (
 )
 
 func init() {
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		_ = RegisterOperation(kind+" configure", func(args []string, in io.Reader, out, errOut io.Writer) error {
 			return recallConfigureOperation(kind, args, in, out, errOut)
 		})
@@ -218,7 +218,7 @@ func menuRecallModel(m ConfigureMenuIO, kind string) error {
 }
 
 func printRecallStatus(d ops.Deployment, out io.Writer) error {
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		c, err := d.RecallModelConfig(kind)
 		if err != nil {
 			return err
@@ -233,11 +233,7 @@ func printRecallStatus(d ops.Deployment, out io.Writer) error {
 		}
 		timeout := c.TimeoutMS
 		if timeout == 0 {
-			if kind == "summary" {
-				timeout = 120000
-			} else {
-				timeout = 8000
-			}
+			timeout = 8000
 		}
 		fmt.Fprintf(out, "%s: %s style=auto host=%s model=%s effort=%s thinking=%s timeout-ms=%d key-file-present=%t\n", strings.ToUpper(kind[:1])+kind[1:], state, safeHost(c.BaseURL), safeLabel(c.Model), safeLabel(c.ReasoningEffort), safeLabel(c.Thinking), timeout, present)
 	}
