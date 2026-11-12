@@ -4,7 +4,7 @@ This runbook describes the local Linux installation and the macOS client on
 `zhuwei@macair`. For the distinction between documentation and acceptance, see
 the [evidence register](../acceptance/evidence.md).
 
-When operating voice routing, the instructions, triage, held-task controls and fallback paths below describe deployed `bb07671`, not the replacement target. [ADR 0013](../architecture/decisions/0013-context-register.md) is **Accepted, not implemented** and is the single source for the superseding decisions; do not apply them as deployment instructions.
+When operating voice routing, use the register configuration below and [ADR 0013](../architecture/decisions/0013-context-register.md) for main. Historical triage, alias-roster Steward, held-task controls and fallback descriptions are **deployed on `bb07671`, removed on main**; never apply those historical commands or env keys to a new installation. Replacement deployment and live acceptance remain unverified.
 
 For client error investigation, authenticated diagnostic uploads, bounded
 SQLite inspection, and voice pool isolation checks, see the
@@ -82,7 +82,7 @@ deployment baseline, not the register configuration.
 
 ### Historical live-call held-task controls
 
-When deploying spoken task controls, apply voice migration 216 at normal server
+Historical only (deployed on `bb07671`, removed on main). Do not configure these controls on main. At that checkpoint, apply voice migration 216 at normal server
 startup. `ZOE_VOICE_CONFIRMATION_WINDOW_SECONDS` bounds same-call held questions
 (default 600; valid range 1-3600). Configure the existing stateless triage model;
 without a classifier, speech does not authorize a held request. `zoe triage test`
@@ -121,7 +121,7 @@ The following precedence applies to stack discovery (highest first).
 Discovery self-heals the resolved descriptor without writing during inspection;
 the next successful provider configuration persists the corrected descriptor.
 Systemd unit status and runner/provider restarts always use systemctl, including
-on Compose hosts. Memory configuration uses Compose; triage and recall save
+on Compose hosts. Memory configuration uses Compose; Steward and recall save
 their model settings in the stack environment without a mode gate.
 
 The installer creates the external Docker network `zoe` when it is missing. The
@@ -243,8 +243,12 @@ After the stack starts, steps 1 and 2 may be done in either order; step 3 comes 
    installation and process readiness; model execution, memory processing, and
 end-to-end task completion require a separate acceptance run.
 
+### Historical triage configuration (removed on main)
+
+When consulting the following historical setup and wire table, remember that triage and alias-roster Steward were deployed on `bb07671`, removed on main by ADR 0013. No `ZOE_TRIAGE_*` variable is consumed, and no triage command or model exists on main. Steward's operator probe now invokes `Choose`. The retained `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS` (35000 ms default, range 100-60000) bounds register plus Steward routing and the handoff wait; Steward retains 30000 ms default and range 200-60000. Historical instructions follow for evidence only:
+
 Use `zoe` with no arguments for the numbered operator menu, or configure endpoints directly with
-`zoe memory configure` and `zoe triage configure`. Triage accepts an HTTPS (or local HTTP) base URL; it first tries `/responses` and falls back to `/chat/completions` when that route is unavailable.
+`zoe memory configure` and the former `zoe triage configure`. Triage accepted an HTTPS (or local HTTP) base URL and tried `/responses` before `/chat/completions` when unavailable.
 Use `--key-stdin` to install a mode-0600 key without placing it in shell history.
 Triage is disabled when `ZOE_TRIAGE_BASE_URL` is empty. Apply a saved change with `zoe update`.
 

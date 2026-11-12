@@ -2,7 +2,7 @@
 
 Status: direction proposed; routing and bounded recall decisions recorded 2026-11-06. Progress and recall have component implementations; real voice acceptance remains open. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
 
-Status note (2026-11-12): routing/context, impact and held-confirmation policy, opening instructions, Steward references/actions, progress, reply language and memory cadence are **superseded-by-0013 (target)**, [Accepted, not implemented](0013-context-register.md). The descriptions below retain the deployed `bb07671` baseline, not implementation claims for 0013. Recall evidence and transport boundaries remain unless explicitly replaced; held-task controls are deployed history, not the target.
+Status note (2026-11-12): when reading routing/context, impact and held-confirmation policy, opening instructions, Steward references/actions, progress, reply language and memory cadence below, treat them as historical: **deployed on `bb07671`, removed on main** by [ADR 0013](0013-context-register.md). Main uses the register and alias-free `Choose`; triage, `Assign`, `Decide`, fixed progress sentences and confirmation routing are removed. Historical sections and links preserve evidence, not current setup instructions. Recall evidence and transport boundaries remain unless explicitly replaced. No replacement deployment or live acceptance is claimed.
 
 ## Context
 

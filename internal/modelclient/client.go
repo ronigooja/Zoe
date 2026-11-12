@@ -97,6 +97,18 @@ func (c *Client) Style() string {
 	}
 	return c.style
 }
+
+// SetStyle applies when an adapter exposes an explicit endpoint-style setting.
+// An empty style retains automatic Responses/Chat Completions negotiation.
+func (c *Client) SetStyle(style string) error {
+	if style != "" && style != "responses" && style != "chat" {
+		return errors.New("API style must be responses or chat")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.style = style
+	return nil
+}
 func (c *Client) SetHTTPClient(client *http.Client) {
 	if c != nil && client != nil {
 		c.http = client

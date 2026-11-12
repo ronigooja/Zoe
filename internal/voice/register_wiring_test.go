@@ -196,7 +196,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 				if r.ResourceType != "voice_turn" || r.ResourceID != "current" || r.ResourceVersion != 1 {
 					t.Fatalf("chat result=%+v", r)
 				}
-				if count(`SELECT count(*) FROM voice_turns WHERE turn_id='current' AND triage_category='chat' AND steward_decision='dispatch' AND steward_action='' AND handoff_handled=1`) != 1 {
+				if count(`SELECT count(*) FROM voice_turns WHERE turn_id='current' AND triage_category='chat' AND steward_decision='' AND steward_action='' AND handoff_handled=1`) != 1 {
 					t.Fatal("chat was not stored and silently handled; candidate retrieval may have run")
 				}
 				if count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies`) != 0 {

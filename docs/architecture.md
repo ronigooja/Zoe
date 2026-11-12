@@ -8,7 +8,7 @@ Assistant task results are durably recorded with their authoritative event. When
 
 ## System and authority
 
-For delegated task admission, the [deployed roster-aware Steward contract](architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager) separates Zoe task management from resident OpenCode Worker execution. The [context-register target](architecture/decisions/0013-context-register.md) is **Accepted, not implemented**.
+For delegated task admission on main, [ADR 0013](architecture/decisions/0013-context-register.md) uses register routing and alias-free Steward `Choose`, separate from resident OpenCode Worker execution. The [roster-aware contract](architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager) is historical: deployed on `bb07671`, removed on main. Replacement deployment and live acceptance remain unverified.
 
 Zoe is a private, self-hosted Linux Go control server with an independent Linux runner, SQLite WAL with `synchronous=FULL`, and native SwiftUI clients for macOS, iPhone, and iPad. The first release is single-instance and multi-project with one fixed owner principal. User/workspace boundaries remain explicit for future evolution.
 
@@ -73,7 +73,7 @@ On macOS the server/AI owns a versioned declarative screen document and opaque i
 
 ## Voice and business work
 
-When applying the target voice design, [ADR 0013](architecture/decisions/0013-context-register.md) is **Accepted, not implemented** and supersedes triage, impact confirmation, opening instructions and task/context routing below. The following impact gates, fallback and interaction-state descriptions are the deployed baseline, not target requirements.
+When reading the historical voice descriptions below, [ADR 0013](architecture/decisions/0013-context-register.md) supersedes triage, impact confirmation, opening instructions and task/context routing. These old gates, fallback and interaction states were deployed on `bb07671`, removed on main; they are not current implementation requirements.
 
 Zoe-compatible `ronigooja/chatgpt-web-voice` fork is the selected gateway/account pool. The current voice topology and lease boundary are defined by [ADR 0005](architecture/decisions/0005-voice-task-and-lease-boundaries.md); deployment details live in [voice deployment](../deploy/voice/README.md).
 

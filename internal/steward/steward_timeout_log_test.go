@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/ronigooja/Zoe/internal/triage"
 )
 
 func TestStewardTimeoutLogBudgets(t *testing.T) {
@@ -43,11 +41,11 @@ func TestStewardTimeoutLogBudgets(t *testing.T) {
 			defer log.SetOutput(old)
 			ctx, cancel := context.WithTimeout(context.Background(), tc.parent)
 			defer cancel()
-			_, err := client.Decide(ctx, "private utterance")
-			if !errors.Is(err, context.DeadlineExceeded) || triage.ErrorKind(err) != "deadline_exceeded" {
+			_, err := client.Choose(ctx, "private utterance", "none", "", nil)
+			if !errors.Is(err, context.DeadlineExceeded) || errorKind(err) != "deadline_exceeded" {
 				t.Fatalf("timeout identity lost: %v", err)
 			}
-			for _, prefix := range []string{"steward_call ", "triage_call "} {
+			for _, prefix := range []string{"steward_call "} {
 				found := false
 				for _, line := range strings.Split(logs.String(), "\n") {
 					if !strings.Contains(line, prefix) {
@@ -74,13 +72,5 @@ func TestStewardTimeoutLogBudgets(t *testing.T) {
 				t.Fatal("sensitive data in logs")
 			}
 		})
-	}
-}
-
-func TestStewardQuestionAlwaysPlainChinese(t *testing.T) {
-	for _, input := range []string{"handle this", "处理这个", ""} {
-		if got := Question(input); got != "要我现在去处理这个请求吗？" {
-			t.Fatalf("question=%q", got)
-		}
 	}
 }

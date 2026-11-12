@@ -2,7 +2,7 @@
 
 Status: accepted direction; implementation and acceptance remain open. Supersedes the explicit-submission sentences in [ADR 0005](0005-voice-task-and-lease-boundaries.md). Principles: [target architecture](../../design/target-architecture.md). Delivery status: [master plan](../../master-plan.md); evidence: [evidence register](../../acceptance/evidence.md).
 
-Target status (2026-11-12): the impact policy in decision 4 and its high-impact floor below are **superseded-by-0013 (target)**, [Accepted, not implemented](0013-context-register.md#1-register-first-triage-deleted). This removes impact classification, explicit-confirmation waiting tasks, confirm/decline handling and fixed assent text; these remain historical/deployed descriptions only. Other authority and receipt boundaries are unchanged.
+Implementation status (2026-11-12): when reading the impact policy in decision 4 and its high-impact floor below, treat them as **deployed on `bb07671`, removed on main** by [ADR 0013](0013-context-register.md#1-register-first-triage-deleted). Impact classification, explicit-confirmation waiting tasks, confirm/decline handling, fixed assent text and alias-roster Steward APIs are historical only. Other authority and receipt boundaries are unchanged; replacement deployment and live acceptance remain unverified.
 
 ## Context
 

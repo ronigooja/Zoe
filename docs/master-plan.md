@@ -21,8 +21,7 @@ Call-end summary jobs and the in-process worker have focused synthetic coverage;
 
 Roster-aware Steward task management and the compatible Worker executor profile are
 deployed on `bb07671`; see the [contract and current limitations](architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager).
-The [context-register target](architecture/decisions/0013-context-register.md) is **Accepted, not implemented**; compaction, attribution and added latency are unmeasured.
-Pre-run scoped high-impact confirmation and live Worker/voice acceptance remain open.
+On main, [ADR 0013](architecture/decisions/0013-context-register.md) replaces that roster with register routing and alias-free `Choose`; triage, `Assign`/`Decide`, impact confirmation and fixed progress replies are removed. This is source implementation, not a replacement deployment: the old flow was deployed on `bb07671`, removed on main. Compaction, attribution, added latency and live Worker/voice acceptance remain unmeasured.
 
 The bounded recall route, leased fallback recovery and bounded shutdown-joined workers have local fake-gateway/model regression coverage; see [its contract](architecture/decisions/0012-voice-conversation-layer.md#bounded-recall-route). Hosted integration and real speech/provider behavior remain open.
 
