@@ -95,7 +95,7 @@ func TestMemoryBatchInterval(t *testing.T) {
 	}
 }
 
-func TestMemoryBatchWindowKeysIsolationAtomicSuccessAndApproval(t *testing.T) {
+func TestMemoryBatchWindowKeysIsolationAtomicSuccessAndRead(t *testing.T) {
 	db, repo, _, now := batchFixture(t)
 	ctx := context.Background()
 	writeMemory(t, ctx, db, repo, Scope{Kind: ScopePersonal, PrincipalID: "owner"}, "existing fact", "existing-source", 0)
@@ -132,15 +132,19 @@ func TestMemoryBatchWindowKeysIsolationAtomicSuccessAndApproval(t *testing.T) {
 	if err != nil || !boundary.Equal(now) {
 		t.Fatalf("boundary=%v err=%v", boundary, err)
 	}
-	var proposalID, status string
-	var version int64
-	if err = db.QueryRow(`SELECT id,status,version FROM memory_proposals`).Scan(&proposalID, &status, &version); err != nil || status != "pending" {
-		t.Fatalf("proposal=%s err=%v", status, err)
-	}
 	var count int
-	_ = db.QueryRow(`SELECT count(*) FROM memory_claims`).Scan(&count)
-	if count != 1 {
-		t.Fatalf("model bypassed authority: claims=%d", count)
+	if err = db.QueryRow(`SELECT count(*) FROM memory_proposals`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("proposals=%d err=%v", count, err)
+	}
+	p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"memory:read:personal"}}
+	_, claims, err := repo.AssembleContext(ctx, p, "", "owner", "drink", contracts.MemoryContextDefaultBudgetTokens)
+	if err != nil || len(claims) != 1 || claims[0].Status != ClaimActive || claims[0].Content != "I prefer tea" || claims[0].Authority != AuthorityModelInferred || len(claims[0].Sources) != 1 || claims[0].Sources[0].Kind != "memory_batch" {
+		t.Fatalf("batch not readable: %#v err=%v", claims, err)
+	}
+	p.SubjectID = "other"
+	_, claims, err = repo.AssembleContext(ctx, p, "", "other", "drink", contracts.MemoryContextDefaultBudgetTokens)
+	if err != nil || len(claims) != 0 {
+		t.Fatalf("owner read leak: %#v err=%v", claims, err)
 	}
 	// Idempotent repeat and a later empty period never dispatch a model.
 	if ok, err = repo.RunBatch(ctx, "default", "owner", now, 24*time.Hour, model); err != nil || ok {
@@ -160,21 +164,76 @@ func TestMemoryBatchWindowKeysIsolationAtomicSuccessAndApproval(t *testing.T) {
 	if err != nil || !other.Equal(time.Unix(0, 0)) {
 		t.Fatalf("owner leaked: %v %v", other, err)
 	}
-	// The normal approval command can materialize a source-linked personal claim.
+	if err = db.QueryRow(`SELECT count(*) FROM memory_claims`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("idempotence claims=%d err=%v", count, err)
+	}
+}
+
+func TestMemoryBatchUpdatesExistingKeyWithoutDuplicates(t *testing.T) {
+	db, repo, _, now := batchFixture(t)
+	ctx := context.Background()
+	first := writeMemory(t, ctx, db, repo, Scope{Kind: ScopePersonal, PrincipalID: "owner"}, "old fact", "original", 0)
+	output, _ := json.Marshal([]extractedMemory{{Subject: first.Subject, Key: first.Key, Content: "updated durable fact"}})
+	model := batchFakeModel(t, 200, string(output), nil)
+	if ok, err := repo.RunBatch(ctx, "default", "owner", now, time.Hour, model); err != nil || !ok {
+		t.Fatalf("update=%v err=%v", ok, err)
+	}
+	p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"memory:read:personal"}}
+	_, claims, err := repo.AssembleContext(ctx, p, "", "owner", "", contracts.MemoryContextDefaultBudgetTokens)
+	if err != nil || len(claims) != 1 || claims[0].ID != first.ID || claims[0].Revision != first.Revision+1 || claims[0].Content != "updated durable fact" || claims[0].Status != ClaimActive {
+		t.Fatalf("update %#v err=%v", claims, err)
+	}
+	var count int
+	if err = db.QueryRow(`SELECT count(*) FROM memory_claims`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("duplicates=%d err=%v", count, err)
+	}
+}
+
+func TestMemoryBatchTrustDoesNotEscapeOtherWritePaths(t *testing.T) {
+	db, repo, _, now := batchFixture(t)
+	ctx := context.Background()
+	source := Source{ID: "forged-batch", Version: 1, Scope: Scope{Kind: ScopePersonal, PrincipalID: "owner"}, Kind: "memory_batch", Reference: "forged", Producer: "memory-batch", RecordedAt: now}
+	claim := Claim{ID: "fixture", WorkspaceID: "default", Scope: source.Scope, Subject: "user", Key: "drink", Content: "untrusted", Authority: AuthorityModelInferred, Status: ClaimActive, Revision: 1, Sources: []Source{source}}
+	if err := claim.ValidateForWrite(); err == nil {
+		t.Fatal("public validation accepted active model output")
+	}
+	claim.ID = ""
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	claim, err := repo.ApproveProposalTx(ctx, tx, contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"memory:read:personal", "memory:write:personal"}}, "approval", proposalID, version, now)
+	if _, err = repo.PutTx(ctx, tx, WriteInput{WorkspaceID: "default", ActorID: "owner", Claim: claim, Source: source}); err == nil {
+		t.Fatal("manual write forged batch trust")
+	}
+	if _, err = repo.putBatchClaimTx(ctx, tx, "default", "other", source, extractedMemory{Subject: "u", Key: "k", Content: "v"}); err == nil {
+		t.Fatal("batch owner mismatch accepted")
+	}
+	if _, err = repo.putBatchClaimTx(ctx, tx, "default", "owner", source, extractedMemory{Subject: "u", Key: "k", Content: "v"}); err == nil {
+		t.Fatal("batch without evidence accepted")
+	}
+	if err = tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	source.Kind = "user_note"
+	tx, err = db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claim.Authority != AuthorityUserConfirmed || claim.Status != ClaimActive || len(claim.Sources) != 2 {
-		t.Fatalf("claim=%#v", claim)
+	defer tx.Rollback()
+	if err = insertSourceTx(ctx, tx, "default", source); err != nil {
+		t.Fatal(err)
 	}
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
+	}
+	proposal, err := repo.CreateProposal(ctx, contracts.RunnerPrincipal{WorkspaceIDs: []string{"default"}}, runnerProposalRequest{WorkspaceID: "default", SourceID: source.ID, SourceVersion: 1, ExtractorVersion: "other", Scope: source.Scope, Subject: "u", Key: "k", Content: "v"})
+	if err != nil || proposal.Status != "pending" {
+		t.Fatalf("other proposal=%#v err=%v", proposal, err)
+	}
+	var count int
+	if err = db.QueryRow(`SELECT count(*) FROM memory_claims`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("other path created claims=%d err=%v", count, err)
 	}
 }
 

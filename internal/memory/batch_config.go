@@ -24,7 +24,7 @@ func BatchInterval(value string) (time.Duration, error) {
 
 // BatchModelFromEnv reuses the existing deployment-selected memory endpoint.
 // Unlike Mem0's per-claim add workflow, this call is stateless and writes only
-// through the repository's review flow.
+// through the repository's batch-only trusted write flow.
 func BatchModelFromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) (*modelclient.Client, error) {
 	return modelclient.FromEnv("ZOE_MEM0_LLM", getenv, readFile, 120000, 5000, 600000)
 }

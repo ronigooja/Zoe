@@ -60,7 +60,7 @@ func (r *Repository) ReadBoundary(ctx context.Context, workspace, principal stri
 }
 
 // AdvanceBoundaryTx applies a compare-and-swap in the caller's memory write.
-// Callers must commit it only together with all accepted batch proposals.
+// Callers must commit it only together with all accepted batch claims.
 func (r *Repository) AdvanceBoundaryTx(ctx context.Context, tx *sql.Tx, workspace, principal string, previous, next time.Time) error {
 	if workspace == "" || principal == "" || !next.After(previous) {
 		return ErrVersionConflict
@@ -163,8 +163,8 @@ func (r *Repository) batchInput(ctx context.Context, workspace, principal string
 	return in, rows.Err()
 }
 
-// RunBatch leases one owner's interval. Model output enters pending review,
-// never the user-confirmed lane. Errors commit neither proposals nor boundary.
+// RunBatch leases one owner's interval. Only this path trusts batch model
+// output as active memory. Errors commit neither claims nor boundary.
 func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, now time.Time, interval time.Duration, model BatchModel) (bool, error) {
 	if workspace == "" || principal == "" || interval < time.Hour || interval > 168*time.Hour {
 		return false, errors.New("invalid memory batch scope or interval")
@@ -268,7 +268,7 @@ func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, 
 		return false, err
 	}
 	for _, item := range extracted {
-		_, err = r.createProposalTx(ctx, tx, runnerProposalRequest{WorkspaceID: workspace, SourceID: source.ID, SourceVersion: 1, ExtractorVersion: "memory-batch-v1", Scope: source.Scope, Subject: item.Subject, Key: item.Key, Content: item.Content})
+		_, err = r.putBatchClaimTx(ctx, tx, workspace, principal, source, item)
 		if err != nil {
 			return false, err
 		}
@@ -284,4 +284,40 @@ func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, 
 		return false, err
 	}
 	return true, nil
+}
+
+// putBatchClaimTx is deliberately private: manual writes and runner proposals
+// cannot request batch trust. Evidence, owner and active revision are checked
+// in the same transaction as the shared claim repository write.
+func (r *Repository) putBatchClaimTx(ctx context.Context, tx *sql.Tx, workspace, principal string, source Source, item extractedMemory) (Claim, error) {
+	if source.Kind != "memory_batch" || source.Producer != "memory-batch" || source.Scope != (Scope{Kind: ScopePersonal, PrincipalID: principal}) || principal == "" || workspace == "" {
+		return Claim{}, ErrInvalidSource
+	}
+	valid, err := sourceStillAvailable(ctx, tx, workspace, source)
+	if err != nil {
+		return Claim{}, err
+	}
+	if !valid {
+		return Claim{}, ErrInvalidSource
+	}
+	var expected int64
+	var count int
+	item.Subject, item.Key, item.Content = strings.TrimSpace(item.Subject), strings.TrimSpace(item.Key), strings.TrimSpace(item.Content)
+	if len(item.Content) > 20_000 {
+		return Claim{}, errors.New("batch memory content exceeds limits")
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT count(*),coalesce(max(revision),0) FROM memory_claims WHERE workspace_id=? AND scope_kind='personal' AND principal_id=? AND subject=? AND claim_key=? AND status IN ('active','conflicted') AND deleted_at IS NULL`, workspace, principal, item.Subject, item.Key).Scan(&count, &expected); err != nil {
+		return Claim{}, err
+	}
+	// Preserve the existing unresolved multi-claim conflict barrier rather than
+	// inventing an arbitrary winner or adding another duplicate.
+	if count > 1 {
+		return Claim{}, ErrVersionConflict
+	}
+	claim, err := r.putTx(ctx, tx, WriteInput{WorkspaceID: workspace, ActorID: "memory-batch", Source: source, Expected: expected, Claim: Claim{WorkspaceID: workspace, Scope: source.Scope, Subject: item.Subject, Key: item.Key, Content: item.Content, Authority: AuthorityModelInferred, Status: ClaimActive, Sources: []Source{source}}}, true)
+	if err != nil {
+		return Claim{}, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO memory_batch_claims(workspace_id,claim_id,revision,source_id,source_version) VALUES(?,?,?,?,?)`, workspace, claim.ID, claim.Revision, source.ID, source.Version)
+	return claim, err
 }

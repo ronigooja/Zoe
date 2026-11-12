@@ -162,8 +162,12 @@ type SearchResult struct {
 }
 
 func (r *Repository) PutTx(ctx context.Context, tx *sql.Tx, in WriteInput) (Claim, error) {
+	return r.putTx(ctx, tx, in, false)
+}
+
+func (r *Repository) putTx(ctx context.Context, tx *sql.Tx, in WriteInput, batchTrusted bool) (Claim, error) {
 	c := in.Claim
-	if c.WorkspaceID != in.WorkspaceID || c.Authority != AuthorityUserConfirmed {
+	if c.WorkspaceID != in.WorkspaceID || (!batchTrusted && c.Authority != AuthorityUserConfirmed) {
 		return Claim{}, errors.New("user memory writes must be workspace-bound and user-confirmed")
 	}
 	if in.ActorID == "" || in.Source.Kind == "" || in.Source.Reference == "" {
@@ -180,7 +184,7 @@ func (r *Repository) PutTx(ctx context.Context, tx *sql.Tx, in WriteInput) (Clai
 	}
 	c.ID = uuid.NewString()
 	c.Revision = 1
-	if err := c.ValidateForWrite(); err != nil {
+	if err := c.validateForWrite(batchTrusted); err != nil {
 		return Claim{}, err
 	}
 	for _, source := range sources {
@@ -506,8 +510,14 @@ WHERE c.workspace_id=? AND c.deleted_at IS NULL AND c.status IN ('active','confl
 			continue
 		}
 		if c.Authority == AuthorityModelInferred {
-			result.Missing = append(result.Missing, c.ID+":unverified")
-			continue
+			var trusted int
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM memory_batch_claims b JOIN memory_sources s ON s.workspace_id=b.workspace_id AND s.id=b.source_id AND s.version=b.source_version WHERE b.workspace_id=? AND b.claim_id=? AND b.revision=? AND s.kind='memory_batch' AND s.scope_kind='personal' AND s.principal_id=? AND s.deleted_at IS NULL`, c.WorkspaceID, c.ID, c.Revision, c.Scope.PrincipalID).Scan(&trusted); err != nil {
+				return SearchResult{}, err
+			}
+			if trusted == 0 {
+				result.Missing = append(result.Missing, c.ID+":unverified")
+				continue
+			}
 		}
 		if c.ValidFrom != nil && c.ValidFrom.After(at) || c.ValidTo != nil && !c.ValidTo.After(at) {
 			continue

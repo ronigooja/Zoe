@@ -256,7 +256,7 @@ CREATE INDEX memory_deletion_events_lineage ON memory_deletion_events(instance_l
 	}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "memory", Version: 104, Name: "memory_batch_boundary", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "memory", Version: 104, Name: "memory_batch_boundary", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE memory_batch_boundaries (
 workspace_id TEXT NOT NULL REFERENCES workspaces(id), principal_id TEXT NOT NULL,
 boundary_ns INTEGER NOT NULL DEFAULT 0, next_attempt_ms INTEGER NOT NULL DEFAULT 0,
@@ -270,6 +270,17 @@ CREATE TRIGGER memory_batch_inputs_delete_source AFTER UPDATE OF deleted_at ON m
 WHEN NEW.deleted_at IS NOT NULL BEGIN
 DELETE FROM memory_batch_inputs WHERE workspace_id=NEW.workspace_id AND source_id=NEW.id AND source_version=NEW.version;
 END;`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "memory", Version: 105, Name: "memory_batch_trusted_revisions", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE memory_batch_claims (
+workspace_id TEXT NOT NULL, claim_id TEXT NOT NULL, revision INTEGER NOT NULL,
+source_id TEXT NOT NULL, source_version INTEGER NOT NULL,
+PRIMARY KEY(workspace_id,claim_id,revision),
+FOREIGN KEY(claim_id,revision) REFERENCES memory_revisions(claim_id,revision) ON DELETE CASCADE,
+FOREIGN KEY(workspace_id,source_id,source_version) REFERENCES memory_sources(workspace_id,id,version));`)
 		return err
 	}})
 }
