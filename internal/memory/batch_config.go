@@ -46,7 +46,7 @@ func (r *Repository) runBatches(ctx context.Context, model BatchModel, interval 
 }
 
 func (r *Repository) batchStep(ctx context.Context, model BatchModel, interval time.Duration, now time.Time) error {
-	rows, err := r.db.QueryContext(ctx, `SELECT workspace_id,owner_id FROM voice_sessions UNION SELECT workspace_id,owner_subject_id FROM tasks WHERE owner_subject_id<>''`)
+	rows, err := r.db.QueryContext(ctx, `SELECT workspace_id,owner_id FROM voice_sessions UNION SELECT workspace_id,owner_subject_id FROM tasks WHERE owner_subject_id<>'' UNION SELECT workspace_id,principal_id FROM memory_staged_writes WHERE status='pending'`)
 	if err != nil {
 		return err
 	}
