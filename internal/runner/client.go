@@ -148,7 +148,7 @@ func (c *ControlClient) Current(ctx context.Context) ([]contracts.JobClaim, erro
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, safeHTTPError("read current claims", response.StatusCode)
+		return nil, currentClaimsHTTPError{status: response.StatusCode}
 	}
 	var body struct {
 		Claims []contracts.JobClaim `json:"claims"`

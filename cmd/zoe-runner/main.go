@@ -142,9 +142,13 @@ func contextWindowRatioEnv() (float64, error) {
 }
 
 func serve(ctx context.Context, engine *runner.Engine, deployments *runner.DeploymentWorker, triggerAdmissions *runner.TriggerAdmissionWorker, once bool, idle time.Duration) error {
+	wait, err := startupWaitEnv()
+	if err != nil {
+		return err
+	}
 	// Current claims include work already assigned to this runner. Replay those
 	// exact journaled requests before accepting another claim after restart.
-	current, err := engine.Control.Current(ctx)
+	current, err := engine.StartupCurrent(ctx, wait)
 	if err != nil {
 		return fmt.Errorf("reconcile current claims: %w", err)
 	}
@@ -264,6 +268,18 @@ func serve(ctx context.Context, engine *runner.Engine, deployments *runner.Deplo
 		case <-time.After(idle):
 		}
 	}
+}
+
+func startupWaitEnv() (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv("ZOE_RUNNER_STARTUP_WAIT_SECONDS"))
+	if value == "" {
+		return 120 * time.Second, nil
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds < 0 || seconds > 600 {
+		return 0, errors.New("ZOE_RUNNER_STARTUP_WAIT_SECONDS must be an integer between 0 and 600")
+	}
+	return time.Duration(seconds) * time.Second, nil
 }
 
 func loadRoutes(raw string) (map[string]runner.Route, error) {
