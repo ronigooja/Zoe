@@ -865,7 +865,7 @@ func TestVoiceOpeningContextAVASIsCreationContextAnd501IsNonFatal(t *testing.T) 
 			var body struct {
 				OpeningContext *openingContext `json:"opening_context"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OpeningContext == nil || len(body.OpeningContext.Items) != 2 {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OpeningContext == nil || len(body.OpeningContext.Items) != 1 {
 				t.Errorf("AVAS create missing opening_context: err=%v body=%+v", err, body)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"answer_sdp": "v=0\r\n", "voice_session_id": "gw-avas"})

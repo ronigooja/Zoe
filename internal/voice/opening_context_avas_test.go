@@ -53,13 +53,18 @@ func TestAVASOpeningContextCreateItemsAndDelivery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Literal expectation deliberately protects the exact mandatory wording.
-			want := []openingContextItem{{Role: "user", Text: "用户要求取消或停止进行中的任务时,先委托,不要自己回答。用户询问任务进度或结果时,先委托,不要自己回答。用户询问关于他本人的任何信息时,先委托,等结果再回答,不要自己回答。"}}
+			// Only memory facts are emitted; no delegation rule is injected.
+			want := []openingContextItem{}
 			if tc.memory {
 				want = append(want, openingContextItem{Role: "user", Text: "喜欢的饮料:茶"}, openingContextItem{Role: "user", Text: "居住地:上海"})
 			}
 			if received.OpeningContext == nil || !reflect.DeepEqual(received.OpeningContext.Items, want) {
 				t.Fatalf("opening=%+v want=%+v", received.OpeningContext, want)
+			}
+			for _, item := range received.OpeningContext.Items {
+				if strings.Contains(item.Text, "先委托") || strings.Contains(item.Text, "不要自己回答") {
+					t.Fatalf("delegation rule emitted: %q", item.Text)
+				}
 			}
 			var delivery string
 			var manifest []byte
@@ -81,7 +86,7 @@ func TestAVASOpeningContextCreateItemsAndDelivery(t *testing.T) {
 	}
 }
 
-func TestAVASOpeningContextRuleSurvivesMissingMemoryAndBudget(t *testing.T) {
+func TestAVASOpeningContextEmptyWithoutMemoryOrBudget(t *testing.T) {
 	for _, mode := range []string{"nil", "error", "empty", "facts"} {
 		t.Run(mode, func(t *testing.T) {
 			_, svc := newVoiceTestService(t, Config{UpstreamRoute: "avas", OpeningContextBudget: 1})
@@ -97,8 +102,12 @@ func TestAVASOpeningContextRuleSurvivesMissingMemoryAndBudget(t *testing.T) {
 				}
 			}
 			opening := svc.buildOpeningContext(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user"})
-			if opening == nil || !reflect.DeepEqual(opening.Items, []openingContextItem{{Role: "user", Text: delegationRuleItem}}) {
+			if opening == nil || !reflect.DeepEqual(opening.Items, []openingContextItem{}) || openingCharsFor(opening) != 0 {
 				t.Fatalf("opening=%+v", opening)
+			}
+			wire, err := json.Marshal(opening)
+			if err != nil || !strings.Contains(string(wire), `"items":[]`) {
+				t.Fatalf("empty opening context must encode an items array: %s err=%v", wire, err)
 			}
 		})
 	}
@@ -114,12 +123,12 @@ func TestAVASOpeningContextFactBudgetAndLimit(t *testing.T) {
 	}})
 	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user"}
 	opening := svc.buildOpeningContext(context.Background(), p)
-	if len(opening.Items) != 6 {
-		t.Fatalf("items=%d want rule plus five facts", len(opening.Items))
+	if len(opening.Items) != 5 {
+		t.Fatalf("items=%d want five facts", len(opening.Items))
 	}
-	svc.openingBudget = len([]rune(delegationRuleItem)) + len([]rune("偏好:0"))
+	svc.openingBudget = len([]rune("偏好:0"))
 	opening = svc.buildOpeningContext(context.Background(), p)
-	if len(opening.Items) != 2 || openingCharsFor(opening) != svc.openingBudget {
+	if len(opening.Items) != 1 || opening.Items[0].Text != "偏好:0" || openingCharsFor(opening) != svc.openingBudget {
 		t.Fatalf("opening=%+v chars=%d budget=%d", opening, openingCharsFor(opening), svc.openingBudget)
 	}
 }
@@ -146,7 +155,7 @@ func TestAVASOpeningContextRealNonTerminalTasks(t *testing.T) {
 		}
 	}
 	opening := svc.buildOpeningContext(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user"})
-	want := []openingContextItem{{Role: "user", Text: delegationRuleItem}}
+	want := []openingContextItem{}
 	for _, i := range []int{0, 1, 2, 3} {
 		want = append(want, openingContextItem{Role: "user", Text: "进行中的任务:任务" + fmt.Sprint(i)})
 	}
@@ -190,7 +199,7 @@ func TestAVASOpeningContextSkipsStaleWaitingTasksAndDuplicates(t *testing.T) {
 		t.Fatal("no opening context")
 	}
 	got := map[string]int{}
-	for _, item := range opening.Items[1:] {
+	for _, item := range opening.Items {
 		got[item.Text]++
 	}
 	want := map[string]int{"进行中的任务:刚更新的等待任务": 1, "进行中的任务:重复任务": 1, "进行中的任务:排队任务": 1}
