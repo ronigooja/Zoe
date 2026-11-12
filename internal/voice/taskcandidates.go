@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strings"
 	"time"
@@ -78,22 +79,29 @@ ORDER BY julianday(t.created_at) DESC,t.id DESC LIMIT 5`, workspace, owner, work
 	}
 	terms := candidateTerms(text)
 	if len(terms) > 0 && len(selected) < limit {
-		var scores []string
-		args := []any{workspace, owner, stamp(now.Add(-30 * 24 * time.Hour)), stamp(now)}
+		patterns := make([]string, 0, len(terms))
 		for _, term := range terms {
-			scores = append(scores, `(CASE WHEN lower(t.title) LIKE ? ESCAPE '\' THEN 2 ELSE 0 END + CASE WHEN lower(coalesce(t.result,'')) LIKE ? ESCAPE '\' THEN 1 ELSE 0 END)`)
-			pattern := candidateLikePattern(term)
-			args = append(args, pattern, pattern)
+			patterns = append(patterns, candidateLikePattern(term))
 		}
-		// MATERIALIZED prevents the LIKE expressions from expanding the scan past
-		// the newest 500 eligible rows, even when few of those rows match.
-		matches, err := read(`WITH recent AS MATERIALIZED (
-SELECT * FROM tasks WHERE workspace_id=? AND owner_subject_id=?
-AND status IN ('queued','active','waiting','awaiting_user','complete')
-AND julianday(created_at) BETWEEN julianday(?) AND julianday(?)
-ORDER BY julianday(created_at) DESC,id DESC LIMIT 500)
-SELECT `+candidateColumns+`,`+strings.Join(scores, "+")+` AS score FROM recent t
-ORDER BY score DESC,julianday(t.created_at) DESC,t.id DESC`, args...)
+		encodedPatterns, err := json.Marshal(patterns)
+		if err != nil {
+			return nil, err
+		}
+		// A term table avoids SQL expression/parameter limits. Score every eligible
+		// task, but fetch result snippets only for the bounded top-ranked set.
+		// Reserve enough rows to allow for overlap with the always-include set.
+		matches, err := read(`WITH scored AS MATERIALIZED (
+SELECT t.id,t.created_at,(SELECT sum(
+CASE WHEN lower(t.title) LIKE p.value ESCAPE '\' THEN 2 ELSE 0 END +
+CASE WHEN lower(coalesce(t.result,'')) LIKE p.value ESCAPE '\' THEN 1 ELSE 0 END)
+FROM json_each(?) p) AS score
+FROM tasks t WHERE t.workspace_id=? AND t.owner_subject_id=?
+AND t.status IN ('queued','active','waiting','awaiting_user','complete')
+AND julianday(t.created_at)<=julianday(?)), ranked AS (
+SELECT id,score FROM scored WHERE score>0
+ORDER BY score DESC,julianday(created_at) DESC,id DESC LIMIT ?)
+SELECT `+candidateColumns+`,r.score FROM ranked r JOIN tasks t ON t.id=r.id
+ORDER BY r.score DESC,julianday(t.created_at) DESC,t.id DESC`, string(encodedPatterns), workspace, owner, stamp(now), limit+len(selected))
 		if err != nil {
 			return nil, err
 		}
@@ -162,7 +170,7 @@ func candidateTerms(text string) []string {
 	var terms []string
 	seen := map[string]bool{}
 	add := func(term string) {
-		if !seen[term] && !stop[term] && len(terms) < 24 {
+		if !seen[term] && !stop[term] {
 			terms = append(terms, term)
 			seen[term] = true
 		}
@@ -177,7 +185,7 @@ func candidateTerms(text string) []string {
 		return 0
 	}
 	runes := []rune(strings.ToLower(text))
-	for i := 0; i < len(runes) && len(terms) < 24; {
+	for i := 0; i < len(runes); {
 		k := kind(runes[i])
 		j := i + 1
 		for j < len(runes) && kind(runes[j]) == k {
@@ -186,7 +194,7 @@ func candidateTerms(text string) []string {
 		if k == 1 && j-i >= 2 || k == 2 && j-i == 1 {
 			add(string(runes[i:j]))
 		} else if k == 2 {
-			for n := i; n+1 < j && len(terms) < 24; n++ {
+			for n := i; n+1 < j; n++ {
 				add(string(runes[n : n+2]))
 			}
 		}

@@ -36,8 +36,19 @@ func TestCandidatesTermsAndWildcardEscaping(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		words = append(words, fmt.Sprintf("word%d", i))
 	}
-	if got := candidateTerms(strings.Join(words, " ")); len(got) != 24 {
-		t.Fatalf("term cap=%d", len(got))
+	if got := candidateTerms(strings.Join(words, " ")); !reflect.DeepEqual(got, words) {
+		t.Fatalf("all terms=%q want=%q", got, words)
+	}
+	var cjk []rune
+	var bigrams []string
+	for r := rune(0x4e00); r < 0x4e20; r++ {
+		cjk = append(cjk, r)
+		if len(cjk) > 1 {
+			bigrams = append(bigrams, string(cjk[len(cjk)-2:]))
+		}
+	}
+	if got := candidateTerms(string(cjk)); !reflect.DeepEqual(got, bigrams) {
+		t.Fatalf("all CJK bigrams=%q want=%q", got, bigrams)
 	}
 	db, svc, now := rosterFixture(t)
 	var match bool
@@ -85,13 +96,13 @@ func TestCandidatesTitleWeightRankingAndNewestPresentation(t *testing.T) {
 	}
 }
 
-func TestCandidatesOwnerStatusAndAgeFilters(t *testing.T) {
+func TestCandidatesOwnerStatusAndNoAgeLimit(t *testing.T) {
 	db, svc, now := rosterFixture(t)
 	seeds := []rosterSeed{
 		{id: "queued", status: "queued"}, {id: "active", status: "active"},
 		{id: "waiting", status: "waiting"}, {id: "awaiting", status: "awaiting_user"},
 		{id: "complete", status: "complete", created: now.Add(-30 * 24 * time.Hour)},
-		{id: "old", status: "complete", created: now.Add(-30*24*time.Hour - time.Second)},
+		{id: "old", status: "complete", created: now.Add(-365 * 24 * time.Hour)},
 		{id: "future", status: "active", created: now.Add(time.Minute)},
 		{id: "failed", status: "failed"}, {id: "canceled", status: "canceled"}, {id: "paused", status: "paused"},
 		{id: "other-owner", status: "active", owner: "other-owner"},
@@ -101,13 +112,16 @@ func TestCandidatesOwnerStatusAndAgeFilters(t *testing.T) {
 		candidateSeed(t, db, now, seed, "budget "+seed.id)
 	}
 	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 20)
-	if err != nil || len(got) != 5 {
+	if err != nil || len(got) != 6 {
 		t.Fatalf("filters got=%+v err=%v", got, err)
 	}
 	for _, c := range got {
-		if strings.Contains(c.Request, "other") || c.Request == "budget old" || c.Request == "budget future" {
+		if strings.Contains(c.Request, "other") || c.Request == "budget future" {
 			t.Fatalf("unexpected candidate=%+v", c)
 		}
+	}
+	if got[len(got)-1].Request != "budget old" {
+		t.Fatalf("year-old match missing: %+v", got)
 	}
 }
 
@@ -142,7 +156,7 @@ func TestCandidatesAlwaysIncludeLatestSessionEmptyTermsAndDedup(t *testing.T) {
 	}
 }
 
-func TestCandidatesLimitsAndBoundedScan(t *testing.T) {
+func TestCandidatesLimitsAndUnboundedScan(t *testing.T) {
 	db, svc, now := rosterFixture(t)
 	for i := 0; i < 501; i++ {
 		title := "budget"
@@ -158,8 +172,37 @@ func TestCandidatesLimitsAndBoundedScan(t *testing.T) {
 		}
 	}
 	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "uniqueolder", now, 8)
-	if err != nil || len(got) != 0 {
-		t.Fatalf("documented 500-row recall boundary got=%+v err=%v", got, err)
+	if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{"uniqueolder"}) {
+		t.Fatalf("match beyond newest 500 tasks got=%+v err=%v", got, err)
+	}
+}
+
+func TestCandidatesAllTermsParticipate(t *testing.T) {
+	db, svc, now := rosterFixture(t)
+	var words []string
+	for i := 0; i < 30; i++ {
+		word := fmt.Sprintf("word%02d", i)
+		words = append(words, word)
+		candidateSeed(t, db, now, rosterSeed{id: word, status: "complete"}, word)
+	}
+	// Check each term beyond the former cap, not just token extraction. The
+	// final term breaks score ties and must win even with the output limit of 1.
+	for _, word := range words {
+		rosterExec(t, db, `UPDATE tasks SET result=? WHERE id=?`, word, word)
+		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", strings.Join(words, " "), now, 1)
+		if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{word}) {
+			t.Fatalf("term %q must participate: got=%+v err=%v", word, got, err)
+		}
+		rosterExec(t, db, `UPDATE tasks SET result='' WHERE id=?`, word)
+	}
+	// Unlimited terms must not turn into an oversized SQL expression tree.
+	for i := 30; i < 1100; i++ {
+		words = append(words, fmt.Sprintf("word%04d", i))
+	}
+	candidateSeed(t, db, now, rosterSeed{id: "last-term", status: "complete", result: words[len(words)-1]}, "last match")
+	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", strings.Join(words[30:], " "), now, 1)
+	if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{"last match"}) {
+		t.Fatalf("long query final term got=%+v err=%v", got, err)
 	}
 }
 
