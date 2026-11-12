@@ -989,7 +989,7 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 	if value, ok := oldStack["ZOE_VOICE_INSTRUCTION_TEXT"]; ok {
 		stack["ZOE_VOICE_INSTRUCTION_TEXT"] = value
 	}
-	for _, kind := range []string{"SUMMARY", "ANSWER"} {
+	for _, kind := range []string{"ANSWER"} {
 		for _, suffix := range []string{"BASE_URL", "MODEL", "REASONING_EFFORT", "THINKING", "TIMEOUT_MS", "API_KEY_FILE"} {
 			key := "ZOE_" + kind + "_" + suffix
 			if value, ok := oldStack[key]; ok {
@@ -1147,7 +1147,7 @@ func isOperatorOwnedEnvKey(key string) bool {
 	if key == "ZOE_VOICE_INSTRUCTION_TEXT" {
 		return true
 	}
-	for _, kind := range []string{"SUMMARY", "ANSWER"} {
+	for _, kind := range []string{"ANSWER"} {
 		for _, suffix := range []string{"BASE_URL", "MODEL", "REASONING_EFFORT", "THINKING", "TIMEOUT_MS", "API_KEY_FILE"} {
 			if key == "ZOE_"+kind+"_"+suffix {
 				return true
@@ -1174,7 +1174,7 @@ func validOperatorEnvValue(key, value string) bool {
 	if key == "ZOE_VOICE_INSTRUCTION_TEXT" {
 		return true // Startup validates the optional instruction; updates preserve it verbatim.
 	}
-	if strings.HasPrefix(key, "ZOE_SUMMARY_") || strings.HasPrefix(key, "ZOE_ANSWER_") {
+	if strings.HasPrefix(key, "ZOE_ANSWER_") {
 		return isOperatorOwnedEnvKey(key)
 	}
 	if value == "" || value == "{}" {

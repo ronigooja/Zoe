@@ -27,7 +27,7 @@ func recallOwnedKeyFixture(t *testing.T) {
 
 func TestRecallKeyWrittenOwned65532Mode0600(t *testing.T) {
 	recallOwnedKeyFixture(t)
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
 			path := filepath.Join(root, "secrets", kind+"-api-key")
@@ -81,7 +81,7 @@ func TestRecallModelFailsBeforeRequestForUnreadableServerKey(t *testing.T) {
 	calls := 0
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(401) }))
 	defer s.Close()
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		t.Run(kind, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "key")
 			if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
@@ -97,7 +97,7 @@ func TestRecallModelFailsBeforeRequestForUnreadableServerKey(t *testing.T) {
 
 func TestRecallExistingKeyRejectedWhenUnreadableByServer(t *testing.T) {
 	unreadableRecallKeyFixture(t)
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
 			path := filepath.Join(root, "key")
@@ -117,7 +117,7 @@ func TestRecallExistingKeyRejectedWhenUnreadableByServer(t *testing.T) {
 }
 
 func TestRecallConfigEffortSetRejectsMinimal(t *testing.T) {
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		for _, effort := range []string{"", "none", "low", "medium", "high", "max", "minimal"} {
 			c := RecallModelConfig{BaseURL: "https://gateway.example", Model: "m", SecretPath: "/key", ReasoningEffort: effort}
 			_, err := c.Normalized(kind)
@@ -128,11 +128,15 @@ func TestRecallConfigEffortSetRejectsMinimal(t *testing.T) {
 	}
 }
 
-func TestUpdateWarnsForUnreadableSummaryAndAnswerKeysBeforeServices(t *testing.T) {
+func TestUpdateWarnsForUnreadableAnswerKeysBeforeServices(t *testing.T) {
 	unreadableRecallKeyFixture(t)
 	root := t.TempDir()
 	d := Deployment{Root: root, StackEnv: filepath.Join(root, "zoe-stack.env")}
-	for _, kind := range []string{"summary", "answer"} {
+	// Retired summary settings must not be parsed or produce credential warnings.
+	if err := os.WriteFile(d.StackEnv, []byte("ZOE_SUMMARY_TIMEOUT_MS=invalid\nZOE_SUMMARY_BASE_URL=https://retired.invalid\nZOE_SUMMARY_API_KEY_FILE=/retired-summary-key\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"answer"} {
 		path := filepath.Join(root, kind+"-key")
 		if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
 			t.Fatal(err)
@@ -148,9 +152,12 @@ func TestUpdateWarnsForUnreadableSummaryAndAnswerKeysBeforeServices(t *testing.T
 	if err == nil || !strings.Contains(err.Error(), "update stopped before service changes") || calls != 0 {
 		t.Fatalf("err=%v calls=%d", err, calls)
 	}
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		if !strings.Contains(out.String(), kind+"-key") {
 			t.Errorf("missing %s warning", kind)
 		}
+	}
+	if strings.Contains(out.String(), "retired-summary-key") {
+		t.Fatal("retired summary credential produced a warning")
 	}
 }

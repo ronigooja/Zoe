@@ -50,7 +50,7 @@ func TestDeploymentModeHybridModelConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"REGISTER", "COMPACT", "SUMMARY", "ANSWER"} {
+	for _, name := range []string{"REGISTER", "COMPACT", "ANSWER"} {
 		if !strings.Contains(string(b), "ZOE_"+name+"_MODEL=") {
 			t.Errorf("missing %s configuration", name)
 		}

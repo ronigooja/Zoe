@@ -154,7 +154,7 @@ func TestStatusShowsAnswerWithoutSecrets(t *testing.T) {
 			t.Errorf("missing %s", want)
 		}
 	}
-	if strings.Contains(out.String()+errOut.String(), "summary-private") || strings.Contains(out.String()+errOut.String(), "answer-private") {
+	if strings.Contains(out.String()+errOut.String(), "answer-private") {
 		t.Fatal("status leaked key")
 	}
 }
