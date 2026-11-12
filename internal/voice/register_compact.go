@@ -104,8 +104,16 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 	if strings.TrimSpace(output) == "" || utf8.RuneCountInString(output) > r.limit {
 		return false, errors.New("invalid register compact")
 	}
-	// All coverage metadata and text advance in one statement; M changes bump version and revoke this claim.
-	result, err := r.db.ExecContext(ctx, `UPDATE voice_context_registers SET compact=?,compact_through=?,built_at=?,source_hash=?,version=version+1,claim_token='',lease_until_ms=0 WHERE workspace_id=? AND owner_subject_id=? AND version=? AND claim_token=? AND lease_until_ms>? AND (SELECT count(*) FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id AND v.workspace_id=t.workspace_id WHERE v.workspace_id=? AND v.owner_id=?)=?`, output, edge.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), fingerprint, o.WorkspaceID, o.OwnerSubjectID, s.Version, token, now.UnixMilli(), o.WorkspaceID, o.OwnerSubjectID, s.sourceCount)
+	// Re-read caller-owned M immediately before committing; provenance also invalidates
+	// this compact on reads if the memory batch advances after this check.
+	boundary, err := r.memoryBoundary(ctx, o)
+	if err != nil {
+		return false, err
+	}
+	if !boundary.Equal(s.MemoryBoundary) {
+		return false, nil
+	}
+	result, err := r.db.ExecContext(ctx, `UPDATE voice_context_registers SET compact=?,compact_through=?,built_at=?,source_hash=?,source_memory_boundary=?,version=version+1,claim_token='',lease_until_ms=0 WHERE workspace_id=? AND owner_subject_id=? AND version=? AND claim_token=? AND lease_until_ms>? AND (SELECT count(*) FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id AND v.workspace_id=t.workspace_id WHERE v.workspace_id=? AND v.owner_id=?)=?`, output, edge.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), fingerprint, s.MemoryBoundary.UTC().Format(time.RFC3339Nano), o.WorkspaceID, o.OwnerSubjectID, s.Version, token, now.UnixMilli(), o.WorkspaceID, o.OwnerSubjectID, s.sourceCount)
 	if err != nil {
 		return false, err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,6 +26,7 @@ type registerFixture struct {
 	calls                int
 	inputs, instructions []string
 	onCall               func()
+	boundary             time.Time
 }
 
 func newRegisterFixture(t *testing.T) *registerFixture {
@@ -52,7 +54,12 @@ func newRegisterFixture(t *testing.T) *registerFixture {
 	}))
 	t.Cleanup(server.Close)
 	var err error
-	f.r, err = NewRegister(f.db, RegisterConfig{Model: RegisterModelConfig{BaseURL: server.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000, MemoryKeys: func(_ context.Context, o RegisterOwner) ([]MemoryMappingKey, error) {
+	f.r, err = NewRegister(f.db, RegisterConfig{Model: RegisterModelConfig{BaseURL: server.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000, MemoryBoundary: func(_ context.Context, o RegisterOwner) (time.Time, error) {
+		if o == f.owner {
+			return f.boundary, nil
+		}
+		return time.Time{}, nil
+	}, MemoryKeys: func(_ context.Context, o RegisterOwner) ([]MemoryMappingKey, error) {
 		if o != f.owner {
 			return nil, nil
 		}
@@ -105,16 +112,14 @@ func TestRegisterContiguousLayersAndMemoryBoundary(t *testing.T) {
 		t.Fatal("no rebuild")
 	}
 	s := f.layers(f.now)
-	if !s.CompactThrough.Equal(edge) || !s.RawFrom.Equal(s.CompactThrough) || s.CompactFrom.Unix() != 0 || strings.Contains(s.Raw, "old") || !strings.Contains(s.Raw, "assistant: edge") {
+	if !s.CompactThrough.Equal(edge) || !s.RawFrom.Equal(s.CompactThrough) || !s.CompactFrom.IsZero() || strings.Contains(s.Raw, "old") || !strings.Contains(s.Raw, "assistant: edge") {
 		t.Fatalf("noncontiguous layers: %+v", s)
 	}
 	if !strings.Contains(f.inputs[0], "user: old") || strings.Contains(f.inputs[0], "assistant: edge") || f.instructions[0] != RegisterCompactInstruction {
 		t.Fatal("incorrect compaction instruction/input")
 	}
 	m := f.now.Add(-2 * time.Hour)
-	if err := f.r.SetMemoryBoundary(ctx, f.owner, m); err != nil {
-		t.Fatal(err)
-	}
+	f.boundary = m
 	s = f.layers(f.now)
 	if !s.CompactFrom.Equal(m) || !s.RawFrom.Equal(m) || s.Compact != "" || strings.Contains(s.Raw, "old") {
 		t.Fatalf("memory did not move left edge: %+v", s)
@@ -151,8 +156,8 @@ func TestRegisterCrossCallStableOrderingAndOwnerIsolation(t *testing.T) {
 	if strings.Index(input, "user: first") > strings.Index(input, "assistant: second") || strings.Index(input, "assistant: second") > strings.Index(input, "assistant: third") || strings.Contains(input, "SECRET_") {
 		t.Fatal("source order/isolation violated")
 	}
-	f.output = "It refers to first."
-	if _, err := f.r.Restate(context.Background(), f.owner, "that", f.now); err != nil {
+	f.output = `{"route":"task","restatement":"It refers to first."}`
+	if _, err := f.r.Route(context.Background(), f.owner, "that", f.now); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(f.inputs[1], "SECRET_") || !strings.Contains(f.inputs[1], "travel: trip") || f.instructions[1] != RegisterAttributionInstruction {
@@ -217,17 +222,54 @@ func TestRegisterFailedRebuildPreservesCoverageAndSuccessAtomic(t *testing.T) {
 	}
 }
 
-func TestRegisterRestateExactParsing(t *testing.T) {
+func TestRegisterRouteExactParsing(t *testing.T) {
 	f := newRegisterFixture(t)
 	for _, tc := range []struct {
 		out   string
 		valid bool
-	}{{"none", true}, {"memory trip", true}, {"It refers to the user's trip.", true}, {"", false}, {" none", false}, {"none\n", false}, {"memory absent", false}, {"memory", false}, {"memory trip extra", false}, {"{\"text\":\"none\"}", false}, {"```none```", false}, {"one\ntwo", false}, {"- none", false}} {
+	}{
+		{`{"route":"task","restatement":"none"}`, true},
+		{`{"route":"task","restatement":"It refers to the user's trip."}`, true},
+		{`{"route":"memory_write","restatement":""}`, true},
+		{`{"route":"recall","restatement":""}`, true},
+		{`{"memory_key":"trip"}`, true},
+		{`{"route":"confirm","restatement":"none"}`, false},
+		{`{"route":"decline","restatement":"none"}`, false},
+		{`{"route":"cancel","restatement":"none"}`, false},
+		{`{"route":"progress","restatement":"none"}`, false},
+		{`{"route":"task","restatement":""}`, false},
+		{`{"route":"task"}`, false},
+		{`{"route":"recall"}`, false},
+		{`{"route":"memory_write","restatement":"none"}`, false},
+		{`{"route":"recall","restatement":"none"}`, false},
+		{`{"route":"task","restatement":null}`, false},
+		{`{"route":"task","restatement":1}`, false},
+		{`{"route":"task","restatement":" none"}`, false},
+		{`{"route":"task","restatement":"one\ntwo"}`, false},
+		{`{"route":"task","restatement":"- none"}`, false},
+		{`{"route":"task","restatement":"none","extra":"x"}`, false},
+		{`{"route":"task","route":"recall","restatement":""}`, false},
+		{`{"memory_key":"absent"}`, false},
+		{`{"memory_key":""}`, false},
+		{`{"memory_key":null}`, false},
+		{`{"memory_key":"trip","route":"task","restatement":"none"}`, false},
+		{`{"memory_key":"trip","extra":"x"}`, false},
+		{`{"route":"task","restatement":"none"} {}`, false},
+		{`{"route":"task","restatement":"none"} extra`, false},
+		{`prefix {"route":"task","restatement":"none"}`, false},
+		{`[]`, false}, {`null`, false}, {`none`, false}, {`memory trip`, false}, {``, false},
+	} {
 		t.Run(tc.out, func(t *testing.T) {
-			f.output = tc.out
-			got, err := f.r.Restate(context.Background(), f.owner, "that", f.now)
-			if (err == nil) != tc.valid || tc.valid && string(got) != tc.out {
-				t.Fatalf("valid=%v got=%q err=%v", tc.valid, got, err)
+			got, key, err := parseRegisterRoute(tc.out, []MemoryMappingKey{{Subject: "travel", Key: "trip"}})
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v got=%+v key=%q err=%v", tc.valid, got, key, err)
+			}
+			if tc.valid && key == "" {
+				f.output = tc.out
+				result, err := f.r.Route(context.Background(), f.owner, "that", f.now)
+				if err != nil || result != got {
+					t.Fatalf("route=%+v err=%v", result, err)
+				}
 			}
 		})
 	}
@@ -241,9 +283,7 @@ func TestRegisterDurableClaimAndMemoryFence(t *testing.T) {
 		t.Fatal("live claim stolen")
 	}
 	f.onCall = func() {
-		if err := f.r.SetMemoryBoundary(context.Background(), f.owner, f.now.Add(-90*time.Minute)); err != nil {
-			t.Error(err)
-		}
+		f.boundary = f.now.Add(-90 * time.Minute)
 	}
 	if f.rebuild(f.now.Add(2 * time.Minute)) {
 		t.Fatal("stale claimant committed after M moved")
@@ -274,24 +314,27 @@ func TestRegisterSourceArrivalFencesInFlightBuild(t *testing.T) {
 	}
 }
 
-func TestRegisterMemoryBoundaryTransactionRollback(t *testing.T) {
+func TestRegisterMemoryBoundaryProviderIsolationAndFailure(t *testing.T) {
 	f := newRegisterFixture(t)
 	f.turn("handoff-session", 0, "user", "old", f.now.Add(-2*time.Hour))
 	f.rebuild(f.now)
 	before := f.layers(f.now)
-	tx, err := f.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
+	f.boundary = f.now.Add(-90 * time.Minute)
+	other, err := f.r.Layers(context.Background(), RegisterOwner{"default", "other"}, f.now)
+	if err != nil || !other.MemoryBoundary.IsZero() || other.Compact != "" || other.Raw != "" {
+		t.Fatal("boundary owner leaked", err)
 	}
-	if err = SetRegisterMemoryBoundaryTx(context.Background(), tx, f.owner, f.now.Add(-90*time.Minute)); err != nil {
-		tx.Rollback()
-		t.Fatal(err)
+	want := errors.New("memory unavailable")
+	f.r.boundary = func(context.Context, RegisterOwner) (time.Time, error) { return time.Time{}, want }
+	if _, err = f.r.Route(context.Background(), f.owner, "that", f.now); !errors.Is(err, want) {
+		t.Fatal("provider error ignored", err)
 	}
-	if err = tx.Rollback(); err != nil {
-		t.Fatal(err)
+	if _, err = f.r.RebuildCompactForOwner(context.Background(), f.owner, f.now); !errors.Is(err, want) {
+		t.Fatal("rebuild provider error ignored", err)
 	}
-	if after := f.layers(f.now); after != before {
-		t.Fatal("failed memory batch advanced boundary")
+	var compact string
+	if err = f.db.QueryRow(`SELECT compact FROM voice_context_registers WHERE workspace_id='default' AND owner_subject_id='owner'`).Scan(&compact); err != nil || compact != before.Compact {
+		t.Fatal("failed provider lost compact", err)
 	}
 }
 
@@ -307,11 +350,15 @@ func TestRegisterRejectsOversizedCompact(t *testing.T) {
 	}
 }
 
-func TestRegisterMigration218PreservesOldRows(t *testing.T) {
+func TestRegisterMigration219PreservesOldRowsAndReplays(t *testing.T) {
 	f := newRegisterFixture(t)
 	f.turn("handoff-session", 0, "assistant", "old transcript", f.now.Add(-2*time.Hour))
-	// Recreate the exact pre-218 shape on a real migrated fixture, retaining existing voice data.
-	f.exec(`DROP TABLE voice_context_registers; DROP TABLE voice_register_memory_boundaries; DELETE FROM schema_migrations WHERE version=218`)
+	// Recreate pre-219 shape while preserving real transcript and register rows.
+	f.exec(`ALTER TABLE voice_context_registers DROP COLUMN source_memory_boundary;
+CREATE TABLE voice_register_memory_boundaries(workspace_id TEXT,owner_subject_id TEXT,boundary_at TEXT);
+INSERT INTO voice_register_memory_boundaries VALUES('default','owner','2026-11-12T09:00:00Z');
+INSERT INTO voice_context_registers(workspace_id,owner_subject_id,compact,version) VALUES('default','owner','keep compact',7);
+DELETE FROM schema_migrations WHERE namespace='voice' AND version=219`)
 	if err := f.store.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -319,22 +366,85 @@ func TestRegisterMigration218PreservesOldRows(t *testing.T) {
 	if err := f.db.QueryRow(`SELECT t.text,v.owner_id FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id WHERE t.seq=0`).Scan(&text, &owner); err != nil || text != "old transcript" || owner != "owner" {
 		t.Fatalf("old rows lost: %q %q %v", text, owner, err)
 	}
-	f.exec(`INSERT INTO voice_context_registers(workspace_id,owner_subject_id) VALUES('default','owner')`)
-	var compact, through, built string
+	var compact, boundary string
 	var version int
-	if err := f.db.QueryRow(`SELECT compact,compact_through,built_at,version FROM voice_context_registers`).Scan(&compact, &through, &built, &version); err != nil || compact != "" || through != registerEpoch || built != registerEpoch || version != 0 {
-		t.Fatal("migration defaults invalid", err)
+	if err := f.db.QueryRow(`SELECT compact,version,source_memory_boundary FROM voice_context_registers`).Scan(&compact, &version, &boundary); err != nil || compact != "keep compact" || version != 7 || boundary != "" {
+		t.Fatal("migration lost old register", err)
 	}
-	// Upgrade fixtures can remove the receipt while retaining these independent tables.
-	// Replaying 218 must preserve both existing register state and memory coverage.
-	f.exec(`UPDATE voice_context_registers SET compact='keep compact',version=7;
-INSERT INTO voice_register_memory_boundaries(workspace_id,owner_subject_id,boundary_at) VALUES('default','owner','2026-11-12T09:00:00Z');
-DELETE FROM schema_migrations WHERE version=218`)
+	var count int
+	if err := f.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='voice_register_memory_boundaries'`).Scan(&count); err != nil || count != 0 {
+		t.Fatal("voice M survived", err)
+	}
+	// Replaying both receipts must tolerate retained tables/columns and drop the recreated M.
+	f.exec(`UPDATE voice_context_registers SET source_memory_boundary='2026-11-12T09:00:00Z'; DELETE FROM schema_migrations WHERE namespace='voice' AND version>=218`)
 	if err := f.store.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	var boundary string
-	if err := f.db.QueryRow(`SELECT r.compact,r.version,m.boundary_at FROM voice_context_registers r JOIN voice_register_memory_boundaries m USING(workspace_id,owner_subject_id)`).Scan(&compact, &version, &boundary); err != nil || compact != "keep compact" || version != 7 || boundary != "2026-11-12T09:00:00Z" {
+	if err := f.db.QueryRow(`SELECT compact,version,source_memory_boundary FROM voice_context_registers`).Scan(&compact, &version, &boundary); err != nil || compact != "keep compact" || version != 7 || boundary != "2026-11-12T09:00:00Z" {
 		t.Fatalf("migration replay lost register state: compact=%q version=%d boundary=%q err=%v", compact, version, boundary, err)
+	}
+	if err := f.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='voice_register_memory_boundaries'`).Scan(&count); err != nil || count != 0 {
+		t.Fatal("replayed voice M survived", err)
+	}
+}
+
+func TestRegisterRouteMemoryRoundTripAndFailures(t *testing.T) {
+	for _, mode := range []string{"success", "repeat", "provider_error", "missing_provider", "unlisted", "foreign", "model_error", "invalid_second"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newRegisterFixture(t)
+			f.output = `{"memory_key":"trip"}`
+			reads := 0
+			f.r.content = func(_ context.Context, owner RegisterOwner, key string) (string, error) {
+				reads++
+				if owner != f.owner || key != "trip" {
+					t.Fatal("memory owner/key mismatch")
+				}
+				if mode == "provider_error" {
+					return "", errors.New("unavailable")
+				}
+				return "saved trip content", nil
+			}
+			if mode == "missing_provider" {
+				f.r.content = nil
+			}
+			if mode == "unlisted" {
+				f.output = `{"memory_key":"absent"}`
+			}
+			owner := f.owner
+			if mode == "foreign" {
+				owner = RegisterOwner{"default", "other"}
+			}
+			f.onCall = func() {
+				if f.calls != 2 {
+					return
+				}
+				if !strings.Contains(f.inputs[1], "saved trip content") || !strings.Contains(f.inputs[1], "Current sentence:\nthat") {
+					t.Error("memory follow-up lost context")
+				}
+				switch mode {
+				case "repeat":
+				case "model_error":
+					f.fail = true
+				case "invalid_second":
+					f.output = `{"route":"progress","restatement":"none"}`
+				default:
+					f.output = `{"route":"task","restatement":"It refers to the saved trip."}`
+				}
+			}
+			got, err := f.r.Route(context.Background(), owner, "that", f.now)
+			if mode == "success" {
+				if err != nil || got != (RouteResult{"task", "It refers to the saved trip."}) || reads != 1 || f.calls != 2 {
+					t.Fatalf("got=%+v reads=%d calls=%d err=%v", got, reads, f.calls, err)
+				}
+			} else if err == nil || got != (RouteResult{}) {
+				t.Fatal("accepted failure", got, err)
+			}
+			if f.calls > 2 || reads > 1 {
+				t.Fatal("unbounded memory loop")
+			}
+			if (mode == "unlisted" || mode == "foreign") && reads != 0 {
+				t.Fatal("unlisted memory fetched")
+			}
+		})
 	}
 }
