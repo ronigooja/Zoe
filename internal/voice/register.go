@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -83,11 +85,26 @@ func (r *ContextRegister) MemoryKeys(ctx context.Context, owner RegisterOwner) (
 	return r.keys(ctx, owner)
 }
 
-func (r *ContextRegister) Route(ctx context.Context, owner RegisterOwner, sentence string, now time.Time) (RouteResult, error) {
+func (r *ContextRegister) Route(ctx context.Context, owner RegisterOwner, sentence string, now time.Time) (result RouteResult, resultErr error) {
+	started := time.Now()
+	kind := "db"
+	defer func() {
+		status, route := "ok", result.Route
+		if resultErr != nil {
+			status, route = "error", "none"
+		} else {
+			kind = "none"
+		}
+		log.Printf("register_call status=%s route=%s elapsed_ms=%d error_kind=%s", status, route, time.Since(started).Milliseconds(), kind)
+	}()
+	if validRegisterOwner(owner) != nil {
+		kind = "config"
+	}
 	layers, err := r.Layers(ctx, owner, now)
 	if err != nil {
 		return RouteResult{}, err
 	}
+	kind = "other"
 	keys, err := r.MemoryKeys(ctx, owner)
 	if err != nil {
 		return RouteResult{}, err
@@ -99,28 +116,55 @@ func (r *ContextRegister) Route(ctx context.Context, owner RegisterOwner, senten
 	input := "Memory keys:\n" + mappings.String() + "\nCompact:\n" + layers.Compact + "\nRaw:\n" + layers.Raw + "\nCurrent sentence:\n" + sentence
 	output, err := r.model.Complete(ctx, RegisterAttributionInstruction, input)
 	if err != nil {
+		kind = registerModelErrorKind(ctx, r.model, err)
 		return RouteResult{}, err
 	}
+	kind = "output_invalid"
 	result, key, err := parseRegisterRoute(output, keys)
 	if err != nil || key == "" {
 		return result, err
 	}
 	if r.content == nil {
+		kind = "config"
 		return RouteResult{}, errors.New("register memory content provider is required")
 	}
+	kind = "other"
 	content, err := r.content(ctx, owner, key)
 	if err != nil {
 		return RouteResult{}, err
 	}
 	output, err = r.model.Complete(ctx, RegisterAttributionInstruction, input+"\nRequested memory key:\n"+key+"\nRequested memory content:\n"+content)
 	if err != nil {
+		kind = registerModelErrorKind(ctx, r.model, err)
 		return RouteResult{}, err
 	}
+	kind = "output_invalid"
 	result, key, err = parseRegisterRoute(output, keys)
 	if key != "" {
 		return RouteResult{}, errors.New("register requested memory more than once")
 	}
 	return result, err
+}
+
+// registerModelErrorKind classifies model failures without logging error text or payloads.
+func registerModelErrorKind(ctx context.Context, model *modelclient.Client, err error) string {
+	if model == nil {
+		return "config"
+	}
+	var httpErr *modelclient.HTTPError
+	if errors.As(err, &httpErr) {
+		return "model_http"
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return "model_timeout"
+	}
+	switch err.Error() {
+	case "invalid model response", "model response was incomplete":
+		return "output_invalid"
+	default:
+		return "model_transport"
+	}
 }
 
 func parseRegisterRoute(output string, keys []MemoryMappingKey) (RouteResult, string, error) {
