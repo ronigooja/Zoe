@@ -425,7 +425,7 @@ func TestRegisterIsNeverCalledInsideATransaction(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"route":"recall","restatement":""}`})
 	}))
 	defer model.Close()
-	register, err := NewRegister(r.store.DB(), RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000})
+	register, err := NewRegister(r.store.DB(), RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "compact-fixture", APIKey: "fixture"}, CompactCharacters: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}

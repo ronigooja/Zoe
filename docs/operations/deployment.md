@@ -54,13 +54,22 @@ separate `instructions` system prompt.
 
 ### Register routing configuration
 
-When deploying the context-register wiring, configure `ZOE_REGISTER_BASE_URL`,
-`ZOE_REGISTER_MODEL`, `ZOE_REGISTER_API_KEY_FILE`,
-`ZOE_REGISTER_REASONING_EFFORT`, and `ZOE_REGISTER_TIMEOUT_MS`. Each unset field
-falls back to its `ZOE_STEWARD_*` counterpart. With neither timeout set, the
-default is 30000 ms; register validation accepts 500-60000 ms. Both routing calls
-share the existing 35-second classification budget. Compose mounts a distinct
-register secret, falling back to the Steward secret source.
+When deploying the context-register wiring, independently configure routing with
+`ZOE_REGISTER_{BASE_URL,MODEL,API_KEY_FILE,REASONING_EFFORT,THINKING,TIMEOUT_MS}`
+and compaction with `ZOE_COMPACT_{BASE_URL,MODEL,API_KEY_FILE,REASONING_EFFORT,THINKING,TIMEOUT_MS}`.
+For each prefix, `BASE_URL`, `MODEL`, and `API_KEY_FILE` are required: there is no
+fallback; startup fails if any is unset or the key file is unreadable or empty,
+naming the variable without exposing its content. Compose requires all six host
+variables and mounts independent routing and compaction secrets. Effort and
+thinking default to empty. Routing timeout defaults to 30000 ms (500-60000);
+compaction timeout defaults to 600000 ms (5000-600000). Both routing calls share
+the existing 35-second classification budget.
+
+When tuning compaction, `ZOE_COMPACT_MAX_CHARACTERS` defaults to 8000 (500-100000),
+`ZOE_COMPACT_INTERVAL_MINUTES` defaults to 60 (1-1440), and
+`ZOE_REGISTER_RAW_WINDOW_MINUTES` defaults to 60 (5-1440). Invalid values fail
+startup with the variable name. The raw-window width sets the compact right edge;
+raw starts at the retained compact edge even after a failed rebuild.
 
 For this wiring, register failures and Steward failures create no task and hold
 the fixed processing-error speech. Memory writes are staged silently once per

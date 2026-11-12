@@ -44,11 +44,21 @@ services:
       ZOE_VOICE_INGEST_ID: ${ZOE_VOICE_INGEST_ID:-voice-gateway}
       ZOE_VOICE_INGEST_WORKSPACES: ${ZOE_VOICE_INGEST_WORKSPACES:-default}
       ZOE_VOICE_ACCOUNT_MEDIA_ENABLED: ${ZOE_VOICE_ACCOUNT_MEDIA_ENABLED:-false}
-      ZOE_REGISTER_BASE_URL: ${ZOE_REGISTER_BASE_URL:-}
-      ZOE_REGISTER_MODEL: ${ZOE_REGISTER_MODEL:-}
+      ZOE_REGISTER_BASE_URL: ${ZOE_REGISTER_BASE_URL:?set routing model base URL}
+      ZOE_REGISTER_MODEL: ${ZOE_REGISTER_MODEL:?set routing model}
       ZOE_REGISTER_REASONING_EFFORT: ${ZOE_REGISTER_REASONING_EFFORT:-}
-      ZOE_REGISTER_TIMEOUT_MS: ${ZOE_REGISTER_TIMEOUT_MS:-${ZOE_STEWARD_TIMEOUT_MS:-30000}}
+      ZOE_REGISTER_THINKING: ${ZOE_REGISTER_THINKING:-}
+      ZOE_REGISTER_TIMEOUT_MS: ${ZOE_REGISTER_TIMEOUT_MS:-30000}
       ZOE_REGISTER_API_KEY_FILE: /run/secrets/register_api_key
+      ZOE_REGISTER_RAW_WINDOW_MINUTES: ${ZOE_REGISTER_RAW_WINDOW_MINUTES:-60}
+      ZOE_COMPACT_BASE_URL: ${ZOE_COMPACT_BASE_URL:?set compaction model base URL}
+      ZOE_COMPACT_MODEL: ${ZOE_COMPACT_MODEL:?set compaction model}
+      ZOE_COMPACT_API_KEY_FILE: /run/secrets/compact_api_key
+      ZOE_COMPACT_REASONING_EFFORT: ${ZOE_COMPACT_REASONING_EFFORT:-}
+      ZOE_COMPACT_THINKING: ${ZOE_COMPACT_THINKING:-}
+      ZOE_COMPACT_TIMEOUT_MS: ${ZOE_COMPACT_TIMEOUT_MS:-600000}
+      ZOE_COMPACT_MAX_CHARACTERS: ${ZOE_COMPACT_MAX_CHARACTERS:-8000}
+      ZOE_COMPACT_INTERVAL_MINUTES: ${ZOE_COMPACT_INTERVAL_MINUTES:-60}
       ZOE_STEWARD_BASE_URL: ${ZOE_STEWARD_BASE_URL:-}
       ZOE_VOICE_INSTRUCTION_TEXT: ${ZOE_VOICE_INSTRUCTION_TEXT:-}
       ZOE_STEWARD_API_STYLE: ${ZOE_STEWARD_API_STYLE:-}
@@ -91,6 +101,8 @@ services:
         target: voice_ingest_token
       - source: register_api_key
         target: register_api_key
+      - source: compact_api_key
+        target: compact_api_key
       - source: steward_api_key
         target: steward_api_key
       - source: summary_api_key
@@ -174,7 +186,9 @@ secrets:
   voice_ingest_token:
     file: ${ZOE_VOICE_INGEST_TOKEN_FILE:-/dev/null}
   register_api_key:
-    file: ${ZOE_REGISTER_API_KEY_FILE:-${ZOE_STEWARD_API_KEY_FILE:-/dev/null}}
+    file: ${ZOE_REGISTER_API_KEY_FILE:?set routing API key file path}
+  compact_api_key:
+    file: ${ZOE_COMPACT_API_KEY_FILE:?set compaction API key file path}
   summary_api_key:
     file: ${ZOE_SUMMARY_API_KEY_FILE:-/dev/null}
   answer_api_key:

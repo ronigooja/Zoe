@@ -75,10 +75,17 @@ func TestServerSubprocessBootstrapAndRestart(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "state", "zoe.db")
 	token := subprocessSecret(t)
 	startupKey := token
+	modelKey := filepath.Join(t.TempDir(), "model-key")
+	if err := os.WriteFile(modelKey, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	var stderr bytes.Buffer
 	start := func() *exec.Cmd {
 		cmd := exec.Command(binary)
 		cmd.Env = append(os.Environ(), "ZOE_LISTEN_ADDR="+addr, "ZOE_DATABASE_PATH="+db, "ZOE_INSTANCE_KEY="+startupKey, "ZOE_VOICE_GATEWAY_URL=", "ZOE_VOICE_GATEWAY_API_KEY=")
+		for _, prefix := range []string{"ZOE_REGISTER", "ZOE_COMPACT"} {
+			cmd.Env = append(cmd.Env, prefix+"_BASE_URL=https://model.invalid", prefix+"_MODEL=fixture", prefix+"_API_KEY_FILE="+modelKey)
+		}
 		cmd.Stderr = &stderr
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)

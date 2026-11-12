@@ -48,10 +48,15 @@ func TestComposedServerRegistersDerivedWorkerCredentialAndFailsClosedWithoutVoic
 	if err != nil || !credential.Enabled || credential.Token != workerToken || !sameStringSet(credential.Scopes, memoryWorkerScopes) || len(credential.WorkspaceIDs) != 1 || credential.WorkspaceIDs[0] != "default" {
 		t.Fatalf("memory runner credential did not load with exact scopes/workspaces: %#v err=%v", credential, err)
 	}
-	server, err := composeControlServer(store, control.Config{}, voice.Config{}, capabilities.Config{}, memory.DerivedConfig{})
+	registerConfig, err := registerConfigFromEnv(func(k string) string { return registerEnvFixture()[k] }, func(string) ([]byte, error) { return []byte("fixture"), nil })
 	if err != nil {
 		t.Fatal(err)
 	}
+	server, err := composeControlServer(store, control.Config{}, voice.Config{RegisterConfig: registerConfig}, capabilities.Config{}, memory.DerivedConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown()
 	if err = store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}

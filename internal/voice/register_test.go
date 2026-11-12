@@ -32,7 +32,8 @@ type registerFixture struct {
 
 func newRegisterFixture(t *testing.T) *registerFixture {
 	t.Helper()
-	_, store, _ := transcriptHTTPServer(t)
+	fixtureModel := RegisterModelConfig{BaseURL: "https://unused.invalid", Model: "fixture", APIKey: "fixture"}
+	_, store, _ := handoffHTTPServerWithConfig(t, Config{IngestEnabled: true, RegisterConfig: &RegisterConfig{Model: fixtureModel, CompactModel: fixtureModel, CompactCharacters: 1000}})
 	f := &registerFixture{t: t, db: store.DB(), store: store, now: time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC), owner: RegisterOwner{"default", "owner"}, output: "compact record"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct{ Instructions, Input string }
@@ -55,7 +56,7 @@ func newRegisterFixture(t *testing.T) *registerFixture {
 	}))
 	t.Cleanup(server.Close)
 	var err error
-	f.r, err = NewRegister(f.db, RegisterConfig{Model: RegisterModelConfig{BaseURL: server.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000, MemoryBoundary: func(_ context.Context, o RegisterOwner) (time.Time, error) {
+	f.r, err = NewRegister(f.db, RegisterConfig{Model: RegisterModelConfig{BaseURL: server.URL, Model: "route-fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: server.URL, Model: "compact-fixture", APIKey: "fixture"}, CompactCharacters: 1000, MemoryBoundary: func(_ context.Context, o RegisterOwner) (time.Time, error) {
 		if o == f.owner {
 			return f.boundary, nil
 		}
