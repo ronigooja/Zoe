@@ -248,8 +248,23 @@ func (c *Client) MoveSession(ctx context.Context, sessionID, directory string) e
 	_, err := c.do(ctx, http.MethodPost, "/api/session/"+url.PathEscape(sessionID)+"/move", b, nil)
 	return err
 }
-func (c *Client) Prompt(ctx context.Context, sessionID, text string) error {
-	b, _ := json.Marshal(map[string]string{"text": text})
+
+type PromptOptions struct {
+	ID       string `json:"id,omitempty"`
+	Delivery string `json:"delivery,omitempty"`
+}
+
+func (c *Client) Prompt(ctx context.Context, sessionID, text string, options ...PromptOptions) error {
+	body := map[string]string{"text": text}
+	if len(options) > 0 {
+		if options[0].ID != "" {
+			body["id"] = options[0].ID
+		}
+		if options[0].Delivery != "" {
+			body["delivery"] = options[0].Delivery
+		}
+	}
+	b, _ := json.Marshal(body)
 	_, err := c.do(ctx, http.MethodPost, "/api/session/"+url.PathEscape(sessionID)+"/prompt", b, nil)
 	if err != nil {
 		return fmt.Errorf("%w: prompt: %v", ErrOutcomeUnknown, err)

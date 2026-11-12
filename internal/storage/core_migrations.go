@@ -6,6 +6,15 @@ import (
 )
 
 func RegisterCoreMigrations(s *Store) error {
+	if err := s.RegisterMigration(Migration{Namespace: "core", Version: 16, Name: "run_entry_deliveries", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE run_entry_deliveries (
+run_id TEXT NOT NULL REFERENCES runs(id), entry_id TEXT NOT NULL REFERENCES task_entries(id),
+delivered_at TEXT NOT NULL, prompt_kind TEXT NOT NULL DEFAULT 'append', PRIMARY KEY(run_id,entry_id));
+CREATE TABLE run_rotation_snapshots(run_id TEXT NOT NULL REFERENCES runs(id), snapshot_id TEXT NOT NULL, instructions_json BLOB NOT NULL, PRIMARY KEY(run_id,snapshot_id));`)
+		return err
+	}}); err != nil {
+		return err
+	}
 	if err := s.RegisterMigration(Migration{Namespace: "core", Version: 1, Name: "core_authority", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 CREATE TABLE workspaces (

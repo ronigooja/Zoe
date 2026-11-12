@@ -21,8 +21,31 @@ type ControlClient struct {
 	client *http.Client
 }
 
+func (c *ControlClient) AcknowledgeEntry(ctx context.Context, runID string, delivery contracts.EntryDelivery) error {
+	b, err := json.Marshal(delivery)
+	if err != nil {
+		return err
+	}
+	r, err := c.request(ctx, http.MethodPost, "/runner/v1/runs/"+url.PathEscape(runID)+"/entry-deliveries", b, "")
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusNoContent {
+		return safeHTTPError("acknowledge entry", r.StatusCode)
+	}
+	return nil
+}
+
 func (c *ControlClient) RotationContext(ctx context.Context, runID, attemptID string, fence uint64) (contracts.RotationContext, error) {
+	return c.RotationSnapshot(ctx, runID, attemptID, fence, "")
+}
+
+func (c *ControlClient) RotationSnapshot(ctx context.Context, runID, attemptID string, fence uint64, snapshotID string) (contracts.RotationContext, error) {
 	endpoint := "/runner/v1/runs/" + url.PathEscape(runID) + "/rotation-context?attempt_id=" + url.QueryEscape(attemptID) + "&fence=" + url.QueryEscape(fmt.Sprint(fence))
+	if snapshotID != "" {
+		endpoint += "&snapshot_id=" + url.QueryEscape(snapshotID)
+	}
 	response, err := c.request(ctx, http.MethodGet, endpoint, nil, "")
 	if err != nil {
 		return contracts.RotationContext{}, err

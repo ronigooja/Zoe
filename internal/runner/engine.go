@@ -32,6 +32,19 @@ type RunnerAPI interface {
 type rotationContextControl interface {
 	RotationContext(context.Context, string, string, uint64) (contracts.RotationContext, error)
 }
+
+type entryDeliveryControl interface {
+	AcknowledgeEntry(context.Context, string, contracts.EntryDelivery) error
+}
+type entryPromptRuntime interface {
+	PromptEntry(context.Context, RuntimeBinding, contracts.RunEntry) error
+}
+
+func entryMessageID(id string) string {
+	sum := sha256.Sum256([]byte("zoe-task-entry:" + id))
+	return "msg_" + hex.EncodeToString(sum[:])
+}
+
 type runBudgetControl interface {
 	ReserveBudget(context.Context, string, contracts.RunBudgetReserveRequest) (contracts.RunBudgetReceipt, error)
 	SettleBudget(context.Context, string, string, contracts.RunBudgetSettleRequest) (contracts.RunBudgetReceipt, error)
@@ -169,6 +182,9 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err err
 	prompt := buildPrompt(claim)
 	if claim.ResumeQuestion != "" {
 		prompt = buildResumePrompt(claim.Goal, claim.ResumeQuestion, claim.ResumeAnswer)
+		for _, instruction := range claim.Instructions {
+			prompt += "\n\n" + instruction
+		}
 	}
 	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: fmt.Sprint(claim.Fence), Model: route.Model, ModelRouteID: claim.ModelRouteID, Agent: claim.Agent, Permissions: claim.PermissionRules, Prompt: prompt, Workspace: claim.WorkspaceID}
 	entry, err = e.Journal.SaveClaim(ctx, claim, spec, "claimed")
@@ -281,8 +297,13 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			time.Sleep(e.interval())
 			continue
 		}
+		pendingKnown := true
 		if pending, ok := e.Runtime.(PendingRequests); ok {
-			if requests, reqErr := pending.PendingPermissions(ctx, b); reqErr == nil && len(requests) > 0 {
+			requests, reqErr := pending.PendingPermissions(ctx, b)
+			if reqErr != nil {
+				pendingKnown = false
+			}
+			if reqErr == nil && len(requests) > 0 {
 				r := requests[0]
 				entry, _, _ := e.Journal.Entry(ctx, claim.RunID)
 				if authc, ok := e.Control.(runtimeAuthorizationControl); ok {
@@ -311,7 +332,11 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 				time.Sleep(e.interval())
 				continue
 			}
-			if forms, reqErr := pending.PendingForms(ctx, b); reqErr == nil && len(forms) > 0 {
+			forms, reqErr := pending.PendingForms(ctx, b)
+			if reqErr != nil {
+				pendingKnown = false
+			}
+			if reqErr == nil && len(forms) > 0 {
 				f := forms[0]
 				entry, _, _ := e.Journal.Entry(ctx, claim.RunID)
 				if authc, ok := e.Control.(runtimeAuthorizationControl); ok {
@@ -379,6 +404,12 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			}
 			return e.rotate(ctx, claim, b, msgs)
 		}
+		if !waiting && pendingKnown && control.DesiredControl == "run" && len(control.Entries) > 0 {
+			if e.deliverEntries(ctx, claim, b, control.Entries) {
+				time.Sleep(e.interval())
+				continue
+			}
+		}
 		_ = status
 		m, done, term := opencode.Completion(msgs)
 		if !done {
@@ -402,6 +433,42 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 		}
 		return e.terminate(ctx, claim, b, "completed", false)
 	}
+}
+
+// Delivery failures are deliberately nonterminal. Reuse the API message identity
+// after an uncertain prompt or acknowledgement; never put that identity in text.
+func (e *Engine) deliverEntries(ctx context.Context, c contracts.JobClaim, b RuntimeBinding, entries []contracts.RunEntry) bool {
+	api, ok := e.Control.(entryDeliveryControl)
+	if !ok {
+		return false
+	}
+	runtime, ok := e.Runtime.(entryPromptRuntime)
+	if !ok {
+		return false
+	}
+	for _, entry := range entries {
+		current, err := e.Control.Control(ctx, c.RunID)
+		if err != nil || current.DesiredControl != "run" {
+			return true
+		}
+		found := false
+		for _, pending := range current.Entries {
+			if pending.ID == entry.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return true
+		}
+		if err := runtime.PromptEntry(ctx, b, entry); err != nil {
+			return true
+		}
+		if err := api.AcknowledgeEntry(ctx, c.RunID, contracts.EntryDelivery{AttemptID: c.AttemptID, Fence: c.Fence, EntryID: entry.ID}); err != nil {
+			return true
+		}
+	}
+	return true
 }
 
 func (e *Engine) rotationHasNoRoom(ctx context.Context, c contracts.JobClaim, msgs []opencode.Message) bool {
@@ -668,7 +735,13 @@ func (e *Engine) rotate(ctx context.Context, c contracts.JobClaim, old RuntimeBi
 		_ = e.Runtime.Abort(ctx, old)
 		return e.terminate(ctx, c, old, "context_rotation_limit_exceeded", false)
 	}
+	if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, old.SessionID, "", count); err != nil {
+		return err
+	}
 	rotation := e.buildRotationPrompt(ctx, c, msgs)
+	if rotation == "" {
+		return fmt.Errorf("%w: rotation snapshot unavailable", ErrOutcomePending)
+	}
 	if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, old.SessionID, rotation, count); err != nil {
 		return err
 	}
@@ -711,7 +784,18 @@ func (e *Engine) emitSessionRotated(ctx context.Context, c contracts.JobClaim, o
 
 func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, msgs []opencode.Message) string {
 	ctxData := contracts.RotationContext{MemoryUnavailable: true}
-	if control, ok := e.Control.(rotationContextControl); ok {
+	if control, ok := e.Control.(interface {
+		RotationSnapshot(context.Context, string, string, uint64, string) (contracts.RotationContext, error)
+	}); ok {
+		entry, _, err := e.Journal.Entry(ctx, c.RunID)
+		if err != nil {
+			return ""
+		}
+		ctxData, err = control.RotationSnapshot(ctx, c.RunID, c.AttemptID, c.Fence, fmt.Sprint(entry.RotationCount))
+		if err != nil {
+			return ""
+		}
+	} else if control, ok := e.Control.(rotationContextControl); ok {
 		if refreshed, err := control.RotationContext(ctx, c.RunID, c.AttemptID, c.Fence); err == nil {
 			ctxData = refreshed
 		}
@@ -749,12 +833,22 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 	}
 	standardClaim := c
 	standardClaim.MemoryContext = contracts.MemoryContext{}
+	standardClaim.Instructions = nil
 	b.WriteString("\n\nStandard constraints:\n" + buildPrompt(standardClaim))
 	return truncate(b.String(), rotationPromptLimit)
 }
 
 func (e *Engine) recoverRotation(ctx context.Context, c contracts.JobClaim, entry JournalEntry) error {
 	if entry.Phase == "rotating" && entry.RotationNewSession == "" {
+		if entry.RotationSummary == "" {
+			entry.RotationSummary = e.buildRotationPrompt(ctx, c, nil)
+			if entry.RotationSummary == "" {
+				return fmt.Errorf("%w: rotation snapshot unavailable", ErrOutcomePending)
+			}
+			if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, entry.RotationOldSession, entry.RotationSummary, entry.RotationCount); err != nil {
+				return err
+			}
+		}
 		spec := entry.Spec
 		spec.Prompt = entry.RotationSummary
 		binding, err := e.Runtime.Create(ctx, spec)
@@ -1104,6 +1198,9 @@ func validateClaim(c contracts.JobClaim) error {
 }
 func buildPrompt(c contracts.JobClaim) string {
 	prompt := "Work only on the assigned goal. Do not delegate or perform external irreversible changes.\n\nGoal:\n" + c.Goal
+	for _, instruction := range c.Instructions {
+		prompt += "\n\n" + instruction
+	}
 	if len(c.MemoryContext.Items) == 0 {
 		return prompt
 	}

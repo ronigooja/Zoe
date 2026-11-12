@@ -206,6 +206,14 @@ func (r OpenCodeRuntime) Prompt(ctx context.Context, b RuntimeBinding, p string)
 	}
 	return c.Prompt(ctx, b.SessionID, p)
 }
+
+func (r OpenCodeRuntime) PromptEntry(ctx context.Context, b RuntimeBinding, entry contracts.RunEntry) error {
+	c, err := r.client()
+	if err != nil {
+		return err
+	}
+	return c.Prompt(ctx, b.SessionID, entry.Content, opencode.PromptOptions{ID: entryMessageID(entry.ID), Delivery: "steer"})
+}
 func (r OpenCodeRuntime) Status(ctx context.Context, b RuntimeBinding) (map[string]opencode.Status, error) {
 	c, e := r.client()
 	if e != nil {

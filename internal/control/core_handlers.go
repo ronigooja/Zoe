@@ -250,8 +250,7 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 	if err := decodePayload(req.Payload, &p); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
-	p.Content = strings.TrimSpace(p.Content)
-	if p.TaskID == "" || p.Content == "" || len(p.Content) > 20000 {
+	if p.TaskID == "" || strings.TrimSpace(p.Content) == "" || len(p.Content) > 20000 {
 		return contracts.CommandResult{}, nil, apiError(400, "invalid_request", "task_id and content are required", nil)
 	}
 	version, status, err := taskVersionStatus(ctx, tx, c.Principal, p.TaskID)
@@ -303,7 +302,7 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 				return contracts.CommandResult{}, nil, apiError(409, "confirmation_invalid", "admission confirmation does not match the pending request", nil)
 			}
 		}
-		confirmed = explicitConfirmationPhrases[strings.ToLower(p.Content)]
+		confirmed = explicitConfirmationPhrases[strings.ToLower(strings.TrimSpace(p.Content))]
 		if !confirmed {
 			if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='reject' WHERE task_id=? AND run_id=? AND action_digest=? AND authorization_used=0`, p.TaskID, interactionRun, actionDigest); err != nil {
 				return contracts.CommandResult{}, nil, err
@@ -335,6 +334,11 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 	if interaction == "awaiting_message" && interactionRun != "" && actionDigest != "" {
 		if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='answer',message=? WHERE task_id=? AND run_id=? AND action_digest=? AND authorization_used=0`, p.Content, p.TaskID, interactionRun, actionDigest); err != nil {
 			return contracts.CommandResult{}, nil, err
+		}
+		if liveInteractionRun {
+			if err = markRunEntries(ctx, tx, interactionRun, "answer", []contracts.RunEntry{{ID: id}}); err != nil {
+				return contracts.CommandResult{}, nil, err
+			}
 		}
 	}
 	if interaction == "explicit_confirmation" && !expiredInteraction && confirmed {

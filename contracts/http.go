@@ -236,6 +236,7 @@ type JobAuthorization struct {
 }
 
 type JobClaim struct {
+	Instructions          []string          `json:"instructions,omitempty"`
 	RunID                 string            `json:"run_id"`
 	TaskID                string            `json:"task_id"`
 	AttemptID             string            `json:"attempt_id"`
@@ -344,9 +345,22 @@ type ClaimRecovery struct {
 }
 
 type RunControl struct {
-	RunID          string `json:"run_id"`
-	DesiredControl string `json:"desired_control"`
-	ControlVersion int64  `json:"control_version"`
+	Entries        []RunEntry `json:"entries,omitempty"`
+	RunID          string     `json:"run_id"`
+	DesiredControl string     `json:"desired_control"`
+	ControlVersion int64      `json:"control_version"`
+}
+
+type RunEntry struct {
+	ID        string    `json:"id"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type EntryDelivery struct {
+	AttemptID string `json:"attempt_id"`
+	Fence     uint64 `json:"fence"`
+	EntryID   string `json:"entry_id"`
 }
 
 type ExternalEffect struct {

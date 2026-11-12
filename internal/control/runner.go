@@ -223,6 +223,18 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 			_ = tx.QueryRowContext(r.Context(), `SELECT coalesce(content,'') FROM task_entries WHERE task_id=? AND kind='user_message' ORDER BY created_at DESC,id DESC LIMIT 1`, chosen.id).Scan(&claim.ResumeAnswer)
 		}
 	}
+	initialEntries, err := orderedRunEntries(r.Context(), tx, runID, false)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	for _, entry := range initialEntries {
+		claim.Instructions = append(claim.Instructions, entry.Content)
+	}
+	if err = markRunEntries(r.Context(), tx, runID, "initial", initialEntries); err != nil {
+		writeError(w, err)
+		return
+	}
 	if err = tx.Commit(); err != nil {
 		writeError(w, err)
 		return
@@ -312,28 +324,25 @@ func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	rows, err := s.store.DB().QueryContext(r.Context(), `SELECT content FROM task_entries WHERE workspace_id=? AND task_id=? AND kind='user_message' ORDER BY created_at,id`, workspace, taskID)
+	tx, err := s.store.DB().BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	defer rows.Close()
-	const limit = 12000
-	var all []string
-	total := 0
-	for rows.Next() {
-		var content string
-		if err := rows.Scan(&content); err != nil {
-			writeError(w, err)
-			return
-		}
-		all = append(all, content)
-		total += len(content) + 1
-	}
-	if err := rows.Err(); err != nil {
+	defer tx.Rollback()
+	entries, err := orderedRunEntries(r.Context(), tx, runID, false)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
+	const limit = 12000
+	var all []string
+	total := 0
+	for _, entry := range entries {
+		all = append(all, entry.Content)
+		total += len(entry.Content) + 1
+	}
+	selected := entries
 	if total > limit {
 		kept := []string{}
 		used := 0
@@ -346,6 +355,40 @@ func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
 			used += n
 		}
 		all = append([]string{"[Earlier user instructions omitted: rotation context capped; newest instructions retained.]"}, kept...)
+		selected = entries[len(entries)-len(kept):]
+	}
+	if snapshotID := r.URL.Query().Get("snapshot_id"); snapshotID != "" {
+		if len(snapshotID) > 64 {
+			writeError(w, apiError(400, "invalid_request", "snapshot id too long", nil))
+			return
+		}
+		var stored []byte
+		err = tx.QueryRowContext(r.Context(), `SELECT instructions_json FROM run_rotation_snapshots WHERE run_id=? AND snapshot_id=?`, runID, snapshotID).Scan(&stored)
+		if err == nil {
+			if err = json.Unmarshal(stored, &all); err != nil {
+				writeError(w, err)
+				return
+			}
+		} else if errors.Is(err, sql.ErrNoRows) {
+			stored, err = json.Marshal(all)
+			if err == nil {
+				_, err = tx.ExecContext(r.Context(), `INSERT INTO run_rotation_snapshots(run_id,snapshot_id,instructions_json) VALUES(?,?,?)`, runID, snapshotID, stored)
+			}
+			if err == nil {
+				err = markRunEntries(r.Context(), tx, runID, "rotation", selected)
+			}
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+		} else {
+			writeError(w, err)
+			return
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		writeError(w, err)
+		return
 	}
 	memory, unavailable := s.assembleMemoryContext(r.Context(), claim)
 	writeJSON(w, http.StatusOK, contracts.RotationContext{Instructions: all, Memory: memory, MemoryUnavailable: unavailable})
@@ -427,6 +470,23 @@ func loadClaim(ctx context.Context, tx *sql.Tx, runID string, cfg Config) (contr
 			c.ResumeAnswer = c.ResumeAnswer[:20000]
 		}
 	}
+	rows, err := tx.QueryContext(ctx, `SELECT e.content FROM run_entry_deliveries d JOIN task_entries e ON e.id=d.entry_id WHERE d.run_id=? AND d.prompt_kind='initial' ORDER BY e.created_at,e.id`, runID)
+	if err != nil {
+		return c, err
+	}
+	for rows.Next() {
+		var content string
+		if err = rows.Scan(&content); err != nil {
+			rows.Close()
+			return c, err
+		}
+		c.Instructions = append(c.Instructions, content)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return c, err
+	}
 	return c, nil
 }
 
@@ -491,6 +551,33 @@ func (s *Server) handleCurrentClaims(w http.ResponseWriter, r *http.Request) {
 		} else {
 			claim.PregrantCapabilityIDs = []string{}
 		}
+		tx, txErr := s.store.DB().BeginTx(r.Context(), nil)
+		if txErr != nil {
+			writeError(w, txErr)
+			return
+		}
+		entries, txErr := orderedRunEntries(r.Context(), tx, id, false)
+		if txErr == nil {
+			for _, entry := range entries {
+				var kind string
+				txErr = tx.QueryRowContext(r.Context(), `SELECT prompt_kind FROM run_entry_deliveries WHERE run_id=? AND entry_id=?`, id, entry.ID).Scan(&kind)
+				if errors.Is(txErr, sql.ErrNoRows) {
+					txErr = nil
+					continue
+				}
+				if txErr != nil {
+					break
+				}
+				if kind == "initial" {
+					claim.Instructions = append(claim.Instructions, entry.Content)
+				}
+			}
+		}
+		tx.Rollback()
+		if txErr != nil {
+			writeError(w, txErr)
+			return
+		}
 		recovery.Claims = append(recovery.Claims, claim)
 	}
 	writeJSON(w, 200, recovery)
@@ -511,6 +598,30 @@ func (s *Server) handleRunControl(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	tx, err := s.store.DB().BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer tx.Rollback()
+	var workspace string
+	var ready bool
+	err = tx.QueryRowContext(r.Context(), `SELECT r.workspace_id,r.status='active' AND r.desired_control='run' AND t.status='active' AND t.interaction_state='none' FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id=? AND r.runner_id=?`, control.RunID, p.RunnerID).Scan(&workspace, &ready)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !HasRunnerScope(p, "runner:control:read", workspace) {
+		writeError(w, apiError(403, "forbidden", "workspace scope required", nil))
+		return
+	}
+	if ready {
+		control.Entries, err = orderedRunEntries(r.Context(), tx, control.RunID, true)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
 	}
 	writeJSON(w, 200, control)
 }
