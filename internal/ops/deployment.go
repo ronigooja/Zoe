@@ -92,9 +92,6 @@ type InspectConfig struct {
 	MemoryModel             string
 	MemoryReasoningEffort   string
 	MemoryLastCheck         string
-	TriageBaseURL           string
-	TriageModel             string
-	TriageSecretPath        string
 }
 
 func explicitDeploymentMode() Mode {

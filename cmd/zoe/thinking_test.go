@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestMaintenanceMenuTriageAcceptsEffortNone(t *testing.T) {
+func TestMaintenanceMenuCompactAcceptsEffortNone(t *testing.T) {
 	menuManager(t)
 	containerKeyFixture(t)
 	root := t.TempDir()
@@ -29,12 +29,12 @@ func TestMaintenanceMenuTriageAcceptsEffortNone(t *testing.T) {
 		t.Fatalf("out=%s err=%s", out.String(), errOut.String())
 	}
 	b, err := os.ReadFile(filepath.Join(root, "zoe-stack.env"))
-	if err != nil || !strings.Contains(string(b), `ZOE_TRIAGE_REASONING_EFFORT="none"`) || !strings.Contains(string(b), `ZOE_TRIAGE_THINKING="disabled"`) {
+	if err != nil || !strings.Contains(string(b), `ZOE_COMPACT_REASONING_EFFORT="none"`) || !strings.Contains(string(b), `ZOE_COMPACT_THINKING="disabled"`) {
 		t.Fatalf("env=%s err=%v", b, err)
 	}
 }
 
-func TestTriageTestUsesDisabledThinkingEffortNone(t *testing.T) {
+func TestCompactTestUsesDisabledThinkingEffortNone(t *testing.T) {
 	fakeServices(t, false)
 	containerKeyFixture(t)
 	var body map[string]any
@@ -53,11 +53,11 @@ func TestTriageTestUsesDisabledThinkingEffortNone(t *testing.T) {
 	if err := os.WriteFile(key, []byte("key"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	env := "ZOE_TRIAGE_BASE_URL=" + s.URL + "\nZOE_TRIAGE_MODEL=deepseek-flash\nZOE_TRIAGE_API_KEY_FILE=" + key + "\nZOE_TRIAGE_THINKING=disabled\nZOE_TRIAGE_REASONING_EFFORT=high\n"
+	env := "ZOE_COMPACT_BASE_URL=" + s.URL + "\nZOE_COMPACT_MODEL=deepseek-flash\nZOE_COMPACT_API_KEY_FILE=" + key + "\nZOE_COMPACT_THINKING=disabled\nZOE_COMPACT_REASONING_EFFORT=high\n"
 	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte(env), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := run([]string{"triage", "test", "--root", root, "--text", "classify this sentence"}, strings.NewReader(""), io.Discard, io.Discard); err != nil {
+	if err := menuTestModel(root, io.Discard, "Compact"); err != nil {
 		t.Fatal(err)
 	}
 	reasoning, ok := body["reasoning"].(map[string]any)

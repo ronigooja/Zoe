@@ -29,8 +29,8 @@ func configureMenuIO(root string, in io.Reader, out, errOut io.Writer) Configure
 	}}
 }
 
-func menuModel(m ConfigureMenuIO, triage bool, steward ...bool) error {
-	isSteward := len(steward) > 0 && steward[0]
+func menuModel(m ConfigureMenuIO, kind string) error {
+	independent := kind != "Memory"
 	root := m.Root
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -39,20 +39,14 @@ func menuModel(m ConfigureMenuIO, triage bool, steward ...bool) error {
 		return err
 	}
 	var base, model, effort, thinking, keyPath string
-	if triage {
-		c, e := d.TriageConfig()
-		if isSteward {
-			c, e = d.StewardConfig()
-		}
+	if independent {
+		c, e := d.MenuModelConfig(kind)
 		if e != nil {
 			return e
 		}
 		base, model, effort, thinking, keyPath = c.BaseURL, c.Model, c.ReasoningEffort, c.Thinking, c.SecretPath
 		if keyPath == "" {
-			keyPath = filepath.Join(root, "secrets", "triage-api-key")
-			if isSteward {
-				keyPath = filepath.Join(root, "secrets", "steward-api-key")
-			}
+			keyPath = filepath.Join(root, "secrets", strings.ToLower(kind)+"-api-key")
 		}
 	} else {
 		c, e := d.MemoryConfig()
@@ -61,20 +55,13 @@ func menuModel(m ConfigureMenuIO, triage bool, steward ...bool) error {
 		}
 		base, model, effort, keyPath = c.BaseURL, c.Model, c.ReasoningEffort, c.SecretPath
 	}
-	kind := "Memory"
-	if triage {
-		kind = "Triage"
-	}
-	if isSteward {
-		kind = "Steward"
-	}
 	fmt.Fprintf(m.Out, "%s model configuration (Enter keeps current value)\n", kind)
 	for {
 		base, err = menuValue(m, "Base URL", base)
 		if err != nil {
 			return err
 		}
-		if err = ops.ValidateTriageBaseURL(base, ""); err != nil && triage {
+		if err = ops.ValidateModelBaseURL(base); err != nil && independent {
 			fmt.Fprintf(m.ErrOut, "%s Nothing was saved.\n", err)
 			continue
 		}
@@ -97,7 +84,7 @@ func menuModel(m ConfigureMenuIO, triage bool, steward ...bool) error {
 		}
 		break
 	}
-	if triage {
+	if independent {
 		for {
 			thinking, err = menuValue(m, "Thinking (Enter = provider default, disabled = faster, enabled)", thinking)
 			if err != nil {
@@ -117,8 +104,8 @@ func menuModel(m ConfigureMenuIO, triage bool, steward ...bool) error {
 	if keyChoice != "" {
 		keyPath = keyChoice
 	}
-	if triage {
-		if err := menuSaveTriage(m, d, base, model, effort, thinking, keyPath, isSteward); err != nil {
+	if independent {
+		if err := menuSaveModel(m, d, base, model, effort, thinking, keyPath, kind); err != nil {
 			fmt.Fprintf(m.ErrOut, "%s Nothing was saved.\n", err)
 			return err
 		}
@@ -146,16 +133,15 @@ func menuValue(m ConfigureMenuIO, label, current string) (string, error) {
 	return strings.TrimSpace(v), nil
 }
 
-func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, effort, thinking, keyPath string, steward ...bool) error {
-	isSteward := len(steward) > 0 && steward[0]
+func menuSaveModel(m ConfigureMenuIO, d ops.Deployment, base, model, effort, thinking, keyPath, kind string) error {
 	if err := ops.ValidateReasoningEffort(effort); err != nil {
 		return err
 	}
-	if err := ops.ValidateTriageBaseURL(base, ""); err != nil {
+	if err := ops.ValidateModelBaseURL(base); err != nil {
 		return err
 	}
 	if strings.TrimSpace(model) == "" {
-		return errors.New("triage model is required")
+		return errors.New("model is required")
 	}
 	fmt.Fprint(m.Out, "API key (input is hidden; leave empty to keep current): ")
 	secret, err := m.PromptSecret(m.Out)
@@ -163,7 +149,7 @@ func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, effort, th
 		return err
 	}
 	if len(secret) > 0 {
-		if err := ops.WriteTriageSecretAtomic(keyPath, secret); err != nil {
+		if err := ops.WriteModelSecretAtomic(keyPath, secret); err != nil {
 			return err
 		}
 		for i := range secret {
@@ -172,12 +158,12 @@ func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, effort, th
 	} else if err := ops.ValidateKeyFile(keyPath); err != nil {
 		return err
 	}
-	c := ops.TriageConfig{BaseURL: base, Model: model, ReasoningEffort: effort, Thinking: thinking, SecretPath: keyPath}
-	write := ops.WriteTriageEnvAtomic
-	if isSteward {
-		write = ops.WriteStewardEnvAtomic
+	c, err := d.MenuModelConfig(kind)
+	if err != nil {
+		return err
 	}
-	if err := write(d.StackEnv, c, false); err != nil {
+	c.BaseURL, c.Model, c.ReasoningEffort, c.Thinking, c.SecretPath = base, model, effort, thinking, keyPath
+	if err := ops.WriteMenuModelEnvAtomic(d.StackEnv, c, kind); err != nil {
 		return err
 	}
 	fmt.Fprintln(m.Out, "Saved.")
@@ -189,18 +175,14 @@ func menuSaveTriage(m ConfigureMenuIO, d ops.Deployment, base, model, effort, th
 	if strings.TrimSpace(answer) == "" || strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes") {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		probe := ops.TestTriage
-		if isSteward {
-			probe = ops.TestSteward
-		}
-		r, testErr := probe(ctx, c, nil)
+		r, testErr := ops.TestMenuModel(ctx, c, kind, nil)
 		if testErr != nil {
 			fmt.Fprintf(m.ErrOut, "FAIL HTTP %dxx latency=%dms: %s\n", r.HTTPStatus/100, r.Latency.Milliseconds(), safeLabel(testErr.Error()))
 		} else {
 			fmt.Fprintf(m.Out, "PASS style=%s HTTP %dxx latency=%dms category=%s\n", safeLabel(r.Style), r.HTTPStatus/100, r.Latency.Milliseconds(), safeLabel(r.Category))
 		}
 	}
-	fmt.Fprintln(m.Out, "Apply with: zoe update")
+	fmt.Fprintln(m.Out, "Apply with: zoe update (restart/redeploy the server)")
 	return nil
 }
 
@@ -266,19 +248,20 @@ func menuSaveMemory(m ConfigureMenuIO, d ops.Deployment, base, model, effort, ke
 	return nil
 }
 
-func menuTestSteward(root string, out io.Writer) error {
+func menuTestModel(root string, out io.Writer, kind string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	d, err := ops.DiscoverDeployment(ctx, opsManager(), root)
 	if err != nil {
 		return err
 	}
-	c, err := d.StewardConfig()
+	c, err := d.MenuModelConfig(kind)
 	if err != nil {
 		return err
 	}
-	r, err := ops.TestSteward(ctx, c, nil)
+	r, err := ops.TestMenuModel(ctx, c, kind, nil)
 	if err != nil {
+		fmt.Fprintf(out, "FAIL style=%s HTTP %dxx latency=%dms\n", safeLabel(r.Style), r.HTTPStatus/100, r.Latency.Milliseconds())
 		return err
 	}
 	fmt.Fprintf(out, "PASS style=%s HTTP %dxx latency=%dms decision=%s\n", safeLabel(r.Style), r.HTTPStatus/100, r.Latency.Milliseconds(), safeLabel(r.Category))

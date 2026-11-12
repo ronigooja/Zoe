@@ -45,61 +45,6 @@ func fakeServices(t *testing.T, failReload bool) *[]string {
 	return &calls
 }
 
-func TestTriageTestTextFlagClassifiesGivenSentence(t *testing.T) {
-	containerKeyFixture(t)
-	fakeServices(t, false)
-	var input string
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		input, _ = body["input"].(string)
-		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"task"}]}]}`))
-	}))
-	defer s.Close()
-	root := t.TempDir()
-	key := filepath.Join(root, "key")
-	if err := os.WriteFile(key, []byte("key"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL=\""+s.URL+"/v1\"\nZOE_TRIAGE_MODEL=\"m\"\nZOE_TRIAGE_API_KEY_FILE=\""+key+"\"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := triageTestOperation([]string{"--root", root, "--text", "查查今天新闻"}, nil, io.Discard, io.Discard); err != nil {
-		t.Fatal(err)
-	}
-	if input != "查查今天新闻" {
-		t.Fatalf("input=%q", input)
-	}
-}
-
-func TestTriageTestDefaultSentenceUnchanged(t *testing.T) {
-	containerKeyFixture(t)
-	fakeServices(t, false)
-	var input string
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		input, _ = body["input"].(string)
-		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"progress"}]}]}`))
-	}))
-	defer s.Close()
-	root := t.TempDir()
-	key := filepath.Join(root, "key")
-	if err := os.WriteFile(key, []byte("key"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL=\""+s.URL+"/v1\"\nZOE_TRIAGE_MODEL=\"m\"\nZOE_TRIAGE_API_KEY_FILE=\""+key+"\"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := triageTestOperation([]string{"--root", root}, nil, io.Discard, io.Discard); err != nil {
-		t.Fatal(err)
-	}
-	if input != "好了吗" {
-		t.Fatalf("input=%q", input)
-	}
-}
 func TestProviderConfigureTestStatusUsePersistedDeployment(t *testing.T) {
 	fakeServices(t, false)
 	token := "private-provider-token"
@@ -144,7 +89,7 @@ func TestStatusShowsModelAndEffortWithoutSecrets(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "zoe-runner.env"), []byte("ZOE_OPENCODE_MODEL=task-model\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_MEM0_LLM_MODEL=memory-model\nZOE_MEM0_LLM_REASONING_EFFORT=high\nZOE_TRIAGE_BASE_URL=https://gateway.example\nZOE_TRIAGE_MODEL=triage-model\nZOE_TRIAGE_REASONING_EFFORT=low\nZOE_TRIAGE_API_STYLE=chat\nZOE_TRIAGE_THINKING=disabled\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_MEM0_LLM_MODEL=memory-model\nZOE_MEM0_LLM_REASONING_EFFORT=high\nZOE_REGISTER_BASE_URL=https://gateway.example\nZOE_REGISTER_MODEL=register-model\nZOE_REGISTER_REASONING_EFFORT=low\nZOE_REGISTER_THINKING=disabled\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	fakeServices(t, false)
@@ -153,7 +98,7 @@ func TestStatusShowsModelAndEffortWithoutSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, want := range []string{"model=task-model effort=unsupported", "model=memory-model effort=high", "model=triage-model effort=low", "style=chat", "thinking=disabled"} {
+	for _, want := range []string{"model=task-model effort=unsupported", "model=memory-model effort=high", "model=register-model effort=low", "thinking=disabled"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("status=%s", got)
 		}
@@ -165,33 +110,6 @@ func TestStatusShowsModelAndEffortWithoutSecrets(t *testing.T) {
 
 func TestStatusShowsStyleAndThinkingWithoutSecrets(t *testing.T) {
 	t.Run("status", func(t *testing.T) { TestStatusShowsModelAndEffortWithoutSecrets(t) })
-}
-
-func TestTriageTestReportsWhichStyleWorked(t *testing.T) {
-	containerKeyFixture(t)
-	root := t.TempDir()
-	key := filepath.Join(root, "key")
-	if err := os.WriteFile(key, []byte("secret\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/responses" {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"task"},"finish_reason":"stop"}]}`))
-	}))
-	defer s.Close()
-	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL="+s.URL+"\nZOE_TRIAGE_MODEL=m\nZOE_TRIAGE_API_KEY_FILE="+key+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	var out, errOut bytes.Buffer
-	if err := triageTestOperation([]string{"--root", root}, nil, &out, &errOut); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "style=chat") {
-		t.Fatalf("out=%s err=%s", out.String(), errOut.String())
-	}
 }
 
 func TestStatusUsesConfiguredServerPortForReadiness(t *testing.T) {

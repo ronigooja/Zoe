@@ -12,21 +12,21 @@ import (
 )
 
 // TestSteward applies the existing bounded menu probe pattern to task admission.
-func TestSteward(ctx context.Context, c TriageConfig, h *http.Client, text ...string) (TriageProbeResult, error) {
+func TestSteward(ctx context.Context, c ModelConfig, h *http.Client, text ...string) (ModelProbeResult, error) {
 	c, err := c.Normalized()
 	if err != nil {
-		return TriageProbeResult{}, err
+		return ModelProbeResult{}, err
 	}
 	if err := ValidateModelKeyReadable(c.SecretPath); err != nil {
-		return TriageProbeResult{}, err
+		return ModelProbeResult{}, err
 	}
 	env := map[string]string{"BASE_URL": c.BaseURL, "MODEL": c.Model, "API_KEY_FILE": c.SecretPath, "REASONING_EFFORT": c.ReasoningEffort, "THINKING": c.Thinking, "API_STYLE": c.APIStyle}
 	client, err := steward.FromEnv(func(key string) string { return env[strings.TrimPrefix(key, "ZOE_STEWARD_")] }, os.ReadFile)
 	if err != nil {
-		return TriageProbeResult{}, errors.New("invalid steward configuration")
+		return ModelProbeResult{}, errors.New("invalid steward configuration")
 	}
 	if client == nil {
-		return TriageProbeResult{}, errors.New("steward is disabled")
+		return ModelProbeResult{}, errors.New("steward is disabled")
 	}
 	if h != nil {
 		client.SetHTTPClient(h)
@@ -37,7 +37,7 @@ func TestSteward(ctx context.Context, c TriageConfig, h *http.Client, text ...st
 	}
 	start := time.Now()
 	decision, err := client.Decide(ctx, input)
-	result := TriageProbeResult{Latency: time.Since(start), Style: client.Style(), Category: string(decision)}
+	result := ModelProbeResult{Latency: time.Since(start), Style: client.Style(), Category: string(decision)}
 	if err == nil {
 		result.HTTPStatus = http.StatusOK
 	}

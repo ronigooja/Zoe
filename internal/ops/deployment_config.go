@@ -181,17 +181,17 @@ func (d Deployment) MemoryConfig() (MemoryConfig, error) {
 	return c, nil
 }
 
-func (d Deployment) TriageConfig() (TriageConfig, error) {
-	return d.taskManagerConfig("TRIAGE")
-}
-
 // StewardConfig reads the independent stateless task-manager configuration.
-func (d Deployment) StewardConfig() (TriageConfig, error) {
-	return d.taskManagerConfig("STEWARD")
+func (d Deployment) StewardConfig() (ModelConfig, error) {
+	return d.MenuModelConfig("Steward")
 }
 
-func (d Deployment) taskManagerConfig(kind string) (TriageConfig, error) {
-	c := TriageConfig{}
+func (d Deployment) MenuModelConfig(kind string) (ModelConfig, error) {
+	prefix, err := menuModelPrefix(kind)
+	c := ModelConfig{}
+	if err != nil {
+		return c, err
+	}
 	v, err := readEnv(d.StackEnv)
 	if os.IsNotExist(err) {
 		return c, nil
@@ -199,12 +199,15 @@ func (d Deployment) taskManagerConfig(kind string) (TriageConfig, error) {
 	if err != nil {
 		return c, err
 	}
-	c.BaseURL = v["ZOE_"+kind+"_BASE_URL"]
-	c.APIStyle = v["ZOE_"+kind+"_API_STYLE"]
-	c.Model = v["ZOE_"+kind+"_MODEL"]
-	c.ReasoningEffort = v["ZOE_"+kind+"_REASONING_EFFORT"]
-	c.Thinking = v["ZOE_"+kind+"_THINKING"]
-	c.SecretPath = v["ZOE_"+kind+"_API_KEY_FILE"]
+	c.BaseURL = v[prefix+"_BASE_URL"]
+	if kind == "Steward" {
+		c.APIStyle = v[prefix+"_API_STYLE"]
+	}
+	c.Model = v[prefix+"_MODEL"]
+	c.ReasoningEffort = v[prefix+"_REASONING_EFFORT"]
+	c.Thinking = v[prefix+"_THINKING"]
+	c.SecretPath = v[prefix+"_API_KEY_FILE"]
+	c.TimeoutMS = v[prefix+"_TIMEOUT_MS"]
 	return c, nil
 }
 

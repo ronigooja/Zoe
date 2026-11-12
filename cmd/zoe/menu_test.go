@@ -28,17 +28,17 @@ func menuManager(t *testing.T) {
 	t.Cleanup(func() { opsManager = old })
 }
 
-func TestMaintenanceMenuListsTriageModelItems(t *testing.T) {
+func TestMaintenanceMenuListsCompactModelItems(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(strings.NewReader("0\n"), &out, &errOut, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "10) Configure triage model") || !strings.Contains(out.String(), "11) Test triage model") {
+	if !strings.Contains(out.String(), "10) Configure Compact model") || !strings.Contains(out.String(), "11) Test Compact model") {
 		t.Fatalf("menu=%s", out.String())
 	}
 }
 
-func TestMaintenanceMenuTriageFlowPromptsModelAndEffortAndWritesBoth(t *testing.T) {
+func TestMaintenanceMenuCompactFlowPromptsModelAndEffortAndWritesBoth(t *testing.T) {
 	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
@@ -46,7 +46,7 @@ func TestMaintenanceMenuTriageFlowPromptsModelAndEffortAndWritesBoth(t *testing.
 		_, _ = w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"technical"}]}]}`))
 	}))
 	defer s.Close()
-	keyPath := filepath.Join(root, "triage-key")
+	keyPath := filepath.Join(root, "compact-key")
 	old := terminalEcho
 	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
 	t.Cleanup(func() { terminalEcho = old })
@@ -56,7 +56,7 @@ func TestMaintenanceMenuTriageFlowPromptsModelAndEffortAndWritesBoth(t *testing.
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(root, "zoe-stack.env"))
-	if err != nil || !strings.Contains(string(data), "ZOE_TRIAGE_MODEL") {
+	if err != nil || !strings.Contains(string(data), "ZOE_COMPACT_MODEL") {
 		t.Fatalf("env err=%v data=%s", err, data)
 	}
 	key, err := os.ReadFile(keyPath)
@@ -71,7 +71,7 @@ func TestMaintenanceMenuTriageFlowPromptsModelAndEffortAndWritesBoth(t *testing.
 	}
 }
 
-func TestMaintenanceMenuTriagePromptsForThinkingAndWritesIt(t *testing.T) {
+func TestMaintenanceMenuCompactPromptsForThinkingAndWritesIt(t *testing.T) {
 	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
@@ -88,12 +88,12 @@ func TestMaintenanceMenuTriagePromptsForThinkingAndWritesIt(t *testing.T) {
 		t.Fatal(out.String())
 	}
 	b, _ := os.ReadFile(filepath.Join(root, "zoe-stack.env"))
-	if !strings.Contains(string(b), `ZOE_TRIAGE_THINKING="disabled"`) {
+	if !strings.Contains(string(b), `ZOE_COMPACT_THINKING="disabled"`) {
 		t.Fatalf("env=%s", b)
 	}
 }
 
-func TestMaintenanceMenuTriageDoesNotAskForAPIStyle(t *testing.T) {
+func TestMaintenanceMenuCompactDoesNotAskForAPIStyle(t *testing.T) {
 	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
@@ -108,7 +108,7 @@ func TestMaintenanceMenuTriageDoesNotAskForAPIStyle(t *testing.T) {
 	}
 }
 
-func TestMaintenanceMenuTriageValidationErrorSaysNothingSavedAndReprompts(t *testing.T) {
+func TestMaintenanceMenuCompactValidationErrorSaysNothingSavedAndReprompts(t *testing.T) {
 	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
@@ -126,7 +126,7 @@ func TestMaintenanceMenuTriageValidationErrorSaysNothingSavedAndReprompts(t *tes
 	}
 }
 
-func TestMaintenanceMenuTriageRejectsUnknownThinkingAndSaysNothingSaved(t *testing.T) {
+func TestMaintenanceMenuCompactRejectsUnknownThinkingAndSaysNothingSaved(t *testing.T) {
 	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
@@ -144,7 +144,7 @@ func TestMaintenanceMenuTriageRejectsUnknownThinkingAndSaysNothingSaved(t *testi
 	}
 }
 
-func TestMaintenanceMenuTriageEOFSaysCancelled(t *testing.T) {
+func TestMaintenanceMenuCompactEOFSaysCancelled(t *testing.T) {
 	menuManager(t)
 	var out, errOut bytes.Buffer
 	_ = menuWithRoot(strings.NewReader("10\n"), &out, &errOut, t.TempDir())
@@ -153,7 +153,7 @@ func TestMaintenanceMenuTriageEOFSaysCancelled(t *testing.T) {
 	}
 }
 
-func TestMaintenanceMenuTestTriageReportsPass(t *testing.T) {
+func TestMaintenanceMenuTestCompactReportsPass(t *testing.T) {
 	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
@@ -161,11 +161,11 @@ func TestMaintenanceMenuTestTriageReportsPass(t *testing.T) {
 		_, _ = w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"task"}]}]}`))
 	}))
 	defer s.Close()
-	keyPath := filepath.Join(root, "triage-key")
+	keyPath := filepath.Join(root, "compact-key")
 	if err := os.WriteFile(keyPath, []byte("secret\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_TRIAGE_BASE_URL=\""+s.URL+"/v1\"\nZOE_TRIAGE_MODEL=\"triage\"\nZOE_TRIAGE_API_KEY_FILE=\""+keyPath+"\"\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_COMPACT_BASE_URL=\""+s.URL+"/v1\"\nZOE_COMPACT_MODEL=\"compact\"\nZOE_COMPACT_API_KEY_FILE=\""+keyPath+"\"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer

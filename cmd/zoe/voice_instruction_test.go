@@ -15,7 +15,7 @@ func TestMaintenanceMenuListsVoiceInstruction(t *testing.T) {
 	if err := menuWithRoot(strings.NewReader("0\n"), &out, &errOut, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "21) Configure voice instruction") {
+	if !strings.Contains(out.String(), "23) Configure voice instruction") {
 		t.Fatal("voice instruction menu item missing")
 	}
 }
@@ -24,7 +24,7 @@ func TestMaintenanceMenuVoiceInstructionShowsEffectiveDefaultAndCustom(t *testin
 	menuManager(t)
 	root := t.TempDir()
 	var out, errOut bytes.Buffer
-	if err := menuWithRoot(strings.NewReader("21\ncustom rule\n21\n\n0\n"), &out, &errOut, root); err != nil {
+	if err := menuWithRoot(strings.NewReader("23\ncustom rule\n23\n\n0\n"), &out, &errOut, root); err != nil {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{"Current voice instruction (default):\n" + voice.DefaultInstructionText, "Current voice instruction (custom):\ncustom rule"} {
@@ -42,10 +42,10 @@ func TestMaintenanceMenuVoiceInstructionWritesAndRestores(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "zoe-stack.env")
 	var out, errOut bytes.Buffer
-	if err := menuWithRoot(strings.NewReader("21\ncustom instruction $HOME\n0\n"), &out, &errOut, root); err != nil {
+	if err := menuWithRoot(strings.NewReader("23\ncustom instruction $HOME\n0\n"), &out, &errOut, root); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "21) Configure voice instruction") {
+	if !strings.Contains(out.String(), "23) Configure voice instruction") {
 		t.Fatal("voice instruction menu item missing")
 	}
 	data, err := os.ReadFile(path)
@@ -54,7 +54,7 @@ func TestMaintenanceMenuVoiceInstructionWritesAndRestores(t *testing.T) {
 	}
 	for _, text := range []string{"off", ""} {
 		out.Reset()
-		if err := menuWithRoot(strings.NewReader("21\n"+text+"\n0\n"), &out, &errOut, root); err != nil {
+		if err := menuWithRoot(strings.NewReader("23\n"+text+"\n0\n"), &out, &errOut, root); err != nil {
 			t.Fatal(err)
 		}
 		data, err = os.ReadFile(path)
@@ -78,7 +78,7 @@ func TestMaintenanceMenuVoiceInstructionRejectsInvalid(t *testing.T) {
 	for _, text := range []string{string([]byte{255}), strings.Repeat("x", 6001)} {
 		root := t.TempDir()
 		var out, errOut bytes.Buffer
-		if err := menuWithRoot(strings.NewReader("21\n"+text+"\n0\n"), &out, &errOut, root); err != nil {
+		if err := menuWithRoot(strings.NewReader("23\n"+text+"\n0\n"), &out, &errOut, root); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(errOut.String(), "nothing saved") {
