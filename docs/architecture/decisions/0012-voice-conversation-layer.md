@@ -2,7 +2,7 @@
 
 Status: direction proposed; routing and bounded recall decisions recorded 2026-11-06. Progress and recall have component implementations; real voice acceptance remains open. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
 
-Status note (2026-11-12): routing/context, Steward references/attach, progress and memory cadence are **superseded-by-0013 (target)**, [Accepted, not implemented](0013-context-register.md). Descriptions explicitly labeled deployed below remain the `bb07671` baseline, not implementation claims for 0013. Recall, authority, transport and held-task safeguards are not superseded.
+Status note (2026-11-12): routing/context, impact and held-confirmation policy, opening instructions, Steward references/actions, progress, reply language and memory cadence are **superseded-by-0013 (target)**, [Accepted, not implemented](0013-context-register.md). The descriptions below retain the deployed `bb07671` baseline, not implementation claims for 0013. Recall evidence and transport boundaries remain unless explicitly replaced; held-task controls are deployed history, not the target.
 
 ## Context
 
@@ -38,10 +38,10 @@ Observed on the AVAS route ([evidence](../../acceptance/evidence.md#instruction-
 
 Decision:
 
-1. Deployed: for client-target delegations, the upstream voice model alone decides when to delegate; Zoe does not classify chat. Zoe routes each received delegation with a stateless LLM call returning `progress`, `recall`, `memory_write`, `memory_read`, `task`, or `cancel`. The legacy `memory` category is unknown and follows the existing retry/unclassified slow task fallback. Only when exactly one eligible held request exists, also offer `confirm` and `decline`, with its pending question as data beside the current utterance. The prompt contains definitions only, without example sentences. No history or accumulated context is sent. No keyword rules infer read/write or agreement semantics. See [held-task controls](#held-task-controls). Adding `unclear` and register attribution is **superseded-by-0013 (target)**, not a current category.
+1. Deployed: for client-target delegations, the upstream voice model alone decides when to delegate; Zoe does not classify chat. Zoe routes each received delegation with a stateless LLM call returning `progress`, `recall`, `memory_write`, `memory_read`, `task`, or `cancel`. The legacy `memory` category is unknown and follows the existing retry/unclassified slow task fallback. Only when exactly one eligible held request exists, also offer `confirm` and `decline`, with its pending question as data beside the current utterance. The prompt contains definitions only, without example sentences. No history or accumulated context is sent. No keyword rules infer read/write or agreement semantics. See [held-task controls](#held-task-controls). Triage deletion and its three-route replacement are **superseded-by-0013 (target)**, not deployed; `unclear` is not a target route.
 2. The model endpoint, model, and key file are configured like the memory model (`ZOE_TRIAGE_BASE_URL`, `ZOE_TRIAGE_MODEL`, `ZOE_TRIAGE_API_KEY_FILE`); empty base URL disables triage. The connection is long-lived and reused; requests are independent.
 3. For committed-turn classification, retry a failed or unrecognized result once within the remaining classification budget. The triage HTTP timeout defaults to 3000 ms (`ZOE_TRIAGE_TIMEOUT_MS`, range 200–10000). Exhausted failures persist `unclassified` and retain the existing slow task path. Failure never drops a request.
-4. The impact classification of [ADR 0009](0009-voice-steward-impact-policy.md) stays authoritative. A category never grants authority; high-impact requests keep the waiting/confirmation path regardless of category.
+4. Deployed impact classification follows [ADR 0009](0009-voice-steward-impact-policy.md). A category never grants authority; high-impact requests keep the waiting/confirmation path regardless of category. This policy is superseded for the target by ADR 0013.
 5. Classification and gateway calls never run inside a database transaction.
 6. Fast paths read local evidence only: `progress` reads the task table; `recall` follows the bounded read-only route below; `memory_read` uses the existing owner-scoped context assembler with the question as query. Memory routes do not create Worker tasks. Memory writes remain blocked as described below.
 7. Historical instruction-style wording is no longer the deployed fixed-reply contract: Zoe sends plain Chinese statements, including fixed error/progress speech. Upstream can still add or rewrite wording; fixed payloads are not a speech-verbatim guarantee.
@@ -187,6 +187,8 @@ The Mac API client uses shared `URLSession` without a custom request timeout;
 about 60 s of client waiting is inferred from its default, not measured live.
 
 ### Held-task controls
+
+This section describes deployed `bb07671` controls. Target cancellation and Worker answers replace these controls under [ADR 0013](0013-context-register.md#5-steward-and-task-references); target impact confirmation is deleted.
 
 When a live call has exactly one held task, accept model-classified `confirm` or
 `decline` only for that owner, workspace, session and generation. Eligible tasks
