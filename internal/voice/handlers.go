@@ -381,9 +381,9 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if state != "active" || generation != p.Generation {
 		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_generation_stale", "voice handoff belongs to an inactive media generation", nil)
 	}
-	var taskID, content, storedCategory, stewardDecision, stewardAction, stewardTaskID string
+	var taskID, content, storedCategory, stewardAction, stewardTaskID string
 	var storedHash []byte
-	if err := tx.QueryRowContext(ctx, `SELECT coalesce(l.task_id,nullif(v.resumed_task_id,''),''),v.content,v.content_hash,coalesce(v.triage_category,''),v.steward_decision,v.steward_action,v.steward_task_id FROM voice_turns v LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&taskID, &content, &storedHash, &storedCategory, &stewardDecision, &stewardAction, &stewardTaskID); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(l.task_id,nullif(v.resumed_task_id,''),''),v.content,v.content_hash,coalesce(v.triage_category,''),v.steward_action,v.steward_task_id FROM voice_turns v LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&taskID, &content, &storedHash, &storedCategory, &stewardAction, &stewardTaskID); errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(http.StatusNotFound, "voice_turn_not_found", "confirmed voice turn revision was not found", nil)
 	} else if err != nil {
 		return contracts.CommandResult{}, nil, err
@@ -411,12 +411,6 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	}
 	if category == "chat" {
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, s.markHandledTx(ctx, tx, cmd, p)
-	}
-	if stewardDecision == string(steward.Error) {
-		if err := s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech); err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, nil
 	}
 	if category == "memory_write" {
 		var key string
@@ -638,12 +632,12 @@ func (s *Service) classifyCommittedTurn(id string) {
 			}
 		}
 	}
-	decision := "dispatch"
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}
 	if err != nil {
-		decision = "error"
+		// Internal failure sentinel, never a model route: fail closed on replay.
+		route.Route = "error"
 		choice = steward.Choice{}
 		taskID = ""
 	}
@@ -652,7 +646,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 	}
 	writeCtx, stop := context.WithTimeout(context.Background(), time.Second)
 	defer stop()
-	_, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_decision=?,steward_action=?,steward_task_id=?,pending_question=? WHERE id=? AND triage_category IS NULL`, route.Route, decision, string(choice.Action), taskID, choice.Reply, id)
+	_, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_action=?,steward_task_id=?,pending_question=? WHERE id=? AND triage_category IS NULL`, route.Route, string(choice.Action), taskID, choice.Reply, id)
 	log.Printf("voice_routing id=%s failed=%t storage_error=%t", id, err != nil, writeErr != nil)
 }
 

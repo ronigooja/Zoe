@@ -79,6 +79,8 @@ func TestRegisterStartupFailsBeforeOpeningDatabase(t *testing.T) {
 
 func TestRegisterConfigDefaultsAndIndependentModels(t *testing.T) {
 	values := registerEnvFixture()
+	values["ZOE_TRIAGE_BASE_URL"] = "invalid-obsolete-endpoint"
+	values["ZOE_TRIAGE_TIMEOUT_MS"] = "not-a-number"
 	cfg, err := registerConfigFromEnv(func(k string) string { return values[k] }, func(string) ([]byte, error) { return []byte("fixture"), nil })
 	if err != nil {
 		t.Fatal(err)

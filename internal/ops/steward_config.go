@@ -36,8 +36,8 @@ func TestSteward(ctx context.Context, c ModelConfig, h *http.Client, text ...str
 		input = text[0]
 	}
 	start := time.Now()
-	decision, err := client.Decide(ctx, input)
-	result := ModelProbeResult{Latency: time.Since(start), Style: client.Style(), Category: string(decision)}
+	choice, err := client.Choose(ctx, input, "none", time.Now().UTC().Format(time.RFC3339Nano), nil)
+	result := ModelProbeResult{Latency: time.Since(start), Style: client.Style(), Category: string(choice.Action)}
 	if err == nil {
 		result.HTTPStatus = http.StatusOK
 	}

@@ -1,6 +1,6 @@
 # ADR 0013: Persistent conversation context register
 
-Status: **Accepted, not implemented**. Final user decisions: 2026-11-12. Supersedes the target routing, impact policy, opening instructions, context, Steward task references/actions, reply language and memory cadence in [ADR 0009](0009-voice-steward-impact-policy.md) and [ADR 0012](0012-voice-conversation-layer.md). ADR 0012 and [deployment](../../operations/deployment.md) retain the deployed `bb07671` baseline. Component code does not establish end-to-end implementation or acceptance; see [evidence](../../acceptance/evidence.md#context-register-real-call-findings--2026-11-12).
+Status: **Accepted; source implementation in progress, not deployed or accepted end to end**. Final user decisions: 2026-11-12. Supersedes routing, impact policy, opening instructions, context, Steward task references/actions, reply language and memory cadence in [ADR 0009](0009-voice-steward-impact-policy.md) and [ADR 0012](0012-voice-conversation-layer.md). On main, register routing and alias-free `Choose` replace triage, `Assign`/`Decide`, impact holds and fixed progress replies; those old paths were deployed on `bb07671`, removed on main. ADR 0012 retains historical evidence. Component code does not establish end-to-end implementation or acceptance; see [evidence](../../acceptance/evidence.md#context-register-real-call-findings--2026-11-12).
 
 ## Context
 
@@ -8,7 +8,7 @@ Verified in the recorded calls: components with partial context misreported a cl
 
 ## Decision
 
-All requirements below apply to the target and remain **Accepted, not implemented**.
+All requirements below apply to the accepted design; the status above distinguishes source changes from deployment and acceptance.
 
 ### 1. Register first; triage deleted
 

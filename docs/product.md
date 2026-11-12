@@ -314,7 +314,7 @@ If the execution environment becomes unavailable because a device is powered off
 
 **CY-04-02.** Keep agent execution, services, data, memory, permissions, events, status, and health on the server.
 
-For delegated voice tasks, Zoe owns roster-aware Steward task management and the resident OpenCode Worker executes work; deployed behavior and limits are defined once in the [task-manager contract](architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager). The context-register and alias-free task-reference target is **Accepted, not implemented** in [ADR 0013](architecture/decisions/0013-context-register.md).
+For delegated voice tasks on main, Zoe uses register routing and alias-free Steward `Choose`; the resident OpenCode Worker executes work under [ADR 0013](architecture/decisions/0013-context-register.md). The former [roster-aware contract](architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager) is historical: deployed on `bb07671`, removed on main. Replacement deployment and live acceptance remain unverified.
 
 The client is primarily responsible for interaction and presentation.
 
@@ -1120,7 +1120,7 @@ For the resident voice Worker, the existing full-permission decision in [ADR 001
 
 **CY-14-02.** Apply configured execution permissions; target requests follow ADR 0013 without a separate high-impact confirmation gate.
 
-The former risk-based confirmation requirement is superseded for the target, **Accepted, not implemented**, by [ADR 0013](architecture/decisions/0013-context-register.md#1-register-first-triage-deleted). Deployed challenge/audit behavior remains documented in ADR 0012; it is not a target requirement or result-acceptance workflow.
+The former risk-based voice confirmation requirement is superseded by [ADR 0013](architecture/decisions/0013-context-register.md#1-register-first-triage-deleted): deployed on `bb07671`, removed on main. Historical challenge/audit behavior remains in ADR 0012; it is not a current requirement or result-acceptance workflow.
 
 <a id="cy-14-03"></a>
 

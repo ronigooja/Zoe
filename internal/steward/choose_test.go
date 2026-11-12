@@ -33,7 +33,7 @@ func TestChooseReportReplyBoundsAndNoTask(t *testing.T) {
 	for _, request := range []string{"", "Original request"} {
 		for _, text := range []string{"  No such task was found. \n", " \t" + strings.Repeat("🙂é", 350) + "\n"} {
 			data, _ := json.Marshal(map[string]string{"action": "report", "task": request, "reply": text})
-			s := rosterServer(t, string(data), nil)
+			s := choiceServer(t, string(data), nil)
 			got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, []Candidate{{Request: "Original request"}})
 			s.Close()
 			want := []rune(strings.TrimSpace(text))
@@ -57,7 +57,7 @@ func TestChooseNonReportReply(t *testing.T) {
 				request = "Original request"
 			}
 			data, _ := json.Marshal(map[string]string{"action": action, "task": request, "reply": reply})
-			s := rosterServer(t, string(data), nil)
+			s := choiceServer(t, string(data), nil)
 			_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, []Candidate{{Request: "Original request", Question: "Which?"}})
 			s.Close()
 			if (err == nil) != (reply == "") {
@@ -75,7 +75,7 @@ func TestChooseValidReplies(t *testing.T) {
 			if action == ActionNew || action == ActionNone {
 				request = ""
 			}
-			s := rosterServer(t, choiceReply(string(action), request), nil)
+			s := choiceServer(t, choiceReply(string(action), request), nil)
 			defer s.Close()
 			got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, candidates)
 			want := Choice{Action: action, Request: request}
@@ -97,7 +97,7 @@ func TestChooseExactMatchAndNoMatch(t *testing.T) {
 				continue // An unmatched report intentionally has no task.
 			}
 			t.Run(string(action)+"/"+quote, func(t *testing.T) {
-				s := rosterServer(t, choiceReply(string(action), quote), nil)
+				s := choiceServer(t, choiceReply(string(action), quote), nil)
 				defer s.Close()
 				got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, []Candidate{{Request: request, Question: "Which?"}})
 				if !errors.Is(err, ErrNoMatch) || got.Action != action || got.Request != quote {
@@ -127,7 +127,7 @@ func TestChooseRejectsInvalidReplies(t *testing.T) {
 		`{"action":"report","task":"request","reply":"state","id":"1"}`,
 	} {
 		t.Run(reply, func(t *testing.T) {
-			s := rosterServer(t, reply, nil)
+			s := choiceServer(t, reply, nil)
 			defer s.Close()
 			_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, []Candidate{{Request: "request"}})
 			if err == nil {
@@ -144,7 +144,7 @@ func TestChooseDuplicateRequestsUseNewest(t *testing.T) {
 			candidates[0].Question = "Newest question?"
 			candidates[1].Question = ""
 		}
-		s := rosterServer(t, choiceReply("answer", "same"), nil)
+		s := choiceServer(t, choiceReply("answer", "same"), nil)
 		_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, candidates)
 		s.Close()
 		if (err == nil) != newestHasQuestion {
@@ -158,7 +158,7 @@ func TestChooseCancelDuplicateRequestsPreserveNewestFirstInput(t *testing.T) {
 		{Request: "same", Status: "active", CreatedAt: "newest"},
 		{Request: "same", Status: "done", CreatedAt: "older"},
 	}
-	s := rosterServer(t, choiceReply("cancel", "same"), func(body []byte) {
+	s := choiceServer(t, choiceReply("cancel", "same"), func(body []byte) {
 		var outer map[string]json.RawMessage
 		if err := json.Unmarshal(body, &outer); err != nil {
 			t.Error(err)
@@ -196,7 +196,7 @@ func TestChooseInputNoAliasesRuneCapsAndOrder(t *testing.T) {
 	// Exactly 400 runes remains usable and must not be shortened to 200.
 	candidates[1].Request = strings.Repeat("界🙂", 200)
 	sentence, restatement := "private original sentence", "private restatement"
-	s := rosterServer(t, choiceReply("attach", candidates[1].Request), func(body []byte) {
+	s := choiceServer(t, choiceReply("attach", candidates[1].Request), func(body []byte) {
 		var outer struct{ Input, Instructions string }
 		if err := json.Unmarshal(body, &outer); err != nil {
 			t.Error(err)
@@ -259,7 +259,7 @@ func TestChooseDroppedCandidatesCannotMatch(t *testing.T) {
 			candidates = append(candidates, Candidate{Request: strconv.Itoa(i)})
 		}
 		candidates = append(candidates, Candidate{Request: "excluded"})
-		s := rosterServer(t, choiceReply("attach", request), nil)
+		s := choiceServer(t, choiceReply("attach", request), nil)
 		got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, candidates)
 		s.Close()
 		if !errors.Is(err, ErrNoMatch) || errors.Is(err, ErrRequestTooLong) != (request == overlong) || got.Dropped != 2 {
@@ -293,7 +293,7 @@ func TestChooseEmptyCandidatesAndInstructionLanguage(t *testing.T) {
 			t.Fatal("CJK in choice instructions")
 		}
 	}
-	s := rosterServer(t, choiceReply("none", ""), func(body []byte) {
+	s := choiceServer(t, choiceReply("none", ""), func(body []byte) {
 		var outer struct{ Input string }
 		if err := json.Unmarshal(body, &outer); err != nil {
 			t.Error(err)
@@ -313,7 +313,7 @@ func TestChooseLogsExcludePrivateData(t *testing.T) {
 	previous := log.Writer()
 	log.SetOutput(&logs)
 	defer log.SetOutput(previous)
-	s := rosterServer(t, "private-model-output", nil)
+	s := choiceServer(t, "private-model-output", nil)
 	defer s.Close()
 	_, err := configured(t, s.URL, "").Choose(context.Background(), "private-sentence", "private-restatement", choiceNow, []Candidate{{Request: "private-request", Question: "private-question", Result: "private-result", Additions: []string{"private-addition"}}})
 	if err == nil {

@@ -14,9 +14,8 @@ import (
 )
 
 type fakeSteward struct {
-	decision steward.Decision
-	err      error
-	calls    atomic.Int32
+	err   error
+	calls atomic.Int32
 }
 
 func (f *fakeSteward) Choose(context.Context, string, string, string, []steward.Candidate) (steward.Choice, error) {
@@ -40,8 +39,8 @@ func TestStewardOrdinaryTaskSentencesDispatch(t *testing.T) {
 	}
 }
 
-func TestStewardLegacyAskNoLongerHoldsOrdinaryTask(t *testing.T) {
-	f := &fakeSteward{decision: steward.Ask}
+func TestStewardChooseNewDoesNotAskForConfirmation(t *testing.T) {
+	f := &fakeSteward{}
 	var posts atomic.Int32
 	gateway := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { posts.Add(1); w.WriteHeader(200) }))
 	defer gateway.Close()
@@ -65,7 +64,7 @@ func TestStewardLegacyAskNoLongerHoldsOrdinaryTask(t *testing.T) {
 }
 
 func TestStewardHighImpactIsOrdinaryQueuedWork(t *testing.T) {
-	f := &fakeSteward{decision: steward.Dispatch}
+	f := &fakeSteward{}
 	ts, store, key := handoffHTTPServerWithConfig(t, Config{Steward: f})
 	r := commitAndHandoff(t, ts, key, "high-steward", "delete the old project")
 	var status, interaction string
@@ -77,7 +76,7 @@ func TestStewardHighImpactIsOrdinaryQueuedWork(t *testing.T) {
 
 func TestStewardUnavailableCreatesNoTask(t *testing.T) {
 	for _, err := range []error{errors.New("provider unavailable"), context.DeadlineExceeded} {
-		ts, store, key := handoffHTTPServerWithConfig(t, Config{Steward: &fakeSteward{decision: steward.Ask, err: err}})
+		ts, store, key := handoffHTTPServerWithConfig(t, Config{Steward: &fakeSteward{err: err}})
 		commitAndHandoff(t, ts, key, "failed-steward", "what did we discuss last week")
 		var tasks int
 		if e := store.DB().QueryRow(`SELECT count(*) FROM tasks`).Scan(&tasks); e != nil {
