@@ -269,16 +269,21 @@ func TestChooseDroppedCandidatesCannotMatch(t *testing.T) {
 }
 
 func TestChooseEmptyCandidatesAndInstructionLanguage(t *testing.T) {
-	const none = "none = asks for no new work, including a sentence that tells running work to continue; sentences that only ask about state are report; withdrawals of work are cancel."
+	const none = "none = asks for no work."
 	if !strings.Contains(chooseInstructions, none) {
 		t.Error("none definition must be the task-only exit, without duplicating register chat")
+	}
+	for _, removed := range []string{"asks for no new work", "including a sentence that tells running work to continue", "sentences that only ask about state are report", "withdrawals of work are cancel"} {
+		if strings.Contains(chooseInstructions, removed) {
+			t.Errorf("instruction retains removed none wording %q", removed)
+		}
 	}
 	for _, chatOnly := range []string{"conversation", "thanks", "acknowledgement"} {
 		if strings.Contains(chooseInstructions, chatOnly) {
 			t.Errorf("Steward duplicates register chat: %s", chatOnly)
 		}
 	}
-	for _, required := range []string{"cancel = the sentence withdraws or stops the work of one listed task", "withdrawals of work are cancel", "For attach, answer, cancel, and a matched report", "report", "newest", "current time", "reply language follows the input"} {
+	for _, required := range []string{"cancel = the sentence withdraws or stops the work of one listed task", "For attach, answer, cancel, and a matched report", "report", "newest", "current time", "reply language follows the input"} {
 		if !strings.Contains(chooseInstructions, required) {
 			t.Errorf("instruction missing %q", required)
 		}

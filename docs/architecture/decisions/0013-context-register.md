@@ -68,7 +68,7 @@ No code-generated identifier, alias or short key appears anywhere in model conte
 | `attach` | Add the sentence to existing work. |
 | `answer` | Deliver the user's original reply text to a Worker with a pending question. |
 | `cancel` | Withdraw or stop one task, chosen by the model from full context, not the deployed code rule selecting the newest unfinished task of the current call. |
-| `none` | Exists only as Steward's exit when the register judged `task` but no work is asked, including a sentence telling running work to continue; never a substitute for a task-state question. Steward never sees `chat`; conversation, thanks and acknowledgements are listed only in the register's `chat` definition. |
+| `none` | Asks for no work. Exists only as Steward's exit when the register judged `task` but no work is asked. A sentence telling running work to continue is not `none`; existing actions handle it according to task state. Never a substitute for a task-state question. Steward never sees `chat`; conversation, thanks and acknowledgements are listed only in the register's `chat` definition. |
 | `report` | Answer about one task's state, progress, result or handling, including earlier work. |
 
 For running-task `attach`, the runner delivers the message to the running OpenCode session with `steer`, merged into the same run, once per (run, entry). Entries included in initial, rotation or answer prompts are marked delivered. Runner delivery is merged to main; handler wiring remains pending. The deployed interim stop-plus-merged-new-task behavior remains documented in ADR 0012 until replaced. Attaching to complete work creates a new task carrying the previous result.
