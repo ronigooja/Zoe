@@ -325,4 +325,16 @@ func TestRegisterMigration218PreservesOldRows(t *testing.T) {
 	if err := f.db.QueryRow(`SELECT compact,compact_through,built_at,version FROM voice_context_registers`).Scan(&compact, &through, &built, &version); err != nil || compact != "" || through != registerEpoch || built != registerEpoch || version != 0 {
 		t.Fatal("migration defaults invalid", err)
 	}
+	// Upgrade fixtures can remove the receipt while retaining these independent tables.
+	// Replaying 218 must preserve both existing register state and memory coverage.
+	f.exec(`UPDATE voice_context_registers SET compact='keep compact',version=7;
+INSERT INTO voice_register_memory_boundaries(workspace_id,owner_subject_id,boundary_at) VALUES('default','owner','2026-11-12T09:00:00Z');
+DELETE FROM schema_migrations WHERE version=218`)
+	if err := f.store.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var boundary string
+	if err := f.db.QueryRow(`SELECT r.compact,r.version,m.boundary_at FROM voice_context_registers r JOIN voice_register_memory_boundaries m USING(workspace_id,owner_subject_id)`).Scan(&compact, &version, &boundary); err != nil || compact != "keep compact" || version != 7 || boundary != "2026-11-12T09:00:00Z" {
+		t.Fatalf("migration replay lost register state: compact=%q version=%d boundary=%q err=%v", compact, version, boundary, err)
+	}
 }

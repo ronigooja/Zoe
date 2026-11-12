@@ -299,11 +299,11 @@ ALTER TABLE voice_turns ADD COLUMN steward_task_id TEXT NOT NULL DEFAULT ''`)
 		return err
 	}
 	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 218, Name: "voice_context_register", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_register_memory_boundaries (
+		_, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS voice_register_memory_boundaries (
 workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
 boundary_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
 PRIMARY KEY(workspace_id,owner_subject_id));
-CREATE TABLE voice_context_registers (
+CREATE TABLE IF NOT EXISTS voice_context_registers (
 workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
 compact TEXT NOT NULL DEFAULT '', compact_through TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
 built_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', version INTEGER NOT NULL DEFAULT 0,
