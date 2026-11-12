@@ -111,6 +111,11 @@ type Claim struct {
 // ValidateForWrite rejects authority escalation. Model output can only enter
 // the candidate lane; it cannot assert a user confirmation or execution fact.
 func (c Claim) ValidateForWrite() error {
+	return c.validateForWrite(false)
+}
+
+// validateForWrite permits active model output only for repository-owned batches.
+func (c Claim) validateForWrite(batchTrusted bool) error {
 	if strings.TrimSpace(c.ID) == "" || strings.TrimSpace(c.WorkspaceID) == "" || strings.TrimSpace(c.Subject) == "" || strings.TrimSpace(c.Key) == "" || strings.TrimSpace(c.Content) == "" {
 		return errors.New("claim requires ID, workspace, subject, key, and content")
 	}
@@ -123,7 +128,7 @@ func (c Claim) ValidateForWrite() error {
 	if c.DeletedAt != nil || c.Status == ClaimTombstoned {
 		return errors.New("tombstones are created only by the deletion operation")
 	}
-	if c.Authority == AuthorityModelInferred && c.Status != ClaimCandidate {
+	if c.Authority == AuthorityModelInferred && c.Status != ClaimCandidate && !(batchTrusted && c.Status == ClaimActive) {
 		return errors.New("model-inferred claims must remain candidates")
 	}
 	switch c.Authority {

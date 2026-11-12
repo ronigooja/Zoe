@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"os"
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
@@ -18,6 +19,19 @@ func Register(s *control.Server, store *storage.Store) error {
 		return err
 	}
 	repository := NewRepositoryWithStore(store)
+	interval, err := BatchInterval(os.Getenv("ZOE_MEMORY_BATCH_INTERVAL_HOURS"))
+	if err != nil {
+		return err
+	}
+	model, err := BatchModelFromEnv(os.Getenv, os.ReadFile)
+	if err != nil {
+		return err
+	}
+	if model != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.RegisterShutdownHook(cancel)
+		go repository.runBatches(ctx, model, interval)
+	}
 	service := &Service{repo: repository, db: store.DB()}
 	if err := s.RegisterContextAssembler(func(ctx context.Context, p contracts.Principal, taskID, recipientID, query string, budget int) (contracts.MemoryContext, error) {
 		manifest, claims, err := repository.AssembleContext(ctx, p, taskID, recipientID, query, budget)

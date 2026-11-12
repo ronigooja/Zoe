@@ -111,7 +111,7 @@ func TestMemoryChineseVersionConflictAndDeletion(t *testing.T) {
 	}
 }
 
-func TestVoiceOutcomeCreatesScopedSourceAndExtractionJobNotClaim(t *testing.T) {
+func TestVoiceOutcomeCreatesScopedSourceWithoutPerJobExtraction(t *testing.T) {
 	ctx := context.Background()
 	store, repo := newMemoryTestRepo(t)
 	p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner-1"}
@@ -132,7 +132,7 @@ func TestVoiceOutcomeCreatesScopedSourceAndExtractionJobNotClaim(t *testing.T) {
 	if err := store.DB().QueryRow(`SELECT count(*) FROM memory_claims WHERE workspace_id='default'`).Scan(&claims); err != nil {
 		t.Fatal(err)
 	}
-	if jobs != 1 || claims != 0 {
+	if jobs != 0 || claims != 0 {
 		t.Fatalf("jobs=%d claims=%d; outcome must enter source/proposal path only", jobs, claims)
 	}
 }
