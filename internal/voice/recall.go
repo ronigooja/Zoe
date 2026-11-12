@@ -3,18 +3,14 @@ package voice
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 
-	"github.com/ronigooja/Zoe/internal/answer"
-	"github.com/ronigooja/Zoe/internal/recall/dates"
+	"github.com/ronigooja/Zoe/contracts"
 )
 
-const recallExcerptBytes = 16 * 1024
 const recallNotFound = "我没有在我们的对话记录里找到相关内容。"
 const recallUnavailable = "我现在没法查看对话记录，请稍后再试。"
 
@@ -26,10 +22,10 @@ func recallFailureSpeech(status string) string {
 // evidenceFailureSpeech applies to recall and memory reads; only absent evidence
 // may use not-found wording, while every failed check reports unavailability.
 func evidenceFailureSpeech(status, notFound, unavailable string) string {
-	if status == "no_summaries" || status == "not_found" {
-		return recallSpeech(notFound, nil)
+	if status == "not_found" {
+		return recallSpeech(notFound)
 	}
-	return recallSpeech(unavailable, nil)
+	return recallSpeech(unavailable)
 }
 
 // recallWorkerLimit bounds model work per service, including persistence retries.
@@ -123,10 +119,7 @@ func (s *Service) persistRecallRetry(ctx context.Context, id, text string) bool 
 
 var recallIDs = regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\b`)
 
-func recallSpeech(text string, candidates []answer.Candidate) string {
-	for _, c := range candidates {
-		text = strings.ReplaceAll(text, c.ID, "")
-	}
+func recallSpeech(text string) string {
 	text = recallIDs.ReplaceAllString(text, "")
 	// Reject markup instead of risking reading formatting, links or evidence IDs aloud.
 	if strings.ContainsAny(text, "*#`[]<>_~|") {
@@ -137,12 +130,6 @@ func recallSpeech(text string, candidates []answer.Candidate) string {
 		text = recallUnavailable
 	}
 	return text
-}
-
-type recallCandidate struct {
-	answer.Candidate
-	session     string
-	first, last int64
 }
 
 // dispatchRecall starts work only after the holding receipt is delivered. The
@@ -246,95 +233,32 @@ func (s *Service) recallAnswer(ctx context.Context, workspace, owner, question s
 	if s.recall.Answerer == nil {
 		return fail(0, "unconfigured")
 	}
-	limit := s.recall.RecallSummaryLimit
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	loc, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		return fail(0, "timezone")
-	}
-	query := `SELECT v.id,v.topic,v.started_at,v.ended_at,v.summary,v.session_id,v.first_seq,v.last_seq FROM voice_call_summaries v JOIN voice_sessions s ON s.id=v.session_id AND s.workspace_id=v.workspace_id WHERE v.workspace_id=? AND s.owner_id=?`
-	args := []any{workspace, owner}
-	if r, ok := dates.Resolve(question, s.now(), loc); ok {
-		query += ` AND julianday(v.started_at)>=julianday(?) AND julianday(v.started_at)<julianday(?)`
-		args = append(args, r.Start.Format(time.RFC3339Nano), r.End.Format(time.RFC3339Nano))
-	}
-	query += ` ORDER BY julianday(v.started_at) DESC,v.id LIMIT ?`
-	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return fail(0, "summary_error")
-	}
-	var candidates []answer.Candidate
-	known := map[string]recallCandidate{}
-	for rows.Next() {
-		var c recallCandidate
-		if err = rows.Scan(&c.ID, &c.Topic, &c.StartTime, &c.EndTime, &c.Summary, &c.session, &c.first, &c.last); err != nil {
-			rows.Close()
-			return fail(0, "summary_error")
+	var items []contracts.MemoryContextItem
+	if s.contextAssembler != nil {
+		p := contracts.Principal{WorkspaceID: workspace, SubjectID: owner, Scopes: []string{"memory:read:personal"}}
+		memory, err := s.contextAssembler(ctx, p, "", owner, question, contracts.MemoryContextDefaultBudgetTokens)
+		if err != nil || ctx.Err() != nil {
+			return fail(0, "context_error")
 		}
-		candidates = append(candidates, c.Candidate)
-		known[c.ID] = c
+		items = memory.Items
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return fail(0, "summary_error")
-	}
-	n := len(candidates)
-	if n == 0 {
-		return fail(0, "no_summaries")
-	}
-	result, err := s.recall.Answerer.Answer(ctx, question, candidates, nil)
-	if err != nil || ctx.Err() != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return fail(n, "timeout")
+	n := len(items)
+	conversation := ""
+	if s.register != nil {
+		budget := s.recall.RecallContextCharBudget
+		if budget <= 0 {
+			budget = 16 * 1024
 		}
-		return fail(n, "model_error")
-	}
-	if result.Status == "need_transcript" {
-		excerpts := []answer.Excerpt{}
-		remaining := recallExcerptBytes
-		seen := map[string]bool{}
-		if len(result.SummaryIDs) == 0 {
-			return fail(n, "invalid_request")
+		var err error
+		conversation, err = s.register.AssembleContext(ctx, RegisterOwner{workspace, owner}, s.now(), budget)
+		if err != nil || ctx.Err() != nil {
+			return fail(n, "context_error")
 		}
-		for _, id := range result.SummaryIDs {
-			c, ok := known[id]
-			if !ok || seen[id] {
-				return fail(n, "invalid_request")
-			}
-			seen[id] = true
-			if remaining == 0 {
-				continue
-			}
-			turns, err := ReadTranscriptTurns(ctx, s.db, workspace, c.session, c.first, c.last)
-			if err != nil {
-				return fail(n, "transcript_error")
-			}
-			var b strings.Builder
-			for _, t := range turns {
-				line := fmt.Sprintf("%s: %s\n", t.Role, t.Text)
-				if len(line) > remaining {
-					line = line[:remaining]
-					for !utf8.ValidString(line) {
-						line = line[:len(line)-1]
-					}
-				}
-				b.WriteString(line)
-				remaining -= len(line)
-				if remaining == 0 {
-					break
-				}
-			}
-			excerpts = append(excerpts, answer.Excerpt{SummaryID: id, Text: b.String()})
-		}
-		result, err = s.recall.Answerer.Answer(ctx, question, candidates, excerpts)
 	}
+	if n == 0 && strings.TrimSpace(conversation) == "" {
+		return fail(0, "not_found")
+	}
+	result, err := s.recall.Answerer.Answer(ctx, question, items, conversation)
 	if err != nil || ctx.Err() != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return fail(n, "timeout")
@@ -347,7 +271,7 @@ func (s *Service) recallAnswer(ctx context.Context, workspace, owner, question s
 		}
 		return fail(n, "invalid_request")
 	}
-	text := recallSpeech(result.Text, candidates)
+	text := recallSpeech(result.Text)
 	if text != recallUnavailable {
 		text = "对话记录里记着：" + text
 	}

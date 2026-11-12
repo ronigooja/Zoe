@@ -25,37 +25,35 @@ import (
 )
 
 type Config struct {
-	InstructionText        string
-	IngestEnabled          bool
-	GatewayURL             string
-	GatewayAPIKey          string
-	HTTPClient             *http.Client
-	MaxOfferBytes          int64
-	AccountMediaLifecycle  AccountMediaLifecycle
-	HeartbeatTimeout       time.Duration
-	Now                    func() time.Time
-	ContextAssembler       control.ContextAssembler
-	OpeningContextBudget   int
-	ContextCharBudget      int
-	OutcomeWriter          func(context.Context, contracts.Principal, string, string, string) error
-	UpstreamRoute          string
-	ResultDeliveryEnabled  bool
-	ResultDeliveryInterval time.Duration
-	ContextRegister        *ContextRegister
-	RegisterConfig         *RegisterConfig
-	ClassificationTimeout  time.Duration
-	Summarizer             Summarizer
-	SummarySettleDelay     *time.Duration
-	Steward                TaskSteward
-	Answerer               Answerer
-	RecallTimeout          time.Duration
-	RecallLease            time.Duration
-	RecallSummaryLimit     int
-	RecallHoldingText      string
+	InstructionText         string
+	IngestEnabled           bool
+	GatewayURL              string
+	GatewayAPIKey           string
+	HTTPClient              *http.Client
+	MaxOfferBytes           int64
+	AccountMediaLifecycle   AccountMediaLifecycle
+	HeartbeatTimeout        time.Duration
+	Now                     func() time.Time
+	ContextAssembler        control.ContextAssembler
+	OpeningContextBudget    int
+	ContextCharBudget       int
+	OutcomeWriter           func(context.Context, contracts.Principal, string, string, string) error
+	UpstreamRoute           string
+	ResultDeliveryEnabled   bool
+	ResultDeliveryInterval  time.Duration
+	ContextRegister         *ContextRegister
+	RegisterConfig          *RegisterConfig
+	ClassificationTimeout   time.Duration
+	Steward                 TaskSteward
+	Answerer                Answerer
+	RecallTimeout           time.Duration
+	RecallLease             time.Duration
+	RecallContextCharBudget int
+	RecallHoldingText       string
 }
 
 type Answerer interface {
-	Answer(context.Context, string, []answer.Candidate, []answer.Excerpt) (answer.Result, error)
+	Answer(context.Context, string, []contracts.MemoryContextItem, string) (answer.Result, error)
 }
 
 type TaskSteward interface {
@@ -90,8 +88,6 @@ type Service struct {
 	workers                sync.WaitGroup
 	reaperStop             chan struct{}
 	reaperDone             chan struct{}
-	summary                *summaryWorker
-	summaryDone            chan struct{}
 }
 
 type gatewayRequestIDContextKey struct{}
@@ -442,12 +438,8 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if interval <= 0 {
 		interval = time.Second
 	}
-	settle := time.Minute
-	if cfg.SummarySettleDelay != nil {
-		settle = *cfg.SummarySettleDelay
-	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, summary: &summaryWorker{db: db, model: cfg.Summarizer, now: now, settle: settle}, summaryDone: make(chan struct{}), recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func (s *Service) writeOutcome(ctx context.Context, p contracts.Principal, sessionID, summary, outcome string) error {
@@ -502,8 +494,6 @@ func (s *Service) Start() {
 	s.recoverRecall(s.recallCtx, true)
 	s.workers.Add(1)
 	go func() { defer s.workers.Done(); s.reaper() }()
-	s.workers.Add(1)
-	go func() { defer s.workers.Done(); defer close(s.summaryDone); s.summary.run(s.recallCtx) }()
 	if s.resultDeliveryEnabled || s.register != nil {
 		s.workers.Add(1)
 		go func() { defer s.workers.Done(); s.resultDispatcher() }()

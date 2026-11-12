@@ -238,6 +238,9 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 					t.Fatal("live cancel claimed completion before runner acknowledgement")
 				}
 			case "report", "report_empty":
+				if count(`SELECT count(*) FROM voice_turns WHERE turn_id='current' AND report_text='The task is queued.' AND pending_question=''`) != 1 {
+					t.Fatal("report reply was not isolated from the pending question")
+				}
 				want := 1
 				if name == "report_empty" {
 					want = 0

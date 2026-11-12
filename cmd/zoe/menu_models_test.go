@@ -42,19 +42,17 @@ Models:
   15) Test Memory extraction model
   16) Configure Memory answer model (recall and memory questions)
   17) Test Memory answer model
-  18) Configure Call summary model (summary after a call ends)
-  19) Test Call summary model
 Voice:
-  20) Configure voice gateway
-  21) Test voice gateway
-  22) Show voice gateway status
-  23) Configure voice instruction
+  18) Configure voice gateway
+  19) Test voice gateway
+  20) Show voice gateway status
+  21) Configure voice instruction
 Access:
-  24) Create instance key
-  25) Rotate instance key
+  22) Create instance key
+  23) Rotate instance key
 Client policy:
-  26) Show client policy
-  27) Set client policy
+  24) Show client policy
+  25) Set client policy
   0) Exit
 Select an option: `
 	if out.String() != want || errOut.Len() != 0 {

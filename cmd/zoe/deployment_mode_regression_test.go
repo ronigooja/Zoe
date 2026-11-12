@@ -28,7 +28,7 @@ func TestDeploymentModeHybridModelConfiguration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, kind := range []string{"Register", "Compact", "summary", "answer"} {
+	for _, kind := range []string{"Register", "Compact", "answer"} {
 		t.Run(kind, func(t *testing.T) {
 			args := []string{"--root", root, "--base-url", "https://gateway.example/v1", "--model", kind + "-model", "--key-stdin"}
 			var err error

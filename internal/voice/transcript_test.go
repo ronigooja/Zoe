@@ -343,7 +343,7 @@ func TestMigrationIsAdditiveAndKeepsExistingVoiceData(t *testing.T) {
 	if _, err := store.DB().Exec(`DROP TABLE voice_instruction_deliveries; DELETE FROM schema_migrations WHERE namespace='voice' AND version=215`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('legacy','default','handoff-session',1,'legacy',1,'keep verbatim',X'01',?,'legacy'); ALTER TABLE voice_turns DROP COLUMN steward_decision; ALTER TABLE voice_turns DROP COLUMN resumed_task_id; DROP TRIGGER voice_summary_enqueue; DROP TRIGGER voice_summary_late_turn; DROP TABLE voice_summary_jobs; DROP TABLE voice_recall_jobs; DROP TABLE voice_call_summaries; DROP TABLE voice_transcript_turns; DELETE FROM schema_migrations WHERE namespace='voice' AND version>=211`, transcriptAt); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('legacy','default','handoff-session',1,'legacy',1,'keep verbatim',X'01',?,'legacy'); ALTER TABLE voice_turns DROP COLUMN steward_decision; ALTER TABLE voice_turns DROP COLUMN resumed_task_id; DROP TRIGGER IF EXISTS voice_summary_enqueue; DROP TRIGGER IF EXISTS voice_summary_late_turn; DROP TABLE IF EXISTS voice_summary_jobs; DROP TABLE voice_recall_jobs; DROP TABLE IF EXISTS voice_call_summaries; DROP TABLE voice_transcript_turns; DELETE FROM schema_migrations WHERE namespace='voice' AND version>=211`, transcriptAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Migrate(context.Background()); err != nil {
@@ -353,7 +353,7 @@ func TestMigrationIsAdditiveAndKeepsExistingVoiceData(t *testing.T) {
 	if err := store.DB().QueryRow(`SELECT content FROM voice_turns WHERE id='legacy'`).Scan(&text); err != nil || text != "keep verbatim" {
 		t.Fatalf("legacy text=%q err=%v", text, err)
 	}
-	for _, table := range []string{"voice_transcript_turns", "voice_call_summaries"} {
+	for _, table := range []string{"voice_transcript_turns"} {
 		var n int
 		if err := store.DB().QueryRow(`SELECT count(*) FROM ` + table).Scan(&n); err != nil || n != 0 {
 			t.Fatalf("new table %s count=%d err=%v", table, n, err)
@@ -364,23 +364,23 @@ func TestMigrationIsAdditiveAndKeepsExistingVoiceData(t *testing.T) {
 	}
 }
 
-func TestMigrationSummaryJobsUpgrades211AndKeepsExistingVoiceData(t *testing.T) {
+func TestMigration220RemovesSummariesAndKeepsExistingVoiceData(t *testing.T) {
 	_, store, _ := handoffHTTPServer(t)
 	ctx := context.Background()
 	if _, err := store.DB().Exec(rollbackVoiceConfirmationBinding); err != nil {
 		t.Fatal(err)
 	}
-	// Reconstruct exactly the schema/history before migration 212. Keep the
-	// session, delegated turn, raw transcript, and existing derived summary.
+	// Reconstruct the pre-212 history, including a retired derived summary.
 	if _, err := store.DB().Exec(`DROP TABLE voice_instruction_deliveries;
 ALTER TABLE voice_turns DROP COLUMN steward_decision;
 ALTER TABLE voice_turns DROP COLUMN resumed_task_id;
 DROP TABLE voice_recall_jobs;
 DELETE FROM schema_migrations WHERE namespace='voice' AND version>=213;
-DROP TRIGGER voice_summary_enqueue;
-DROP TRIGGER voice_summary_late_turn;
-DROP TABLE voice_summary_jobs;
+DROP TRIGGER IF EXISTS voice_summary_enqueue;
+DROP TRIGGER IF EXISTS voice_summary_late_turn;
+DROP TABLE IF EXISTS voice_summary_jobs;
 DELETE FROM schema_migrations WHERE namespace='voice' AND version=212;
+CREATE TABLE voice_call_summaries(id TEXT PRIMARY KEY,workspace_id TEXT,session_id TEXT,topic TEXT,started_at TEXT,ended_at TEXT,first_seq INTEGER,last_seq INTEGER,summary TEXT,created_at TEXT);
 INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('legacy','default','handoff-session',1,'legacy',1,'keep delegated',X'01',?,'legacy');
 INSERT INTO voice_transcript_turns(workspace_id,session_id,seq,role,text,at,received_at) VALUES('default','handoff-session',7,'user','keep raw',?,?);
 INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,ended_at,first_seq,last_seq,summary,created_at) VALUES('existing','default','handoff-session','topic',?,?,7,7,'keep summary',?);`, transcriptAt, transcriptAt, transcriptAt, transcriptAt, transcriptAt, transcriptAt); err != nil {
@@ -400,7 +400,6 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 		{`SELECT id FROM voice_sessions WHERE id='handoff-session'`, "handoff-session"},
 		{`SELECT content FROM voice_turns WHERE id='legacy'`, "keep delegated"},
 		{`SELECT text FROM voice_transcript_turns WHERE session_id='handoff-session' AND seq=7`, "keep raw"},
-		{`SELECT summary FROM voice_call_summaries WHERE id='existing' AND first_seq=7 AND last_seq=7`, "keep summary"},
 	} {
 		var got string
 		if err := store.DB().QueryRow(tc.query).Scan(&got); err != nil || got != tc.want {
@@ -410,12 +409,44 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 	if _, err := store.DB().Exec(`UPDATE voice_sessions SET state='ended',ended_at=? WHERE id='handoff-session'; UPDATE voice_sessions SET state='ended' WHERE id='handoff-session'`, transcriptAt); err != nil {
 		t.Fatal(err)
 	}
-	var jobs int
-	if err := store.DB().QueryRow(`SELECT count(*) FROM voice_summary_jobs WHERE session_id='handoff-session' AND generation=1 AND status='pending'`).Scan(&jobs); err != nil || jobs != 1 {
-		t.Fatalf("upgraded enqueue jobs=%d err=%v", jobs, err)
+	var retired int
+	if err := store.DB().QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('voice_call_summaries','voice_summary_jobs','voice_summary_enqueue','voice_summary_late_turn')`).Scan(&retired); err != nil || retired != 0 {
+		t.Fatalf("retired objects=%d err=%v", retired, err)
 	}
-	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 219 {
+	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 220 {
 		t.Fatalf("post-upgrade version=%d err=%v", version, err)
+	}
+}
+
+func TestMigration220ReplaysAndPreservesReportText(t *testing.T) {
+	_, store, _ := handoffHTTPServer(t)
+	ctx := context.Background()
+	if _, err := store.DB().Exec(`ALTER TABLE voice_turns DROP COLUMN report_text;
+CREATE TABLE voice_summary_jobs(session_id TEXT);
+CREATE INDEX voice_summary_jobs_due ON voice_summary_jobs(session_id);
+CREATE TABLE voice_call_summaries(id TEXT);
+CREATE INDEX voice_call_summaries_session ON voice_call_summaries(id);
+CREATE TRIGGER voice_summary_enqueue AFTER UPDATE OF state ON voice_sessions BEGIN INSERT INTO voice_summary_jobs VALUES(NEW.id); END;
+CREATE TRIGGER voice_summary_late_turn AFTER INSERT ON voice_transcript_turns BEGIN INSERT INTO voice_summary_jobs VALUES(NEW.session_id); END;
+DELETE FROM schema_migrations WHERE namespace='voice' AND version=220;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,report_text) VALUES('report','default','handoff-session',1,'report',1,'question',X'01','2026-11-12T00:00:00Z','report','preserved report'); DELETE FROM schema_migrations WHERE namespace='voice' AND version=220;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	if err := store.DB().QueryRow(`SELECT report_text FROM voice_turns WHERE id='report'`).Scan(&text); err != nil || text != "preserved report" {
+		t.Fatalf("report=%q err=%v", text, err)
+	}
+	var retired int
+	if err := store.DB().QueryRow(`SELECT count(*) FROM sqlite_master WHERE name LIKE 'voice_summary_%' OR name LIKE 'voice_call_summaries%'`).Scan(&retired); err != nil || retired != 0 {
+		t.Fatalf("retired objects=%d err=%v", retired, err)
 	}
 }
 
@@ -446,9 +477,9 @@ UPDATE voice_sessions SET state='ended',ended_at=? WHERE id='handoff-session';`,
 			t.Fatalf("migration %d count=%d err=%v", version, count, err)
 		}
 	}
-	var jobs int
-	if err := store.DB().QueryRow(`SELECT count(*) FROM voice_summary_jobs WHERE session_id='handoff-session'`).Scan(&jobs); err != nil || jobs != 1 {
-		t.Fatalf("summary jobs=%d err=%v", jobs, err)
+	var retired int
+	if err := store.DB().QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='voice_summary_jobs'`).Scan(&retired); err != nil || retired != 0 {
+		t.Fatalf("retired jobs table=%d err=%v", retired, err)
 	}
 	if _, err := store.DB().Exec(`INSERT INTO voice_recall_jobs(id,workspace_id,owner_id,session_id,generation,turn_id,question,holding_id) VALUES('upgrade','default','owner','handoff-session',1,'upgrade','question','holding');
 INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,steward_decision,resumed_task_id) VALUES('upgrade','default','handoff-session',1,'upgrade',1,'preserved',X'01','2026-11-06T00:00:00Z','upgrade','execute','');`); err != nil {
@@ -459,13 +490,10 @@ INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,c
 	}
 }
 
-func TestTranscriptAndSummaryTablesAreIncludedInDestruction(t *testing.T) {
+func TestTranscriptTableIsIncludedInDestruction(t *testing.T) {
 	ts, store, key := transcriptHTTPServer(t)
 	if status, _ := postTranscript(t, ts, key, "handoff-session", transcriptTurn(1, "user", "retained forever")); status != 200 {
 		t.Fatalf("status=%d", status)
-	}
-	if _, err := store.DB().Exec(`INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,ended_at,first_seq,last_seq,summary,created_at) VALUES('summary','default','handoff-session','topic',?,?,1,1,'summary',?)`, transcriptAt, transcriptAt, transcriptAt); err != nil {
-		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "source.sqlite")
 	if _, err := store.DB().Exec(`VACUUM INTO ?`, path); err != nil {
@@ -486,7 +514,7 @@ try:
  sqlite_snapshot(pathlib.Path(sys.argv[1]),target)
  target.chmod(0o600)
  with sqlite3.connect(target) as db:
-  for table in ('voice_transcript_turns','voice_call_summaries'):
+  for table in ('voice_transcript_turns',):
    assert db.execute('SELECT count(*) FROM '+table).fetchone()[0]==1, table+' missing from backup'
   db.execute("UPDATE zoe_instance_state SET instance_id='instance-fixture'")
  runner,calls=fixture.executor(manifest)

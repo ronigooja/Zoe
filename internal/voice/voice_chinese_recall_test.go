@@ -23,18 +23,16 @@ func assertPlainChineseRecall(t *testing.T, text string) {
 }
 
 func TestRecallChineseOutputSentences(t *testing.T) {
-	for _, status := range []string{"no_summaries", "not_found", "unconfigured", "timezone", "summary_error", "model_error", "invalid_request", "timeout", "transcript_error"} {
+	for _, status := range []string{"not_found", "unconfigured", "context_error", "model_error", "invalid_request", "timeout"} {
 		t.Run(status, func(t *testing.T) { assertPlainChineseRecall(t, recallFailureSpeech(status)) })
 	}
-	for _, text := range []string{"我们聊过花园。", "", "**花园**", "selected-summary", "12345678-1234-1234-1234-123456789abc"} {
-		assertPlainChineseRecall(t, recallSpeech(text, []answer.Candidate{{ID: "selected-summary"}}))
+	for _, text := range []string{"我们聊过花园。", "", "**花园**", "12345678-1234-1234-1234-123456789abc"} {
+		assertPlainChineseRecall(t, recallSpeech(text))
 	}
 	_, store, _ := handoffHTTPServerWithConfig(t, Config{})
-	_, err := store.DB().Exec(`INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,ended_at,first_seq,last_seq,summary,created_at) VALUES('chinese-summary','default','handoff-session','花园','2026-11-05T12:00:00Z','2026-11-05T12:00:00Z',1,1,'我们聊过花园。','2026-11-05T12:00:00Z')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	svc := newService(store.DB(), Config{Answerer: recallModelFunc(func(context.Context, string, []answer.Candidate, []answer.Excerpt) (answer.Result, error) {
+	svc := newService(store.DB(), Config{ContextAssembler: func(context.Context, contracts.Principal, string, string, string, int) (contracts.MemoryContext, error) {
+		return contracts.MemoryContext{Items: []contracts.MemoryContextItem{{Content: "花园"}}}, nil
+	}, Answerer: recallModelFunc(func(context.Context, string, []contracts.MemoryContextItem, string) (answer.Result, error) {
 		return answer.Result{Status: "answer", Text: "我们聊过花园。"}, nil
 	})})
 	t.Cleanup(svc.Stop)

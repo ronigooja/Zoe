@@ -9,11 +9,10 @@ import (
 	"testing"
 
 	"github.com/ronigooja/Zoe/internal/answer"
-	"github.com/ronigooja/Zoe/internal/summarize"
 )
 
-func TestRecallResponsesThinkingControlsReasoningForBothModels(t *testing.T) {
-	for _, kind := range []string{"summary", "answer"} {
+func TestRecallResponsesThinkingControlsReasoningForAnswer(t *testing.T) {
+	for _, kind := range []string{"answer"} {
 		for _, tc := range []struct {
 			name, model, thinking, effort, want string
 			reasoning                           bool
@@ -44,9 +43,6 @@ func TestRecallResponsesThinkingControlsReasoningForBothModels(t *testing.T) {
 						t.Error("Responses must not send chat thinking")
 					}
 					output := `{"status":"not_found"}`
-					if kind == "summary" {
-						output = `[{"topic":"Plan","summary":"Agreed.","first_seq":1,"last_seq":1}]`
-					}
 					_ = json.NewEncoder(w).Encode(map[string]string{"output_text": output})
 				}))
 				defer s.Close()
@@ -54,20 +50,12 @@ func TestRecallResponsesThinkingControlsReasoningForBothModels(t *testing.T) {
 				values := map[string]string{prefix + "_BASE_URL": s.URL, prefix + "_MODEL": tc.model, prefix + "_THINKING": tc.thinking, prefix + "_REASONING_EFFORT": tc.effort, prefix + "_API_KEY_FILE": "/key"}
 				get := func(n string) string { return values[n] }
 				read := func(string) ([]byte, error) { return []byte("fixture"), nil }
-				if kind == "summary" {
-					c, err := summarize.FromEnv(get, read)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if _, err = c.Summarize(context.Background(), []summarize.Turn{{Seq: 1, Role: "user", Text: "Agreed."}}); err != nil {
-						t.Fatal(err)
-					}
-				} else {
+				{
 					c, err := answer.FromEnv(get, read)
 					if err != nil {
 						t.Fatal(err)
 					}
-					if _, err = c.Answer(context.Background(), "What?", nil, nil); err != nil {
+					if _, err = c.Answer(context.Background(), "What?", nil, ""); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -77,19 +65,14 @@ func TestRecallResponsesThinkingControlsReasoningForBothModels(t *testing.T) {
 }
 
 func TestRecallEffortValidationAcceptsGatewaySetAndRejectsMinimal(t *testing.T) {
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		for _, effort := range []string{"", "none", "low", "medium", "high", "max", "minimal"} {
 			t.Run(kind+"/"+effort, func(t *testing.T) {
 				prefix := "ZOE_" + strings.ToUpper(kind)
 				values := map[string]string{prefix + "_BASE_URL": "https://gateway.example/v1", prefix + "_MODEL": "deepseek", prefix + "_REASONING_EFFORT": effort, prefix + "_API_KEY_FILE": "/key"}
 				get := func(n string) string { return values[n] }
 				read := func(string) ([]byte, error) { return []byte("fixture"), nil }
-				var err error
-				if kind == "summary" {
-					_, err = summarize.FromEnv(get, read)
-				} else {
-					_, err = answer.FromEnv(get, read)
-				}
+				_, err := answer.FromEnv(get, read)
 				if (err != nil) != (effort == "minimal") {
 					t.Fatalf("effort=%s err=%v", effort, err)
 				}
@@ -99,7 +82,7 @@ func TestRecallEffortValidationAcceptsGatewaySetAndRejectsMinimal(t *testing.T) 
 }
 
 func TestRecallChatKeepsThinkingAndVerbatimEffort(t *testing.T) {
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		t.Run(kind, func(t *testing.T) {
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/responses" {
@@ -115,9 +98,6 @@ func TestRecallChatKeepsThinkingAndVerbatimEffort(t *testing.T) {
 					t.Errorf("chat fields=%v", body)
 				}
 				output := `{"status":"not_found"}`
-				if kind == "summary" {
-					output = `[{"topic":"Plan","summary":"Agreed.","first_seq":1,"last_seq":1}]`
-				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]string{"content": output}}}})
 			}))
 			defer s.Close()
@@ -125,20 +105,12 @@ func TestRecallChatKeepsThinkingAndVerbatimEffort(t *testing.T) {
 			values := map[string]string{prefix + "_BASE_URL": s.URL, prefix + "_MODEL": "deepseek", prefix + "_THINKING": "disabled", prefix + "_REASONING_EFFORT": "max", prefix + "_API_KEY_FILE": "/key"}
 			get := func(n string) string { return values[n] }
 			read := func(string) ([]byte, error) { return []byte("fixture"), nil }
-			if kind == "summary" {
-				c, err := summarize.FromEnv(get, read)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err = c.Summarize(context.Background(), []summarize.Turn{{Seq: 1, Role: "user", Text: "Agreed."}}); err != nil {
-					t.Fatal(err)
-				}
-			} else {
+			{
 				c, err := answer.FromEnv(get, read)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err = c.Answer(context.Background(), "What?", nil, nil); err != nil {
+				if _, err = c.Answer(context.Background(), "What?", nil, ""); err != nil {
 					t.Fatal(err)
 				}
 			}

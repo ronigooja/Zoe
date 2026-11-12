@@ -260,10 +260,6 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if memoryErr != nil {
 		return memoryErr
 	}
-	summary, err := d.SummaryConfig()
-	if err != nil {
-		return err
-	}
 	answer, err := d.AnswerConfig()
 	if err != nil {
 		return err
@@ -272,7 +268,7 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if err != nil {
 		return err
 	}
-	warnings := ModelKeyWarnings(register, compact, steward, ModelConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, ModelConfig{BaseURL: summary.BaseURL, SecretPath: summary.SecretPath}, ModelConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath})
+	warnings := ModelKeyWarnings(register, compact, steward, ModelConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, ModelConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath})
 	for _, warning := range warnings {
 		if o.Out != nil {
 			fmt.Fprintln(o.Out, warning)

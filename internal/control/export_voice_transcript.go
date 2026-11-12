@@ -17,7 +17,6 @@ func writeVoiceTranscriptExport(ctx context.Context, tx *sql.Tx, out io.Writer, 
 		count *int64
 	}{
 		{"voice_transcript_turns", `SELECT json_object('workspace_id',v.workspace_id,'session_id',v.session_id,'seq',v.seq,'role',v.role,'text',v.text,'at',v.at,'received_at',v.received_at) FROM voice_transcript_turns v JOIN voice_sessions s ON s.id=v.session_id AND s.workspace_id=v.workspace_id WHERE v.workspace_id=? AND s.owner_id=? ORDER BY v.session_id,v.seq`, &counts.VoiceTranscripts},
-		{"voice_call_summaries", `SELECT json_object('id',v.id,'workspace_id',v.workspace_id,'session_id',v.session_id,'topic',v.topic,'started_at',v.started_at,'ended_at',v.ended_at,'first_seq',v.first_seq,'last_seq',v.last_seq,'summary',v.summary,'created_at',v.created_at,'model_call_id',v.model_call_id) FROM voice_call_summaries v JOIN voice_sessions s ON s.id=v.session_id AND s.workspace_id=v.workspace_id WHERE v.workspace_id=? AND s.owner_id=? ORDER BY v.started_at,v.id`, &counts.VoiceSummaries},
 	} {
 		if _, err := io.WriteString(out, `,"`+item.table+`":`); err != nil {
 			return err
@@ -42,7 +41,6 @@ func writeVoiceTranscriptExport(ctx context.Context, tx *sql.Tx, out io.Writer, 
 func validateVoiceTranscriptExportBounds(ctx context.Context, tx *sql.Tx, p contracts.Principal) error {
 	for _, item := range []struct{ table, field string }{
 		{"voice_transcript_turns", "length(CAST(v.text AS BLOB))"},
-		{"voice_call_summaries", "max(length(CAST(v.topic AS BLOB)),length(CAST(v.summary AS BLOB)))"},
 	} {
 		exists, err := tableExistsTx(ctx, tx, item.table)
 		if err != nil {

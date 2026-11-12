@@ -12,14 +12,25 @@ import (
 	"testing"
 )
 
-func TestMaintenanceMenuListsSummaryAndAnswerItems(t *testing.T) {
+func TestMaintenanceMenuListsAnswerItems(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(strings.NewReader("0\n"), &out, &errOut, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"18) Configure Call summary model", "19) Test Call summary model", "16) Configure Memory answer model", "17) Test Memory answer model", "20) Configure voice gateway", "27) Set client policy"} {
+	for _, label := range []string{"16) Configure Memory answer model", "17) Test Memory answer model", "18) Configure voice gateway", "25) Set client policy"} {
 		if !strings.Contains(out.String(), label) {
 			t.Errorf("missing %s", label)
+		}
+	}
+	if strings.Contains(out.String(), "Call summary") {
+		t.Fatal("retired summary menu item")
+	}
+}
+
+func TestSummaryCommandsAreRemoved(t *testing.T) {
+	for _, command := range []string{"configure", "test"} {
+		if err := run([]string{"summary", command}, strings.NewReader(""), io.Discard, io.Discard); err == nil {
+			t.Fatal("retired summary command accepted")
 		}
 	}
 }
@@ -39,7 +50,7 @@ func TestMaintenanceMenuAnswerFlowWritesEnvAndSecretAndTests(t *testing.T) {
 			Instructions string `json:"instructions"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&request)
-		if !strings.Contains(request.Input, "When is the project meeting?") || !strings.Contains(request.Instructions, "Answer from summaries alone") {
+		if !strings.Contains(request.Input, "When is the project meeting?") || !strings.Contains(request.Instructions, "memory_items and conversation record") {
 			t.Error("runtime answer request missing")
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"status":"answer","text":"In the January call, the meeting was set for Monday."}`})
@@ -79,10 +90,10 @@ func TestMaintenanceMenuAnswerFlowWritesEnvAndSecretAndTests(t *testing.T) {
 	}
 }
 
-func TestSummaryTestAndAnswerTestUseRuntimeClients(t *testing.T) {
+func TestAnswerTestUsesRuntimeClient(t *testing.T) {
 	containerKeyFixture(t)
 	menuManager(t)
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
 			calls := 0
@@ -95,12 +106,7 @@ func TestSummaryTestAndAnswerTestUseRuntimeClients(t *testing.T) {
 				}
 				_ = json.NewDecoder(r.Body).Decode(&body)
 				output := `{"status":"answer","text":"In the January call, the meeting was set for Monday."}`
-				if kind == "summary" {
-					if !strings.Contains(body.Input, `"seq":1`) || !strings.Contains(body.Input, "The project meeting is on Monday.") || !strings.Contains(body.Instructions, "Group the call into meaningful topics") || !strings.Contains(body.Instructions, "greetings and filler may be omitted") || !strings.Contains(body.Instructions, "without overlaps; gaps are allowed") {
-						t.Error("summary runtime not used")
-					}
-					output = `[{"topic":"Meeting","summary":"The meeting is on Monday.","first_seq":1,"last_seq":2}]`
-				} else if !strings.Contains(body.Input, "fixture-1") || !strings.Contains(body.Instructions, "Never invent") {
+				if !strings.Contains(body.Input, "The project meeting is on Monday.") || !strings.Contains(body.Instructions, "Never invent") {
 					t.Error("answer runtime not used")
 				}
 				if invalid {
@@ -130,11 +136,11 @@ func TestSummaryTestAndAnswerTestUseRuntimeClients(t *testing.T) {
 	}
 }
 
-func TestStatusShowsSummaryAndAnswerWithoutSecrets(t *testing.T) {
+func TestStatusShowsAnswerWithoutSecrets(t *testing.T) {
 	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		if err := run([]string{kind, "configure", "--root", root, "--base-url", "https://" + kind + ".example/v1", "--model", kind + "-model", "--effort", "medium", "--thinking", "disabled", "--key-stdin"}, strings.NewReader(kind+"-private"), io.Discard, io.Discard); err != nil {
 			t.Fatal(err)
 		}
@@ -143,7 +149,7 @@ func TestStatusShowsSummaryAndAnswerWithoutSecrets(t *testing.T) {
 	if err := statusOperation([]string{"--root", root}, nil, &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Summary: enabled style=auto host=summary.example model=summary-model effort=medium thinking=disabled timeout-ms=120000 key-file-present=true", "Answer: enabled style=auto host=answer.example model=answer-model effort=medium thinking=disabled timeout-ms=8000 key-file-present=true"} {
+	for _, want := range []string{"Answer: enabled style=auto host=answer.example model=answer-model effort=medium thinking=disabled timeout-ms=8000 key-file-present=true"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %s", want)
 		}

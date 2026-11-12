@@ -19,7 +19,7 @@ func (info unreadableRecallKeyInfo) Sys() any {
 	return &st
 }
 
-func TestStatusWarnsForUnreadableSummaryAndAnswerKeys(t *testing.T) {
+func TestStatusWarnsForUnreadableAnswerKeys(t *testing.T) {
 	menuManager(t)
 	root := t.TempDir()
 	d := ops.Deployment{Root: root, StackEnv: filepath.Join(root, "zoe-stack.env")}
@@ -32,7 +32,7 @@ func TestStatusWarnsForUnreadableSummaryAndAnswerKeys(t *testing.T) {
 		return unreadableRecallKeyInfo{info}, nil
 	}
 	t.Cleanup(func() { ops.ModelKeyStat = old })
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		path := filepath.Join(root, kind+"-key")
 		if err := os.WriteFile(path, []byte(kind+"-private"), 0600); err != nil {
 			t.Fatal(err)
@@ -45,7 +45,7 @@ func TestStatusWarnsForUnreadableSummaryAndAnswerKeys(t *testing.T) {
 	if err := statusOperation([]string{"--root", root}, nil, &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []string{"summary", "answer"} {
+	for _, kind := range []string{"answer"} {
 		if !strings.Contains(out.String(), kind+"-key") || !strings.Contains(out.String(), "WARNING:") {
 			t.Errorf("missing %s warning", kind)
 		}

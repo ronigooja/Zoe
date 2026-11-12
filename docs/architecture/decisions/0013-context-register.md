@@ -17,7 +17,7 @@ For every delegated sentence, the register is the first reader and makes one mod
 | Route | Meaning and destination |
 |---|---|
 | `memory_write` | Store or update a stable personal fact or preference; stage the original sentence for the memory batch in decision 3. |
-| `recall` | Retrieve a saved personal fact or preference, or past conversation content; send to memory. |
+| `recall` | Answer a saved personal fact or past-conversation question from scoped memory items and the owner's compact plus raw register context through the answer model. |
 | `task` | Requests for work, changes or cancellation of work, and questions about the state of work; send to Steward with a plain-text restatement of what the sentence refers to. |
 | `chat` | Conversation addressed to the assistant that asks for no work and no memory operation: greetings, small talk, thanks, acknowledgements. Mark the voice turn handled and end the flow; create no task, produce no Zoe speech, query no task candidates, and never send it to Steward. The upstream model already answers chat on its own. |
 
@@ -45,6 +45,10 @@ When configuring the register, routing uses `ZOE_REGISTER_*` and compaction uses
 At call creation the same source supplies upstream `initial_items`, within existing opening-context budgets. The next call never waits for memory processing or compaction: read stored compact plus raw, with no model call at join. The Codex-source limits of 128 items / 8192 tokens are not measured gateway/upstream ceilings. Mid-call additions use `session.context.append`.
 
 ### 3. Memory cadence
+
+When answering `recall`, retain the holding reply, durable job queue, idempotent delivery and answer timeout. Assemble memory with the existing 2048-token budget and read register context with a bounded character budget, without a retrieval model call. Invoke the answer model once with both as data; without a configured register, use memory alone. With no evidence, return not-found; retrieval or model failures report unavailability.
+
+The whole-call summary pipeline was deployed on `bb07671` and is removed on main. Migration 220 drops `voice_summary_jobs`, `voice_call_summaries` and their enqueue/late-transcript triggers and indexes, and adds `voice_turns.report_text` for Steward report replies. Export and destruction inventories retain transcripts, not summaries. `ZOE_SUMMARY_*` settings are no longer read; retained legacy env lines are inert. This code change is not deployment or real-call acceptance evidence.
 
 When the batch is due, run every 24 hours after its last success, not at call end. No new content means no run and no model call. Originals remain in `voice_transcript_turns` after hangup; retention enforcement is not determined.
 
