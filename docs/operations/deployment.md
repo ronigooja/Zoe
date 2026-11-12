@@ -76,26 +76,8 @@ the fixed processing-error speech. Memory writes are staged silently once per
 committed turn; recall retains its holding and answer delivery. Task reports use
 Steward text; active attachments append to the same task without stopping it.
 No high-impact confirmation hold or confirm/decline routing is performed.
-Old `ZOE_TRIAGE_*` entries in a deployed host env file are unused by server
-startup and do not prevent startup. The sections below describe the previous
-deployment baseline, not the register configuration.
 
-### Historical live-call held-task controls
-
-Historical only (deployed on `bb07671`, removed on main). Do not configure these controls on main. At that checkpoint, apply voice migration 216 at normal server
-startup. `ZOE_VOICE_CONFIRMATION_WINDOW_SECONDS` bounds same-call held questions
-(default 600; valid range 1-3600). Configure the existing stateless triage model;
-without a classifier, speech does not authorize a held request. `zoe triage test`
-can return `progress`, `recall`, `memory_write`, `memory_read`, `task`, or `cancel`; the standalone probe
-has no pending question, so `confirm` and `decline` are rejected there.
-
-When validating this route, check a held task and answer in the same live call,
-then verify task/interaction state and runner claims. Admission consent uses
-`task:admit`, never a runtime tool grant. Cancel is limited to the current owner,
-session and generation; running work stops only after runner acknowledgement.
-For binding, timeout, retry and scope rules, see
-[ADR 0012 held-task controls](../architecture/decisions/0012-voice-conversation-layer.md#held-task-controls).
-Local component tests do not establish real-provider or spoken-delivery acceptance.
+### Deployment layout
 
 - `/opt/zoe/releases/current` selects the immutable server/runner release.
 - `zoe-compose.service` supervises the server, memory worker, and Qdrant.
@@ -243,35 +225,19 @@ After the stack starts, steps 1 and 2 may be done in either order; step 3 comes 
    installation and process readiness; model execution, memory processing, and
 end-to-end task completion require a separate acceptance run.
 
-### Historical triage configuration (removed on main)
+### Routing deadlines and model wire settings
 
-When consulting the following historical setup and wire table, remember that triage and alias-roster Steward were deployed on `bb07671`, removed on main by ADR 0013. No `ZOE_TRIAGE_*` variable is consumed, and no triage command or model exists on main. Steward's operator probe now invokes `Choose`. The retained `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS` (35000 ms default, range 100-60000) bounds register plus Steward routing and the handoff wait; Steward retains 30000 ms default and range 200-60000. Historical instructions follow for evidence only:
+When routing committed voice turns, `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS`
+(default 35000 ms, range 100-60000) bounds register plus Steward routing and the
+handoff wait. `ZOE_STEWARD_TIMEOUT_MS` bounds the Steward decision, including
+API-style negotiation (default 30000 ms, range 200-60000). Both models share the
+total budget, not additive guarantees. Steward's operator probe invokes `Choose`.
+Register or Steward failure creates no task and sends fixed processing-error speech.
 
-Use `zoe` with no arguments for the numbered operator menu, or configure endpoints directly with
-`zoe memory configure` and the former `zoe triage configure`. Triage accepted an HTTPS (or local HTTP) base URL and tried `/responses` before `/chat/completions` when unavailable.
-Use `--key-stdin` to install a mode-0600 key without placing it in shell history.
-Triage is disabled when `ZOE_TRIAGE_BASE_URL` is empty. Apply a saved change with `zoe update`.
-
-For committed voice turns, `ZOE_TRIAGE_TIMEOUT_MS` sets the HTTP timeout (default
-3000 ms, range 200–10000). `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS` bounds total
-classification and the handoff wait (default 35000 ms, range 100-60000). One retry
-shares the remaining classification budget; there is no separate 1500 ms cutoff.
-For task classification, `ZOE_STEWARD_TIMEOUT_MS` bounds the HTTP call and the
-whole Steward decision, including API-style negotiation (default 30000 ms, range
-200-60000). Triage and Steward share the total budget, not additive guarantees;
-raise the total explicitly when both calls may consume their full timeouts.
-Exhausted triage failures retain the slow path; Steward failure/timeout creates
-no task and sends fixed processing-error/developer-report speech. Log only bounded classification
-diagnostics, including `steward_ms`, `reason=triage_timeout`, `triage_error`,
-`steward_timeout` or `steward_error`, and `attempts`.
-
-The [deployed roster-aware Steward contract](../architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager)
-defines migration 217, roster bounds, actions and high-impact bypass. Its aliases
-and partial context remain deployed on `bb07671`; replacement is **Accepted, not implemented**
-in [ADR 0013](../architecture/decisions/0013-context-register.md). The Mac client's
-roughly 60 s URLSession wait is a code-based inference, not a measured deadline.
-
-For triage requests, `ZOE_TRIAGE_THINKING` and `ZOE_TRIAGE_REASONING_EFFORT` (CLI `--thinking` and `--effort`) control the following wire fields. Effort accepts `none`, `low`, `medium`, `high`, `max`, or empty; `minimal` is rejected by the configured OpenAI-style gateway. Values are sent unchanged, not mapped locally.
+When configuring the answer client's thinking and reasoning effort, use the wire
+settings below. Effort accepts `none`, `low`, `medium`, `high`, `max`, or empty;
+`minimal` is rejected by the configured OpenAI-style gateway. Values are sent
+unchanged, not mapped locally.
 
 | Thinking value | `/responses` | `/chat/completions` |
 | --- | --- | --- |
@@ -281,21 +247,9 @@ For triage requests, `ZOE_TRIAGE_THINKING` and `ZOE_TRIAGE_REASONING_EFFORT` (CL
 
 Responses requests never send the chat `thinking` field. Explicit thinking settings suppress `temperature` on Responses; otherwise existing model-based temperature behavior remains unchanged. Chat requests retain `temperature: 0`. An explicit effort of `none` is still sent unchanged with `enabled`, so avoid that combination when enabling thinking is intended.
 
-When running `zoe triage test`, only the categories in the [triage routing contract](../architecture/decisions/0012-voice-conversation-layer.md#routing-stateless-triage-decided-2026-11-06) pass; removed or unknown model output reports FAIL. The `chat` API style refers only to Chat Completions transport, not a routing category.
-
 [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode) defaults to enabled with effort `high`; its Responses `none` disables thinking. DeepSeek maps `minimal` to `low`, `medium` and `xhigh` to `high`, and supports `max`; Zoe accepts `medium` but rejects `minimal` and `xhigh` for gateway compatibility. See its [Responses API guide](https://api-docs.deepseek.com/guides/responses_api). Memory effort validation uses the same accepted values; its existing empty-effort fallback remains `medium`.
 
 ### Call-recall model endpoints
-
-When testing delegated-turn triage with `zoe triage test`, valid categories are
-`progress`, `recall`, `memory_write`, `memory_read`, `task`, and `cancel`. The legacy
-`memory` result is invalid and follows the unclassified slow task fallback at runtime.
-The standalone probe has no pending question and rejects `confirm` and `decline`;
-those categories are available only for a bound held-task answer in a live call.
-Memory reads reuse `ZOE_ANSWER_*` and the existing owner-scoped memory context
-assembler; no additional model is configured. Memory writes currently report
-save unavailability without a Worker task; the ingestion contract is blocked
-as recorded in [ADR 0012](../architecture/decisions/0012-voice-conversation-layer.md#personal-memory-routes).
 
 For memory and conversation recall, configure the Memory answer endpoint through the Models
 menu or `zoe answer configure`. It accepts `--base-url`,
@@ -306,7 +260,7 @@ An empty base URL disables the endpoint; updates preserve its settings.
 Environment names and secret references are in the [stack example](../../deploy/linux/zoe-stack.env.example).
 The answer timeout defaults to 8000 ms (range 500–30000). The client uses Responses first and remembers a
 Chat Completions fallback after HTTP 404, 405, or 501. The thinking/effort wire
-contract is the same as the triage table above, including temperature suppression.
+contract is the same as the wire table above, including temperature suppression.
 Existing keys must be readable by the server user before saving or probing;
 status and update warn about unreadable configured keys, and update stops before
 service changes. `zoe answer test` invokes the runtime
@@ -316,7 +270,7 @@ client with synthetic evidence and reports PASS/FAIL, API style, and latency;
 When the register routes recall, the answer client receives owner-scoped memory items
 and bounded register conversation context (compact plus raw recent turns) in one model
 call. Without a register it uses memory alone. The call-summary pipeline and its
-Configure/Test commands are removed; legacy `ZOE_SUMMARY_*` settings are ignored.
+Configure/Test commands are removed.
 Synthetic probes do not establish live-provider quality, latency, deployment, or
 end-to-end acceptance.
 

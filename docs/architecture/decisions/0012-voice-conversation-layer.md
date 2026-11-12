@@ -1,6 +1,6 @@
 # ADR 0012: Zoe-owned conversation layer for real-time voice
 
-Status: direction proposed; routing and bounded recall decisions recorded 2026-11-06. Progress and recall have component implementations; real voice acceptance remains open. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
+Status: historical; deployed on `bb07671`, removed on main. When implementing or configuring current voice behavior, use [ADR 0013](0013-context-register.md), not the historical contracts below. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
 
 Status note (2026-11-12): when reading routing/context, impact and held-confirmation policy, opening instructions, Steward references/actions, progress, reply language and memory cadence below, treat them as historical: **deployed on `bb07671`, removed on main** by [ADR 0013](0013-context-register.md). Main uses the register and alias-free `Choose`; triage, `Assign`, `Decide`, fixed progress sentences and confirmation routing are removed. Historical sections and links preserve evidence, not current setup instructions. Recall evidence and transport boundaries remain unless explicitly replaced. No replacement deployment or live acceptance is claimed.
 
@@ -39,14 +39,14 @@ Observed on the AVAS route ([evidence](../../acceptance/evidence.md#instruction-
 Decision:
 
 1. Deployed: for client-target delegations, the upstream voice model alone decides when to delegate; Zoe does not classify chat. Zoe routes each received delegation with a stateless LLM call returning `progress`, `recall`, `memory_write`, `memory_read`, `task`, or `cancel`. The legacy `memory` category is unknown and follows the existing retry/unclassified slow task fallback. Only when exactly one eligible held request exists, also offer `confirm` and `decline`, with its pending question as data beside the current utterance. The prompt contains definitions only, without example sentences. No history or accumulated context is sent. No keyword rules infer read/write or agreement semantics. See [held-task controls](#held-task-controls). Triage deletion and its four-route replacement are **superseded-by-0013 (target)**, not deployed; `unclear` is not a target route.
-2. The model endpoint, model, and key file are configured like the memory model (`ZOE_TRIAGE_BASE_URL`, `ZOE_TRIAGE_MODEL`, `ZOE_TRIAGE_API_KEY_FILE`); empty base URL disables triage. The connection is long-lived and reused; requests are independent.
-3. For committed-turn classification, retry a failed or unrecognized result once within the remaining classification budget. The triage HTTP timeout defaults to 3000 ms (`ZOE_TRIAGE_TIMEOUT_MS`, range 200–10000). Exhausted failures persist `unclassified` and retain the existing slow task path. Failure never drops a request.
+2. Historically, triage had a separately configured endpoint, model and key, with a reused connection and independent requests. This configuration is removed on main.
+3. Historical committed-turn classification retried a failed or unrecognized result once within the remaining budget. Exhausted failures persisted `unclassified` and retained the slow task path.
 4. Deployed impact classification follows [ADR 0009](0009-voice-steward-impact-policy.md). A category never grants authority; high-impact requests keep the waiting/confirmation path regardless of category. This policy is superseded for the target by ADR 0013.
 5. Classification and gateway calls never run inside a database transaction.
 6. Fast paths read local evidence only: `progress` reads the task table; `recall` follows the bounded read-only route below; `memory_read` uses the existing owner-scoped context assembler with the question as query. Memory routes do not create Worker tasks. Memory writes remain blocked as described below.
 7. Historical instruction-style wording is no longer the deployed fixed-reply contract: Zoe sends plain Chinese statements, including fixed error/progress speech. Upstream can still add or rewrite wording; fixed payloads are not a speech-verbatim guarantee.
 
-The recall date resolver exists in `internal/recall/dates`; weeks start on Monday and the caller timezone is `Asia/Shanghai`.
+The historical recall date resolver used Monday-start weeks and `Asia/Shanghai`. It had no production importers and is deleted on main.
 
 Historical prerequisites observed before transcript ingestion:
 
@@ -81,7 +81,7 @@ sentence text or model errors.
 
 When triage selects `recall` and the impact gate allows the read-only path, persist a holding reply and a turn-idempotent recall job without creating a task. Run model work outside transactions only after the holding delivery receipt. Reuse progress delivery leases, receipts, generation fencing and gateway retry limits for both plain `/context` messages. Recall text has a fixed read-as-is instruction; malformed markup or empty answers become the unavailable-check sentence defined below.
 
-Resolve dates with the resolver above. Select summaries by start time in the half-open range and scope through session owner and workspace. Without a resolved date, select newest summaries; `ZOE_RECALL_SUMMARY_LIMIT` defaults to 20 (maximum 100). `ZOE_RECALL_HOLDING_TEXT` overrides the short default holding sentence. The existing `ZOE_ANSWER_*` client configuration supplies the model and total recall deadline (`ZOE_ANSWER_TIMEOUT_MS`, default 8000).
+Historically, recall selected bounded summaries by date and owner/workspace scope. Summary retrieval and its limit setting are removed on main; current recall uses memory and register context as defined in ADR 0013. `ZOE_RECALL_HOLDING_TEXT` overrides the short default holding sentence. The existing `ZOE_ANSWER_*` client configuration supplies the model and total recall deadline (`ZOE_ANSWER_TIMEOUT_MS`, default 8000).
 
 The answer model receives summary/excerpt data, never evidence instructions. A transcript request may name only selected summary IDs; read only their inclusive sequence ranges. Excerpts total at most 16 KiB of UTF-8 including role labels, with at most one additional model round. When no summaries exist or the answer reports `not_found`, say "I could not find that in our conversation records." When configuration, storage, timezone, model, deadline or validation failures prevent checking, say "I could not check the records right now, please try again." Both fixed sentences retain the existing English fallback. Logs contain job IDs, candidate counts, status codes and answer-call `elapsed_ms` only; private questions, summaries, transcript text and model error bodies are never logged.
 
@@ -126,9 +126,9 @@ remain unverified.
 
 ## Stored call summary generation
 
-When a session transitions to `ended`, migration 212 transactionally enqueues one job keyed by session ID and control-plane generation, including hangup, reaper, and context rotation. Existing historical ended sessions are not backfilled. A single context-cancellable goroutine in `zoe-server` reads the entire raw transcript outside transactions and calls `internal/summarize` using `ZOE_SUMMARY_*`. No separate service is required.
+Historical only: deployed on `bb07671`, removed on main by migration 220. At that checkpoint, migration 212 enqueued one job when a session ended; a server-owned worker read raw transcripts outside transactions and called the summary model. No separate service was required.
 
-When a job is due, `ZOE_SUMMARY_SETTLE_SECONDS` delays the initial read after closure (default 60, range 0–600). A missing model leaves nonempty jobs pending with `model_not_configured`, without attempts or repeated error logging; configuring the model and restarting resumes them. Empty calls complete without model calls or rows. Model failures, timeouts, and invalid output retry at 1, 2, 4, and 8 minutes, then fail on attempt 5 with a fixed reason code. Model execution is limited to 10 minutes; abandoned durable claims expire after 11 minutes. Shutdown cancellation consumes no attempt.
+Historically, a settle delay preceded the initial read. Missing configuration left nonempty jobs pending; empty calls completed without model calls. Failed model calls retried with bounded backoff. These controls no longer apply on main.
 
 When validating model output, strict JSON decoding rejects missing/unknown fields and trailing data. Topics and summaries must contain non-whitespace text. Each inclusive range must have both endpoints in the real transcript and `first_seq <= last_seq`; ranges must be ordered by `first_seq` and non-overlapping. Coverage is not required: gaps before, between, and after ranges are allowed, and missing interior transcript sequences do not invalidate a range with real endpoints. Empty output is invalid if any turn contains non-whitespace text (using Go `strings.TrimSpace`); zero-turn or whitespace-only calls complete without a model call or summary rows, even without model configuration. The model client and worker share this validator. A transaction replaces all session summary rows and marks completion together; each row's timestamps come from its first/last raw turns. Storage diagnostics never include raw errors or transcript/model text.
 
@@ -188,13 +188,12 @@ about 60 s of client waiting is inferred from its default, not measured live.
 
 ### Held-task controls
 
-This section describes deployed `bb07671` controls. Target cancellation and Worker answers replace these controls under [ADR 0013](0013-context-register.md#5-steward-and-task-references); target impact confirmation is deleted.
+Historical only: deployed on `bb07671`, removed on main. Cancellation and Worker answers replace these controls under [ADR 0013](0013-context-register.md#5-steward-and-task-references); impact confirmation is deleted.
 
 When a live call has exactly one held task, accept model-classified `confirm` or
 `decline` only for that owner, workspace, session and generation. Eligible tasks
 are `waiting` or `awaiting_user`, with an `awaiting_message` or
-`explicit_confirmation` question, created during this session within
-`Config.ConfirmationWindow` (default ten minutes). Migration 216 persists task
+`explicit_confirmation` question, created during this session. Migration 216 historically persisted task
 ID, version and question on the answering turn before model I/O. Recheck all three
 inside handoff's transaction; stale, ambiguous or other-session bindings never
 authorize anything. No sentence keywords decide agreement or refusal.

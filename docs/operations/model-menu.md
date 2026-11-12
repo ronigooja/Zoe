@@ -32,10 +32,9 @@ The probe uses `/responses` relative to the configured base URL; a failed route
 fails the probe rather than issuing a second request. No Register, Compact, or
 Steward CLI subcommands or flags are provided.
 
-When migrating old host env files, legacy `ZOE_TRIAGE_*` and `ZOE_SUMMARY_*` lines are left untouched
-and ignored. The old triage Configure/Test menu entries and CLI commands no
-longer exist. Call-summary Configure/Test entries and `summary configure` /
-`summary test` commands are removed; legacy summary settings are ignored.
+When using the current menu, triage and call-summary Configure/Test entries and
+their CLI commands are unavailable. Use Register for routing and Memory answer
+for recall; see [deployment configuration](deployment.md#register-routing-configuration).
 
 When navigating non-model entries, Voice is 18-21, Access is 22-23, Client policy
 is 24-25, and Exit is 0; Overview and System retain entries 1-5.

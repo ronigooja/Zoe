@@ -345,7 +345,7 @@ PRIMARY KEY(workspace_id,owner_subject_id));`)
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 220, Name: "voice_remove_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 220, Name: "voice_remove_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS voice_summary_enqueue;
 DROP TRIGGER IF EXISTS voice_summary_late_turn;
 DROP TABLE IF EXISTS voice_summary_jobs;
@@ -376,6 +376,24 @@ DROP TABLE IF EXISTS voice_call_summaries;`); err != nil {
 		if !found {
 			_, err = tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN report_text TEXT NOT NULL DEFAULT ''`)
 		}
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 221, Name: "voice_remove_unused_legacy_state", Up: func(ctx context.Context, tx *sql.Tx) error {
+		// Upgrade fixtures can roll back receipts while retaining the latest schema.
+		for _, column := range []string{"steward_decision", "pending_task_id", "pending_task_version", "pending_question"} {
+			var exists bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pragma_table_info('voice_turns') WHERE name=?)`, column).Scan(&exists); err != nil {
+				return err
+			}
+			if exists {
+				if _, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns DROP COLUMN `+column); err != nil {
+					return err
+				}
+			}
+		}
+		_, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS voice_instruction_deliveries`)
 		return err
 	}})
 }

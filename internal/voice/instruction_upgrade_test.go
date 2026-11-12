@@ -22,13 +22,11 @@ INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,c
 	if err := store.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	var content, decision string
-	if err := store.DB().QueryRow(`SELECT content,steward_decision FROM voice_turns WHERE id='legacy215'`).Scan(&content, &decision); err != nil || content != "keep voice data" || decision != "execute" {
+	var content, commandID string
+	if err := store.DB().QueryRow(`SELECT content,command_id FROM voice_turns WHERE id='legacy215'`).Scan(&content, &commandID); err != nil || content != "keep voice data" || commandID != "legacy215" {
 		t.Fatalf("data not preserved: %v", err)
 	}
-	if _, err := store.DB().Exec(`INSERT INTO voice_instruction_deliveries VALUES('handoff-session',1,'version','delivered',1)`); err != nil {
-		t.Fatal(err)
-	}
+	assertVoiceLegacyStateRemoved(t, store.DB())
 	if err := store.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}

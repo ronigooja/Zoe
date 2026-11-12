@@ -93,8 +93,8 @@ func TestInstructionCreateSessionWireAndReconnect(t *testing.T) {
 				t.Fatalf("creates=%d pushes=%d; want 2 creates, no instruction context pushes", creates, pushes)
 			}
 			var rows int
-			if err := store.DB().QueryRow(`SELECT count(*) FROM voice_instruction_deliveries`).Scan(&rows); err != nil || rows != 0 {
-				t.Fatalf("separate delivery evidence written: rows=%d error=%v", rows, err)
+			if err := store.DB().QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='voice_instruction_deliveries'`).Scan(&rows); err != nil || rows != 0 {
+				t.Fatalf("retired delivery table exists: rows=%d error=%v", rows, err)
 			}
 		})
 	}

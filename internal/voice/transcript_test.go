@@ -413,7 +413,7 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 	if err := store.DB().QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('voice_call_summaries','voice_summary_jobs','voice_summary_enqueue','voice_summary_late_turn')`).Scan(&retired); err != nil || retired != 0 {
 		t.Fatalf("retired objects=%d err=%v", retired, err)
 	}
-	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 220 {
+	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 221 {
 		t.Fatalf("post-upgrade version=%d err=%v", version, err)
 	}
 }
@@ -428,13 +428,13 @@ CREATE TABLE voice_call_summaries(id TEXT);
 CREATE INDEX voice_call_summaries_session ON voice_call_summaries(id);
 CREATE TRIGGER voice_summary_enqueue AFTER UPDATE OF state ON voice_sessions BEGIN INSERT INTO voice_summary_jobs VALUES(NEW.id); END;
 CREATE TRIGGER voice_summary_late_turn AFTER INSERT ON voice_transcript_turns BEGIN INSERT INTO voice_summary_jobs VALUES(NEW.session_id); END;
-DELETE FROM schema_migrations WHERE namespace='voice' AND version=220;`); err != nil {
+DELETE FROM schema_migrations WHERE namespace='voice' AND version>=220;`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,report_text) VALUES('report','default','handoff-session',1,'report',1,'question',X'01','2026-11-12T00:00:00Z','report','preserved report'); DELETE FROM schema_migrations WHERE namespace='voice' AND version=220;`); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,report_text) VALUES('report','default','handoff-session',1,'report',1,'question',X'01','2026-11-12T00:00:00Z','report','preserved report'); DELETE FROM schema_migrations WHERE namespace='voice' AND version>=220;`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Migrate(ctx); err != nil {
@@ -482,7 +482,7 @@ UPDATE voice_sessions SET state='ended',ended_at=? WHERE id='handoff-session';`,
 		t.Fatalf("retired jobs table=%d err=%v", retired, err)
 	}
 	if _, err := store.DB().Exec(`INSERT INTO voice_recall_jobs(id,workspace_id,owner_id,session_id,generation,turn_id,question,holding_id) VALUES('upgrade','default','owner','handoff-session',1,'upgrade','question','holding');
-INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,steward_decision,resumed_task_id) VALUES('upgrade','default','handoff-session',1,'upgrade',1,'preserved',X'01','2026-11-06T00:00:00Z','upgrade','execute','');`); err != nil {
+INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,resumed_task_id) VALUES('upgrade','default','handoff-session',1,'upgrade',1,'preserved',X'01','2026-11-06T00:00:00Z','upgrade','');`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Migrate(ctx); err != nil {
