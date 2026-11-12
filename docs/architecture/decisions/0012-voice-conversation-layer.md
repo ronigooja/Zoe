@@ -169,7 +169,7 @@ The roster references, register input and attach semantics are
 Deployed `attach` to queued/active/waiting work uses normal stop plus a new task
 with merged goal (old goal plus new sentence). A complete task produces a new task
 carrying the previous result. Retain this interim behavior until the runner
-delivers appended entries to running work; the target and pending investigation
+delivers appended entries to running work; the target, completed source investigation and remaining live-verification limits
 are defined in [ADR 0013 decision 5](0013-context-register.md#5-steward-and-task-references).
 
 When configured, `ZOE_STEWARD_BASE_URL`, `MODEL`, `API_KEY_FILE`, `API_STYLE`,

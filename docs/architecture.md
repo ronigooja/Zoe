@@ -91,7 +91,7 @@ The control plane owns interaction state separately from task execution status. 
 
 ## Memory, retrieval, and context
 
-The persistent per-user conversation register and revised memory cadence in [ADR 0013](architecture/decisions/0013-context-register.md) are **Accepted, not implemented**. They do not describe the current memory worker or unblock its separate write contract.
+The persistent per-user conversation register and revised memory batch in [ADR 0013](architecture/decisions/0013-context-register.md#3-memory-cadence) are **Accepted, not implemented**. That decision defines the in-scope claim materialization and authority constraints, not the current memory worker's behavior.
 
 The Go authority owns memory sources, versions, and tombstones. Accepted changes are synchronously visible there; Mem0/Qdrant maintenance is asynchronous. Explicit user decisions register through policy; model-derived claims remain candidates. Source events, execution facts, and inferences remain distinguishable. Formal decisions and task state reference authoritative ledger records rather than summaries.
 
