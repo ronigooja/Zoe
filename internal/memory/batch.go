@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/internal/modelclient"
@@ -171,8 +172,20 @@ func (r *Repository) batchInput(ctx context.Context, workspace, principal string
 
 // RunBatch leases one owner's interval. Only this path trusts batch model
 // output as active memory. Errors commit neither claims nor boundary.
-func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, now time.Time, interval time.Duration, model BatchModel) (bool, error) {
+func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, now time.Time, interval time.Duration, model BatchModel) (ok bool, runErr error) {
+	started := time.Now()
+	stage, kind := "read_boundary", ""
+	var in batchInput
+	chars, claims := 0, 0
+	defer func() {
+		if runErr != nil {
+			logBatchFailure(runErr, stage, kind, principal, in, chars, time.Since(started))
+		} else if ok {
+			logBatchSuccess(principal, in, chars, claims, time.Since(started))
+		}
+	}()
 	if workspace == "" || principal == "" || interval < time.Hour || interval > 168*time.Hour {
+		kind = "config"
 		return false, errors.New("invalid memory batch scope or interval")
 	}
 	if model == nil {
@@ -191,9 +204,11 @@ func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, 
 		gate.Rollback()
 		return false, err
 	}
+	stage = "commit"
 	if err = gate.Commit(); err != nil {
 		return false, err
 	}
+	stage = "read_boundary"
 	_, err = r.db.ExecContext(ctx, `INSERT OR IGNORE INTO memory_batch_boundaries(workspace_id,principal_id) VALUES(?,?)`, workspace, principal)
 	if err != nil {
 		return false, err
@@ -219,23 +234,31 @@ func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, 
 	if !now.After(from) {
 		return false, nil
 	}
-	in, err := r.batchInput(ctx, workspace, principal, from, now)
+	stage = "load_input"
+	in, err = r.batchInput(ctx, workspace, principal, from, now)
 	if err != nil {
 		return false, err
 	}
 	if len(in.ExplicitRequests) == 0 && len(in.Transcript) == 0 && len(in.Tasks) == 0 {
 		return false, nil
 	}
+	kind = "input"
 	data, err := json.Marshal(in)
 	if err != nil {
 		return false, err
 	}
+	chars = utf8.RuneCount(data)
+	stage, kind = "call_model", ""
 	callCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	text, err := model.Complete(callCtx, MemoryExtractionInstruction, string(data))
+	if err != nil && errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+		kind = "model_timeout"
+	}
 	cancel()
 	if err != nil {
 		return false, err
 	}
+	stage, kind = "parse_output", "output_invalid"
 	var extracted []extractedMemory
 	if err = modelclient.Decode(text, &extracted); err != nil {
 		return false, err
@@ -251,6 +274,8 @@ func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, 
 		}
 		seen[k] = true
 	}
+	claims = len(extracted)
+	stage, kind = "write", ""
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -264,6 +289,7 @@ func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, 
 		return false, err
 	}
 	if held != 1 {
+		kind = "lease_lost"
 		return false, ErrVersionConflict
 	}
 	source := Source{ID: uuid.NewString(), Version: 1, Scope: Scope{Kind: ScopePersonal, PrincipalID: principal}, Kind: "memory_batch", Reference: "memory_batch:" + workspace + ":" + principal + ":" + from.Format(time.RFC3339Nano) + "/" + now.Format(time.RFC3339Nano), ContentHash: hashString(string(data)), RecordedAt: now.UTC(), Producer: "memory-batch"}
@@ -301,6 +327,7 @@ func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, 
 	if err != nil {
 		return false, err
 	}
+	stage = "commit"
 	if err = tx.Commit(); err != nil {
 		return false, err
 	}
@@ -325,7 +352,7 @@ func (r *Repository) putBatchClaimTx(ctx context.Context, tx *sql.Tx, workspace,
 	var count int
 	item.Subject, item.Key, item.Content = strings.TrimSpace(item.Subject), strings.TrimSpace(item.Key), strings.TrimSpace(item.Content)
 	if len(item.Content) > 20_000 {
-		return Claim{}, errors.New("batch memory content exceeds limits")
+		return Claim{}, errBatchOutputTooLarge
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT count(*),coalesce(max(revision),0) FROM memory_claims WHERE workspace_id=? AND scope_kind='personal' AND principal_id=? AND subject=? AND claim_key=? AND status IN ('active','conflicted') AND deleted_at IS NULL`, workspace, principal, item.Subject, item.Key).Scan(&count, &expected); err != nil {
 		return Claim{}, err
