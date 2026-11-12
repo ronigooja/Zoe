@@ -71,7 +71,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cfg := Config{Steward: client, RegisterConfig: &RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000}}
+			cfg := Config{Steward: client, RegisterConfig: &RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "compact-fixture", APIKey: "fixture"}, CompactCharacters: 1000}}
 			ts, store, key := handoffHTTPServerWithConfig(t, cfg)
 			if err := memory.RegisterMigrations(store); err != nil {
 				t.Fatal(err)

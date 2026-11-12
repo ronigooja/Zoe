@@ -104,7 +104,7 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 	if err != nil {
 		return false, err
 	}
-	edge := now.Add(-time.Hour)
+	edge := now.Add(-r.rawWindow)
 	if edge.Before(s.MemoryBoundary) {
 		edge = s.MemoryBoundary
 	}
@@ -125,11 +125,11 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 	if count == 0 || fingerprint == s.hash {
 		return false, nil
 	}
-	callCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	callCtx, cancel := context.WithTimeout(ctx, r.compactTimeout)
 	stage = "call_model"
-	output, err := r.model.Complete(callCtx, RegisterCompactInstruction, fmt.Sprintf("Character limit: %d\n\n%s", r.limit, transcript.String()))
+	output, err := r.compactModel.Complete(callCtx, RegisterCompactInstruction, fmt.Sprintf("Character limit: %d\n\n%s", r.limit, transcript.String()))
 	if err != nil {
-		kind = registerModelErrorKind(callCtx, r.model, err)
+		kind = registerModelErrorKind(callCtx, r.compactModel, err)
 	}
 	cancel()
 	if err != nil {

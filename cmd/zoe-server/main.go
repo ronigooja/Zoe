@@ -49,6 +49,10 @@ func run() error {
 	if dbPath == "" {
 		return errors.New("ZOE_DATABASE_PATH is required")
 	}
+	registerConfig, err := registerConfigFromEnv(os.Getenv, os.ReadFile)
+	if err != nil {
+		return fmt.Errorf("register configuration: %w", err)
+	}
 	profiles, err := loadProfiles(os.Getenv("ZOE_RUNTIME_PROFILES"))
 	if err != nil {
 		return err
@@ -145,10 +149,6 @@ func run() error {
 		if err != nil || recallLimit < 1 || recallLimit > 100 {
 			return errors.New("ZOE_RECALL_SUMMARY_LIMIT must be between 1 and 100")
 		}
-	}
-	registerConfig, err := registerConfigFromEnv(os.Getenv, os.ReadFile)
-	if err != nil {
-		return fmt.Errorf("register configuration: %w", err)
 	}
 	server, err := composeControlServer(store, cfg, voice.Config{InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, Summarizer: summarizer, SummarySettleDelay: &summarySettle, Answerer: answerer, RecallTimeout: answerTimeout, RecallSummaryLimit: recallLimit, RecallHoldingText: os.Getenv("ZOE_RECALL_HOLDING_TEXT"), GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),

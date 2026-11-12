@@ -32,6 +32,8 @@ type RegisterModelConfig struct {
 }
 type RegisterConfig struct {
 	Model             RegisterModelConfig
+	CompactModel      RegisterModelConfig
+	RawWindow         time.Duration
 	MemoryKeys        RegisterMemoryKeys
 	MemoryContent     func(context.Context, RegisterOwner, string) (string, error)
 	MemoryBoundary    func(context.Context, RegisterOwner) (time.Time, error)
@@ -39,37 +41,53 @@ type RegisterConfig struct {
 	Interval          time.Duration
 }
 type ContextRegister struct {
-	db       *sql.DB
-	model    *modelclient.Client
-	keys     RegisterMemoryKeys
-	content  func(context.Context, RegisterOwner, string) (string, error)
-	boundary func(context.Context, RegisterOwner) (time.Time, error)
-	limit    int
-	interval time.Duration
-	mu       sync.Mutex
-	cancel   context.CancelFunc
-	done     chan struct{}
+	db             *sql.DB
+	model          *modelclient.Client
+	compactModel   *modelclient.Client
+	compactTimeout time.Duration
+	rawWindow      time.Duration
+	keys           RegisterMemoryKeys
+	content        func(context.Context, RegisterOwner, string) (string, error)
+	boundary       func(context.Context, RegisterOwner) (time.Time, error)
+	limit          int
+	interval       time.Duration
+	mu             sync.Mutex
+	cancel         context.CancelFunc
+	done           chan struct{}
 }
 
 func NewRegister(db *sql.DB, cfg RegisterConfig) (*ContextRegister, error) {
-	if db == nil || cfg.CompactCharacters <= 0 || cfg.Interval < 0 {
+	if db == nil || cfg.CompactCharacters <= 0 || cfg.Interval < 0 || cfg.RawWindow < 0 {
 		return nil, errors.New("invalid register configuration")
 	}
 	if cfg.Interval == 0 {
 		cfg.Interval = time.Hour
 	}
-	if cfg.Model.Timeout == 0 {
-		cfg.Model.Timeout = 30 * time.Second
+	if cfg.RawWindow == 0 {
+		cfg.RawWindow = time.Hour
 	}
-	if cfg.Model.Timeout < time.Millisecond || cfg.Model.Timeout > 10*time.Minute {
-		return nil, errors.New("invalid register model timeout")
+	build := func(prefix string, model RegisterModelConfig, def, min, max int) (*modelclient.Client, error) {
+		if strings.TrimSpace(model.BaseURL) == "" {
+			return nil, fmt.Errorf("%s_BASE_URL is required", prefix)
+		}
+		values := map[string]string{prefix + "_BASE_URL": model.BaseURL, prefix + "_MODEL": model.Model, prefix + "_API_KEY_FILE": "configured", prefix + "_REASONING_EFFORT": model.ReasoningEffort, prefix + "_THINKING": model.Thinking}
+		if model.Timeout != 0 {
+			values[prefix+"_TIMEOUT_MS"] = fmt.Sprint(model.Timeout.Milliseconds())
+		}
+		return modelclient.FromEnv(prefix, func(k string) string { return values[k] }, func(string) ([]byte, error) { return []byte(model.APIKey), nil }, def, min, max)
 	}
-	values := map[string]string{"REGISTER_BASE_URL": cfg.Model.BaseURL, "REGISTER_MODEL": cfg.Model.Model, "REGISTER_API_KEY_FILE": "configured", "REGISTER_REASONING_EFFORT": cfg.Model.ReasoningEffort, "REGISTER_THINKING": cfg.Model.Thinking, "REGISTER_TIMEOUT_MS": fmt.Sprint(cfg.Model.Timeout.Milliseconds())}
-	client, err := modelclient.FromEnv("REGISTER", func(k string) string { return values[k] }, func(string) ([]byte, error) { return []byte(cfg.Model.APIKey), nil }, 30000, 1, 600000)
+	client, err := build("ZOE_REGISTER", cfg.Model, 30000, 500, 60000)
 	if err != nil {
 		return nil, err
 	}
-	return &ContextRegister{db: db, model: client, keys: cfg.MemoryKeys, content: cfg.MemoryContent, boundary: cfg.MemoryBoundary, limit: cfg.CompactCharacters, interval: cfg.Interval}, nil
+	compact, err := build("ZOE_COMPACT", cfg.CompactModel, 600000, 5000, 600000)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.CompactModel.Timeout == 0 {
+		cfg.CompactModel.Timeout = 10 * time.Minute
+	}
+	return &ContextRegister{db: db, model: client, compactModel: compact, compactTimeout: cfg.CompactModel.Timeout, rawWindow: cfg.RawWindow, keys: cfg.MemoryKeys, content: cfg.MemoryContent, boundary: cfg.MemoryBoundary, limit: cfg.CompactCharacters, interval: cfg.Interval}, nil
 }
 
 type RouteResult struct{ Route, Restatement string }

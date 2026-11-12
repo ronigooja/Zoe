@@ -34,11 +34,13 @@ The register persists per user (`workspace + owner`) across calls. The sole boun
 | Layer | Coverage and access |
 |---|---|
 | Memory | Before `M`: existing memory mapping subjects/keys only, not claim content. |
-| Compact | `M` to now minus 60 minutes: rebuild hourly from source, never incrementally; retain the previous compact on failure. |
-| Raw | Last 60 minutes of original text. |
+| Compact | `M` to now minus the configured raw window (default 60 minutes): rebuild from source at the configured interval (default hourly), never incrementally; retain the previous compact on failure. |
+| Raw | Original text from the retained compact right edge; target width defaults to 60 minutes. |
 | Live | Current sentence. |
 
 When `M` is inside the raw window, compact coverage is empty. Preserve contiguous coverage on rebuild failure, including the source text after the retained compact; do not discard that interval. No new conversation means no rebuild. Original text comes from `voice_transcript_turns`, both roles, with session-scoped sequence numbers. Per-user order is timestamp, session ID, then sequence.
+
+When configuring the register, routing uses `ZOE_REGISTER_*` and compaction uses `ZOE_COMPACT_*` independently, with no Steward or cross-model fallback. Both require `BASE_URL`, `MODEL`, and readable, nonempty `API_KEY_FILE`; missing settings fail startup by variable name. Timeout defaults are 30000 ms for routing and 600000 ms for compaction. The compact character limit defaults to 8000; interval and raw-window tunables are defined in [deployment configuration](../../operations/deployment.md#register-routing-configuration).
 
 At call creation the same source supplies upstream `initial_items`, within existing opening-context budgets. The next call never waits for memory processing or compaction: read stored compact plus raw, with no model call at join. The Codex-source limits of 128 items / 8192 tokens are not measured gateway/upstream ceilings. Mid-call additions use `session.context.append`.
 

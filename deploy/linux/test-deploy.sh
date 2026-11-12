@@ -22,7 +22,13 @@ env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
        'ZOE_RUNNER_IMAGE': 'ghcr.io/test/zoe-runner@sha256:'+'4'*64,
        'ZOE_VOICE_UPSTREAM_ROUTE': 'avas', 'ZOE_STEWARD_TIMEOUT_MS': '30000',
        'ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS': '35000', 'ZOE_REGISTER_TIMEOUT_MS': '30000',
-       'ZOE_MEMORY_BATCH_INTERVAL_HOURS': '24'}
+       'ZOE_MEMORY_BATCH_INTERVAL_HOURS': '24',
+       'ZOE_REGISTER_BASE_URL': 'https://route.invalid', 'ZOE_REGISTER_MODEL': 'route',
+       'ZOE_REGISTER_API_KEY_FILE': '/run/secrets/register_api_key',
+       'ZOE_COMPACT_BASE_URL': 'https://compact.invalid', 'ZOE_COMPACT_MODEL': 'compact',
+       'ZOE_COMPACT_API_KEY_FILE': '/run/secrets/compact_api_key',
+       'ZOE_COMPACT_TIMEOUT_MS': '600000', 'ZOE_COMPACT_MAX_CHARACTERS': '8000',
+       'ZOE_COMPACT_INTERVAL_MINUTES': '60', 'ZOE_REGISTER_RAW_WINDOW_MINUTES': '60'}
 (p/'stack.env').write_text(''.join(k+'='+v+'\n' for k,v in env.items()))
 (p/'stack.env').chmod(0o640)
 config = {'services': {'zoe-server': {'environment': {k:v for k,v in env.items() if not k.endswith('_IMAGE')},
@@ -45,7 +51,7 @@ case = os.environ['CASE']
 if case == 'missing-unit-path':
     (root/'bin/zoe-runner').unlink()
 if case == 'undefined-variable':
-    with (root/'deploy-linux/docker-compose.yml').open('a') as out: out.write('    command: ${UNDEFINED_TEST_VALUE}\n')
+    with (root/'deploy-linux/docker-compose.yml').open('a') as out: out.write('    command: ${UNDEFINED_TEST_VALUE:?set required value}\n')
 def sums(root):
     text = ''.join(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.relative_to(root).as_posix()+'\n'
                    for f in sorted(root.rglob('*')) if f.is_file() and f.name not in ['SHA256SUMS', 'release-manifest.json'])
