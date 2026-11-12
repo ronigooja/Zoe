@@ -189,22 +189,22 @@ still apply. Treat this tier as host-root authority, not a workspace sandbox.
 
 Runs rotated by releases before this fix are rebound on recovery from the journal chain.
 
-Use the [Linux deployment templates](../../deploy/linux/) and [release workflow](../../.github/workflows/server-release.yml) for the server/runner release. The reviewed release must contain `bin/zoe`, `bin/zoe-secret-entrypoint`, and `deploy-linux/` with the Compose and systemd files. The embedded CLI source revision must match `SOURCE_REVISION`; do not compile on the control host.
+Use the [Linux deployment templates](../../deploy/linux/) and [release workflow](../../.github/workflows/server-release.yml) for the server/runner release. `server-release-<full-sha>` contains `server-linux-amd64.tar.gz`; extract it before deployment. Its real, executable `bin/zoe-server`, `bin/zoe-runner`, `bin/zoe-secret-entrypoint`, and `bin/zoe` are produced directly by the workflow's Go builds, not host-created symlinks. The tar preserves executable modes across artifact download. `SHA256SUMS` and `release-manifest.json` record these `bin/` paths; `deploy-linux/` contains Compose and systemd templates. The embedded CLI source revision must match `SOURCE_REVISION`; do not compile on the control host. The same run publishes the matching [operator CLI archive](#operator-release-installation).
 
 The operator release installation procedure below installs only the maintenance CLI. It does not install server images or configure a complete deployment. Run `zoe status` before `zoe setup`, `zoe provider configure`, `zoe provider test`, `zoe memory configure`, or `zoe memory test`; these operations are also available from the grouped interactive menu. The memory model key is a separate credential issued by the model gateway and entered through `zoe`; Zoe never creates it. For an already deployed external voice gateway, use `zoe voice configure --url HTTPS_URL --token-file PRIVATE_KEY_FILE`, then `zoe voice test` and `zoe voice status`. This writes only the Zoe-side endpoint and secret reference; it does not deploy or modify the gateway. Follow [the CLI implementation](../../cmd/zoe/) for current flags and [deployment configuration](../../internal/ops/deployment_config.go) for detection and rollback behavior.
 
 ### Complete Linux deployment order
 
-Copy the reviewed `zoe-linux-<arch>.tar.gz` package to the host, then run the
-single bootstrap entry point:
+For a new host, download and verify both artifacts on the host using
+[the release download procedure](#operator-release-installation), then run:
 
 ```sh
-sudo bash deploy-linux/install-cli.sh /path/to/zoe-linux-<arch>.tar.gz
-sudo zoe install [--start] --release /path/to/release
+sudo bash "$work/operator/deploy-linux/install-cli.sh" "$work/operator-download/zoe-linux-amd64.tar.gz"
+sudo zoe install [--start] --release "$work/server"
 ```
 
-   The bootstrap verifies `SHA256SUMS`, installs the CLI atomically, and keeps one
-   immutable CLI release. `zoe install` validates the release and host before
+   The bootstrap verifies `SHA256SUMS`, installs the CLI atomically, and keeps prior
+   CLI releases for rollback. `zoe install` validates the release and host before
     writing files, verifies the host-installed OpenCode binary, stages the release, pins images by digest, pulls them, installs
    the systemd units, preserves existing tokens and operator environment keys, and creates
     deployment-owned runner tokens only when absent. It creates the OpenCode password once with mode 0600 and never prints or regenerates it. It does not create an instance
@@ -317,6 +317,8 @@ model-backed task execution.
 
 ### Upgrade and removal
 
+For every server upgrade, first download both artifacts, run the pre-switch
+checks, and install the matching CLI using [the procedure below](#operator-release-installation).
 Use `zoe update --release /path/to/release` to stage and pull
 the new release, switch `current`, restart Compose and the runner, and verify
 health; after health succeeds it also atomically switches the host CLI to the
@@ -471,14 +473,122 @@ prints keys, tokens, or installation links.
 
 ## Operator release installation
 
-The Linux workflow's manual release option builds the `zoe` operator CLI for
-Linux `amd64` and `arm64` on GitHub-hosted runners after its complete checks pass;
-see [CI verification](../development/verification.md#completion-gate-and-manual-checks).
-Each `operator-linux-<arch>-<revision>` artifact contains
-a tarball with `bin/zoe`, `deploy-linux/install-cli.sh`, `SOURCE_REVISION`, and
-`SHA256SUMS`. Select the host architecture, extract into a new immutable release
-directory, and verify `sha256sum -c SHA256SUMS` from that directory. This operator
-archive does not contain the server images or a complete service deployment.
+When deploying a server release, use the successful **Server deployment artifact**
+run for the reviewed full SHA, not the optional `operator-artifacts` job in normal
+Linux CI. That server run always builds both `server-release-<sha>` and
+`operator-cli-<sha>` for Linux `amd64`. The sibling CLI artifact contains
+`zoe-linux-amd64.tar.gz` with `bin/zoe`, `deploy-linux/install-cli.sh`,
+`SOURCE_REVISION`, and `SHA256SUMS`. It is the same binary included in the server
+release. The Linux workflow's optional release job still produces standalone
+`operator-linux-<arch>-<revision>` archives for `amd64` and `arm64`; these are not
+a substitute for matching the server release SHA.
+
+Deployment assumptions: the host is Linux `amd64`, has authenticated `gh` access
+to this repository's Actions artifacts, and uses `/opt/zoe/releases` and the
+symlink `/usr/local/bin/zoe`. These are the repository installer's defaults;
+inspect the actual selector before proceeding and stop if the host differs.
+Artifacts expire after seven days; use an available successful reviewed run.
+Download directly on the host, without a workstation relay:
+
+```bash
+set -euo pipefail
+revision=REVIEWED_FULL_40_CHARACTER_SHA
+run_id=SUCCESSFUL_SERVER_RELEASE_RUN_ID
+test "$(uname -m)" = x86_64
+test "$(gh run view "$run_id" --repo ronigooja/Zoe --json headSha --jq .headSha)" = "$revision"
+test "$(gh run view "$run_id" --repo ronigooja/Zoe --json conclusion --jq .conclusion)" = success
+work="$(mktemp -d /tmp/zoe-deploy.XXXXXX)"
+mkdir -p "$work/server-download" "$work/operator-download" "$work/server" "$work/operator"
+gh run download "$run_id" --repo ronigooja/Zoe --name "server-release-$revision" --dir "$work/server-download"
+gh run download "$run_id" --repo ronigooja/Zoe --name "operator-cli-$revision" --dir "$work/operator-download"
+tar -xzf "$work/server-download/server-linux-amd64.tar.gz" -C "$work/server"
+tar -xzf "$work/operator-download/zoe-linux-amd64.tar.gz" -C "$work/operator"
+(cd "$work/server" && sha256sum -c SHA256SUMS)
+(cd "$work/operator" && sha256sum -c SHA256SUMS)
+test "$(cat "$work/server/SOURCE_REVISION")" = "$revision"
+test "$(cat "$work/operator/SOURCE_REVISION")" = "$revision"
+test "$("$work/operator/bin/zoe" --source-revision)" = "$revision"
+cmp "$work/server/bin/zoe" "$work/operator/bin/zoe"
+```
+
+Before any `zoe install`, `zoe update`, or manual `current` switch, verify all
+release-relative paths referenced by the shipped units in the new directory:
+
+```bash
+release="$work/server"
+for executable in zoe zoe-server zoe-runner zoe-secret-entrypoint; do
+  test -f "$release/bin/$executable"
+  test ! -L "$release/bin/$executable"
+  test -x "$release/bin/$executable"
+done
+for file in docker-compose.yml zoe-compose.service zoe-runner.service zoe-opencode.service zoe-runner-tmpfiles.conf; do
+  test -f "$release/deploy-linux/$file"
+done
+test -d "$release" # zoe-compose WorkingDirectory after current switches
+# The installer reuses an existing same-revision destination; inspect it too.
+staged="/opt/zoe/releases/$revision"
+if sudo test -e "$staged"; then
+  for executable in zoe zoe-server zoe-runner zoe-secret-entrypoint; do
+    sudo test -f "$staged/bin/$executable"
+    sudo test ! -L "$staged/bin/$executable"
+    sudo test -x "$staged/bin/$executable"
+    sudo cmp "$release/bin/$executable" "$staged/bin/$executable"
+  done
+  for file in docker-compose.yml zoe-compose.service zoe-runner.service zoe-opencode.service zoe-runner-tmpfiles.conf; do
+    sudo cmp "$release/deploy-linux/$file" "$staged/deploy-linux/$file"
+  done
+fi
+```
+
+On upgrades, review `systemctl cat zoe-compose zoe-runner zoe-opencode` for local
+unit overrides. For **every** additional `/opt/zoe/releases/current/<path>` or
+relative Compose file it references, require the corresponding new-release path
+to exist (and executables to be executable) before continuing. External paths
+are host prerequisites, not release files: verify Docker, the configured
+OpenCode executable, environment files, credential references, runner state,
+and lock paths exist with the unit's required access; never display their
+contents. Keep the deployed units' `bin/` paths; do not repair packages with
+hand-made runner or entrypoint symlinks.
+
+Install the CLI **on every deployment**, even when the host still has an older
+CLI whose update implementation cannot update itself. Save the previous target
+outside the temporary download directory for rollback:
+
+```bash
+test -L /usr/local/bin/zoe
+previous_cli="$(readlink -f /usr/local/bin/zoe)"
+test -x "$previous_cli"
+printf '%s\n' "$previous_cli" | sudo tee /opt/zoe/releases/CLI_PREVIOUS >/dev/null
+sudo bash "$work/operator/deploy-linux/install-cli.sh" "$work/operator-download/zoe-linux-amd64.tar.gz"
+hash -r
+test "$(/usr/local/bin/zoe --source-revision)" = "$revision"
+sudo /usr/local/bin/zoe update --release "$release"
+test "$(/usr/local/bin/zoe --source-revision)" = "$revision"
+sudo /usr/local/bin/zoe status
+```
+
+For first installation, omit the existing-selector/previous-target checks and
+run `zoe install` instead of `zoe update` as described above. The archive installer
+checks sums and the embedded revision, copies to
+`/opt/zoe/releases/zoe-cli-<first-12-sha>/`, and atomically replaces the PATH
+symlink. Existing immutable CLI releases are retained, not pruned. The existing
+`--source-revision` check proves the binary starts without entering the menu;
+`zoe status` checks deployment metadata, not end-to-end model behavior.
+
+If CLI verification or the deployment fails, retain downloads for diagnosis and
+restore the recorded CLI selector atomically (server rollback is separate):
+
+```bash
+previous_cli="$(cat /opt/zoe/releases/CLI_PREVIOUS)"
+test -x "$previous_cli"
+sudo ln -s "$previous_cli" /usr/local/bin/.zoe-rollback
+sudo mv -Tf /usr/local/bin/.zoe-rollback /usr/local/bin/zoe
+hash -r
+/usr/local/bin/zoe --source-revision
+```
+
+After successful deployment, remove only the temporary `$work` download tree;
+keep the previous CLI and server releases until rollback is no longer needed.
 
 For a complete source-built release, `deploy/linux/build-release.sh RELEASE_TAG`
 also installs `bin/zoe` beside the runner in `/opt/zoe/releases/RELEASE_TAG`.
@@ -487,7 +597,7 @@ reviewing the release, install its CLI on the standard host PATH with:
 
 ```sh
 sudo bash /opt/zoe/releases/RELEASE_TAG/deploy-linux/install-cli.sh /opt/zoe/releases/RELEASE_TAG
-zoe
+zoe --source-revision
 ```
 
 The installer atomically selects the immutable CLI through `/usr/local/bin/zoe`

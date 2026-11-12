@@ -57,7 +57,8 @@ cp "$repo_root/deploy/linux/opencode-release.json" "$release_stage/opencode-rele
 chmod 0755 "$release_stage"
 
 export CGO_ENABLED=0 GOOS=linux GOARCH="$build_goarch"
-"$go_bin" build -trimpath -buildvcs=false -ldflags='-s -w' -o "$build_dir/bin/zoe" ./cmd/zoe
+source_revision="$(git rev-parse HEAD)"
+"$go_bin" build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceRevision=$source_revision" -o "$build_dir/bin/zoe" ./cmd/zoe
 "$go_bin" build -trimpath -buildvcs=false -ldflags='-s -w' -o "$build_dir/bin/zoe-server" ./cmd/zoe-server
 "$go_bin" build -trimpath -buildvcs=false -ldflags='-s -w' -o "$build_dir/bin/zoe-runner" ./cmd/zoe-runner
 "$go_bin" build -trimpath -buildvcs=false -ldflags='-s -w' -o "$build_dir/bin/zoe-secret-entrypoint" ./deploy/linux/secret-entrypoint.go
@@ -72,18 +73,18 @@ cp -a "$repo_root/deploy/linux" "$release_stage/deploy-linux"
 "$docker_bin" "${buildx_base[@]}" -f "$repo_root/deploy/linux/Dockerfile.runner" -t "zoe-runner:$tag" "$repo_root"
 
 # Record immutable source, binary checksums, and local image IDs before publishing.
-source_revision="$(git rev-parse HEAD)"
+printf '%s\n' "$source_revision" > "$release_stage/SOURCE_REVISION"
 (
   cd "$release_stage"
-  sha256sum bin/* opencode-release.json > SHA256SUMS
+  sha256sum bin/* opencode-release.json SOURCE_REVISION > SHA256SUMS
   RELEASE_TAG="$tag" SOURCE_REVISION="$source_revision" BUILD_PLATFORM="$build_platform" DOCKER_BIN="$docker_bin" python3 - <<'PY'
 import hashlib, json, os, pathlib, subprocess
 root = pathlib.Path('.')
 artifacts = []
-for item in sorted(root.iterdir()):
+for item in sorted(root.rglob('*')):
     if not item.is_file() or item.name == 'release-manifest.json':
         continue
-    artifacts.append({'name': item.name, 'path': item.name, 'sha256': hashlib.sha256(item.read_bytes()).hexdigest()})
+    artifacts.append({'name': item.name, 'path': item.relative_to(root).as_posix(), 'sha256': hashlib.sha256(item.read_bytes()).hexdigest()})
 images = {}
 for name in ('zoe-server', 'zoe-memory-worker', 'zoe-runner'):
     ref = f'{name}:{os.environ["RELEASE_TAG"]}'

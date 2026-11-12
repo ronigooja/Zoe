@@ -109,6 +109,14 @@ run_release retry-tag "$release_root" "$build_root" "$tmp_root/docker-retry.log"
 [[ "$(cat "$release_root/retry-tag/bin/zoe")" == "synthetic executable: zoe" ]]
 [[ -x "$release_root/retry-tag/bin/zoe-runner" ]]
 [[ -x "$release_root/retry-tag/bin/zoe-secret-entrypoint" ]]
+[[ "$(cat "$release_root/retry-tag/SOURCE_REVISION")" == "$(git -C "$repo_root" rev-parse HEAD)" ]]
+(cd "$release_root/retry-tag" && sha256sum -c SHA256SUMS)
+python3 - "$release_root/retry-tag/release-manifest.json" <<'PY'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+paths = {artifact['path'] for artifact in manifest['artifacts']}
+assert {'bin/zoe', 'bin/zoe-server', 'bin/zoe-runner', 'bin/zoe-secret-entrypoint', 'SOURCE_REVISION'} <= paths
+PY
 [[ -f "$release_root/retry-tag/deploy-linux/build-release.sh" ]]
 [[ "$(cat "$release_root/retry-tag/bin/zoe-runner")" == "synthetic executable: zoe-runner" ]]
 grep -q -- '--platform linux/arm64' "$tmp_root/docker-retry.log"

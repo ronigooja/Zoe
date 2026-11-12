@@ -53,7 +53,7 @@ jobs:
           set +e
           mkdir -p "$RUNNER_TEMP/zoe-release/artifacts/bin" "$RUNNER_TEMP/zoe-release/artifacts/deploy-linux"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w' \
-            -o "$RUNNER_TEMP/zoe-release/artifacts/zoe-server" ./cmd/zoe-server \
+            -o "$RUNNER_TEMP/zoe-release/artifacts/bin/zoe-server" ./cmd/zoe-server \
             2>&1 | tee "$RUNNER_TEMP/zoe-release/logs/binary-build.log"
           status=$?
           echo "$status" > "$RUNNER_TEMP/zoe-release/logs/binary-build.exit"
@@ -65,13 +65,13 @@ jobs:
           echo "$status" > "$RUNNER_TEMP/zoe-release/logs/operator-build.exit"
           test "$status" -eq 0 || exit "$status"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w' \
-            -o "$RUNNER_TEMP/zoe-release/artifacts/zoe-runner" ./cmd/zoe-runner \
+            -o "$RUNNER_TEMP/zoe-release/artifacts/bin/zoe-runner" ./cmd/zoe-runner \
             2>&1 | tee "$RUNNER_TEMP/zoe-release/logs/runner-build.log"
           status=$?
           echo "$status" > "$RUNNER_TEMP/zoe-release/logs/runner-build.exit"
           test "$status" -eq 0 || exit "$status"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w' \
-            -o "$RUNNER_TEMP/zoe-release/artifacts/zoe-secret-entrypoint" ./deploy/linux/secret-entrypoint.go \
+            -o "$RUNNER_TEMP/zoe-release/artifacts/bin/zoe-secret-entrypoint" ./deploy/linux/secret-entrypoint.go \
             2>&1 | tee "$RUNNER_TEMP/zoe-release/logs/secret-entrypoint-build.log"
           status=$?
           echo "$status" > "$RUNNER_TEMP/zoe-release/logs/secret-entrypoint-build.exit"
@@ -112,7 +112,12 @@ jobs:
           set -e
           cd "$RUNNER_TEMP/zoe-release/artifacts"
           printf '%s\n' "$GITHUB_SHA" > SOURCE_REVISION
-          sha256sum bin/zoe zoe-server zoe-runner zoe-secret-entrypoint opencode-release.json SOURCE_REVISION IMAGE_REFERENCES deploy-linux/docker-compose.yml deploy-linux/zoe-compose.service deploy-linux/zoe-runner.service deploy-linux/zoe-opencode.service deploy-linux/zoe-runner-tmpfiles.conf deploy-linux/install-cli.sh > SHA256SUMS
+          chmod 0755 bin/*
+          for executable in zoe zoe-server zoe-runner zoe-secret-entrypoint; do
+            test -f "bin/$executable" && test ! -L "bin/$executable" && test -x "bin/$executable"
+          done
+          test "$(bin/zoe --source-revision)" = "$GITHUB_SHA"
+          sha256sum bin/* opencode-release.json SOURCE_REVISION IMAGE_REFERENCES deploy-linux/docker-compose.yml deploy-linux/zoe-compose.service deploy-linux/zoe-runner.service deploy-linux/zoe-opencode.service deploy-linux/zoe-runner-tmpfiles.conf deploy-linux/install-cli.sh > SHA256SUMS
           python3 - <<'PYJSON'
           import hashlib, json, os, pathlib
           root = pathlib.Path(".")
@@ -126,6 +131,17 @@ jobs:
               images[name] = {"ref": f"{os.environ['image_namespace']}/{name}:{os.environ['image_tag']}", "digest": digest}
           (root / "release-manifest.json").write_text(json.dumps({"schema":1,"release":os.environ["image_tag"],"source_revision":os.environ["GITHUB_SHA"],"architecture":"amd64","platform":"linux/amd64","artifacts":files,"images":images}, indent=2)+"\n")
           PYJSON
+          # Tar preserves executable modes that upload-artifact otherwise discards.
+          mkdir -p "$RUNNER_TEMP/zoe-release/server-package" "$RUNNER_TEMP/zoe-release/operator-package/deploy-linux" "$RUNNER_TEMP/zoe-release/operator-package/bin" "$RUNNER_TEMP/zoe-release/operator-download"
+          tar -czf "$RUNNER_TEMP/zoe-release/server-package/server-linux-amd64.tar.gz" .
+          cp bin/zoe "$RUNNER_TEMP/zoe-release/operator-package/bin/zoe"
+          cp deploy-linux/install-cli.sh "$RUNNER_TEMP/zoe-release/operator-package/deploy-linux/"
+          cp SOURCE_REVISION "$RUNNER_TEMP/zoe-release/operator-package/"
+          (
+            cd "$RUNNER_TEMP/zoe-release/operator-package"
+            sha256sum bin/zoe deploy-linux/install-cli.sh SOURCE_REVISION > SHA256SUMS
+            tar -czf "$RUNNER_TEMP/zoe-release/operator-download/zoe-linux-amd64.tar.gz" bin deploy-linux SOURCE_REVISION SHA256SUMS
+          )
       - name: Upload release logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -138,7 +154,16 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: server-release-${{ github.sha }}
-          path: ${{ runner.temp }}/zoe-release/artifacts
+          path: ${{ runner.temp }}/zoe-release/server-package
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+      - name: Upload matching operator CLI
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: operator-cli-${{ github.sha }}
+          path: ${{ runner.temp }}/zoe-release/operator-download
           retention-days: 7
           if-no-files-found: error
           compression-level: 0
