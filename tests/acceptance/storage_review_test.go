@@ -164,6 +164,7 @@ func TestReviewLateCoreMigrationAfterFeatureHistory(t *testing.T) {
 		// database whose core history stopped at version 3.
 		`DROP INDEX client_diagnostic_events_device_time`, `DROP INDEX client_diagnostic_events_request`, `DROP TABLE client_diagnostic_events`,
 		`DROP TABLE client_policy`,
+		`DROP TABLE run_rotation_snapshots`, `DROP TABLE run_entry_deliveries`,
 		`DROP INDEX task_confirmations_task`, `DROP TABLE task_confirmations`,
 		`ALTER TABLE tasks DROP COLUMN interaction_state`, `ALTER TABLE tasks DROP COLUMN interaction_scope`,
 		`ALTER TABLE tasks DROP COLUMN interaction_run_id`, `ALTER TABLE tasks DROP COLUMN interaction_action_digest`,
@@ -188,7 +189,7 @@ func TestReviewLateCoreMigrationAfterFeatureHistory(t *testing.T) {
 	if _, err := s.DB().ExecContext(ctx, `DELETE FROM schema_migrations WHERE version=7`); err != nil {
 		t.Fatal(err)
 	}
-	for _, version := range []int{8, 11, 12, 13, 14, 15} {
+	for _, version := range []int{8, 11, 12, 13, 14, 15, 16} {
 		if _, err := s.DB().ExecContext(ctx, `DELETE FROM schema_migrations WHERE version=?`, version); err != nil {
 			t.Fatal(err)
 		}
