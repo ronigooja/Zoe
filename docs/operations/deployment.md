@@ -557,8 +557,32 @@ The known core exclusions are 9 (instance_auth) and unregistered 10; namespace
 ranges may start above one. Compatibility with the old server is established by
 actually starting it and checking health, not guessed from version numbers.
 Completed same-SHA reruns are read-only no-ops. Interrupted transactions require
-explicit rollback; rolled-back SHAs require a new revision so backups remain
-immutable. Downloads are staged under `<releases>/<sha>.dl` and removed on exit.
+explicit rollback. After a successful rollback, the same SHA can be deployed
+again: the previous state is archived as `.deploy-<sha>.attempt-<epoch>-<pid>`,
+and new backups use `.pre-<12-sha>.attempt-<epoch>-<pid>`. Each transaction records
+its own backup paths; original backups are never overwritten. The `.failed`
+marker remains until the fresh attempt succeeds. Downloads are staged under
+`<releases>/<sha>.dl` and removed on exit.
+
+#### Host command compatibility
+
+When verifying or rolling back a host deployment, these command contracts apply:
+
+| Contract | Audit / implementation |
+| --- | --- |
+| Log cutoffs | One `date +%s` value; `journalctl --since "@<seconds>"` uses the epoch syntax documented in [systemd v219](https://github.com/systemd/systemd/blob/v219/man/systemd.time.xml). [Docker logs](https://docs.docker.com/reference/cli/docker/container/logs/#since) receives bare `<seconds>`, not `@`. Neither depends on timezone, `date -d`, BSD/GNU date parsing, or RFC3339 support in journalctl. No other since/until filters exist in the deployment helper. |
+| All services active | Check each unit separately in verify and rollback: [multi-unit is-active](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html#is-active%20PATTERN%E2%80%A6) succeeds if any unit is active. |
+| Container selection | [Compose v2 ps -q SERVICE](https://docs.docker.com/reference/cli/docker/compose/ps/) returns IDs of running containers; require exactly one nonempty result. JSON inspection uses the default array, not Go templates or version-sensitive Compose ps JSON shapes. |
+| Image identity | Parse `docker inspect` container `Image` and `Config.Env`; compare with `docker image inspect` `Id` plus pinned `RepoDigests`. This assumes registry-pulled images with repository digest metadata, not locally built image tags. |
+| Database backup/restore | Python `sqlite3` URI `mode=ro` and [Connection.backup(destination)](https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.backup) use SQLite's online backup API, not shell sqlite3 flags or live file copies. Integrity checks run on backups; database writers stop before restore. |
+| Checksums | GNU `sha256sum -c SHA256SUMS` runs from each extracted root; release generation and fixtures use its [hex-digest, two-space, relative-filename format](https://www.gnu.org/software/coreutils/manual/html_node/cksum-common-options.html). |
+| Lock | util-linux [flock -n 9](https://man7.org/linux/man-pages/man1/flock.1.html) locks the already-open descriptor for the script lifetime; use a local filesystem supporting flock, not an unverified network mount. |
+| Selector replacement | GNU [mv -T](https://www.gnu.org/software/coreutils/manual/html_node/mv-invocation.html) treats the destination as a path, not a directory. [ln -sfn](https://www.gnu.org/software/coreutils/manual/html_node/ln-invocation.html) replaces a symlink without following it; temporary selectors live beside their final selectors so rename is on the same filesystem. These are Linux/GNU prerequisites, not portable macOS/BSD commands. |
+
+CI fixtures strictly enforce the deployment's epoch timestamp subset and emulate
+systemctl's any-active result. They reject the former journal RFC3339 argument
+and Docker's unsupported `@epoch`, and test rollback retries/incomplete-state
+refusal. Static checks and shims do not establish actual host compatibility.
 
 Host-path overrides for controlled installations/tests are `ZOE_RELEASES_DIR`,
 `ZOE_ENV_FILE`, `ZOE_DB_PATH`, `ZOE_API_URL`, `ZOE_UNITS_DIR`, `ZOE_BIN_DIR`,

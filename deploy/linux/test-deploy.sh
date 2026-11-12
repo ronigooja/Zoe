@@ -79,7 +79,7 @@ db.commit(); db.close()
 PY
   cat > "$FIXTURE/shims/shim" <<'PY'
 #!/usr/bin/env python3
-import json, os, pathlib, shutil, sqlite3, sys
+import datetime, json, os, pathlib, re, shutil, sqlite3, sys
 p=pathlib.Path(os.environ['FIXTURE']); cmd=pathlib.Path(sys.argv[0]).name; args=sys.argv[1:]
 old,new=os.environ['OLD_SHA'],os.environ['NEW_SHA']; case=os.environ['CASE']
 current=(p/'releases/current').resolve().name
@@ -89,6 +89,18 @@ def healthy():
     if case == 'restore-required' and current == old and (p/'restarted').exists():
         with sqlite3.connect(p/'db.sqlite') as db:
             return db.execute('select max(version) from schema_migrations').fetchone()[0] == 1
+    return True
+def since_value():
+    if '--since' not in args or args.count('--since') != 1:
+        sys.exit('missing unique --since')
+    return args[args.index('--since')+1]
+def valid_rfc3339(value):
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})', value):
+        return False
+    try:
+        datetime.datetime.fromisoformat(value.replace('Z','+00:00'))
+    except ValueError:
+        return False
     return True
 if cmd == 'gh':
     if args[:2] == ['run','list']: print(json.dumps([{'databaseId':42,'headSha':new}]))
@@ -102,24 +114,47 @@ elif cmd == 'systemctl':
     if args[0] == 'cat': print((p/'units'/(args[1]+'.service')).read_text())
     else:
         record()
+        if args[0] == 'is-active':
+            assert args[1] == '--quiet'
+            units=args[2:]
+            assert units and all(unit in ['zoe-compose','zoe-runner','zoe-opencode'] for unit in units)
+            # Real systemctl returns success for ANY active unit in this list.
+            inactive = 'zoe-opencode' if case == 'inactive-service' and current == new else None
+            sys.exit(0 if any(unit != inactive for unit in units) else 3)
         if args[:2] == ['restart','zoe-compose'] and current == new and not (p/'restarted').exists():
             (p/'restarted').touch()
             with sqlite3.connect(p/'db.sqlite') as db:
                 db.executescript("insert into schema_migrations values('voice',2); insert into voice_turns values(2); insert into tasks values('done');")
 elif cmd == 'curl': print('200' if healthy() else '503',end='')
-elif cmd == 'journalctl': print('runner ready')
+elif cmd == 'journalctl':
+    value=since_value()
+    # Deployment's portable systemd v219 subset; RFC3339 T/Z is NOT accepted.
+    if not re.fullmatch(r'@[0-9]+', value): sys.exit('unsupported journal timestamp')
+    assert args == ['-u','zoe-runner','--since',value,'--no-pager']
+    record()
+    print('runner ready')
 elif cmd == 'sleep': pass
 elif cmd == 'docker':
     if args[0] == 'compose':
         if 'config' in args and '--format' in args: print((p/'config.json').read_text())
-        elif 'ps' in args: print('server-container')
+        elif 'ps' in args:
+            assert args[-3:] == ['ps','-q','zoe-server']
+            print('server-container')
     elif args[0] == 'pull': record()
     elif args[0] == 'inspect':
+        assert args == ['inspect','server-container']
         env=json.loads((p/'config.json').read_text())['services']['zoe-server']['environment']
         print(json.dumps([{'Image':'sha256:'+'2'*64,'Config':{'Env':[k+'='+v for k,v in env.items()]}}]))
     elif args[:2] == ['image','inspect']:
+        assert args == ['image','inspect','ghcr.io/test/zoe-server@sha256:'+'2'*64]
         print(json.dumps([{'Id':'sha256:'+'2'*64,'RepoDigests':['ghcr.io/test/zoe-server@sha256:'+'2'*64]}]))
     elif args[0] == 'logs':
+        value=since_value()
+        # Docker accepts seconds[.nanoseconds] or RFC3339, never @seconds.
+        if not (re.fullmatch(r'[0-9]+(?:\.[0-9]{1,9})?', value) or valid_rfc3339(value)):
+            sys.exit('unsupported Docker timestamp')
+        assert args == ['logs','--since',value,'server-container']
+        record()
         print('listening')
         if case in ['verify-failure','restore-required']: print('panic secret=DO_NOT_LEAK_SENTINEL')
     else: sys.exit(2)
@@ -149,6 +184,15 @@ deploy --dry-run
 unchanged
 [[ ! -e "$FIXTURE/releases/$new" && ! -e "$FIXTURE/releases/$new.dl" ]]
 fixture happy
+# Regression: the former shared RFC3339 argument fails on journalctl v219;
+# Docker accepts it, but rejects the journal's @epoch form.
+if PATH="$FIXTURE/shims:$PATH" journalctl -u zoe-runner --since 2026-11-12T09:31:44Z --no-pager >/dev/null 2>&1; then
+  echo 'journal shim accepted the broken RFC3339 timestamp'; exit 1
+fi
+if PATH="$FIXTURE/shims:$PATH" docker logs --since @1794475904 server-container >/dev/null 2>&1; then
+  echo 'Docker shim accepted journal-only @epoch'; exit 1
+fi
+PATH="$FIXTURE/shims:$PATH" docker logs --since 2026-11-12T09:31:44Z server-container >/dev/null
 deploy
 [[ "$(readlink -f "$FIXTURE/releases/current")" == "$FIXTURE/releases/$new" ]]
 [[ "$("$FIXTURE/bin/zoe" --source-revision)" == "$new" ]]
@@ -157,18 +201,43 @@ deploy
 [[ ! -e "$FIXTURE/releases/$new.dl" ]]
 [[ "$(grep -c '^docker pull ' "$FIXTURE/calls")" == 1 ]]
 [[ "$(stat -c '%a' "$FIXTURE/stack.env.pre-${new:0:12}")" == 640 ]]
+python3 - "$FIXTURE/calls" <<'PY'
+import pathlib, re, sys
+calls=pathlib.Path(sys.argv[1]).read_text()
+journal=re.search(r'^journalctl -u zoe-runner --since @([0-9]+) --no-pager$',calls,re.M)
+assert journal, 'deployment did not pass portable epoch to journalctl'
+assert re.search(r'^docker logs --since '+journal[1]+r' server-container$',calls,re.M), 'Docker and journal cutoffs differ'
+PY
 cp "$FIXTURE/calls" "$FIXTURE/calls-before"
 deploy
 cmp -s "$FIXTURE/calls" "$FIXTURE/calls-before"
 PATH="$FIXTURE/shims:$PATH" bash "$repo_root/deploy/linux/deploy.sh" --rollback --sha "$old"
 [[ "$(readlink -f "$FIXTURE/releases/current")" == "$FIXTURE/releases/$old" ]]
-for failure in verify-failure restore-required; do
+[[ -f "$FIXTURE/releases/.deploy-$new/rolled-back" && -f "$FIXTURE/logs/$new.failed" ]]
+# Same-SHA fresh attempt after rollback preserves original backup/state.
+deploy
+[[ -f "$FIXTURE/logs/$new.done" && ! -f "$FIXTURE/logs/$new.failed" ]]
+[[ "$(readlink -f "$FIXTURE/releases/current")" == "$FIXTURE/releases/$new" ]]
+[[ "$(cat "$FIXTURE/releases/.deploy-$new/db-backup")" == *'.attempt-'* ]]
+[[ -f "$FIXTURE/db.sqlite.pre-${new:0:12}" ]]
+[[ "$(find "$FIXTURE/releases" -maxdepth 1 -type d -name ".deploy-$new.attempt-*" | wc -l | tr -d ' ')" == 1 ]]
+fixture incomplete
+mkdir "$FIXTURE/releases/.deploy-$new"
+if deploy; then echo 'incomplete transaction was accepted'; exit 1; fi
+grep -q 'incomplete transaction' "$FIXTURE/logs/$new.log"
+unchanged
+for failure in verify-failure restore-required inactive-service; do
   fixture "$failure"
   if deploy; then echo "expected verification rollback: $failure"; exit 1; fi
   [[ "$(readlink -f "$FIXTURE/releases/current")" == "$FIXTURE/releases/$old" ]]
   [[ "$("$FIXTURE/bin/zoe" --source-revision)" == "$old" ]]
   cmp -s "$FIXTURE/initial-env" "$FIXTURE/stack.env"
   [[ -f "$FIXTURE/logs/$new.failed" && -f "$FIXTURE/releases/.deploy-$new/rolled-back" ]]
+  grep -q 'deploy step=rollback status=ok' "$FIXTURE/logs/$new.log"
+  if [[ "$failure" == inactive-service ]]; then
+    grep -q 'deploy step=verify status=fail' "$FIXTURE/logs/$new.log"
+    grep -q '^systemctl is-active --quiet zoe-opencode$' "$FIXTURE/calls"
+  fi
   if grep -q DO_NOT_LEAK_SENTINEL "$FIXTURE/logs/$new.log"; then exit 1; fi
   if [[ "$failure" == restore-required ]]; then
     grep -q 'DATA LOSS:.*voice_turns=1 tasks=1' "$FIXTURE/logs/$new.log"

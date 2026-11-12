@@ -41,9 +41,16 @@ exec 9>"$log_root/.lock"
 flock -n 9 || { echo 'deploy step=preflight status=fail reason=deployment-locked'; exit 1; }
 log="$log_root/$sha.log"
 exec >>"$log" 2>&1
-step=preflight armed=false loss=false scratch="" dl="" state="" restart_since="" own_dl=false
+step=preflight armed=false loss=false scratch="" dl="" state="" restart_epoch="" own_dl=false
 state_op() { python3 "$helper" "$@"; }
 ok() { echo "deploy step=$step status=ok"; }
+services_active() {
+  local unit
+  # Multi-unit is-active succeeds when ANY unit is active, not all.
+  for unit in zoe-compose zoe-runner zoe-opencode; do
+    systemctl is-active --quiet "$unit" >/dev/null 2>&1 || return 1
+  done
+}
 health() { [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 3 "$1" 2>/dev/null)" == 200 ]]; }
 wait_health() {
   local attempt
@@ -66,11 +73,15 @@ cli_restore() {
   "$bin_dir/zoe" --source-revision >/dev/null
 }
 rollback() {
-  local old
+  local old env_backup db_backup
   old="$(cat "$state/previous-release")" || return 1
   [[ -d "$old" && -f "$state/backup-complete" ]] || return 1
   systemctl stop zoe-compose >/dev/null 2>&1 || return 1
-  state_op atomic-copy "$env_file.pre-$(cat "$state/revision" | cut -c1-12)" "$env_file" || return 1
+  env_backup="$env_file.pre-$(cat "$state/revision" | cut -c1-12)"
+  db_backup="$db.pre-$(cat "$state/revision" | cut -c1-12)"
+  if [[ -f "$state/env-backup" ]]; then env_backup="$(cat "$state/env-backup")" || return 1; fi
+  if [[ -f "$state/db-backup" ]]; then db_backup="$(cat "$state/db-backup")" || return 1; fi
+  state_op atomic-copy "$env_backup" "$env_file" || return 1
   selector "$old" || return 1
   # Try the old server against the migrated DB before considering data restore.
   if [[ -f "$state/restart-attempted" ]]; then
@@ -82,7 +93,7 @@ rollback() {
         systemctl stop zoe-compose >/dev/null 2>&1 || return 1
         # Stop every Zoe database writer before restoring via SQLite backup API.
         systemctl stop zoe-runner >/dev/null 2>&1 || return 1
-        state_op restore-db "$db.pre-$(cat "$state/revision" | cut -c1-12)" "$db" || return 1
+        state_op restore-db "$db_backup" "$db" || return 1
         loss=true
         touch "$state/data-loss" || return 1
       fi
@@ -94,7 +105,7 @@ rollback() {
   if [[ -f "$state/runner-changed" || "$loss" == true ]]; then
     systemctl restart zoe-runner >/dev/null 2>&1 || return 1
   fi
-  systemctl is-active --quiet zoe-compose zoe-runner zoe-opencode >/dev/null 2>&1 || return 1
+  services_active || return 1
   touch "$state/rolled-back" || return 1
   return 0
 }
@@ -213,21 +224,28 @@ if [[ "$dry_run" == true ]]; then
   exit 0
 fi
 step=backup
+backup_suffix="${sha:0:12}"
 if [[ -f "$state/rolled-back" ]]; then
-  # Keep the first backups; do not silently reuse them for a new attempt.
-  echo 'SHA was rolled back; choose a new release SHA rather than overwrite its backups'
-  exit 1
+  # A fresh attempt must not reuse the pre-rollback DB snapshot or overwrite it.
+  attempt="$(date +%s)-$$"
+  archived_state="$state.attempt-$attempt"
+  mv -T -- "$state" "$archived_state"
+  # Preserve the old manual-rollback reference until the new record is complete.
+  ln -sfn "$archived_state" "$releases/.deploy-rollback-$(basename "$previous")"
+  backup_suffix="${sha:0:12}.attempt-$attempt"
 fi
 mkdir "$state"
 printf '%s\n' "$sha" > "$state/revision"
 printf '%s\n' "$previous" > "$state/previous-release"
 printf '%s\n' "$previous_cli" > "$state/previous-cli"
 cp "$scratch/before.json" "$state/before.json"
-ln -sfn "$state" "$releases/.deploy-rollback-$(basename "$previous")"
-state_op backup "$db" "$db.pre-${sha:0:12}"
-[[ ! -e "$env_file.pre-${sha:0:12}" ]]
-cp -p "$env_file" "$env_file.pre-${sha:0:12}"
+printf '%s\n' "$db.pre-$backup_suffix" > "$state/db-backup"
+printf '%s\n' "$env_file.pre-$backup_suffix" > "$state/env-backup"
+state_op backup "$db" "$db.pre-$backup_suffix"
+[[ ! -e "$env_file.pre-$backup_suffix" ]]
+cp -p "$env_file" "$env_file.pre-$backup_suffix"
 touch "$state/backup-complete"
+ln -sfn "$state" "$releases/.deploy-rollback-$(basename "$previous")"
 if ! cmp -s "$previous/bin/zoe-runner" "$dl/server/bin/zoe-runner"; then touch "$state/runner-changed"; fi
 if [[ ! -e "$releases/$sha" ]]; then
   chmod 0755 "$dl/server"
@@ -255,23 +273,25 @@ state_op idle "$db"
 selector "$sha"
 # Last check immediately before service restart; no remote calls between them.
 state_op idle "$db"
-restart_since="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+# systemd v219 accepts @epoch; Docker accepts bare seconds, not @epoch.
+restart_epoch="$(date +%s)"
+[[ "$restart_epoch" =~ ^[0-9]+$ ]]
 touch "$state/restart-attempted"
 systemctl restart zoe-compose >/dev/null 2>&1
 wait_health
 if [[ -f "$state/runner-changed" ]]; then systemctl restart zoe-runner >/dev/null 2>&1; fi
 ok
 step=verify
-systemctl is-active --quiet zoe-compose zoe-runner zoe-opencode >/dev/null 2>&1
+services_active
 health "$api"
 if [[ -n "${ZOE_PUBLIC_HEALTH_URL:-}" ]]; then health "$ZOE_PUBLIC_HEALTH_URL"; fi
 container="$(docker compose --env-file "$env_file" -f "$releases/current/deploy-linux/docker-compose.yml" ps -q zoe-server 2>/dev/null)"
 [[ -n "$container" && "$container" != *$'\n'* ]]
 state_op container-verify "$releases/$sha" "$env_file" "$container" "$script_dir/expected-env.txt"
 state_op db-verify "$state/before.json" "$db"
-journalctl -u zoe-runner --since "$restart_since" --no-pager > "$scratch/runner.log" 2>/dev/null
+journalctl -u zoe-runner --since "@$restart_epoch" --no-pager > "$scratch/runner.log" 2>/dev/null
 state_op logs "$scratch/runner.log" runner
-docker logs --since "$restart_since" "$container" > "$scratch/server.log" 2>&1
+docker logs --since "$restart_epoch" "$container" > "$scratch/server.log" 2>&1
 state_op logs "$scratch/server.log" server
 [[ "$("$bin_dir/zoe" --source-revision)" == "$sha" ]]
 ok
