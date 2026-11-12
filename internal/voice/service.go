@@ -189,8 +189,6 @@ type openingContextResult struct {
 	Supported *bool `json:"supported,omitempty"`
 }
 
-const delegationRuleItem = `用户要求取消或停止进行中的任务时,先委托,不要自己回答。用户询问任务进度或结果时,先委托,不要自己回答。用户询问关于他本人的任何信息时,先委托,等结果再回答,不要自己回答。`
-
 func openingCharsFor(c *openingContext) int {
 	if c == nil {
 		return 0
@@ -252,10 +250,8 @@ func (s *Service) buildOpeningContext(ctx context.Context, p contracts.Principal
 func (s *Service) buildAVASOpeningContext(ctx context.Context, p contracts.Principal) *openingContext {
 	version := 1
 	_ = s.db.QueryRowContext(ctx, `SELECT coalesce(max(opening_context_version),0)+1 FROM voice_sessions WHERE workspace_id=? AND owner_id=?`, p.WorkspaceID, p.SubjectID).Scan(&version)
-	c := &openingContext{Kind: "full", Version: version, Items: []openingContextItem{{Role: "user", Text: delegationRuleItem}}}
-	used := openingCharsFor(c)
-	// For AVAS, the mandatory rule is the minimum budget; only optional facts
-	// and tasks are dropped when a configured budget is smaller than the rule.
+	c := &openingContext{Kind: "full", Version: version, Items: []openingContextItem{}}
+	used := 0
 	appendItem := func(text string) bool {
 		cost := len([]rune(text))
 		if len(c.Items) >= 128 || used+cost > s.openingBudget {
