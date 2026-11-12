@@ -14,8 +14,12 @@ import (
 	"github.com/ronigooja/Zoe/internal/steward"
 )
 
-// rollbackVoiceAssignment applies when a fixture reconstructs pre-217 schema.
-const rollbackVoiceAssignment = `ALTER TABLE voice_turns DROP COLUMN steward_action;
+// rollbackVoiceAssignment applies when a fixture reconstructs pre-217 schema;
+// remove the later register tables and receipt before rolling back assignment.
+const rollbackVoiceAssignment = `DROP TABLE voice_context_registers;
+DROP TABLE voice_register_memory_boundaries;
+DELETE FROM schema_migrations WHERE namespace='voice' AND version=218;
+ALTER TABLE voice_turns DROP COLUMN steward_action;
 ALTER TABLE voice_turns DROP COLUMN steward_task_id;
 DELETE FROM schema_migrations WHERE namespace='voice' AND version=217;`
 
