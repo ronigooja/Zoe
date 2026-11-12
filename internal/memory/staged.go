@@ -13,10 +13,23 @@ import (
 // For a repeated owner-scoped key, the first text and timestamp are retained,
 // including after processing. Accepted text is stored without normalization.
 func (r *Repository) StageWrite(ctx context.Context, workspace, principal, key, text string, at time.Time) error {
+	return stageWrite(ctx, r.db, workspace, principal, key, text, at)
+}
+
+// StageWriteTx applies when staging belongs to an existing command transaction.
+func (r *Repository) StageWriteTx(ctx context.Context, tx *sql.Tx, workspace, principal, key, text string, at time.Time) error {
+	return stageWrite(ctx, tx, workspace, principal, key, text, at)
+}
+
+type stagedExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func stageWrite(ctx context.Context, db stagedExecer, workspace, principal, key, text string, at time.Time) error {
 	if strings.TrimSpace(workspace) == "" || strings.TrimSpace(principal) == "" || strings.TrimSpace(key) == "" || strings.TrimSpace(text) == "" || !utf8.ValidString(text) || utf8.RuneCountInString(text) > 4000 {
 		return errors.New("invalid staged memory scope, key or text")
 	}
-	_, err := r.db.ExecContext(ctx, `INSERT INTO memory_staged_writes(workspace_id,principal_id,idempotency_key,original_text,staged_at,priority) VALUES(?,?,?,?,?,100) ON CONFLICT(workspace_id,principal_id,idempotency_key) DO NOTHING`, workspace, principal, key, text, at.UnixNano())
+	_, err := db.ExecContext(ctx, `INSERT INTO memory_staged_writes(workspace_id,principal_id,idempotency_key,original_text,staged_at,priority) VALUES(?,?,?,?,?,100) ON CONFLICT(workspace_id,principal_id,idempotency_key) DO NOTHING`, workspace, principal, key, text, at.UnixNano())
 	return err
 }
 

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ronigooja/Zoe/internal/steward"
-	"github.com/ronigooja/Zoe/internal/triage"
 	"log"
 	"net"
 	"net/http"
@@ -104,14 +103,6 @@ func run() error {
 		MaxRuns:            maxRuns,
 		WaitLimit:          waitLimit,
 	}
-	triageClient, err := triage.FromEnv(os.Getenv, os.ReadFile)
-	if err != nil {
-		log.Fatalf("triage configuration: %v", err)
-	}
-	var triageClassifier voice.Classifier
-	if triageClient != nil {
-		triageClassifier = triageAdapter{triageClient}
-	}
 	summaryClient, err := summarize.FromEnv(os.Getenv, os.ReadFile)
 	if err != nil {
 		return fmt.Errorf("summary configuration: %w", err)
@@ -149,21 +140,17 @@ func run() error {
 		answerer = answerClient
 	}
 	recallLimit := 20
-	confirmationWindow := 10 * time.Minute
-	if raw := strings.TrimSpace(os.Getenv("ZOE_VOICE_CONFIRMATION_WINDOW_SECONDS")); raw != "" {
-		seconds, parseErr := strconv.Atoi(raw)
-		if parseErr != nil || seconds < 1 || seconds > 3600 {
-			return errors.New("ZOE_VOICE_CONFIRMATION_WINDOW_SECONDS must be between 1 and 3600")
-		}
-		confirmationWindow = time.Duration(seconds) * time.Second
-	}
 	if raw := strings.TrimSpace(os.Getenv("ZOE_RECALL_SUMMARY_LIMIT")); raw != "" {
 		recallLimit, err = strconv.Atoi(raw)
 		if err != nil || recallLimit < 1 || recallLimit > 100 {
 			return errors.New("ZOE_RECALL_SUMMARY_LIMIT must be between 1 and 100")
 		}
 	}
-	server, err := composeControlServer(store, cfg, voice.Config{InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), ConfirmationWindow: confirmationWindow, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Classifier: triageClassifier, Steward: taskSteward, Summarizer: summarizer, SummarySettleDelay: &summarySettle, Answerer: answerer, RecallTimeout: answerTimeout, RecallSummaryLimit: recallLimit, RecallHoldingText: os.Getenv("ZOE_RECALL_HOLDING_TEXT"), GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	registerConfig, err := registerConfigFromEnv(os.Getenv, os.ReadFile)
+	if err != nil {
+		return fmt.Errorf("register configuration: %w", err)
+	}
+	server, err := composeControlServer(store, cfg, voice.Config{InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, Summarizer: summarizer, SummarySettleDelay: &summarySettle, Answerer: answerer, RecallTimeout: answerTimeout, RecallSummaryLimit: recallLimit, RecallHoldingText: os.Getenv("ZOE_RECALL_HOLDING_TEXT"), GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	}, memory.DerivedConfig{BackupDeleteManifestPath: strings.TrimSpace(os.Getenv("ZOE_BACKUP_DELETE_MANIFEST_PATH"))})
@@ -378,16 +365,4 @@ func optionalSplitEnv(name string) []string {
 func validBearer(value string) bool {
 	bytes, err := base64.RawURLEncoding.DecodeString(value)
 	return err == nil && len(bytes) == 32 && base64.RawURLEncoding.EncodeToString(bytes) == value
-}
-
-type triageAdapter struct{ client *triage.Client }
-
-func (a triageAdapter) Classify(ctx context.Context, text string) (string, error) {
-	category, err := a.client.Classify(ctx, text)
-	return string(category), err
-}
-
-func (a triageAdapter) ClassifyPending(ctx context.Context, text, question string) (string, error) {
-	category, err := a.client.ClassifyPending(ctx, text, question)
-	return string(category), err
 }

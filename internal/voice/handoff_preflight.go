@@ -53,8 +53,8 @@ func (s *Service) prepareHandoff(ctx context.Context, p contracts.Principal, req
 		}
 		select {
 		case <-waitCtx.Done():
-			log.Printf("voice_classification_wait id=%s wait_ms=%d budget_hit=true reason=triage_timeout", id, time.Since(started).Milliseconds())
-			return apiError(http.StatusServiceUnavailable, "triage_timeout", "voice classification is not ready; retry this handoff", nil)
+			log.Printf("voice_routing_wait id=%s wait_ms=%d budget_hit=true reason=routing_timeout", id, time.Since(started).Milliseconds())
+			return apiError(http.StatusServiceUnavailable, "routing_timeout", "voice routing is not ready; retry this handoff", nil)
 		case <-ticker.C:
 		}
 	}

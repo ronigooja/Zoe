@@ -41,9 +41,9 @@ type Config struct {
 	UpstreamRoute          string
 	ResultDeliveryEnabled  bool
 	ResultDeliveryInterval time.Duration
-	Classifier             Classifier
+	ContextRegister        *ContextRegister
+	RegisterConfig         *RegisterConfig
 	ClassificationTimeout  time.Duration
-	ConfirmationWindow     time.Duration
 	Summarizer             Summarizer
 	SummarySettleDelay     *time.Duration
 	Steward                TaskSteward
@@ -52,20 +52,14 @@ type Config struct {
 	RecallLease            time.Duration
 	RecallSummaryLimit     int
 	RecallHoldingText      string
-	ProgressMaxTaskAge     time.Duration
 }
 
 type Answerer interface {
 	Answer(context.Context, string, []answer.Candidate, []answer.Excerpt) (answer.Result, error)
 }
 
-type Classifier interface {
-	Classify(context.Context, string) (string, error)
-}
-
 type TaskSteward interface {
-	Decide(context.Context, string) (steward.Decision, error)
-	Assign(context.Context, string, []steward.RosterTask) (steward.Assignment, error)
+	Choose(context.Context, string, string, string, []steward.Candidate) (steward.Choice, error)
 }
 
 type Service struct {
@@ -84,8 +78,8 @@ type Service struct {
 	upstreamRoute          string
 	resultDeliveryEnabled  bool
 	resultDeliveryInterval time.Duration
-	classifier             Classifier
 	steward                TaskSteward
+	register               *ContextRegister
 	recall                 Config
 	recallCtx              context.Context
 	recallCancel           context.CancelFunc
@@ -94,23 +88,10 @@ type Service struct {
 	started                bool
 	stopped                bool
 	workers                sync.WaitGroup
-	triageMu               sync.RWMutex
-	triage                 map[string]triageCacheEntry
 	reaperStop             chan struct{}
 	reaperDone             chan struct{}
 	summary                *summaryWorker
 	summaryDone            chan struct{}
-}
-
-const triageCacheCap = 1024
-
-// DefaultProgressMaxTaskAge bounds current-call progress evidence when no
-// positive Config.ProgressMaxTaskAge override is supplied.
-const DefaultProgressMaxTaskAge = 6 * time.Hour
-
-type triageCacheEntry struct {
-	category string
-	storedAt time.Time
 }
 
 type gatewayRequestIDContextKey struct{}
@@ -279,6 +260,12 @@ func (s *Service) buildAVASOpeningContext(ctx context.Context, p contracts.Princ
 			}
 		}
 	}
+	if s.register != nil {
+		text, err := s.register.AssembleContext(ctx, RegisterOwner{p.WorkspaceID, p.SubjectID}, s.now(), max(0, s.openingBudget-used))
+		if err == nil && text != "" {
+			appendItem(text)
+		}
+	}
 	// Running or queued tasks are always listed; waiting tasks only when updated
 	// within the last 30 minutes, so abandoned tasks do not read as current work.
 	recent := s.now().Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
@@ -363,6 +350,13 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 		return err
 	}
 	svc := newService(store.DB(), cfg)
+	if cfg.RegisterConfig != nil {
+		var err error
+		svc.register, err = NewRegister(store.DB(), *cfg.RegisterConfig)
+		if err != nil {
+			return err
+		}
+	}
 	server.RegisterShutdownHook(svc.Stop)
 	svc.Start()
 	if err := server.RegisterCommand("voice.turn.commit", svc.commandCommitTurn); err != nil {
@@ -407,12 +401,6 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 }
 
 func newService(db *sql.DB, cfg Config) *Service {
-	if cfg.ProgressMaxTaskAge <= 0 {
-		cfg.ProgressMaxTaskAge = DefaultProgressMaxTaskAge
-	}
-	if cfg.ConfirmationWindow <= 0 {
-		cfg.ConfirmationWindow = 10 * time.Minute
-	}
 	var base *url.URL
 	if raw := strings.TrimSpace(cfg.GatewayURL); raw != "" {
 		base, _ = url.Parse(raw)
@@ -459,27 +447,7 @@ func newService(db *sql.DB, cfg Config) *Service {
 		settle = *cfg.SummarySettleDelay
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, classifier: cfg.Classifier, steward: cfg.Steward, summary: &summaryWorker{db: db, model: cfg.Summarizer, now: now, settle: settle}, summaryDone: make(chan struct{}), recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), triage: make(map[string]triageCacheEntry), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
-}
-
-func triageKey(session string, generation int64, turn string, revision int64) string {
-	return fmt.Sprintf("%s:%d:%s:%d", session, generation, turn, revision)
-}
-
-func (s *Service) cacheTriage(key, category string) {
-	s.triageMu.Lock()
-	defer s.triageMu.Unlock()
-	if len(s.triage) >= triageCacheCap {
-		oldestKey := ""
-		var oldest time.Time
-		for k, entry := range s.triage {
-			if oldestKey == "" || entry.storedAt.Before(oldest) {
-				oldestKey, oldest = k, entry.storedAt
-			}
-		}
-		delete(s.triage, oldestKey)
-	}
-	s.triage[key] = triageCacheEntry{category: category, storedAt: s.now().UTC()}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, summary: &summaryWorker{db: db, model: cfg.Summarizer, now: now, settle: settle}, summaryDone: make(chan struct{}), recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func (s *Service) writeOutcome(ctx context.Context, p contracts.Principal, sessionID, summary, outcome string) error {
@@ -528,12 +496,15 @@ func (s *Service) Start() {
 		return
 	}
 	s.started = true
+	if s.register != nil {
+		s.register.Start(s.recallCtx)
+	}
 	s.recoverRecall(s.recallCtx, true)
 	s.workers.Add(1)
 	go func() { defer s.workers.Done(); s.reaper() }()
 	s.workers.Add(1)
 	go func() { defer s.workers.Done(); defer close(s.summaryDone); s.summary.run(s.recallCtx) }()
-	if s.resultDeliveryEnabled || s.classifier != nil {
+	if s.resultDeliveryEnabled || s.register != nil {
 		s.workers.Add(1)
 		go func() { defer s.workers.Done(); s.resultDispatcher() }()
 	}
@@ -547,6 +518,9 @@ func (s *Service) Stop() {
 		close(s.reaperStop)
 	}
 	s.lifecycleMu.Unlock()
+	if s.register != nil {
+		s.register.Stop()
+	}
 	s.workers.Wait()
 }
 

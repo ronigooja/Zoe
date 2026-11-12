@@ -398,10 +398,20 @@ func TestFastReplyRecomputesSecondsOnRetry(t *testing.T) {
 	}
 }
 
-func TestClassifierAndGatewayAreNeverCalledInsideATransaction(t *testing.T) {
+func TestRegisterIsNeverCalledInsideATransaction(t *testing.T) {
 	r := newDeliveryRig(t)
-	classifier := &fakeClassifier{category: "progress", delay: 20 * time.Millisecond}
-	svc := newService(r.store.DB(), Config{Classifier: classifier, Now: r.now})
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if _, err := r.store.DB().Exec(`UPDATE voice_turns SET content=content WHERE id='turn-lock'`); err != nil {
+			t.Error(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"route":"recall","restatement":""}`})
+	}))
+	defer model.Close()
+	register, err := NewRegister(r.store.DB(), RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newService(r.store.DB(), Config{ContextRegister: register, Now: r.now})
 	at := r.now().Format(time.RFC3339Nano)
 	r.seedCall(t, "s-lock", "user-1", 1)
 	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('turn-lock','default','s-lock',1,'turn',1,'is it done',X'01',?, 'cmd')`, at)
@@ -410,7 +420,7 @@ func TestClassifierAndGatewayAreNeverCalledInsideATransaction(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("classifier blocked")
+		t.Fatal("register blocked")
 	}
 	if _, err := r.store.DB().Exec(`UPDATE voice_turns SET content=content WHERE id='turn-lock'`); err != nil {
 		t.Fatal(err)

@@ -19,8 +19,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
+	"github.com/ronigooja/Zoe/internal/memory"
 	"github.com/ronigooja/Zoe/internal/steward"
-	"github.com/ronigooja/Zoe/internal/triage"
 )
 
 func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -352,10 +352,8 @@ type handoffPayload struct {
 	ContentHash string `json:"content_hash"`
 }
 
-// commandHandoff is the server-owned boundary between a stable voice turn and
-// Worker. It deliberately does not accept an impact level or routing decision
-// from the caller. Stored assignments route ordinary requests; hard high-impact
-// holds require scoped confirmation.
+// commandHandoff applies persisted register routing and Steward choice inside
+// the command transaction. The caller supplies only the stable turn identity.
 func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest, server *control.Server) (contracts.CommandResult, []contracts.Event, error) {
 	if !control.HasScope(cmd.Principal, "client:command") && !control.HasScope(cmd.Principal, "voice:turn:commit") {
 		return contracts.CommandResult{}, nil, apiError(http.StatusForbidden, "forbidden", "voice handoff scope is required", nil)
@@ -407,25 +405,28 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if handled != 0 {
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, nil
 	}
-	if result, events, done, err := s.pendingControlTx(ctx, tx, cmd, p, category, server); done {
-		return result, events, err
-	}
 	content = strings.TrimSpace(content)
-	impact := classifyHandoff(content)
-	if stewardDecision == string(steward.Error) && impact != "high" {
+	if category != "task" && category != "memory_write" && category != "recall" {
+		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech)
+	}
+	if stewardDecision == string(steward.Error) {
 		if err := s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, nil
 	}
-	if category == "memory_write" && impact != "high" {
-		// Source-only extraction currently has no worker materialization contract.
-		// Never acknowledge a save that the existing pipeline cannot perform.
-		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
-		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,'memory_write','pending',?,?,?)`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, memorySaveUnavailable, at, at, at)
+	if category == "memory_write" {
+		var key string
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&key); err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
+		err := memory.NewRepository(s.db).StageWriteTx(ctx, tx, cmd.Principal.WorkspaceID, owner, key, content, cmd.AcceptedAt)
+		if err == nil {
+			err = s.markHandledTx(ctx, tx, cmd, p)
+		}
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, err
 	}
-	if (category == "recall" || category == "memory_read") && impact != "high" {
+	if category == "recall" {
 		id := uuid.NewString()
 		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
 		holding := s.recall.RecallHoldingText
@@ -433,9 +434,6 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 			holding = "我查一下我们之前的对话。"
 		}
 		intent := "recall_holding"
-		if category == "memory_read" {
-			holding, intent = "我查一下保存的笔记。", "memory_read_holding"
-		}
 		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?)`, id, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, holding, intent, at, at, at)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
@@ -444,34 +442,62 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
+		if err = s.markHandledTx(ctx, tx, cmd, p); err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
 		event, _ := json.Marshal(map[string]any{"route": "fast", "category": category, "turn_id": p.TurnID, "revision": p.Revision})
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, []contracts.Event{{Type: "voice.turn.handoff", AggregateType: "voice_session", AggregateID: p.SessionID, AggregateVersion: p.Generation, Payload: event}}, nil
 	}
-	if category == "progress" && impact != "high" {
-		text, err := s.progressReplyTx(ctx, tx, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.SessionID, p.TurnID, s.now())
-		if err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?, ?,?,?,?)`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, text, "progress", "pending", cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)); err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-		handoffEvent, _ := json.Marshal(map[string]any{"route": "fast", "category": category, "turn_id": p.TurnID, "revision": p.Revision})
-		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, []contracts.Event{{Type: "voice.turn.handoff", AggregateType: "voice_session", AggregateID: p.SessionID, AggregateVersion: p.Generation, Payload: handoffEvent}}, nil
-	}
 	goal := content
-	var assignmentEvents []contracts.Event
-	if impact != "high" {
+	{
+		if stewardAction == string(steward.ActionReport) {
+			var reply string
+			if err := tx.QueryRowContext(ctx, `SELECT pending_question FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&reply); err != nil {
+				return contracts.CommandResult{}, nil, err
+			}
+			reply = strings.TrimSpace(reply)
+			if reply == "" {
+				reply = stewardErrorSpeech
+			}
+			if runes := []rune(reply); len(runes) > 600 {
+				reply = string(runes[:600])
+			}
+			err := s.heldReplyTx(ctx, tx, cmd, p, reply)
+			if err == nil {
+				_, err = tx.ExecContext(ctx, `UPDATE voice_fast_replies SET intent_kind='task_report' WHERE session_id=? AND generation=? AND turn_id=?`, p.SessionID, p.Generation, p.TurnID)
+			}
+			return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}, nil, err
+		}
+		if stewardAction == string(steward.ActionCancel) {
+			var id string
+			err := tx.QueryRowContext(ctx, `SELECT id FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND id=?`, cmd.Principal.WorkspaceID, owner, stewardTaskID).Scan(&id)
+			if errors.Is(err, sql.ErrNoRows) {
+				return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}, nil, s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech)
+			}
+			if err != nil {
+				return contracts.CommandResult{}, nil, err
+			}
+			r, events, err := server.StopTaskTx(ctx, tx, cmd, id)
+			var conflict *control.APIError
+			if err != nil && (!errors.As(err, &conflict) || conflict.Code != "state_conflict") {
+				return r, events, err
+			}
+			if err != nil {
+				r = contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}
+			}
+			return r, events, s.stopStateReplyTx(ctx, tx, cmd, p, id)
+		}
 		if stewardAction == string(steward.ActionNone) {
 			_, err := tx.ExecContext(ctx, `UPDATE voice_turns SET handoff_handled=1 WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
 			return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, err
 		}
 		if stewardTaskID != "" && (stewardAction == string(steward.ActionAnswer) || stewardAction == string(steward.ActionAttach)) {
 			var status, interaction, question, oldGoal, result string
-			err := tx.QueryRowContext(ctx, `SELECT t.status,t.interaction_state,t.interaction_question,t.goal,coalesce(t.result,'') FROM tasks t WHERE t.workspace_id=? AND t.owner_subject_id=? AND t.id=? AND EXISTS (SELECT 1 FROM voice_task_links l WHERE l.workspace_id=t.workspace_id AND l.task_id=t.id AND l.session_id=? AND l.generation=?)`, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, stewardTaskID, p.SessionID, p.Generation).Scan(&status, &interaction, &question, &oldGoal, &result)
+			err := tx.QueryRowContext(ctx, `SELECT t.status,t.interaction_state,t.interaction_question,t.goal,coalesce(t.result,'') FROM tasks t WHERE t.workspace_id=? AND t.owner_subject_id=? AND t.id=?`, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, stewardTaskID).Scan(&status, &interaction, &question, &oldGoal, &result)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return contracts.CommandResult{}, nil, err
 			}
-			if err == nil && stewardAction == string(steward.ActionAnswer) && (status == "waiting" || status == "awaiting_user") && interaction == "awaiting_message" && question != "" {
+			if err == nil && stewardAction == string(steward.ActionAnswer) && (status == "waiting" || status == "awaiting_user") && interaction == "awaiting_message" && strings.TrimSpace(question) != "" {
 				r, events, err := server.AppendTaskTx(ctx, tx, cmd, stewardTaskID, content)
 				if err == nil {
 					_, err = tx.ExecContext(ctx, `UPDATE voice_turns SET resumed_task_id=?,handoff_handled=1 WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, stewardTaskID, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
@@ -481,13 +507,11 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 			if err == nil && stewardAction == string(steward.ActionAttach) {
 				switch status {
 				case "queued", "active", "waiting", "awaiting_user":
-					_, events, stopErr := server.StopTaskTx(ctx, tx, cmd, stewardTaskID)
-					var conflict *control.APIError
-					if stopErr != nil && (!errors.As(stopErr, &conflict) || conflict.Code != "state_conflict") {
-						return contracts.CommandResult{}, nil, stopErr
+					r, events, err := server.AppendTaskTx(ctx, tx, cmd, stewardTaskID, content)
+					if err == nil {
+						_, err = tx.ExecContext(ctx, `UPDATE voice_turns SET resumed_task_id=?,handoff_handled=1 WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, stewardTaskID, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
 					}
-					assignmentEvents = append(assignmentEvents, events...)
-					goal = oldGoal + "\n" + content
+					return r, events, err
 				case "complete":
 					runes := []rune(result)
 					if len(runes) > 600 {
@@ -506,118 +530,15 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
-	events := append(assignmentEvents, admission.Events...)
+	events := admission.Events
 	status := "queued"
-	if impact == "high" {
-		status = "waiting"
-		// Admission consent is scoped to this request, never a runtime action.
-		question := steward.Question(content)
-		interaction := "awaiting_message"
-		if impact == "high" {
-			interaction = "explicit_confirmation"
-		}
-		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status='waiting',interaction_state=?,interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, interaction, question, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), admission.Task.ID, cmd.Principal.WorkspaceID); err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-		if impact == "high" {
-			expires := cmd.AcceptedAt.Add(s.recall.ConfirmationWindow).UTC().Format(time.RFC3339Nano)
-			digest := control.AdmissionConfirmationDigest(admission.Task.ID, content, question, admission.Task.Version+1, expires)
-			if _, err = tx.ExecContext(ctx, `UPDATE tasks SET interaction_scope='task:admit',interaction_run_id=?,interaction_action_digest=?,interaction_expected_version=version,interaction_expires_at=? WHERE id=? AND workspace_id=?`, "admission:"+admission.Task.ID, digest, expires, admission.Task.ID, cmd.Principal.WorkspaceID); err != nil {
-				return contracts.CommandResult{}, nil, err
-			}
-		}
-		// High-impact admission holds reach the live call before a scoped answer.
-		intent, text := "steward_ask", question
-		if impact == "high" {
-			intent = "explicit_confirmation"
-		}
-		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
-		if _, err = tx.ExecContext(ctx, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?) ON CONFLICT(session_id,generation,turn_id) DO NOTHING`, uuid.NewString(), cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, text, intent, at, at, at); err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-	}
-	handoffEvent, _ := json.Marshal(map[string]any{"task_id": admission.Task.ID, "turn_id": p.TurnID, "revision": p.Revision, "content_hash": p.ContentHash, "profile_id": "zoe-steward", "impact": impact, "status": status, "route": "slow", "category": category})
+	handoffEvent, _ := json.Marshal(map[string]any{"task_id": admission.Task.ID, "turn_id": p.TurnID, "revision": p.Revision, "content_hash": p.ContentHash, "profile_id": "zoe-steward", "status": status, "route": "task", "category": category})
 	events = append(events, contracts.Event{Type: "voice.turn.handoff", AggregateType: "voice_session", AggregateID: p.SessionID, AggregateVersion: p.Generation, Payload: handoffEvent})
 	return contracts.CommandResult{ResourceType: "task", ResourceID: admission.Task.ID, ResourceVersion: admission.Task.Version}, events, nil
 }
 
 // stewardErrorSpeech is a plain statement; the Steward error detail stays in the logs.
 const stewardErrorSpeech = "处理出错了,请反馈给开发者。"
-
-func (s *Service) progressReplyTx(ctx context.Context, tx *sql.Tx, workspace, owner, session, turn string, now time.Time) (string, error) {
-	return s.progressReplyQuery(ctx, tx, workspace, owner, session, now)
-}
-
-type progressQueryer interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
-func (s *Service) progressReplyQuery(ctx context.Context, db progressQueryer, workspace, owner, session string, now time.Time) (string, error) {
-	cutoff := now.Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
-	ageCutoff := now.Add(-s.recall.ProgressMaxTaskAge).UTC().Format(time.RFC3339Nano)
-	var status, started, created, taskID string
-	err := db.QueryRowContext(ctx, `SELECT t.status,coalesce(t.started_at,''),t.created_at,t.id FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND l.session_id=? AND t.created_at>=? AND t.status IN ('active','queued','waiting') ORDER BY coalesce(t.started_at,t.created_at) DESC LIMIT 1`, workspace, owner, session, ageCutoff).Scan(&status, &started, &created, &taskID)
-	if err == nil && (status == "active" || status == "queued" || status == "waiting") {
-		if stopping, stopErr := s.taskStopRequested(ctx, db, workspace, taskID); stopErr == nil && stopping {
-			return "已经请求停止，正在停下。", nil
-		}
-		stamp := started
-		if stamp == "" {
-			stamp = created
-		}
-		at, parseErr := time.Parse(time.RFC3339Nano, stamp)
-		if parseErr != nil {
-			return "现在没有在处理的任务。", nil
-		}
-		seconds := int(now.Sub(at).Seconds())
-		if seconds < 0 {
-			seconds = 0
-		}
-		return fmt.Sprintf("还在处理,已经%d秒了。", seconds), nil
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	var recentStatus string
-	err = db.QueryRowContext(ctx, `SELECT t.status FROM tasks t JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id WHERE t.workspace_id=? AND t.owner_subject_id=? AND l.session_id=? AND t.created_at>=? AND t.status IN ('awaiting_user','complete') AND coalesce(t.updated_at,t.created_at)>=? ORDER BY coalesce(t.updated_at,t.created_at) DESC LIMIT 1`, workspace, owner, session, ageCutoff, cutoff).Scan(&recentStatus)
-	if err == nil {
-		return "结果已经给你了,或者已经准备好了。", nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	return "现在没有在处理的任务。", nil
-}
-
-// taskStopRequested reports a live run that was asked to stop but has not been confirmed stopped.
-func (s *Service) taskStopRequested(ctx context.Context, db progressQueryer, workspace, taskID string) (bool, error) {
-	var n int
-	err := db.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE workspace_id=? AND task_id=? AND desired_control='stop' AND status IN ('dispatching','active','uncertain')`, workspace, taskID).Scan(&n)
-	return n > 0, err
-}
-
-func (s *Service) progressReply(ctx context.Context, workspace, owner, session string) string {
-	text, err := s.progressReplyQuery(ctx, s.db, workspace, owner, session, s.now())
-	if err == nil {
-		return text
-	}
-	return "现在没有在处理的任务。"
-}
-
-func classifyHandoff(content string) string {
-	lower := strings.ToLower(content)
-	for _, marker := range []string{"delete", "send", "spend", "deploy", "permission", "删除", "发送", "付款", "部署", "权限"} {
-		if strings.Contains(lower, marker) {
-			return "high"
-		}
-	}
-	for _, marker := range []string{"research", "summarize", "summary", "查找", "研究", "总结", "调研"} {
-		if strings.Contains(lower, marker) {
-			return "low"
-		}
-	}
-	return "low"
-}
 
 func (s *Service) commandCommitTurn(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
 	if !control.HasScope(cmd.Principal, "client:command") && !control.HasScope(cmd.Principal, "voice:turn:commit") {
@@ -666,131 +587,71 @@ func (s *Service) commandCommitTurn(ctx context.Context, tx *sql.Tx, cmd control
 }
 
 func (s *Service) classifyCommittedTurn(id string) {
-	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), s.classificationTimeout())
 	defer cancel()
-	var content, session, turn string
-	var generation, revision int64
-	if err := s.db.QueryRowContext(ctx, `SELECT content,session_id,generation,turn_id,revision FROM voice_turns WHERE id=? AND triage_category IS NULL`, id).Scan(&content, &session, &generation, &turn, &revision); err != nil {
+	var content, workspace, owner string
+	if err := s.db.QueryRowContext(ctx, `SELECT v.content,v.workspace_id,s.owner_id FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id WHERE v.id=? AND v.triage_category IS NULL`, id).Scan(&content, &workspace, &owner); err != nil {
 		return
 	}
-	var workspace, owner string
-	if err := s.db.QueryRowContext(ctx, `SELECT workspace_id,owner_id FROM voice_sessions WHERE id=?`, session).Scan(&workspace, &owner); err != nil {
-		return
-	}
-	pending, pendingErr := s.pendingHeld(ctx, s.db, workspace, owner, session, generation)
-	if pendingErr != nil {
-		return
-	}
-	// Persist the snapshot before model I/O so timeout cannot erase its binding.
-	if pending.id == "" {
-		pending.version = -1
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE voice_turns SET pending_task_id=?,pending_task_version=?,pending_question=? WHERE id=? AND triage_category IS NULL AND pending_task_version=0`, pending.id, pending.version, pending.question, id); err != nil {
-		return
-	}
-	if err := s.db.QueryRowContext(ctx, `SELECT pending_task_id,pending_task_version,pending_question FROM voice_turns WHERE id=?`, id).Scan(&pending.id, &pending.version, &pending.question); err != nil {
-		return
-	}
-	category := "task"
+	route := RouteResult{Route: "task"}
 	var err error
-	attempts := 0
-	reason := "none"
-	configuredBudget, effectiveBudget := time.Duration(0), time.Duration(0)
-	ctx = triage.ObserveCallBudget(ctx, func(configured, effective time.Duration) {
-		configuredBudget, effectiveBudget = configured, effective
-	})
-	triageStarted := time.Now()
-	if s.classifier != nil {
-		// Both attempts share the remaining classification budget. Progress
-		// delivery recomputes elapsed time at send time, even after slow triage.
-		for attempts < 2 && ctx.Err() == nil {
-			attempts++
-			if classifier, ok := s.classifier.(interface {
-				ClassifyPending(context.Context, string, string) (string, error)
-			}); ok && pending.id != "" {
-				category, err = classifier.ClassifyPending(ctx, content, pending.question)
+	if s.register == nil {
+		err = errors.New("context register is disabled")
+	} else {
+		route, err = s.register.Route(ctx, RegisterOwner{workspace, owner}, content, s.now())
+	}
+	var choice steward.Choice
+	var taskID string
+	if err == nil && route.Route == "task" {
+		query := route.Restatement
+		if query == "" || query == "none" {
+			query = content
+		}
+		var candidates []taskCandidate
+		candidates, err = s.taskCandidates(ctx, s.db, workspace, owner, query, s.now(), 0)
+		if err == nil {
+			facts := make([]steward.Candidate, 0, len(candidates))
+			for _, c := range candidates {
+				facts = append(facts, steward.Candidate{Request: c.Request, Status: c.Status, CreatedAt: c.CreatedAt, FinishedAt: c.FinishedAt, Question: c.Question, Result: c.Result, Additions: c.Additions})
+			}
+			if s.steward == nil {
+				err = errors.New("steward is disabled")
 			} else {
-				category, err = s.classifier.Classify(ctx, content)
+				choice, err = s.steward.Choose(ctx, content, route.Restatement, s.now().UTC().Format(time.RFC3339Nano), facts)
 			}
-			if pending.id == "" && (category == "confirm" || category == "decline") {
-				category = "task"
-			}
-			if ctx.Err() != nil {
-				err = ctx.Err()
-			}
-			if err == nil && validCategory(category) {
-				break
-			}
-		}
-		if ctx.Err() != nil {
-			err = ctx.Err()
-		}
-	}
-	if err != nil || !validCategory(category) {
-		category = "unclassified"
-		reason = "triage_error"
-		var timeout interface{ Timeout() bool }
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
-			reason = "triage_timeout"
-		}
-	}
-	triageMS := time.Since(triageStarted).Milliseconds()
-	observationErr := err
-	elapsedMS := triageMS
-	stewardMS := int64(0)
-	decision := steward.Dispatch
-	var assignment steward.Assignment
-	if classifyHandoff(content) == "high" {
-		decision = steward.Ask
-	} else if s.steward != nil && category == "task" {
-		if observer, ok := s.steward.(interface {
-			CallBudget(context.Context) (time.Duration, time.Duration)
-		}); ok {
-			configuredBudget, effectiveBudget = observer.CallBudget(ctx)
-		} else {
-			configuredBudget = 0 // Custom stewards do not expose their configuration.
-			if deadline, ok := ctx.Deadline(); ok {
-				effectiveBudget = max(0, time.Until(deadline))
-			}
-		}
-		stewardStarted := time.Now()
-		roster, callErr := s.callRoster(ctx, s.db, workspace, owner, session, generation, s.now())
-		if callErr == nil {
-			tasks := make([]steward.RosterTask, len(roster))
-			for i, task := range roster {
-				tasks[i] = steward.RosterTask{ID: task.ID, Title: task.Title, Status: task.Status, Question: task.Question, Result: task.Result}
-			}
-			assignment, callErr = s.steward.Assign(ctx, content, tasks)
-		}
-		if ctx.Err() != nil {
-			callErr = ctx.Err()
-		}
-		observationErr = callErr
-		if callErr != nil {
-			decision = steward.Error
-			assignment = steward.Assignment{}
-		}
-		stewardMS = time.Since(stewardStarted).Milliseconds()
-		elapsedMS = stewardMS
-		if callErr != nil {
-			reason = "steward_error"
-			var timeout interface{ Timeout() bool }
-			if errors.Is(callErr, context.DeadlineExceeded) || (errors.As(callErr, &timeout) && timeout.Timeout()) {
-				reason = "steward_timeout"
+			if err == nil && choice.Request != "" {
+				matched := false
+				for _, candidate := range candidates {
+					if candidate.Request == choice.Request {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					err = steward.ErrNoMatch
+				} else {
+					// Exact original-request equality; duplicate originals select newest.
+					err = s.db.QueryRowContext(ctx, `SELECT id FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND title=? ORDER BY julianday(created_at) DESC,id DESC LIMIT 1`, workspace, owner, choice.Request).Scan(&taskID)
+				}
 			}
 		}
 	}
-	// Persist using a fresh short context even if model I/O exhausted its deadline.
-	writeCtx, writeCancel := context.WithTimeout(context.Background(), time.Second)
-	defer writeCancel()
-	res, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_decision=?,steward_action=?,steward_task_id=? WHERE id=? AND triage_category IS NULL`, category, string(decision), string(assignment.Action), assignment.TaskID, id)
-	if writeErr == nil {
-		if n, _ := res.RowsAffected(); n == 1 {
-			s.cacheTriage(triageKey(session, generation, turn, revision), category)
-		}
+	decision := "dispatch"
+	if ctx.Err() != nil {
+		err = ctx.Err()
 	}
-	log.Printf("voice_classification id=%s triage_ms=%d steward_ms=%d total_ms=%d budget_hit=%t storage_error=%t reason=%s attempts=%d configured_ms=%d effective_ms=%d elapsed_ms=%d error_kind=%s", id, triageMS, stewardMS, time.Since(started).Milliseconds(), ctx.Err() != nil, writeErr != nil, reason, attempts, configuredBudget.Milliseconds(), effectiveBudget.Milliseconds(), elapsedMS, triage.ErrorKind(observationErr))
+	if err != nil {
+		decision = "error"
+		choice = steward.Choice{}
+		taskID = ""
+	}
+	if route.Route == "" {
+		route.Route = "task"
+	}
+	writeCtx, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	_, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_decision=?,steward_action=?,steward_task_id=?,pending_question=? WHERE id=? AND triage_category IS NULL`, route.Route, decision, string(choice.Action), taskID, choice.Reply, id)
+	log.Printf("voice_routing id=%s failed=%t storage_error=%t", id, err != nil, writeErr != nil)
 }
 
 func (s *Service) handleTurns(w http.ResponseWriter, r *http.Request) {

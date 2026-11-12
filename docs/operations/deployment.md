@@ -52,7 +52,26 @@ Return top-level `context_chars` to report the gateway's applied character count
 an omitted count decodes as zero. These fields describe opening context, not the
 separate `instructions` system prompt.
 
-### Live-call held-task controls
+### Register routing configuration
+
+When deploying the context-register wiring, configure `ZOE_REGISTER_BASE_URL`,
+`ZOE_REGISTER_MODEL`, `ZOE_REGISTER_API_KEY_FILE`,
+`ZOE_REGISTER_REASONING_EFFORT`, and `ZOE_REGISTER_TIMEOUT_MS`. Each unset field
+falls back to its `ZOE_STEWARD_*` counterpart. With neither timeout set, the
+default is 30000 ms; register validation accepts 500-60000 ms. Both routing calls
+share the existing 35-second classification budget. Compose mounts a distinct
+register secret, falling back to the Steward secret source.
+
+For this wiring, register failures and Steward failures create no task and hold
+the fixed processing-error speech. Memory writes are staged silently once per
+committed turn; recall retains its holding and answer delivery. Task reports use
+Steward text; active attachments append to the same task without stopping it.
+No high-impact confirmation hold or confirm/decline routing is performed.
+Old `ZOE_TRIAGE_*` entries in a deployed host env file are unused by server
+startup and do not prevent startup. The sections below describe the previous
+deployment baseline, not the register configuration.
+
+### Historical live-call held-task controls
 
 When deploying spoken task controls, apply voice migration 216 at normal server
 startup. `ZOE_VOICE_CONFIRMATION_WINDOW_SECONDS` bounds same-call held questions

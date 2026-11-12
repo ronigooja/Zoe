@@ -71,7 +71,11 @@ func TestRecallRoute(t *testing.T) {
 				}
 				return answer.Result{Status: "answer", Text: "我们聊过花园。"}, nil
 			})
-			cfg := Config{Classifier: &fakeClassifier{category: "recall"}, GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), Now: func() time.Time { return now }, Answerer: model, RecallTimeout: 100 * time.Millisecond}
+			router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"route":"recall","restatement":""}`})
+			}))
+			defer router.Close()
+			cfg := Config{RegisterConfig: &RegisterConfig{Model: RegisterModelConfig{BaseURL: router.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000}, GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), Now: func() time.Time { return now }, Answerer: model, RecallTimeout: 100 * time.Millisecond}
 			if mode == "unconfigured" {
 				cfg.Answerer = nil
 			}
