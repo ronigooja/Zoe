@@ -274,13 +274,26 @@ END;`)
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "memory", Version: 105, Name: "memory_batch_trusted_revisions", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "memory", Version: 105, Name: "memory_batch_trusted_revisions", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE memory_batch_claims (
 workspace_id TEXT NOT NULL, claim_id TEXT NOT NULL, revision INTEGER NOT NULL,
 source_id TEXT NOT NULL, source_version INTEGER NOT NULL,
 PRIMARY KEY(workspace_id,claim_id,revision),
 FOREIGN KEY(claim_id,revision) REFERENCES memory_revisions(claim_id,revision) ON DELETE CASCADE,
 FOREIGN KEY(workspace_id,source_id,source_version) REFERENCES memory_sources(workspace_id,id,version));`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "memory", Version: 106, Name: "memory_staged_writes", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE memory_staged_writes (
+workspace_id TEXT NOT NULL REFERENCES workspaces(id), principal_id TEXT NOT NULL,
+idempotency_key TEXT NOT NULL, original_text TEXT NOT NULL CHECK(length(original_text) BETWEEN 1 AND 4000),
+staged_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processed')),
+processed_at INTEGER, priority INTEGER NOT NULL DEFAULT 100,
+PRIMARY KEY(workspace_id,principal_id,idempotency_key),
+CHECK((status='pending' AND processed_at IS NULL) OR (status='processed' AND processed_at IS NOT NULL)));
+CREATE INDEX memory_staged_writes_pending ON memory_staged_writes(workspace_id,principal_id,status,priority DESC,staged_at);`)
 		return err
 	}})
 }
