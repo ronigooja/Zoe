@@ -199,6 +199,21 @@ jobs:
             tail -n 80 "$ZOE_OUTPUT/logs/test-install-cli.log"
           fi
           exit "$status"
+      - name: Verify host deployment transaction
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          printf '%s\n' 'sudo bash deploy/linux/test-deploy.sh' > "$ZOE_OUTPUT/logs/test-deploy.command"
+          # The runner owns this log; sudo applies only to the synthetic host test.
+          # shellcheck disable=SC2024
+          sudo bash deploy/linux/test-deploy.sh > "$ZOE_OUTPUT/logs/test-deploy.log" 2>&1
+          status=$?
+          echo "$status" > "$ZOE_OUTPUT/logs/test-deploy.exit"
+          if [[ "$status" -ne 0 ]]; then
+            tail -n 80 "$ZOE_OUTPUT/logs/test-deploy.log"
+          fi
+          exit "$status"
       - name: Upload verification logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
