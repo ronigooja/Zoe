@@ -47,11 +47,13 @@ func TestChooseReportReplyBoundsAndNoTask(t *testing.T) {
 	}
 }
 
+// Old Choose rejects cancel as an unknown action; exact-match and empty-reply
+// success cases, ErrNoMatch checks, and the instruction assertion regress it.
 func TestChooseNonReportReply(t *testing.T) {
-	for _, action := range []string{"new", "none", "attach", "answer"} {
+	for _, action := range []string{"new", "none", "attach", "answer", "cancel"} {
 		for _, reply := range []string{"", "state", " "} {
 			request := ""
-			if action == "attach" || action == "answer" {
+			if action == "attach" || action == "answer" || action == "cancel" {
 				request = "Original request"
 			}
 			data, _ := json.Marshal(map[string]string{"action": action, "task": request, "reply": reply})
@@ -67,7 +69,7 @@ func TestChooseNonReportReply(t *testing.T) {
 
 func TestChooseValidReplies(t *testing.T) {
 	candidates := []Candidate{{Request: " Original request 🙂\n", Question: "Which?"}}
-	for _, action := range []Action{ActionNew, ActionNone, ActionAttach, ActionAnswer, ActionReport} {
+	for _, action := range []Action{ActionNew, ActionNone, ActionAttach, ActionAnswer, ActionCancel, ActionReport} {
 		t.Run(string(action), func(t *testing.T) {
 			request := candidates[0].Request
 			if action == ActionNew || action == ActionNone {
@@ -89,7 +91,7 @@ func TestChooseValidReplies(t *testing.T) {
 
 func TestChooseExactMatchAndNoMatch(t *testing.T) {
 	request := " Original Request\n"
-	for _, action := range []Action{ActionAttach, ActionAnswer, ActionReport} {
+	for _, action := range []Action{ActionAttach, ActionAnswer, ActionCancel, ActionReport} {
 		for _, quote := range []string{"Original Request\n", " Original Request", " original request\n", "unknown", ""} {
 			if action == ActionReport && quote == "" {
 				continue // An unmatched report intentionally has no task.
@@ -115,6 +117,7 @@ func TestChooseRejectsInvalidReplies(t *testing.T) {
 		`{"action":"new","task":null}`, `{"action":"new","task":4}`,
 		`{"Action":"new","task":""}`, `{"action":"new","task":"","task":""}`,
 		`{"action":"new","task":"request"}`, `{"action":"none","task":"request"}`,
+		`{"action":"cancel"}`, `{"action":"cancel","task":""}`,
 		`{"action":"answer","task":"request"}`, `{"action":"new","task":"",}`,
 		`{"action":"report","task":"request"}`, `{"action":"report","task":"","reply":""}`,
 		`{"action":"report","task":"request","reply":" \n\t"}`,
@@ -147,6 +150,36 @@ func TestChooseDuplicateRequestsUseNewest(t *testing.T) {
 		if (err == nil) != newestHasQuestion {
 			t.Fatalf("newest has question=%v err=%v", newestHasQuestion, err)
 		}
+	}
+}
+
+func TestChooseCancelDuplicateRequestsPreserveNewestFirstInput(t *testing.T) {
+	candidates := []Candidate{
+		{Request: "same", Status: "active", CreatedAt: "newest"},
+		{Request: "same", Status: "done", CreatedAt: "older"},
+	}
+	s := rosterServer(t, choiceReply("cancel", "same"), func(body []byte) {
+		var outer map[string]json.RawMessage
+		if err := json.Unmarshal(body, &outer); err != nil {
+			t.Error(err)
+			return
+		}
+		var input, instructions string
+		if err := json.Unmarshal(outer["input"], &input); err != nil {
+			t.Error(err)
+		}
+		if err := json.Unmarshal(outer["instructions"], &instructions); err != nil {
+			t.Error(err)
+		}
+		want := `{"sentence":"stop that work","restatement":"withdraw the same task","now":"2026-11-12T12:34:56Z","tasks":[{"request":"same","status":"active","created_at":"newest","finished_at":"","question":"","result":"","additions":[]},{"request":"same","status":"done","created_at":"older","finished_at":"","question":"","result":"","additions":[]}]}`
+		if input != want || instructions != chooseInstructions {
+			t.Error("cancel changed the input contract or newest-first order")
+		}
+	})
+	defer s.Close()
+	got, err := configured(t, s.URL, "").Choose(context.Background(), "stop that work", "withdraw the same task", choiceNow, candidates)
+	if err != nil || got != (Choice{Action: ActionCancel, Request: "same"}) {
+		t.Fatalf("choice=%+v err=%v", got, err)
 	}
 }
 
@@ -236,7 +269,7 @@ func TestChooseDroppedCandidatesCannotMatch(t *testing.T) {
 }
 
 func TestChooseEmptyCandidatesAndInstructionLanguage(t *testing.T) {
-	for _, required := range []string{"report", "newest", "current time", "reply language follows the input"} {
+	for _, required := range []string{"cancel = the sentence withdraws or stops the work of one listed task", "withdrawals of work are cancel", "For attach, answer, cancel, and a matched report", "report", "newest", "current time", "reply language follows the input"} {
 		if !strings.Contains(chooseInstructions, required) {
 			t.Errorf("instruction missing %q", required)
 		}
