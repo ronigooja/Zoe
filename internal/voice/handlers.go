@@ -406,8 +406,11 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, nil
 	}
 	content = strings.TrimSpace(content)
-	if category != "task" && category != "memory_write" && category != "recall" {
+	if category != "task" && category != "memory_write" && category != "recall" && category != "chat" {
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech)
+	}
+	if category == "chat" {
+		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, s.markHandledTx(ctx, tx, cmd, p)
 	}
 	if stewardDecision == string(steward.Error) {
 		if err := s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech); err != nil {
@@ -488,8 +491,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 			return r, events, s.stopStateReplyTx(ctx, tx, cmd, p, id)
 		}
 		if stewardAction == string(steward.ActionNone) {
-			_, err := tx.ExecContext(ctx, `UPDATE voice_turns SET handoff_handled=1 WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
-			return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, err
+			return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, s.markHandledTx(ctx, tx, cmd, p)
 		}
 		if stewardTaskID != "" && (stewardAction == string(steward.ActionAnswer) || stewardAction == string(steward.ActionAttach)) {
 			var status, interaction, question, oldGoal, result string

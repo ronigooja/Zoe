@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -232,6 +233,10 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 		{`{"route":"task","restatement":"It refers to the user's trip."}`, true},
 		{`{"route":"memory_write","restatement":""}`, true},
 		{`{"route":"recall","restatement":""}`, true},
+		{`{"route":"chat","restatement":""}`, true},
+		{`{"route":"chat","restatement":"none"}`, false},
+		{`{"route":"chat","restatement":" "}`, false},
+		{`{"route":"chat"}`, false},
 		{`{"memory_key":"trip"}`, true},
 		{`{"route":"confirm","restatement":"none"}`, false},
 		{`{"route":"decline","restatement":"none"}`, false},
@@ -272,6 +277,27 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRegisterAttributionInstructionChat(t *testing.T) {
+	for _, required := range []string{
+		"Route chat means the sentence is conversation addressed to the assistant that asks for no work and no memory operation: greetings, small talk, thanks, acknowledgements.",
+		"Route task means everything else: requests for work, changes or cancellation of work, questions about the state of work.",
+		"For memory_write, recall and chat, restatement is empty.",
+		`{"route":"memory_write|recall|task|chat","restatement":"<text>"}`,
+	} {
+		if !strings.Contains(RegisterAttributionInstruction, required) {
+			t.Errorf("missing instruction: %s", required)
+		}
+	}
+	if strings.Contains(RegisterAttributionInstruction, "and conversation addressed to the assistant") {
+		t.Error("task still includes conversation")
+	}
+	for _, r := range RegisterAttributionInstruction {
+		if unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul) {
+			t.Fatalf("instruction contains CJK character %U", r)
+		}
 	}
 }
 

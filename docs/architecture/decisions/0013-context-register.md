@@ -12,13 +12,16 @@ All requirements below apply to the target and remain **Accepted, not implemente
 
 ### 1. Register first; triage deleted
 
-For every delegated sentence, the register is the first reader and makes one model call. Delete triage. Return exactly one of three routes:
+For every delegated sentence, the register is the first reader and makes one model call. Delete triage. Return exactly one of four routes:
 
 | Route | Meaning and destination |
 |---|---|
 | `memory_write` | Store or update a stable personal fact or preference; stage the original sentence for the memory batch in decision 3. |
 | `recall` | Retrieve a saved personal fact or preference, or past conversation content; send to memory. |
-| `task` | Everything else; send to Steward with a plain-text restatement of what the sentence refers to. |
+| `task` | Requests for work, changes or cancellation of work, and questions about the state of work; send to Steward with a plain-text restatement of what the sentence refers to. |
+| `chat` | Conversation addressed to the assistant that asks for no work and no memory operation: greetings, small talk, thanks, acknowledgements. Mark the voice turn handled and end the flow; create no task, produce no Zoe speech, query no task candidates, and never send it to Steward. The upstream model already answers chat on its own. |
+
+For `memory_write`, `recall` and `chat`, restatement is empty. Store `chat` in the existing `triage_category` column like the other routes; replay has no additional effects.
 
 There are no `progress`, `cancel`, `confirm`, `decline`, `unclear` or `memory_read` register routes. The register never reads or manages tasks. A register or Steward failure creates no task and emits fixed speech meaning "processing error, please report to the developer"; there is no fallback route.
 
@@ -65,7 +68,7 @@ No code-generated identifier, alias or short key appears anywhere in model conte
 | `attach` | Add the sentence to existing work. |
 | `answer` | Deliver the user's original reply text to a Worker with a pending question. |
 | `cancel` | Withdraw or stop one task, chosen by the model from full context, not the deployed code rule selecting the newest unfinished task of the current call. |
-| `none` | No task action; never a substitute for a task-state question. |
+| `none` | Exists only as Steward's exit when the register judged `task` but no work is asked, including a sentence telling running work to continue; never a substitute for a task-state question. Steward never sees `chat`; conversation, thanks and acknowledgements are listed only in the register's `chat` definition. |
 | `report` | Answer about one task's state, progress, result or handling, including earlier work. |
 
 For running-task `attach`, the runner delivers the message to the running OpenCode session with `steer`, merged into the same run, once per (run, entry). Entries included in initial, rotation or answer prompts are marked delivered. Runner delivery is merged to main; handler wiring remains pending. The deployed interim stop-plus-merged-new-task behavior remains documented in ADR 0012 until replaced. Attaching to complete work creates a new task carrying the previous result.
@@ -76,7 +79,7 @@ Verified source investigation: OpenCode V2 `anomalyco/opencode` commit `6d02304`
 
 When the sentence asks about a task or earlier work, Steward selects `report` using decision 5's search and exact lookup. It writes a plain statement in `reply` in the same model call, not a separate reply model. Use task facts and current time, not an invented delivery flag. Reply language follows the input. Code does not check statement fidelity. With no named topic, use the newest task; when none is found, leave `task` empty and say so. Any nonempty selected task must match exactly. Reporting creates or modifies no task. `reply` is required and nonempty only for `report`, trimmed and capped at 600 runes.
 
-Every delegated sentence passes the register's one model call; the `task` route then passes Steward's one model call, while memory routes go to memory. The user accepts this added latency. Retain 30 s Steward / 35 s classification budgets; rename classification when triage is removed. Observed upstream speech began about 10 ms after a user turn in a recorded call; target routing latency is not measured and cannot prevent upstream speaking first.
+Every delegated sentence passes the register's one model call; the `task` route then passes Steward's one model call, memory routes go to memory, and `chat` ends without another model call. The user accepts this added latency. Retain 30 s Steward / 35 s classification budgets; rename classification when triage is removed. Observed upstream speech began about 10 ms after a user turn in a recorded call; target routing latency is not measured and cannot prevent upstream speaking first.
 
 ## Draft instructions (untested)
 

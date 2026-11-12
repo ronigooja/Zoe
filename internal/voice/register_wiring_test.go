@@ -18,9 +18,10 @@ import (
 )
 
 func TestRegisterHandoffRoutesAndActions(t *testing.T) {
-	for _, name := range []string{"memory_write", "recall", "new", "none", "answer", "answer_stale", "cancel", "cancel_live", "cancel_complete", "cancel_failed", "cancel_canceled", "report", "report_empty", "attach_active", "attach_complete", "foreign", "attach_failed", "attach_canceled", "route_error", "choose_error", "no_match", "confirm", "decline"} {
+	for _, name := range []string{"chat", "memory_write", "recall", "new", "none", "answer", "answer_stale", "cancel", "cancel_live", "cancel_complete", "cancel_failed", "cancel_canceled", "report", "report_empty", "attach_active", "attach_complete", "foreign", "attach_failed", "attach_canceled", "route_error", "choose_error", "no_match", "confirm", "decline"} {
 		t.Run(name, func(t *testing.T) {
 			var mu sync.Mutex
+			registerCalls, stewardCalls := 0, 0
 			route, action, selected := "task", "new", ""
 			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
@@ -33,6 +34,11 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 					instruction, _ = first["content"].(string)
 				}
 				register := strings.Contains(instruction, "Route memory_write")
+				if register {
+					registerCalls++
+				} else {
+					stewardCalls++
+				}
 				if register && name == "route_error" || !register && name == "choose_error" {
 					w.WriteHeader(503)
 					return
@@ -116,7 +122,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 			}
 			mu.Lock()
 			switch name {
-			case "memory_write", "recall":
+			case "chat", "memory_write", "recall":
 				route = name
 			case "answer", "cancel", "report", "none":
 				action = name
@@ -144,6 +150,14 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 				mu.Unlock()
 			}
 			text := "delete the lunar mission draft"
+			if name == "chat" {
+				text = "thanks for your help"
+				// Candidate retrieval always selects finished_at. Renaming it makes
+				// an accidental query fail instead of silently returning no candidates.
+				if _, err := store.DB().Exec(`ALTER TABLE tasks RENAME COLUMN finished_at TO chat_candidate_query_tripwire`); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if name == "memory_write" {
 				text = "remember my preferred airport is LHR"
 			}
@@ -178,6 +192,16 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 				r = commitAndHandoff(t, ts, key, "current", text)
 			}
 			switch name {
+			case "chat":
+				if r.ResourceType != "voice_turn" || r.ResourceID != "current" || r.ResourceVersion != 1 {
+					t.Fatalf("chat result=%+v", r)
+				}
+				if count(`SELECT count(*) FROM voice_turns WHERE turn_id='current' AND triage_category='chat' AND steward_decision='dispatch' AND steward_action='' AND handoff_handled=1`) != 1 {
+					t.Fatal("chat was not stored and silently handled; candidate retrieval may have run")
+				}
+				if count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies`) != 0 {
+					t.Fatal("chat created a task or fast reply")
+				}
 			case "memory_write":
 				if count(`SELECT count(*) FROM memory_staged_writes WHERE original_text=?`, text) != 1 || count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies`) != 0 {
 					t.Fatal("memory staging created task/reply or missed original")
@@ -238,6 +262,14 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 			}
 			if name == "memory_write" && count(`SELECT count(*) FROM memory_staged_writes`) != 1 {
 				t.Fatal("replay staged twice")
+			}
+			if name == "chat" {
+				mu.Lock()
+				calls, choices := registerCalls, stewardCalls
+				mu.Unlock()
+				if calls != 1 || choices != 0 || count(`SELECT count(*) FROM voice_fast_replies`) != 0 || count(`SELECT count(*) FROM voice_turns WHERE turn_id='current' AND handoff_handled=1`) != 1 {
+					t.Fatalf("chat replay: register=%d steward=%d; expected one register call, no Steward or speech, handled", calls, choices)
+				}
 			}
 			if (name == "cancel" || name == "cancel_live") && count(`SELECT count(*) FROM events WHERE event_type='task.stop_requested' AND aggregate_id=?`, target) != 1 {
 				t.Fatal("replay stopped twice")

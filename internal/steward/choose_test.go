@@ -269,6 +269,15 @@ func TestChooseDroppedCandidatesCannotMatch(t *testing.T) {
 }
 
 func TestChooseEmptyCandidatesAndInstructionLanguage(t *testing.T) {
+	const none = "none = asks for no new work, including a sentence that tells running work to continue; sentences that only ask about state are report; withdrawals of work are cancel."
+	if !strings.Contains(chooseInstructions, none) {
+		t.Error("none definition must be the task-only exit, without duplicating register chat")
+	}
+	for _, chatOnly := range []string{"conversation", "thanks", "acknowledgement"} {
+		if strings.Contains(chooseInstructions, chatOnly) {
+			t.Errorf("Steward duplicates register chat: %s", chatOnly)
+		}
+	}
 	for _, required := range []string{"cancel = the sentence withdraws or stops the work of one listed task", "withdrawals of work are cancel", "For attach, answer, cancel, and a matched report", "report", "newest", "current time", "reply language follows the input"} {
 		if !strings.Contains(chooseInstructions, required) {
 			t.Errorf("instruction missing %q", required)
@@ -284,12 +293,12 @@ func TestChooseEmptyCandidatesAndInstructionLanguage(t *testing.T) {
 		if err := json.Unmarshal(body, &outer); err != nil {
 			t.Error(err)
 		}
-		if outer.Input != `{"sentence":"hello","restatement":"none","now":"2026-11-12T12:34:56Z","tasks":[]}` {
+		if outer.Input != `{"sentence":"keep going","restatement":"none","now":"2026-11-12T12:34:56Z","tasks":[]}` {
 			t.Error("incorrect empty candidate input")
 		}
 	})
 	defer s.Close()
-	if _, err := configured(t, s.URL, "").Choose(context.Background(), "hello", "none", choiceNow, nil); err != nil {
+	if _, err := configured(t, s.URL, "").Choose(context.Background(), "keep going", "none", choiceNow, nil); err != nil {
 		t.Fatal(err)
 	}
 }
