@@ -298,7 +298,7 @@ ALTER TABLE voice_turns ADD COLUMN steward_task_id TEXT NOT NULL DEFAULT ''`)
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 218, Name: "voice_context_register", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 218, Name: "voice_context_register", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS voice_register_memory_boundaries (
 workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
 boundary_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
@@ -309,6 +309,38 @@ compact TEXT NOT NULL DEFAULT '', compact_through TEXT NOT NULL DEFAULT '1970-01
 built_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', version INTEGER NOT NULL DEFAULT 0,
 source_hash TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0,
 PRIMARY KEY(workspace_id,owner_subject_id));`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 219, Name: "voice_register_memory_provenance", Up: func(ctx context.Context, tx *sql.Tx) error {
+		// Upgrade fixtures can replay this migration while retaining the register.
+		rows, err := tx.QueryContext(ctx, `PRAGMA table_info(voice_context_registers)`)
+		if err != nil {
+			return err
+		}
+		found := false
+		for rows.Next() {
+			var cid, notnull, pk int
+			var name, kind string
+			var defaultValue sql.NullString
+			if err = rows.Scan(&cid, &name, &kind, &notnull, &defaultValue, &pk); err != nil {
+				rows.Close()
+				return err
+			}
+			found = found || name == "source_memory_boundary"
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if !found {
+			if _, err = tx.ExecContext(ctx, `ALTER TABLE voice_context_registers ADD COLUMN source_memory_boundary TEXT NOT NULL DEFAULT ''`); err != nil {
+				return err
+			}
+		}
+		_, err = tx.ExecContext(ctx, `DROP TABLE IF EXISTS voice_register_memory_boundaries`)
 		return err
 	}})
 }
