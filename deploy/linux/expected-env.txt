@@ -1,0 +1,7 @@
+# Required running zoe-server environment keys; values come from rendered Compose.
+ZOE_VOICE_UPSTREAM_ROUTE
+ZOE_STEWARD_TIMEOUT_MS
+ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS
+# Compose resolves register timeout through the Steward timeout fallback.
+ZOE_REGISTER_TIMEOUT_MS
+ZOE_MEMORY_BATCH_INTERVAL_HOURS

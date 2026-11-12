@@ -44,6 +44,10 @@ if [[ "$input" == *.tar.gz ]]; then
 else
   release_dir="$(realpath_existing "$input")"
 fi
+if [[ ! -f "$release_dir/SHA256SUMS" ]] || ! (cd "$release_dir" && sha256sum -c SHA256SUMS >/dev/null); then
+  echo "release checksum verification failed" >&2
+  exit 1
+fi
 if [[ ! -f "$release_dir/SOURCE_REVISION" ]]; then
   echo "release must contain SOURCE_REVISION" >&2
   exit 1
@@ -58,7 +62,7 @@ if [[ ! -f "$release_dir/bin/zoe" || ! -x "$release_dir/bin/zoe" ]]; then
   echo "release must contain an executable bin/zoe" >&2
   exit 1
 fi
-embedded_revision="$($release_dir/bin/zoe --source-revision 2>/dev/null || true)"
+embedded_revision="$("$release_dir/bin/zoe" --source-revision 2>/dev/null || true)"
 if [[ "$embedded_revision" != "$revision" ]]; then
   echo "CLI source revision mismatch: embedded=${embedded_revision:-unknown}, release=$revision" >&2
   exit 1
@@ -81,6 +85,10 @@ if [[ -n "$temporary_release" ]]; then
     mv -- "$stage_release" "$target"
   fi
 fi
+if [[ "$("$target/bin/zoe" --source-revision)" != "$revision" ]] || ! cmp -s "$release_dir/bin/zoe" "$target/bin/zoe"; then
+  echo "existing immutable CLI does not match the reviewed release" >&2
+  exit 1
+fi
 target_bin="$(realpath_existing "$target/bin/zoe")"
 if [[ -L "$bin_dir/zoe" && "$(realpath_existing "$bin_dir/zoe")" == "$target_bin" ]]; then
   echo "zoe CLI already installed at $target_bin"
@@ -94,9 +102,4 @@ os.replace(sys.argv[1], sys.argv[2])
 PY
   echo "Installed $bin_dir/zoe -> $target/bin/zoe"
 fi
-if [[ -n "$temporary_release" ]]; then
-  for old in "$releases_dir"/zoe-cli-*; do
-    [[ -d "$old" && "$old" != "$target" ]] || continue
-    rm -rf -- "$old"
-  done
-fi
+# Keep previous immutable CLI releases for explicit operator rollback.

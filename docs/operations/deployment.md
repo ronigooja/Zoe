@@ -189,22 +189,23 @@ still apply. Treat this tier as host-root authority, not a workspace sandbox.
 
 Runs rotated by releases before this fix are rebound on recovery from the journal chain.
 
-Use the [Linux deployment templates](../../deploy/linux/) and [release workflow](../../.github/workflows/server-release.yml) for the server/runner release. The reviewed release must contain `bin/zoe`, `bin/zoe-secret-entrypoint`, and `deploy-linux/` with the Compose and systemd files. The embedded CLI source revision must match `SOURCE_REVISION`; do not compile on the control host.
+Use the [Linux deployment templates](../../deploy/linux/) and [release workflow](../../.github/workflows/server-release.yml) for the server/runner release. `server-release-<full-sha>` contains `server-linux-amd64.tar.gz`; extract it before deployment. Its real, executable `bin/zoe-server`, `bin/zoe-runner`, `bin/zoe-secret-entrypoint`, and `bin/zoe` are produced directly by the workflow's Go builds, not host-created symlinks. The tar preserves executable modes across artifact download. `SHA256SUMS` and `release-manifest.json` record these `bin/` paths; `deploy-linux/` contains Compose and systemd templates. The embedded CLI source revision must match `SOURCE_REVISION`; do not compile on the control host. The same run publishes the matching [operator CLI archive](#operator-release-installation).
 
 The operator release installation procedure below installs only the maintenance CLI. It does not install server images or configure a complete deployment. Run `zoe status` before `zoe setup`, `zoe provider configure`, `zoe provider test`, `zoe memory configure`, or `zoe memory test`; these operations are also available from the grouped interactive menu. The memory model key is a separate credential issued by the model gateway and entered through `zoe`; Zoe never creates it. For an already deployed external voice gateway, use `zoe voice configure --url HTTPS_URL --token-file PRIVATE_KEY_FILE`, then `zoe voice test` and `zoe voice status`. This writes only the Zoe-side endpoint and secret reference; it does not deploy or modify the gateway. Follow [the CLI implementation](../../cmd/zoe/) for current flags and [deployment configuration](../../internal/ops/deployment_config.go) for detection and rollback behavior.
 
 ### Complete Linux deployment order
 
-Copy the reviewed `zoe-linux-<arch>.tar.gz` package to the host, then run the
-single bootstrap entry point:
+For a new host only, obtain and checksum-verify the reviewed server and CLI
+archives described in [operator release installation](#operator-release-installation)
+on the host, extract them into private staging directories, then run:
 
 ```sh
-sudo bash deploy-linux/install-cli.sh /path/to/zoe-linux-<arch>.tar.gz
-sudo zoe install [--start] --release /path/to/release
+sudo bash /path/to/operator/deploy-linux/install-cli.sh /path/to/zoe-linux-amd64.tar.gz
+sudo zoe install [--start] --release /path/to/server-release
 ```
 
-   The bootstrap verifies `SHA256SUMS`, installs the CLI atomically, and keeps one
-   immutable CLI release. `zoe install` validates the release and host before
+   The bootstrap verifies `SHA256SUMS`, installs the CLI atomically, and keeps prior
+   CLI releases for rollback. `zoe install` validates the release and host before
     writing files, verifies the host-installed OpenCode binary, stages the release, pins images by digest, pulls them, installs
    the systemd units, preserves existing tokens and operator environment keys, and creates
     deployment-owned runner tokens only when absent. It creates the OpenCode password once with mode 0600 and never prints or regenerates it. It does not create an instance
@@ -317,7 +318,9 @@ model-backed task execution.
 
 ### Upgrade and removal
 
-Use `zoe update --release /path/to/release` to stage and pull
+For every server upgrade, use the [host deployment transaction](#host-deployment-transaction).
+The following describes the existing CLI lifecycle implementation for diagnosis,
+not an alternative standard deployment procedure. `zoe update --release /path/to/release` stages and pulls
 the new release, switch `current`, restart Compose and the runner, and verify
 health; after health succeeds it also atomically switches the host CLI to the
 release's immutable `bin/zoe` when present. A release without `bin/zoe` prints
@@ -471,14 +474,101 @@ prints keys, tokens, or installation links.
 
 ## Operator release installation
 
-The Linux workflow's manual release option builds the `zoe` operator CLI for
-Linux `amd64` and `arm64` on GitHub-hosted runners after its complete checks pass;
-see [CI verification](../development/verification.md#completion-gate-and-manual-checks).
-Each `operator-linux-<arch>-<revision>` artifact contains
-a tarball with `bin/zoe`, `deploy-linux/install-cli.sh`, `SOURCE_REVISION`, and
-`SHA256SUMS`. Select the host architecture, extract into a new immutable release
-directory, and verify `sha256sum -c SHA256SUMS` from that directory. This operator
-archive does not contain the server images or a complete service deployment.
+When deploying a server release, use the successful **Server deployment artifact**
+run for the reviewed full SHA, not the optional `operator-artifacts` job in normal
+Linux CI. That server run always builds both `server-release-<sha>` and
+`operator-cli-<sha>` for Linux `amd64`. The sibling CLI artifact contains
+`zoe-linux-amd64.tar.gz` with `bin/zoe`, `deploy-linux/install-cli.sh`,
+`SOURCE_REVISION`, and `SHA256SUMS`. It is the same binary included in the server
+release. The Linux workflow's optional release job still produces standalone
+`operator-linux-<arch>-<revision>` archives for `amd64` and `arm64`; these are not
+a substitute for matching the server release SHA.
+
+### Host deployment transaction
+
+For upgrades to an existing Zoe host, [deploy/linux/deploy.sh](../../deploy/linux/deploy.sh)
+is the standard procedure, not a sequence of hand-applied selector changes.
+Run a reviewed copy of that directory (including its Python helper, candidate
+validator and expected-env file) **on the Zoe host as root**. The voice gateway
+and other gateway deployment scripts are separate; this script never deploys
+them or changes CLIProxyAPI. New hosts still require [bootstrap installation](#complete-linux-deployment-order).
+
+```bash
+bash deploy/linux/deploy.sh --sha FULL_40_CHARACTER_SHA --dry-run
+nohup bash deploy/linux/deploy.sh --sha FULL_40_CHARACTER_SHA --run-id SERVER_RELEASE_RUN_ID < /dev/null > /var/log/zoe-deploy-launch.log 2>&1 &
+# Optional: --cli-run-id ID selects a matching successful server-release run.
+bash deploy/linux/deploy.sh --rollback --sha PREVIOUS_FULL_SHA
+```
+
+Without `--run-id`, the script selects a successful `server-release.yml` run
+whose head SHA matches exactly, or aborts. It downloads both artifacts directly
+using host `gh`, with no workstation relay. Artifacts expire after seven days.
+Root must already have authenticated repository/GHCR access, Docker Compose v2,
+Python 3.10+, GNU coreutils, `flock`, systemd and `curl`. The existing deployment
+must be Linux amd64 with SHA-named immutable releases and a PATH symlink, not a
+regular `/usr/local/bin/zoe` executable. No CLI commands, flags or menu entries
+are added; the existing `--source-revision` is the noninteractive startup check.
+
+Each phase emits `deploy step=<name> status=ok|fail`. The private append-only
+`/var/log/zoe-deploy/<sha>.log` and `<sha>.done` or `<sha>.failed` marker are the
+completion authority, not `nohup` launch success. Digests are shortened to 12
+characters; environment values and arbitrary service log text are not printed.
+The script serializes deployments with a lock. Dry-run downloads and validates
+in temporary storage, writes an operational log, and changes no release,
+selector, database, environment, CLI, service or completion marker.
+
+Implemented phases:
+
+1. **preflight**: read-only SQLite active/allocating voice-session gate, local
+   health, per-namespace migration maxima, voice-turn/task counts, current
+   selector and masked server image.
+2. **download-verify**: checksums, matching source/embedded CLI revision,
+   [candidate validation](#deployment-candidates-and-rollback), installed units
+   including drop-ins, required executable/relative Compose paths, undefined
+   Compose inputs, and rendered bind/secret/config sources. Missing names are
+   reported without secret contents. Existing same-SHA directories must match.
+3. **backup**: SQLite backup API plus integrity check, preserving file ownership
+   and mode, and a mode-preserving environment backup. Both use `.pre-<12-sha>`;
+   existing backups are never overwritten.
+4. **images**: pull immutable manifest references; atomically update only changed
+   server/memory-worker/runner image lines, preserving other environment lines.
+5. **install-cli**: checksum-verified archive through `install-cli.sh`, immutable
+   `zoe-cli-<12-sha>` directory, atomic PATH selector and startup revision check.
+6. **switch**: atomic `current.new` rename, immediate voice-session recheck,
+   Compose restart, bounded health wait (at most 150 seconds), then runner
+   restart only when its binary differs.
+7. **verify**: all three services active, local/optional public health, running
+   image ID and immutable digest, required environment names from
+   [expected-env.txt](../../deploy/linux/expected-env.txt), first-three values
+   matching rendered Compose, migration/count preservation, runner journal,
+   server listening/no panic/fatal/migration lines, and CLI startup.
+8. **rollback** on a failed mutation/verification phase: restore environment and
+   selectors/CLI; try the old server with a migrated database first. Only if
+   that server cannot become healthy is the database backup restored, with Zoe
+   writers stopped. The log and final summary explicitly report **DATA LOSS**
+   and lost voice-turn/task counts. Manual rollback uses the saved transaction
+   selected by the requested previous SHA; failed rollback needs operator
+   intervention, not repeated blind deployment.
+9. **cleanup**: remove only owned download/temp files; retain backups, transaction
+   records, previous server and CLI versions.
+
+Migration continuity is checked within each namespace's observed numeric range.
+The known core exclusions are 9 (instance_auth) and unregistered 10; namespace
+ranges may start above one. Compatibility with the old server is established by
+actually starting it and checking health, not guessed from version numbers.
+Completed same-SHA reruns are read-only no-ops. Interrupted transactions require
+explicit rollback; rolled-back SHAs require a new revision so backups remain
+immutable. Downloads are staged under `<releases>/<sha>.dl` and removed on exit.
+
+Host-path overrides for controlled installations/tests are `ZOE_RELEASES_DIR`,
+`ZOE_ENV_FILE`, `ZOE_DB_PATH`, `ZOE_API_URL`, `ZOE_UNITS_DIR`, `ZOE_BIN_DIR`,
+`ZOE_CURRENT_PREFIX` and `ZOE_DEPLOY_LOG_DIR`. `ZOE_PUBLIC_HEALTH_URL` adds public
+health verification. Defaults are `/opt/zoe/releases`, `/etc/zoe/zoe-stack.env`,
+`/var/lib/zoe/server/data/zoe.sqlite`, loopback port 8787 `/healthz`,
+`/etc/systemd/system`, `/usr/local/bin`, `/opt/zoe/releases/current`, and the log
+directory above. Do not pass secret values on the command line or source env
+files in a shell. Units, OpenCode and deployment configuration must already be
+provisioned; this transaction does not install or change systemd units.
 
 For a complete source-built release, `deploy/linux/build-release.sh RELEASE_TAG`
 also installs `bin/zoe` beside the runner in `/opt/zoe/releases/RELEASE_TAG`.
@@ -487,7 +577,7 @@ reviewing the release, install its CLI on the standard host PATH with:
 
 ```sh
 sudo bash /opt/zoe/releases/RELEASE_TAG/deploy-linux/install-cli.sh /opt/zoe/releases/RELEASE_TAG
-zoe
+zoe --source-revision
 ```
 
 The installer atomically selects the immutable CLI through `/usr/local/bin/zoe`
@@ -525,9 +615,10 @@ release, switch `/opt/zoe/releases/current`, then start and check services. The
 plan records the previous immutable release and image digests as rollback targets.
 It never contacts a host, changes a selector, pulls an image, or starts a service.
 
-On the host, apply the reviewed plan manually. Keep old immutable release
- directories and image tags. Rollback changes only the `current` selector and
-Compose image tags, then repeats `/healthz`, `/readyz`, runner/OpenCode/Qdrant, and
-independent task checks. Record integrity, installation, readiness, connectivity,
+On the host, apply releases through the [host deployment transaction](#host-deployment-transaction),
+including its recorded rollback and conditional database restore; do not switch
+selectors manually. Keep old immutable release directories and image tags.
+Repeat independent readiness, connectivity and task acceptance checks after
+the scripted operational checks. Record integrity, installation, readiness, connectivity,
 and end-to-end results separately; see the [acceptance evidence register](../acceptance/evidence.md)
 for the acceptance boundary. This does not modify the external CLIProxyAPI deployment.
