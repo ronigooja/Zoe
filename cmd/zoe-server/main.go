@@ -48,9 +48,9 @@ func run() error {
 	if dbPath == "" {
 		return errors.New("ZOE_DATABASE_PATH is required")
 	}
-	registerConfig, err := registerConfigFromEnv(os.Getenv, os.ReadFile)
+	registerConfig, err := registerConfigForStartup(os.Getenv, os.ReadFile, log.Printf)
 	if err != nil {
-		return fmt.Errorf("register configuration: %w", err)
+		return err
 	}
 	profiles, err := loadProfiles(os.Getenv("ZOE_RUNTIME_PROFILES"))
 	if err != nil {

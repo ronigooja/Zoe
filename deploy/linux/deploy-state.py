@@ -109,7 +109,7 @@ def validate(release, env, units, current_prefix):
     names = env_names(env)
     text = (root / 'deploy-linux/docker-compose.yml').read_text()
     for name, suffix in re.findall(r'\$\{([A-Za-z_][A-Za-z_0-9]*)([^{}]*)\}', text):
-        if not suffix.startswith((':-', '-')) and name not in names:
+        if not suffix.startswith((':-', '-', ':+', '+')) and name not in names:
             fail('undefined Compose variable name=' + name)
     for unit in ('zoe-compose', 'zoe-runner', 'zoe-opencode'):
         path = Path(units) / (unit + '.service')
@@ -145,6 +145,9 @@ def validate(release, env, units, current_prefix):
                 fail('missing bind source service=' + service)
     for kind in ('secrets', 'configs'):
         for name, spec in config.get(kind, {}).items():
+            # Unconfigured optional secrets use the empty character device.
+            if kind == 'secrets' and spec.get('file') == '/dev/null':
+                continue
             if spec.get('file') and not Path(spec['file']).is_file():
                 fail('missing ' + kind + ' source name=' + name)
     image_refs(release)

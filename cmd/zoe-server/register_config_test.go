@@ -2,7 +2,7 @@ package main
 
 import (
 	"errors"
-	"os"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,16 +17,17 @@ func registerEnvFixture() map[string]string {
 	}
 }
 
-func TestRegisterConfigRequiredAndKeyFiles(t *testing.T) {
+func TestRegisterConfigOptionalAndKeyFiles(t *testing.T) {
 	for _, prefix := range []string{"ZOE_REGISTER", "ZOE_COMPACT"} {
 		for _, suffix := range []string{"BASE_URL", "MODEL", "API_KEY_FILE"} {
 			name := prefix + "_" + suffix
 			t.Run(name, func(t *testing.T) {
 				values := registerEnvFixture()
 				delete(values, name)
-				_, err := registerConfigFromEnv(func(k string) string { return values[k] }, func(string) ([]byte, error) { return []byte("fixture"), nil })
-				if err == nil || !strings.Contains(err.Error(), name) {
-					t.Fatalf("missing variable not named: %v", err)
+				var logs []string
+				cfg, err := registerConfigForStartup(func(k string) string { return values[k] }, func(string) ([]byte, error) { return []byte("fixture"), nil }, func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) })
+				if err != nil || cfg != nil || len(logs) != 1 || logs[0] != "register status=disabled reason=not_configured missing="+name {
+					t.Fatalf("missing variable did not disable register: cfg=%v err=%v logs=%v", cfg, err, logs)
 				}
 			})
 		}
@@ -51,29 +52,57 @@ func TestRegisterConfigRequiredAndKeyFiles(t *testing.T) {
 	}
 }
 
-func TestRegisterStartupFailsBeforeOpeningDatabase(t *testing.T) {
-	values := registerEnvFixture()
-	key := t.TempDir() + "/key"
-	if err := os.WriteFile(key, []byte("fixture"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	for _, prefix := range []string{"ZOE_REGISTER", "ZOE_COMPACT"} {
-		values[prefix+"_API_KEY_FILE"] = key
-	}
-	for name := range values {
-		if strings.HasPrefix(name, "ZOE_STEWARD_") {
-			continue
-		}
-		t.Run(name, func(t *testing.T) {
-			for k, v := range values {
-				t.Setenv(k, v)
+func TestRegisterStartupOptionalGroups(t *testing.T) {
+	all := "ZOE_REGISTER_BASE_URL,ZOE_REGISTER_MODEL,ZOE_REGISTER_API_KEY_FILE,ZOE_COMPACT_BASE_URL,ZOE_COMPACT_MODEL,ZOE_COMPACT_API_KEY_FILE"
+	for _, tc := range []struct {
+		name    string
+		values  map[string]string
+		missing string
+	}{
+		{"neither", map[string]string{}, all},
+		{"partial", map[string]string{"ZOE_REGISTER_MODEL": "route"}, "ZOE_REGISTER_BASE_URL,ZOE_REGISTER_API_KEY_FILE,ZOE_COMPACT_BASE_URL,ZOE_COMPACT_MODEL,ZOE_COMPACT_API_KEY_FILE"},
+		{"routing_only", map[string]string{"ZOE_REGISTER_BASE_URL": "https://route.invalid", "ZOE_REGISTER_MODEL": "route", "ZOE_REGISTER_API_KEY_FILE": "route-reference"}, "ZOE_COMPACT_BASE_URL,ZOE_COMPACT_MODEL,ZOE_COMPACT_API_KEY_FILE"},
+		{"enabled", registerEnvFixture(), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs []string
+			cfg, err := registerConfigForStartup(func(k string) string { return tc.values[k] }, func(string) ([]byte, error) { return []byte("fixture"), nil }, func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) })
+			if err != nil || (cfg == nil) != (tc.missing != "") {
+				t.Fatalf("cfg=%v err=%v", cfg, err)
 			}
-			t.Setenv(name, "")
-			t.Setenv("ZOE_DATABASE_PATH", "/nonexistent/register-startup/db")
-			if err := run(); err == nil || !strings.Contains(err.Error(), "register configuration: "+name+" is required") {
-				t.Fatalf("startup did not fail by variable name: %v", err)
+			if tc.missing == "" {
+				if len(logs) != 0 {
+					t.Fatal(logs)
+				}
+				return
+			}
+			if len(logs) != 1 || logs[0] != "register status=disabled reason=not_configured missing="+tc.missing {
+				t.Fatal(logs)
 			}
 		})
+	}
+}
+
+func TestRegisterDisabledValidatesExplicitSettings(t *testing.T) {
+	for _, name := range []string{"ZOE_REGISTER_TIMEOUT_MS", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_MAX_CHARACTERS", "ZOE_COMPACT_INTERVAL_MINUTES", "ZOE_REGISTER_RAW_WINDOW_MINUTES"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := registerConfigFromEnv(func(k string) string {
+				if k == name {
+					return "invalid"
+				}
+				return ""
+			}, func(string) ([]byte, error) { t.Fatal("unexpected file read"); return nil, nil })
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("invalid setting not named: %v", err)
+			}
+		})
+	}
+	for _, prefix := range []string{"ZOE_REGISTER", "ZOE_COMPACT"} {
+		values := map[string]string{prefix + "_BASE_URL": "https://model.invalid", prefix + "_MODEL": "model", prefix + "_API_KEY_FILE": "unreadable"}
+		_, err := registerConfigFromEnv(func(k string) string { return values[k] }, func(string) ([]byte, error) { return nil, errors.New("private") })
+		if err == nil || !strings.Contains(err.Error(), prefix+"_API_KEY_FILE") {
+			t.Fatalf("bad configured key not named: %v", err)
+		}
 	}
 }
 

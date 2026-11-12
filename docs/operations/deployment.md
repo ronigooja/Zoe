@@ -57,10 +57,18 @@ separate `instructions` system prompt.
 When deploying the context-register wiring, independently configure routing with
 `ZOE_REGISTER_{BASE_URL,MODEL,API_KEY_FILE,REASONING_EFFORT,THINKING,TIMEOUT_MS}`
 and compaction with `ZOE_COMPACT_{BASE_URL,MODEL,API_KEY_FILE,REASONING_EFFORT,THINKING,TIMEOUT_MS}`.
-For each prefix, `BASE_URL`, `MODEL`, and `API_KEY_FILE` are required: there is no
-fallback; startup fails if any is unset or the key file is unreadable or empty,
-naming the variable without exposing its content. Compose requires all six host
-variables and mounts independent routing and compaction secrets. Effort and
+Both groups are optional at startup. The register is enabled only when each
+prefix has `BASE_URL`, `MODEL`, and `API_KEY_FILE`. If either group is unset or
+partial, startup succeeds with the register disabled and one
+`register status=disabled reason=not_configured missing=<comma-separated variable names>`
+log line. Every delegated sentence then creates no task and holds the fixed
+processing-error speech; there is no Steward or other fallback. No register
+compaction runs or register opening context is included; recall uses memory alone.
+Configure both groups using the `zoe` menu items **Register model** and
+**Compact model**, then redeploy or restart. A complete group's unreadable or
+empty key file still fails startup, naming the variable without exposing its
+content, even if the other group is incomplete. Compose accepts missing host
+variables and uses `/dev/null` for unset independent secret files. Effort and
 thinking default to empty. Routing timeout defaults to 30000 ms (500-60000);
 compaction timeout defaults to 600000 ms (5000-600000). Both routing calls share
 the existing 35-second classification budget.

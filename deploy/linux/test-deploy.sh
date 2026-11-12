@@ -29,6 +29,10 @@ env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
        'ZOE_COMPACT_API_KEY_FILE': '/run/secrets/compact_api_key',
        'ZOE_COMPACT_TIMEOUT_MS': '600000', 'ZOE_COMPACT_MAX_CHARACTERS': '8000',
        'ZOE_COMPACT_INTERVAL_MINUTES': '60', 'ZOE_REGISTER_RAW_WINDOW_MINUTES': '60'}
+if os.environ['CASE'] == 'happy':
+    for prefix in ['ZOE_REGISTER', 'ZOE_COMPACT']:
+        for suffix in ['BASE_URL', 'MODEL', 'API_KEY_FILE']:
+            env.pop(prefix+'_'+suffix)
 (p/'stack.env').write_text(''.join(k+'='+v+'\n' for k,v in env.items()))
 (p/'stack.env').chmod(0o640)
 config = {'services': {'zoe-server': {'environment': {k:v for k,v in env.items() if not k.endswith('_IMAGE')},
@@ -45,9 +49,20 @@ for revision in [old, new]:
     for unit in ['zoe-compose', 'zoe-runner', 'zoe-opencode']:
         shutil.copy(repo/'deploy/linux'/f'{unit}.service', root/'deploy-linux')
     shutil.copy(repo/'deploy/linux/install-cli.sh', root/'deploy-linux')
-    (root/'deploy-linux/docker-compose.yml').write_text('services:\n  zoe-server:\n    image: ${ZOE_SERVER_IMAGE}\n')
+    compose = 'services:\n  zoe-server:\n    image: ${ZOE_SERVER_IMAGE}\n    environment:\n'
+    for prefix, secret in [('ZOE_REGISTER', 'register_api_key'), ('ZOE_COMPACT', 'compact_api_key')]:
+        for suffix in ['BASE_URL', 'MODEL']:
+            name = prefix+'_'+suffix
+            compose += '      '+name+': ${'+name+':-}\n'
+        compose += '      '+prefix+'_API_KEY_FILE: ${'+prefix+'_API_KEY_FILE:+/run/secrets/'+secret+'}\n'
+    compose += ('secrets:\n  register_api_key:\n    file: ${ZOE_REGISTER_API_KEY_FILE:-/dev/null}\n'
+                '  compact_api_key:\n    file: ${ZOE_COMPACT_API_KEY_FILE:-/dev/null}\n')
+    (root/'deploy-linux/docker-compose.yml').write_text(compose)
 root = p/'source'
 case = os.environ['CASE']
+if case == 'happy':
+    config['secrets'] = {'register_api_key': {'file': '/dev/null'}, 'compact_api_key': {'file': '/dev/null'}}
+    (p/'config.json').write_text(json.dumps(config))
 if case == 'missing-unit-path':
     (root/'bin/zoe-runner').unlink()
 if case == 'undefined-variable':

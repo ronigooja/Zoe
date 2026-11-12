@@ -10,13 +10,46 @@ import (
 	"github.com/ronigooja/Zoe/internal/voice"
 )
 
-// registerConfigFromEnv requires independently configured routing and compaction models.
+func registerMissingEnv(getenv func(string) string) []string {
+	var missing []string
+	for _, prefix := range []string{"ZOE_REGISTER", "ZOE_COMPACT"} {
+		for _, suffix := range []string{"BASE_URL", "MODEL", "API_KEY_FILE"} {
+			name := prefix + "_" + suffix
+			if strings.TrimSpace(getenv(name)) == "" {
+				missing = append(missing, name)
+			}
+		}
+	}
+	return missing
+}
+
+func registerConfigForStartup(getenv func(string) string, readFile func(string) ([]byte, error), logf func(string, ...any)) (*voice.RegisterConfig, error) {
+	cfg, err := registerConfigFromEnv(getenv, readFile)
+	if err != nil {
+		return nil, fmt.Errorf("register configuration: %w", err)
+	}
+	if cfg == nil {
+		logf("register status=disabled reason=not_configured missing=%s", strings.Join(registerMissingEnv(getenv), ","))
+	}
+	return cfg, nil
+}
+
+// registerConfigFromEnv enables the register only when both model groups are complete.
 func registerConfigFromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) (*voice.RegisterConfig, error) {
 	load := func(prefix string, def, min, max int) (voice.RegisterModelConfig, error) {
 		var cfg voice.RegisterModelConfig
+		if _, err := modelclient.Timeout(prefix, getenv, def, min, max); err != nil {
+			return cfg, err
+		}
+		if effort := strings.TrimSpace(getenv(prefix + "_REASONING_EFFORT")); effort != "" && effort != "none" && effort != "low" && effort != "medium" && effort != "high" && effort != "max" {
+			return cfg, fmt.Errorf("%s_REASONING_EFFORT must be none, low, medium, high, max, or empty", prefix)
+		}
+		if thinking := strings.TrimSpace(getenv(prefix + "_THINKING")); thinking != "" && thinking != "enabled" && thinking != "disabled" {
+			return cfg, fmt.Errorf("%s_THINKING must be enabled, disabled, or empty", prefix)
+		}
 		for _, suffix := range []string{"BASE_URL", "MODEL", "API_KEY_FILE"} {
 			if strings.TrimSpace(getenv(prefix+"_"+suffix)) == "" {
-				return cfg, fmt.Errorf("%s_%s is required", prefix, suffix)
+				return cfg, nil
 			}
 		}
 		key, err := readFile(strings.TrimSpace(getenv(prefix + "_API_KEY_FILE")))
@@ -61,6 +94,9 @@ func registerConfigFromEnv(getenv func(string) string, readFile func(string) ([]
 	window, err := integer("ZOE_REGISTER_RAW_WINDOW_MINUTES", 60, 5, 1440)
 	if err != nil {
 		return nil, err
+	}
+	if len(registerMissingEnv(getenv)) != 0 {
+		return nil, nil
 	}
 	return &voice.RegisterConfig{Model: model, CompactModel: compact, CompactCharacters: limit, Interval: time.Duration(interval) * time.Minute, RawWindow: time.Duration(window) * time.Minute}, nil
 }

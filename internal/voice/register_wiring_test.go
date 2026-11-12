@@ -13,12 +13,51 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/memory"
 	"github.com/ronigooja/Zoe/internal/steward"
+	"github.com/ronigooja/Zoe/internal/storage"
 )
 
+// registerDisabledHTTPServer avoids the shared helper's automatic register fixture.
+func registerDisabledHTTPServer(t *testing.T, cfg Config) (*httptest.Server, *storage.Store, string) {
+	t.Helper()
+	ctx := context.Background()
+	store, err := storage.Open(ctx, storage.Config{Path: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.RegisterCoreMigrations(store); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.RegisterInstanceMaintenanceMigration(store); err != nil {
+		t.Fatal(err)
+	}
+	server, err := control.NewServer(store, control.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Register(server, store, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	key := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	if _, _, err := control.InitializeInstanceAuth(ctx, store, key); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(server.Handler())
+	t.Cleanup(func() { ts.Close(); server.Shutdown(); _ = store.Close() })
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('handoff-session','default','owner','instance','request',X'01',1,'active',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	return ts, store, key
+}
+
 func TestRegisterHandoffRoutesAndActions(t *testing.T) {
-	for _, name := range []string{"chat", "memory_write", "recall", "new", "none", "answer", "answer_stale", "cancel", "cancel_live", "cancel_complete", "cancel_failed", "cancel_canceled", "report", "report_empty", "attach_active", "attach_complete", "foreign", "attach_failed", "attach_canceled", "route_error", "choose_error", "no_match", "confirm", "decline"} {
+	for _, name := range []string{"disabled", "chat", "memory_write", "recall", "new", "none", "answer", "answer_stale", "cancel", "cancel_live", "cancel_complete", "cancel_failed", "cancel_canceled", "report", "report_empty", "attach_active", "attach_complete", "foreign", "attach_failed", "attach_canceled", "route_error", "choose_error", "no_match", "confirm", "decline"} {
 		t.Run(name, func(t *testing.T) {
 			var mu sync.Mutex
 			registerCalls, stewardCalls := 0, 0
@@ -72,7 +111,14 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg := Config{Steward: client, RegisterConfig: &RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "compact-fixture", APIKey: "fixture"}, CompactCharacters: 1000}}
-			ts, store, key := handoffHTTPServerWithConfig(t, cfg)
+			if name == "disabled" {
+				cfg.RegisterConfig = nil
+			}
+			serverFixture := handoffHTTPServerWithConfig
+			if name == "disabled" {
+				serverFixture = registerDisabledHTTPServer
+			}
+			ts, store, key := serverFixture(t, cfg)
 			if err := memory.RegisterMigrations(store); err != nil {
 				t.Fatal(err)
 			}
@@ -214,9 +260,17 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 				if count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies`) != 0 {
 					t.Fatal("none had side effects")
 				}
-			case "route_error", "choose_error", "no_match", "confirm", "decline":
+			case "disabled", "route_error", "choose_error", "no_match", "confirm", "decline":
 				if count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies WHERE text=?`, stewardErrorSpeech) != 1 {
 					t.Fatal("model error did not fail closed")
+				}
+				if name == "disabled" {
+					mu.Lock()
+					calls, choices := registerCalls, stewardCalls
+					mu.Unlock()
+					if calls != 0 || choices != 0 {
+						t.Fatalf("disabled register called a model: register=%d steward=%d", calls, choices)
+					}
 				}
 			case "answer", "attach_active":
 				if r.ResourceID != target || count(`SELECT count(*) FROM tasks`) != 1 || count(`SELECT count(*) FROM task_entries WHERE task_id=? AND content=?`, target, text) != 1 {
