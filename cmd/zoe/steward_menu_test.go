@@ -16,7 +16,9 @@ func TestStewardMenuConfigurationAndOwnedKey(t *testing.T) {
 	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"output_text":"dispatch"}`)) }))
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"output_text":"{\"action\":\"none\",\"task\":\"\",\"reply\":\"\"}"}`))
+	}))
 	defer s.Close()
 	keyPath := filepath.Join(root, "secrets", "steward-key")
 	old := terminalEcho
