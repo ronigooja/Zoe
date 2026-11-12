@@ -384,17 +384,35 @@ func TestFastReplyDeliveryRetriesThenFails(t *testing.T) {
 	}
 }
 
-func TestFastReplyRecomputesSecondsOnRetry(t *testing.T) {
+func TestTaskReportRetryPreservesStewardReply(t *testing.T) {
 	r := newDeliveryRig(t)
+	r.code.Store(http.StatusServiceUnavailable)
 	r.seedCall(t, "s-fast", "user-1", 1)
 	at := r.now().Add(-5 * time.Second).Format(time.RFC3339Nano)
 	r.seedTask(t, "task-fast", "user-1")
 	r.exec(t, `UPDATE tasks SET status='active',started_at=?,updated_at=? WHERE id='task-fast'`, at, at)
 	r.exec(t, `INSERT INTO voice_task_links(workspace_id,session_id,generation,turn_id,turn_revision,task_id,linked_by_device_id,command_id,linked_at) VALUES('default','s-fast',1,'old',1,'task-fast','device-1','cmd-fast',?)`, at)
-	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-recompute','default','s-fast',1,'turn','stale','progress','pending',?,?,?)`, r.now().Format(time.RFC3339Nano), at, at)
+	const reply = "The lunar mission research is still running."
+	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-report','default','s-fast',1,'turn',?,'task_report','pending',?,?,?)`, reply, r.now().Format(time.RFC3339Nano), at, at)
 	r.svc.dispatchFastReplies(context.Background())
-	if !strings.Contains(r.texts[0], "已经5秒") {
-		t.Fatalf("first text=%q", r.texts[0])
+	var status string
+	var attempts int
+	if err := r.store.DB().QueryRow(`SELECT status,attempts FROM voice_fast_replies WHERE id='fast-report'`).Scan(&status, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" || attempts != 1 || len(r.texts) != 1 || r.texts[0] != reply {
+		t.Fatalf("first delivery: status=%q attempts=%d texts=%q", status, attempts, r.texts)
+	}
+	r.advance(10 * time.Second)
+	r.exec(t, `UPDATE tasks SET status='complete',result='Research finished.' WHERE id='task-fast'`)
+	r.code.Store(http.StatusOK)
+	r.svc.dispatchFastReplies(context.Background())
+	r.svc.dispatchFastReplies(context.Background())
+	if err := r.store.DB().QueryRow(`SELECT status,attempts FROM voice_fast_replies WHERE id='fast-report'`).Scan(&status, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != "delivered" || attempts != 2 || len(r.texts) != 2 || r.texts[1] != reply || r.posts.Load() != 2 {
+		t.Fatalf("retry delivery: status=%q attempts=%d texts=%q posts=%d", status, attempts, r.texts, r.posts.Load())
 	}
 }
 
