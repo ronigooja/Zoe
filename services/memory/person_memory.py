@@ -1,4 +1,4 @@
-"""Person-scoped Mem0 operations, separate from the legacy claim worker."""
+"""Person-scoped Mem0 operations for the HTTP API."""
 from __future__ import annotations
 
 import hashlib

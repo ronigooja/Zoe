@@ -1,7 +1,7 @@
 [project]
 name = "zoe-memory-worker"
 version = "0.1.0"
-description = "Controlled Mem0 extraction and Qdrant indexing worker for Zoe"
+description = "Person-scoped Mem0 and Qdrant HTTP API for Zoe"
 requires-python = ">=3.11,<3.13"
 dependencies = [
   "fastembed==0.9.0",
