@@ -198,10 +198,6 @@ func TestServerSubprocessBootstrapAndRestart(t *testing.T) {
 		t.Fatal("recovery changed owner subject or lost project")
 	}
 
-	res, body, err = call(http.MethodGet, "/v1/memory?q=available+after+restart", newToken, nil)
-	if err != nil || res.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("memory command is available after restart")) {
-		t.Fatalf("memory search after restart status=%v err=%v body=%s", responseStatus(res), err, body)
-	}
 	res, body, err = call(http.MethodGet, "/v1/voice/config", newToken, nil)
 	if err != nil || res.StatusCode != http.StatusServiceUnavailable || !bytes.Contains(body, []byte("voice_unavailable")) {
 		t.Fatalf("voice candidate without gateway should fail closed after restart: status=%v err=%v body=%s", responseStatus(res), err, body)

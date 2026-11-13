@@ -196,17 +196,18 @@ func TestRotationFencesInflightMutationsAndPersistsAcrossInitialization(t *testi
 func TestInternalCredentialsRemainScopedAndRevokedAfterRegistrationRetry(t *testing.T) {
 	store, server, key := instanceAuthFixture(t)
 	runner, _ := GenerateInstanceKey()
-	worker, _ := GenerateInstanceKey()
-	for _, entry := range []struct{ token, id, scope string }{{runner, "runner", "runner:claim"}, {worker, "ingest", "voice:turn:ingest"}} {
+	ingest, _ := GenerateInstanceKey()
+	credentials := []struct{ token, id, scope string }{{runner, "runner", "runner:claim"}, {ingest, "ingest", "voice:turn:ingest"}}
+	for _, entry := range credentials {
 		if err := server.RegisterRunnerCredential(context.Background(), entry.token, entry.id, []string{"default"}, []string{entry.scope}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := server.RegisterRunnerRoutes(func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /runner/v1/test", func(w http.ResponseWriter, r *http.Request) {
-			p, _ := RunnerPrincipalFromContext(r.Context())
-			if p.RunnerID == "memory" && HasRunnerScope(p, "runner:claim", "default") {
-				t.Error("memory worker got execution authority")
+			p, ok := RunnerPrincipalFromContext(r.Context())
+			if !ok || p.RunnerID != "runner" || !HasRunnerScope(p, "runner:claim", "default") {
+				t.Error("generic runner route did not receive the execution runner principal")
 			}
 			w.WriteHeader(204)
 		})
@@ -214,12 +215,16 @@ func TestInternalCredentialsRemainScopedAndRevokedAfterRegistrationRetry(t *test
 		t.Fatal(err)
 	}
 	handler := server.Handler()
-	for _, token := range []string{runner, worker} {
-		if got := instanceRequest(handler, "GET", "/v1/snapshot", token, "").Code; got != 401 {
+	for _, entry := range credentials {
+		if got := instanceRequest(handler, "GET", "/v1/snapshot", entry.token, "").Code; got != 401 {
 			t.Errorf("worker owner access=%d", got)
 		}
-		if got := instanceRequest(handler, "GET", "/runner/v1/test", token, "").Code; got != 204 {
-			t.Fatal(got)
+		want := http.StatusNoContent
+		if entry.id == "ingest" {
+			want = http.StatusForbidden
+		}
+		if got := instanceRequest(handler, "GET", "/runner/v1/test", entry.token, "").Code; got != want {
+			t.Fatalf("%s generic runner access=%d, want %d", entry.id, got, want)
 		}
 	}
 	if got := instanceRequest(handler, "GET", "/runner/v1/test", key, "").Code; got != 401 {
@@ -228,11 +233,13 @@ func TestInternalCredentialsRemainScopedAndRevokedAfterRegistrationRetry(t *test
 	if _, err := store.DB().Exec(`UPDATE runner_credentials SET revoked_at='revoked'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.RegisterRunnerCredential(context.Background(), runner, "runner", []string{"default"}, []string{"runner:claim"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := instanceRequest(handler, "GET", "/runner/v1/test", runner, "").Code; got != 401 {
-		t.Fatal("registration revived revoked worker")
+	for _, entry := range credentials {
+		if err := server.RegisterRunnerCredential(context.Background(), entry.token, entry.id, []string{"default"}, []string{entry.scope}); err != nil {
+			t.Fatal(err)
+		}
+		if got := instanceRequest(handler, "GET", "/runner/v1/test", entry.token, "").Code; got != 401 {
+			t.Fatalf("registration revived revoked %s credential: status=%d", entry.id, got)
+		}
 	}
 }
 func TestInitializationRollsBackIfAuditActorCannotBeCreated(t *testing.T) {

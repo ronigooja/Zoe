@@ -11,7 +11,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from services.memory.memory_api import MemoryAPIServer, create_memory_api
+from services.memory.memory_api import LOG, MemoryAPIServer, create_memory_api
 from services.memory.person_memory import INGEST_INSTRUCTIONS, PersonMemory, WRITE_INSTRUCTIONS, person_user_id
 from services.memory.worker import configure_logging
 from services.memory.responses_llm import ResponsesLLM
@@ -231,9 +231,21 @@ class MemoryAPITests(unittest.TestCase):
 
     def test_ingest_content_debug_only_and_deadline(self):
         self.memory.llm.generate_response.return_value = '{"memory":[{"text":"private-fact"}]}'
+        request_logged = threading.Event()
+        log_info = LOG.info
+
+        def log_request(*args, **kwargs):
+            log_info(*args, **kwargs)
+            if args[0].startswith("memory_api request "):
+                request_logged.set()
+
         for level in ("INFO", "DEBUG"):
-            with self.assertLogs("zoe.memory.api", level=level) as logs:
+            request_logged.clear()
+            with self.assertLogs("zoe.memory.api", level=level) as logs, patch.object(LOG, "info", side_effect=log_request):
                 self.assertEqual(self.request("/v1/memory/ingest", {"user": "workspace/owner", "text": "private-transcript"})[0], 200)
+                # The handler logs after sending the response body; keep capture
+                # active until that server thread has emitted the request log.
+                self.assertTrue(request_logged.wait(2), "request log was not emitted")
             output = "\n".join(logs.output)
             for content in ("private-transcript", "private-fact", INGEST_INSTRUCTIONS):
                 self.assertEqual(content in output, level == "DEBUG")
