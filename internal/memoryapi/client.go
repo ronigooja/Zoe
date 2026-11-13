@@ -118,6 +118,13 @@ func (c *Client) Ingest(ctx context.Context, user, text string) (added, updated 
 	return out.Added, out.Updated, err
 }
 
+// DeleteAll synchronously deletes an owner's worker memory. Failures are
+// returned to the caller; no durable retry or local deletion ledger is used.
+func (c *Client) DeleteAll(ctx context.Context, user string) error {
+	var out map[string]json.RawMessage
+	return c.call(ctx, "delete-all", map[string]string{"user": user}, &out)
+}
+
 // User uses a JSON tuple so workspace/owner separators cannot collide.
 func User(workspace, owner string) string {
 	data, _ := json.Marshal([]string{workspace, owner})

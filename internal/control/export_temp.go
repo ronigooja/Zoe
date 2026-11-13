@@ -4,19 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/ronigooja/Zoe/contracts"
 	"io/fs"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
-
-const exportTempCleanupScope = "memory:jobs:complete"
 
 type exportTempLease struct {
 	root *os.Root
@@ -221,86 +218,6 @@ func (l *exportTempLease) closeAndClean(db *sql.DB) {
 	}
 	_ = l.root.Close()
 	releaseExportTempLock(l.id, l.lock)
-}
-
-type exportTempCleanupRequest struct {
-	JobID         string `json:"job_id"`
-	WorkspaceID   string `json:"workspace_id"`
-	EntityID      string `json:"entity_id"`
-	EntityVersion int64  `json:"entity_version"`
-	Attempt       int    `json:"attempt"`
-}
-
-type exportTempCleanupResponse struct {
-	Status string `json:"status"`
-	Code   string `json:"code,omitempty"`
-}
-
-func (s *Server) handleExportTempCleanup(w http.ResponseWriter, r *http.Request) {
-	p, ok := RunnerPrincipalFromContext(r.Context())
-	if !ok || p.RunnerID == "" {
-		writeError(w, apiError(http.StatusUnauthorized, "unauthenticated", "runner authentication required", nil))
-		return
-	}
-	allowedScope := false
-	for _, scope := range p.Scopes {
-		if scope == exportTempCleanupScope || scope == "*" {
-			allowedScope = true
-		}
-	}
-	if !allowedScope {
-		writeError(w, apiError(http.StatusForbidden, "forbidden", "runner cleanup scope is required", nil))
-		return
-	}
-	var req exportTempCleanupRequest
-	if err := decodeJSON(r, &req); err != nil || req.JobID == "" || req.WorkspaceID == "" || req.EntityID == "" || req.EntityVersion < 1 || req.Attempt < 1 {
-		writeError(w, apiError(http.StatusBadRequest, "invalid_request", "job identity and positive lease attempt are required", nil))
-		return
-	}
-	sequence, err := s.validateExportTempLease(r.Context(), p, req)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	result, code, err := s.cleanExportTemps(r.Context(), req.WorkspaceID, sequence)
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, exportTempCleanupResponse{Status: "pending", Code: code})
-		return
-	}
-	if !result {
-		writeJSON(w, http.StatusAccepted, exportTempCleanupResponse{Status: "pending", Code: "export_active"})
-		return
-	}
-	writeJSON(w, http.StatusOK, exportTempCleanupResponse{Status: "completed"})
-}
-
-func (s *Server) validateExportTempLease(ctx context.Context, p contracts.RunnerPrincipal, req exportTempCleanupRequest) (int64, error) {
-	var workspace, status, owner, kind, entityID, target, leaseUntil string
-	var version int64
-	var attempts int
-	err := s.store.DB().QueryRowContext(ctx, `SELECT workspace_id,status,lease_owner,coalesce(lease_until,''),attempts,kind,entity_id,entity_version,target FROM memory_jobs WHERE id=?`, req.JobID).Scan(&workspace, &status, &owner, &leaseUntil, &attempts, &kind, &entityID, &version, &target)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, apiError(http.StatusNotFound, "not_found", "memory deletion job not found", nil)
-	}
-	if err != nil {
-		return 0, err
-	}
-	if workspace != req.WorkspaceID || entityID != req.EntityID || version != req.EntityVersion || kind != "delete_cleanup" || target != "export_temp" || !HasRunnerScope(p, exportTempCleanupScope, workspace) {
-		return 0, apiError(http.StatusForbidden, "forbidden", "runner cannot clean this export resource", nil)
-	}
-	if status != "leased" || owner != p.RunnerID || attempts != req.Attempt || leaseUntil == "" {
-		return 0, apiError(http.StatusConflict, "lease_lost", "cleanup job lease is no longer current", nil)
-	}
-	deadline, parseErr := time.Parse(time.RFC3339Nano, leaseUntil)
-	if parseErr != nil || !deadline.After(time.Now().UTC()) {
-		return 0, apiError(http.StatusConflict, "lease_expired", "cleanup job lease expired", nil)
-	}
-	var sequence int64
-	err = s.store.DB().QueryRowContext(ctx, `SELECT instance_deletion_sequence FROM memory_deletion_events WHERE workspace_id=? AND claim_id=? AND revision=? AND event_type='claim_deleted'`, workspace, entityID, version).Scan(&sequence)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, apiError(http.StatusConflict, "tombstone_missing", "authoritative deletion tombstone is unavailable", nil)
-	}
-	return sequence, err
 }
 
 func (s *Server) cleanExportTemps(ctx context.Context, workspace string, sequence int64) (bool, string, error) {

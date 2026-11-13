@@ -17,12 +17,12 @@ Zoe is a private, self-hosted Linux Go control server with an independent Linux 
 | Component | Responsibility | Authority boundary |
 |---|---|---|
 | Native Apple clients | Conversation, voice/text input, task progress/results, decisions, projects, notices, and local drafts | Render server records and stale/offline state; never establish business completion locally |
-| Go control plane | Projects, commands, permissions, tasks, runs, receipts, events, service definitions, memory versions, and audit | Sole authoritative business-state writer |
+| Go control plane | Projects, commands, permissions, tasks, runs, receipts, events, service definitions and audit | Sole authoritative business-state writer |
 | Independent runner | Claim admitted work, invoke authorized runtime/service operations, observe results, and report evidence | Separate credentials and scoped claims; cannot grant its own authority |
 | Zoe runner and OpenCode | Authorized session creation and lifecycle for each run through the dedicated host OpenCode service | Zoe admits work and owns runtime/session lifecycle; the runner is the trusted host-side lifecycle authority |
 | Existing remote CLIProxyAPI | Account selection, quota handling, and proxying for its configured model routes | External OpenAI-compatible provider reused unchanged; no duplicate account rotation in Zoe |
 | Zoe-compatible `ronigooja/chatgpt-web-voice` fork | ChatGPT web real-time transport and voice account pool | Voice transport and spoken output do not authorize or complete business work |
-| Mem0 | Scoped extraction, memory proposals, and permitted worker operations | Controlled worker, never unrestricted task/permission/configuration/decision authority |
+| Mem0 | Owner-scoped memory extraction, storage, and retrieval | Controlled worker, never unrestricted task/permission/configuration/decision authority |
 | Qdrant | Derived retrieval vectors and payloads | Rebuildable index; never the source of truth |
 | SQLite and file storage | Durable authority transactions; artifacts/releases and service data in file storage | Database commit establishes acceptance; large outputs do not become database blobs |
 
@@ -59,7 +59,7 @@ For routes supplied by CLIProxyAPI, account selection and quota handling remain 
 
 ## Identity, clients, and notices
 
-A fresh deployment uses the shared instance-key boundary defined by [ADR 0004](architecture/decisions/0004-instance-key-authentication.md); runner and memory-worker credentials remain separate.
+A fresh deployment uses the shared instance-key boundary defined by [ADR 0004](architecture/decisions/0004-instance-key-authentication.md); runner credentials and the shared memory HTTP API token remain separate.
 
 Clients authenticate with the server URL and shared key through the validation, Keychain, and rotation rules in [ADR 0004](architecture/decisions/0004-instance-key-authentication.md); local clearing is not server-side revocation.
 
@@ -101,11 +101,11 @@ When the memory worker API is configured, `internal/memory` schedules owner-scop
 
 For scheduled ingestion, Go reads turns and completed tasks in `(boundary, tick time]`, preserving chronological turn order and original task titles/results. Transcript blocks are `[RFC3339Nano UTC] user: text\n` or `assistant: text`; task blocks are `[RFC3339Nano UTC] completed task:\nuser: original request\nresult: result\n`, appended after the transcript in completion order. Sequential requests contain at most 200 KiB of UTF-8 text and at most 256 KiB of serialized JSON, preserving whole turns/tasks unless an individual block exceeds either limit. All chunks must succeed before a compare-and-swap advances `memory_ingest_state.boundary_ns` and the next-attempt deadline. Missing owner state starts at the beginning (Unix epoch). Retried chunks may duplicate earlier successes; Mem0 handles deduplication.
 
-Memory lives in Mem0/Qdrant behind the Python worker. The Go scheduler performs no extraction-model call, existing-key lookup, staged write, or claim write. `ZOE_MEM0_LLM_*` configures only the worker's model and is not required by Go startup. Migration 222 in the independent `memory_ingest` namespace creates the small progress table; the namespace and `internal/memoryapi` migration owner survive removal of legacy claim storage. Legacy claim/repository/deletion/export APIs and old tables are retained unchanged by this replacement. Historical ADRs describe the superseded storage/extraction design, not this ingestion contract. Formal task state remains authoritative in the task ledger.
+Memory lives in Mem0/Qdrant behind the Python worker. The Go scheduler performs no extraction-model call, existing-key lookup, staged write, or claim write. `ZOE_MEM0_LLM_*` configures only the worker's model and is not required by Go startup. Migration 222 in the independent `memory_ingest` namespace creates the small progress table; the namespace and `internal/memoryapi` migration owner survive removal of legacy claim storage. The claim subsystem, its migrations, commands, routes, runner context, and native management UI are removed. Only fresh databases are supported; no old-database migration or old-backup restore path exists. Historical ADRs describe the superseded storage/extraction design, not this ingestion contract. Formal task state remains authoritative in the task ledger.
 
-Embeddings use a local multilingual model with pinned revision, dimension, and encoding. Structured lookup and Chinese full-text retrieval remain available if vectors/models fail. A codec change creates a new collection and rebuilds it from authority. Exact versions, model hashes, worker configuration, and storage layout belong in [the memory worker documentation](../services/memory/README.md), not duplicated here.
+The Python worker owns embeddings, Mem0 history, and Qdrant vectors. Go has no SQLite memory authority or fallback index. Exact versions, model hashes, worker configuration, and storage layout belong in [the memory worker documentation](../services/memory/README.md), not duplicated here.
 
-Deletion immediately excludes content from retrieval and future context through a versioned tombstone, then propagates idempotent cleanup across authority, worker history, vectors/payloads, caches, exports, replicas, and backups under retention policy. Stale asynchronous work cannot resurrect deleted data. No cross-store transaction is assumed. Unsupported cleanup targets stay `adapter_missing`; physical erasure cannot be claimed without adapter/checkpoint evidence. Conversations, formal memory, and task evidence are retained until user deletion by default, with configurable retention. See [ADR 0006](architecture/decisions/0006-memory-authority-and-derived-stores.md).
+When deleting an owner's memory, call the worker's `delete-all` synchronously and report failure; there is no durable retry. Logical exports omit memory explicitly because Mem0 has no export endpoint. Complete instance destruction must still inventory and remove Mem0 and Qdrant resources. Historical ADR deletion/rebuild semantics are superseded for memory.
 
 ## Capabilities and deployment isolation
 

@@ -302,7 +302,6 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	}
 	prepPaths := []string{
 		filepath.Join(o.Root, "secrets", "runner-token"),
-		filepath.Join(o.Root, "secrets", "memory-runner-token"),
 		filepath.Join(o.Root, "secrets", "memory-api-token"),
 		filepath.Join(o.Root, "runner-secrets", "runner-token"),
 	}
@@ -798,7 +797,7 @@ func prepareLifecycleFiles(o LifecycleOptions) error {
 			return err
 		}
 	}
-	for _, name := range []string{"runner-token", "memory-runner-token", "memory-api-token"} {
+	for _, name := range []string{"runner-token", "memory-api-token"} {
 		p := filepath.Join(o.Root, "secrets", name)
 		if _, e := os.Stat(p); os.IsNotExist(e) {
 			b := make([]byte, 32)
@@ -986,7 +985,7 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 	if err != nil {
 		return err
 	}
-	stack := map[string]string{"ZOE_SERVER_IMAGE": image(mfest, "zoe-server"), "ZOE_MEMORY_WORKER_IMAGE": image(mfest, "zoe-memory-worker"), "ZOE_SERVER_DATA_ROOT": filepath.Join(o.DataRoot, "server"), "ZOE_MEMORY_DATA_ROOT": filepath.Join(o.DataRoot, "memory"), "ZOE_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "runner-token"), "ZOE_MEMORY_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "memory-runner-token"), "ZOE_MEM0_LLM_API_KEY_FILE": filepath.Join(o.Root, "secrets", "mem0-llm-api-key"), "ZOE_RUNTIME_PROFILES": profiles, "ZOE_DEFAULT_PROFILE_ID": "worker", "ZOE_MAX_RUNS": "12", "ZOE_COMPOSE_FILE": filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", "docker-compose.yml")}
+	stack := map[string]string{"ZOE_SERVER_IMAGE": image(mfest, "zoe-server"), "ZOE_MEMORY_WORKER_IMAGE": image(mfest, "zoe-memory-worker"), "ZOE_SERVER_DATA_ROOT": filepath.Join(o.DataRoot, "server"), "ZOE_MEMORY_DATA_ROOT": filepath.Join(o.DataRoot, "memory"), "ZOE_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "runner-token"), "ZOE_MEM0_LLM_API_KEY_FILE": filepath.Join(o.Root, "secrets", "mem0-llm-api-key"), "ZOE_RUNTIME_PROFILES": profiles, "ZOE_DEFAULT_PROFILE_ID": "worker", "ZOE_MAX_RUNS": "12", "ZOE_COMPOSE_FILE": filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", "docker-compose.yml")}
 	oldStack, _ := readEnv(filepath.Join(o.Root, "zoe-stack.env"))
 	if value, ok := oldStack["ZOE_VOICE_INSTRUCTION_TEXT"]; ok {
 		stack["ZOE_VOICE_INSTRUCTION_TEXT"] = value
@@ -1130,7 +1129,7 @@ func isReleaseOwnedEnvKey(key string) bool {
 	switch key {
 	case "ZOE_SERVER_IMAGE", "ZOE_MEMORY_WORKER_IMAGE",
 		"ZOE_SERVER_DATA_ROOT", "ZOE_MEMORY_DATA_ROOT", "ZOE_RUNNER_TOKEN_FILE",
-		"ZOE_MEMORY_RUNNER_TOKEN_FILE", "ZOE_MEMORY_API_TOKEN_FILE", "ZOE_MEM0_LLM_API_KEY_FILE", "ZOE_COMPOSE_FILE",
+		"ZOE_MEMORY_API_TOKEN_FILE", "ZOE_MEM0_LLM_API_KEY_FILE", "ZOE_COMPOSE_FILE",
 		"ZOE_CONTROL_URL", "ZOE_RUNNER_JOURNAL_PATH":
 		return true
 	default:
@@ -1658,7 +1657,7 @@ func (m Manager) UninstallPlan(ctx context.Context, o LifecycleOptions) (Uninsta
 	plan.KeepFiles = []string{filepath.Join(o.Root, "secrets", "cliproxyapi-api-key"), filepath.Join(o.Root, "runner-secrets", "cliproxyapi-api-key"), filepath.Join(o.Root, "secrets", "voice-gateway-api-key"), filepath.Join(o.Root, "secrets", "mem0-llm-api-key")}
 	plan.RemoveFiles = []string{filepath.Join(o.DataRoot, "opencode"), filepath.Join(o.Root, "zoe-opencode.env"), filepath.Join(openCodeUnitDir(o), "zoe-opencode.service")}
 	if o.PurgeData {
-		plan.RemoveFiles = append(plan.RemoveFiles, o.DataRoot, filepath.Join(o.Root, "zoe-stack.env"), filepath.Join(o.Root, "zoe-runner.env"), filepath.Join(o.Root, "secrets", "runner-token"), filepath.Join(o.Root, "secrets", "memory-runner-token"))
+		plan.RemoveFiles = append(plan.RemoveFiles, o.DataRoot, filepath.Join(o.Root, "zoe-stack.env"), filepath.Join(o.Root, "zoe-runner.env"), filepath.Join(o.Root, "secrets", "runner-token"))
 	}
 	return plan, nil
 }

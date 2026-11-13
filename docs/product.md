@@ -225,7 +225,7 @@ Zoe on macOS is an ambient screen, not a chat app: no sidebar, tabs, or persiste
 
 - **Voice first.** Continuous voice is on by default after connection and identity initialization, within the truthful-state limits below. After a silence timeout (default 60 seconds, counted only when no voice interaction is in progress) the client ends the voice session itself; the user can wake it later and continue because context stays on the server. Voice on/off and the timeout are AI-mutable settings.
 - **Text fallback.** A subtle button reveals a transient text-input bar; the AI may also show or hide it. Submissions follow the rules in Client behavior boundaries.
-- **Settings stay out of the foreground.** Command-Comma opens Settings, which hold connection and key management, account, memory, capabilities, notifications, data, and advanced options, following [the instance-key decision](architecture/decisions/0004-instance-key-authentication.md).
+- **Settings stay out of the foreground.** Command-Comma opens Settings, which hold connection and key management, account, capabilities, notifications, data, and advanced options, following [the instance-key decision](architecture/decisions/0004-instance-key-authentication.md).
 - **AI-controlled surfaces.** The AI opens, updates, and closes its own surfaces (windows, panels, menu-bar item, popover, Dock badge) and sets their size, position, display, level, opacity, click-through, focus, fullscreen, and Dock visibility. There are no fixed regions; the AI composes any layout.
 - **Generic display.** Each surface shows a versioned tree of layout and content primitives, data-bound nodes, and standard components named by information shape (metric, timeline, decision, collection, and others in the contract). The AI picks components from a client-supplied catalog and chooses semantic emphasis and tone; the client owns colors and motion. Unknown types degrade to their fallback. The client has no hardcoded business concepts: an approval is a `decision`, and a press submits only an opaque intent that the server validates.
 - **AI tools and settings audit.** The client exposes tools for surfaces, the component catalog, settings, voice, the text bar, and the silence timeout. Each setting declares type, range, description, and whether the AI may change it. Only the user may change instance key and login credentials, OS microphone permission, and the setting that revokes AI settings access. Every AI settings change shows a subtle notice and is recorded so the user can review and undo it. The menu-bar item always exists, and it shows when the microphone is in use.
@@ -815,7 +815,7 @@ The system should avoid duplicate notifications and frequent, meaningless remind
 
 ## 10. Long-Term Memory Requirements
 
-Long-term memory is layered, source-linked, authority-aware, and scoped; confirmed decisions, execution evidence, and model inference remain distinguishable. Record sources, versions, dates, validity, correction history, and tombstones; automatic summaries cannot overwrite confirmed decisions, curator judgment is on demand, and missing or conflicting history remains uncertainty. Detailed requirements are in [Sections 10.1–10.6](#101-persistent-memory).
+For current deployments, memory lives only in Mem0/Qdrant behind the Python worker; the Go claim authority and native memory-management surfaces are removed. Voice recall and explicit writes use that HTTP API. Logical exports exclude memory and say so explicitly. Owner-memory deletion is synchronous and reports worker failure without durable retry. Only fresh databases are supported; old-database migration and old-backup restore are not supported. The detailed scope requirements below describe product goals, not restored claim APIs.
 
 <a id="cy-10-01"></a>
 
@@ -1098,7 +1098,7 @@ Email, calendars, GitHub, file systems, and other third-party services should be
 
 Authorization applies to the actual action and resource; see [Section 14.2](#142-operation-authorization). Authority delegation, user control, and audit follow [Sections 14.1](#141-separate-permissions), [14.3](#143-user-control), and [14.4](#144-isolation-and-audit).
 
-The current fresh-deployment identity is the fixed owner/workspace using a shared instance key. Runner and memory-worker credentials remain separate. Local client clearing removes local connection data; it does not revoke the shared key or stop server tasks. See the [authentication decision](architecture/decisions/0004-instance-key-authentication.md).
+The current fresh-deployment identity is the fixed owner/workspace using a shared instance key. Runner credentials and the shared memory HTTP API token remain separate. Local client clearing removes local connection data; it does not revoke the shared key or stop server tasks. See the [authentication decision](architecture/decisions/0004-instance-key-authentication.md).
 
 Zoe can run programs, modify files, and operate external applications, so it must have clear permission controls.
 

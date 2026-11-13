@@ -9,7 +9,7 @@ KEYS = ("tests", "macos", "ios", "go", "race", "scripts", "docs", "operator")
 # Packages in the dependency closure of the race-tested packages in linux.yml.
 RACE_PREFIXES = (
     "cmd/zoe/", "cmd/zoe-server/", "contracts/", "internal/agents/opencode/",
-    "internal/capabilities/", "internal/control/", "internal/memory/", "internal/ops/", "internal/profiles/",
+    "internal/capabilities/", "internal/control/", "internal/memory/", "internal/memoryapi/", "internal/ops/", "internal/profiles/",
     "internal/runner/", "internal/storage/", "internal/voice/",
 )
 OPERATOR_PREFIXES = ("cmd/zoe/", "internal/ops/", "deploy/linux/install-cli.sh")
@@ -54,7 +54,7 @@ def select(paths, full=False):
                 scope["operator"] = True
             # The API and wire models have native consumers. Dependency changes
             # and integration fixtures may alter that shared contract as well.
-            if path.startswith(("contracts/", "internal/control/", "internal/voice/", "internal/memory/", "internal/capabilities/", "tests/")) or path in ("go.mod", "go.sum"):
+            if path.startswith(("contracts/", "internal/control/", "internal/voice/", "internal/memory/", "internal/memoryapi/", "internal/capabilities/", "tests/")) or path in ("go.mod", "go.sum"):
                 for key in ("tests", "macos", "ios"):
                     scope[key] = True
         elif path.startswith("deploy/linux/") and path.endswith(".sh"):

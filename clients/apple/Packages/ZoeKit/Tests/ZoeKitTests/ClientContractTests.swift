@@ -57,40 +57,8 @@ private actor AsyncTestGate {
 }
 
 final class ClientContractTests: XCTestCase {
-    func testMemoryInputValidationTrimsAndRejectsEmptyOrOverLengthFields() {
-        XCTAssertEqual(MemoryInputValidation.validate(subject: " Subject ", key: " Key\n", content: " Content "), MemoryInput(subject: "Subject", key: "Key", content: "Content"))
-        XCTAssertNil(MemoryInputValidation.validate(subject: " ", key: "key", content: "content"))
-        XCTAssertNil(MemoryInputValidation.validate(subject: String(repeating: "s", count: 81), key: "key", content: "content"))
-        XCTAssertNil(MemoryInputValidation.validate(subject: "subject", key: String(repeating: "k", count: 81), content: "content"))
-        XCTAssertNil(MemoryInputValidation.validate(subject: "subject", key: "key", content: String(repeating: "c", count: 2001)))
-    }
 
     @MainActor
-    func testRememberPersonalScopeSendsUserNotePayload() async throws {
-        var postedPayload: [String: Any]?
-        ExportURLProtocol.responseHandler = { request in
-            if request.httpMethod == "POST" {
-                postedPayload = (try? JSONSerialization.jsonObject(with: Self.requestBody(request) ?? Data())) as? [String: Any]
-                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: request.value(forHTTPHeaderField: "Idempotency-Key") ?? "", kind: "memory.remember", workspaceID: "workspace-1", resourceID: "memory-1", resourceType: "memory"))
-            }
-            return (500, [:], Data())
-        }
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let emptySnapshot = conversationSnapshot([])
-        await model.preparePendingCheckForTesting(api: api, journal: try CommandJournal(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)), snapshot: emptySnapshot)
-        model.snapshotFetchOverrideForTesting = { emptySnapshot }
-        model.memorySearchOverrideForTesting = { _ in MemorySearchResult(items: [], missing: [], conflicts: []) }
-
-        let accepted = await model.remember(scope: "personal", scopeID: nil, subject: "subject", key: "key", content: "content")
-        XCTAssertTrue(accepted)
-        let payload = try XCTUnwrap(postedPayload?["payload"] as? [String: Any])
-        XCTAssertEqual((payload["scope"] as? [String: Any])?["kind"] as? String, "personal")
-        XCTAssertEqual(payload["subject"] as? String, "subject")
-        XCTAssertEqual(payload["key"] as? String, "key")
-        XCTAssertEqual(payload["content"] as? String, "content")
-        XCTAssertEqual(payload["source_kind"] as? String, "user_note")
-    }
     private func exportSession() -> URLSession {
         ExportURLProtocol.failureHandler = nil
         let configuration = URLSessionConfiguration.ephemeral
@@ -99,9 +67,10 @@ final class ClientContractTests: XCTestCase {
     }
 
     private func exportPackage(scope: String = "personal", schemaVersion: Int = 2, contents: Data? = nil, snapshotCursor: String = "17", validatedCursor: String = "18", auditCursor: String = "18", auditID: String = "export-1", auditType: String = "data.export.prepared") -> (Data, [String: String]) {
-        let contents = contents ?? Data(#"{"projects":[],"tasks":[],"task_dependencies":[],"task_entries":[],"approvals":[],"runs":[],"evidence":[],"memory":[]}"#.utf8)
+        let contents = contents ?? Data(#"{"projects":[],"tasks":[],"task_dependencies":[],"task_entries":[],"approvals":[],"runs":[],"evidence":[]}"#.utf8)
         let manifest: [String: Any] = [
             "format": "zoe.authority-export", "schema_version": schemaVersion,
+            "memory": ["included": false, "reason": "Memory is stored in Mem0 and is not included; the worker has no export endpoint."],
             "export_id": "export-1", "created_at": "2026-10-21T12:00:00Z",
             "workspace_id": "workspace-1", "subject_id": "device-1", "scope": scope,
             "authority": ["instance_lineage_id": "lineage-1", "generation": 3, "deletion_sequence": "4", "snapshot_event_cursor": snapshotCursor, "validated_through_cursor": validatedCursor, "export_audit_event_cursor": auditCursor, "export_audit_event_id": auditID, "export_audit_event_type": auditType, "source": "sqlite_authority"],
@@ -160,9 +129,6 @@ final class ClientContractTests: XCTestCase {
         return result
     }
 
-    private func memoryClaim(id: String, content: String) -> MemoryClaim {
-        MemoryClaim(id: id, workspaceId: "workspace-1", scope: MemoryScope(kind: "personal", id: nil, principalId: "subject-1"), subject: "preference", key: "format", content: content, authorityKind: "user_confirmed", status: "active", revision: 1, validFrom: nil, validTo: nil, supersedes: nil, sources: [], deletedAt: nil)
-    }
 
     func testScopedExportUsesAuthenticatedScopedRequestAndPrivateTemporaryFile() async throws {
         ExportURLProtocol.capturedRequest = nil
@@ -429,50 +395,6 @@ final class ClientContractTests: XCTestCase {
     }
 
     @MainActor
-    func testMemoryReadAuthorizationFailureClearsCachedClaimsAndPreparedExport() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        model.setMemoryClaimsForTesting([memoryClaim(id: "memory-old", content: "stale private content")])
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try Data("export containing stale memory".utf8).write(to: fileURL)
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: fileURL, filename: "zoe-export-old.json", scope: "personal", snapshotCursor: "5"))
-        model.memorySearchOverrideForTesting = { _ in
-            throw ZoeError.http(status: 403, code: "forbidden", message: "memory read denied", details: nil)
-        }
-
-        await model.refreshMemory()
-
-        XCTAssertTrue(model.memoryClaims.isEmpty)
-        XCTAssertTrue(model.memoryMissing.isEmpty)
-        XCTAssertTrue(model.memoryConflicts.isEmpty)
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
-        XCTAssertEqual(model.exportStatus, uiText("Memory access was denied; cached memory and the prepared export were cleared."))
-    }
-
-    @MainActor
-    func testSnapshotAuthorizationFailureClearsMemoryAndPreparedExport() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        model.setMemoryClaimsForTesting([memoryClaim(id: "memory-old", content: "stale private content")])
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try Data("export containing stale memory".utf8).write(to: fileURL)
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: fileURL, filename: "zoe-export-old.json", scope: "personal", snapshotCursor: "5"))
-        model.snapshotFetchOverrideForTesting = {
-            throw ZoeError.http(status: 403, code: "forbidden", message: "snapshot denied", details: nil)
-        }
-
-        do { try await model.refreshSnapshotForTesting(); XCTFail("forbidden snapshot accepted") }
-        catch {
-            if let failure = error as? ZoeError, case let .http(status, _, _, _) = failure, status == 403 {} else {
-                XCTFail("unexpected error: \(error)")
-            }
-        }
-
-        XCTAssertTrue(model.memoryClaims.isEmpty)
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
-    }
-
-    @MainActor
     func testDeletionSequenceChangeInvalidatesPreparedExportAndPrivateFile() async throws {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("zoe-export-authority.zip")
@@ -488,36 +410,7 @@ final class ClientContractTests: XCTestCase {
 
         XCTAssertNil(model.exportArtifact)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
-        XCTAssertEqual(model.exportStatus, uiText("Server authority changed; cached memory and the prepared export were cleared."))
-    }
-
-    @MainActor
-    func testConnectionChangeClearsMemoryEvenWhenNewAddressIsInvalid() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        model.setMemoryClaimsForTesting([memoryClaim(id: "memory-old-origin", content: "old origin private content")])
-        model.serverAddress = "invalid-url"
-
-        await model.clearCredential()
-
-        XCTAssertTrue(model.memoryClaims.isEmpty)
-        XCTAssertTrue(model.memoryMissing.isEmpty)
-        XCTAssertTrue(model.memoryConflicts.isEmpty)
-    }
-
-    @MainActor
-    func testMemoryEventClearsStaleClaimAndPreparedExportBeforeRefreshing() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        model.setMemoryClaimsForTesting([memoryClaim(id: "memory-deleted", content: "deleted secret")])
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try Data("export containing deleted memory".utf8).write(to: fileURL)
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: fileURL, filename: "zoe-export-old.json", scope: "personal", snapshotCursor: "5"))
-        model.memorySearchOverrideForTesting = { _ in MemorySearchResult(items: [self.memoryClaim(id: "memory-current", content: "current result")], missing: [], conflicts: []) }
-
-        await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "event-1", cursor: "6", type: "memory.deleted", occurredAt: "2026-10-21T12:00:00Z", workspaceId: "workspace-1", subjectId: "subject-1", aggregateType: "memory", aggregateId: "memory-deleted", aggregateVersion: 2, payload: .object([:])))
-
-        XCTAssertEqual(model.memoryClaims.map(\.id), ["memory-current"])
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+        XCTAssertEqual(model.exportStatus, uiText("Server authority changed; the prepared export was cleared."))
     }
 
     @MainActor
@@ -552,159 +445,6 @@ final class ClientContractTests: XCTestCase {
     }
 
     @MainActor
-    func testDelayedOldConnectionMemoryEventCannotInvalidateNewConnectionData() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let oldEpoch = model.connectionEpoch
-        model.serverAddress = "invalid-url"
-        await model.clearCredential()
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try Data("new connection export".utf8).write(to: fileURL)
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: fileURL, filename: "zoe-export-new.json", scope: "personal", snapshotCursor: "1"))
-        model.setMemoryClaimsForTesting([memoryClaim(id: "memory-new", content: "new connection claim")])
-
-        await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "old-event", cursor: "2", type: "memory.deleted", occurredAt: "2026-10-21T12:00:00Z", workspaceId: "workspace-old", subjectId: "subject-old", aggregateType: "memory", aggregateId: "memory-old", aggregateVersion: 2, payload: .object([:])), expectedConnectionEpoch: oldEpoch)
-
-        XCTAssertEqual(model.memoryClaims.map(\.id), ["memory-new"])
-        XCTAssertEqual(model.exportArtifact?.filename, "zoe-export-new.json")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
-        model.cancelExport()
-    }
-
-    @MainActor
-    func testRecoveredMemoryDeleteReceiptReplaysJournalAndInvalidatesPreparedExport() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        model.setMemoryClaimsForTesting([memoryClaim(id: "memory-before-replay", content: "before replay")])
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let artifactURL = directory.appendingPathComponent("private-export.json")
-        try Data("export containing deleted memory".utf8).write(to: artifactURL)
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: artifactURL, filename: "zoe-export-private.json", scope: "personal", snapshotCursor: "7"))
-
-        let key = "recovery-key-\(UUID().uuidString.lowercased())"
-        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "memory.delete", expectedVersion: 2, payload: .object(["memory_id": .string("memory-1")]), createdAt: "2026-10-21T12:00:00Z", workspaceID: "workspace-1", expectedResourceType: "memory", expectedResourceID: "memory-1"))
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        var observedReceiptLookup = false
-        ExportURLProtocol.responseHandler = { request in
-            if request.url?.path == "/v1/commands", request.httpMethod == "GET", URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "key" && $0.value == key }) == true {
-                observedReceiptLookup = true
-                return (200, ["Content-Type": "application/json"], Data("{\"command_id\":\"cmd-recovered\",\"idempotency_key\":\"\(key)\",\"workspace_id\":\"workspace-1\",\"kind\":\"memory.delete\",\"status\":\"accepted\",\"resource_type\":\"memory\",\"resource_id\":\"memory-1\",\"resource_version\":3,\"accepted_at\":\"2026-10-21T12:00:00Z\",\"event_cursor\":\"8\"}".utf8))
-            }
-            return (503, ["Content-Type": "application/json"], Data())
-        }
-        var observedQueries: [String] = []
-        model.memorySearchOverrideForTesting = { query in
-            observedQueries.append(query)
-            return MemorySearchResult(items: [], missing: [], conflicts: [])
-        }
-
-        await model.recoverPendingCommandsForTesting(api: api, journal: journal)
-
-        let remainingCommands = try await journal.all()
-        XCTAssertTrue(observedReceiptLookup, "recovery must resolve the persisted idempotency key through the receipt endpoint")
-        XCTAssertTrue(remainingCommands.isEmpty, "an accepted recovered receipt must remove its journal row")
-        XCTAssertEqual(observedQueries, [""])
-        XCTAssertTrue(model.memoryClaims.isEmpty)
-        XCTAssertNil(model.exportArtifact, "a recovered memory deletion must invalidate a prepared private export")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: artifactURL.path), "the invalidated private export file must be removed")
-    }
-
-    @MainActor
-    func testRecoveredMemoryReceiptFromOldGenerationCannotInvalidateNewExport() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let artifactURL = directory.appendingPathComponent("new-private-export.json")
-        try Data("new connection export".utf8).write(to: artifactURL)
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: artifactURL, filename: "zoe-export-new.json", scope: "personal", snapshotCursor: "9"))
-
-        let key = "old-recovery-key-\(UUID().uuidString.lowercased())"
-        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "memory.delete", expectedVersion: 2, payload: .object(["memory_id": .string("memory-1")]), createdAt: "2026-10-21T12:00:00Z", workspaceID: "workspace-1", expectedResourceType: "memory", expectedResourceID: "memory-1"))
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        ExportURLProtocol.responseHandler = { request in
-            guard request.url?.path == "/v1/commands" else { return (503, [:], Data()) }
-            return (200, ["Content-Type": "application/json"], Data("{\"command_id\":\"cmd-old\",\"idempotency_key\":\"\(key)\",\"workspace_id\":\"workspace-1\",\"kind\":\"memory.delete\",\"status\":\"accepted\",\"resource_type\":\"memory\",\"resource_id\":\"memory-1\",\"resource_version\":3,\"accepted_at\":\"2026-10-21T12:00:00Z\",\"event_cursor\":\"8\"}".utf8))
-        }
-
-        await model.recoverPendingCommandsForTesting(api: api, journal: journal, expectedGeneration: model.connectionEpoch &- 1)
-
-        XCTAssertEqual(model.exportArtifact?.filename, "zoe-export-new.json")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: artifactURL.path))
-    }
-
-    @MainActor
-    func testNewMemoryQueryFencesOldInFlightResultAndCoalescesToLatestQuery() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        model.setMemoryClaimsForTesting([memoryClaim(id: "memory-before", content: "before")])
-        let gate = AsyncTestGate()
-        var observedQueries: [String] = []
-        model.memorySearchOverrideForTesting = { query in
-            observedQueries.append(query)
-            if query == "old" { await gate.pause() }
-            return MemorySearchResult(items: [self.memoryClaim(id: "memory-\(query)", content: query)], missing: [], conflicts: [])
-        }
-
-        let oldSearch = Task { await model.refreshMemory(query: "old") }
-        await gate.waitUntilStarted()
-        await model.refreshMemory(query: "new")
-        await gate.resume()
-        await oldSearch.value
-
-        XCTAssertEqual(observedQueries, ["old", "new"])
-        XCTAssertEqual(model.memoryClaims.map(\.id), ["memory-new"])
-    }
-
-    @MainActor
-    func testMemoryQueryFromPreviousConnectionCannotRepopulateClearedClaims() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        model.setMemoryClaimsForTesting([memoryClaim(id: "memory-before", content: "before")])
-        let gate = AsyncTestGate()
-        model.memorySearchOverrideForTesting = { _ in
-            await gate.pause()
-            return MemorySearchResult(items: [self.memoryClaim(id: "memory-old-origin", content: "old origin result")], missing: [], conflicts: [])
-        }
-
-        let oldSearch = Task { await model.refreshMemory() }
-        await gate.waitUntilStarted()
-        model.serverAddress = "invalid-url"
-        await model.clearCredential()
-        await gate.resume()
-        await oldSearch.value
-
-        XCTAssertTrue(model.memoryClaims.isEmpty)
-    }
-
-    @MainActor
-    func testMemoryEventFencesAndDeletesInFlightPreparedExport() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let gate = AsyncTestGate()
-        var producedURL: URL?
-        model.exportDownloadOverrideForTesting = { scope in
-            await gate.pause()
-            let url = directory.appendingPathComponent("stale-export.json")
-            try Data("stale export".utf8).write(to: url)
-            producedURL = url
-            return ScopedExportArtifact(fileURL: url, filename: "zoe-export-stale.json", scope: scope, snapshotCursor: "5")
-        }
-        model.memorySearchOverrideForTesting = { _ in MemorySearchResult(items: [], missing: [], conflicts: []) }
-
-        let preparing = Task { await model.prepareExport(scope: "personal", expectedConnectionEpoch: model.connectionEpoch) }
-        await gate.waitUntilStarted()
-        await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "event-delete", cursor: "6", type: "memory.deleted", occurredAt: "2026-10-21T12:00:00Z", workspaceId: "workspace-1", subjectId: "subject-1", aggregateType: "memory", aggregateId: "memory-1", aggregateVersion: 2, payload: .object([:])))
-        await gate.resume()
-        await preparing.value
-
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(producedURL).path))
-        XCTAssertEqual(model.exportStatus, uiText("Server memory changed; prepare a fresh export."))
-    }
-
     func testConnectionGenerationRejectsResponsesAfterOriginOrCredentialSwitch() throws {
         let serverA = try XCTUnwrap(URL(string: "https://server-a.example"))
         let serverB = try XCTUnwrap(URL(string: "https://server-b.example"))
@@ -1211,42 +951,6 @@ final class ClientContractTests: XCTestCase {
     }
 
     @MainActor
-    func testRecoveredMemoryReceiptInvalidatesExportBeforeLaterJournalRowFails() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let exportURL = directory.appendingPathComponent("private-export.json")
-        try Data("stale memory export".utf8).write(to: exportURL)
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: exportURL, filename: "zoe-export-old.json", scope: "personal", snapshotCursor: "4"))
-        var memoryRefreshCount = 0
-        model.memorySearchOverrideForTesting = { _ in
-            memoryRefreshCount += 1
-            return MemorySearchResult(items: [], missing: [], conflicts: [])
-        }
-        let deleteKey = "accepted-delete-\(UUID().uuidString.lowercased())"
-        let laterKey = "later-command-\(UUID().uuidString.lowercased())"
-        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        try await journal.append(PendingCommand(idempotencyKey: deleteKey, kind: "memory.delete", expectedVersion: 1, payload: .object(["memory_id": .string("memory-1")]), createdAt: "now", workspaceID: "workspace-1", expectedResourceType: "memory", expectedResourceID: "memory-1"))
-        try await journal.append(PendingCommand(idempotencyKey: laterKey, kind: "task.create", expectedVersion: nil, payload: .object(["title": .string("Later")]), createdAt: "later", workspaceID: "workspace-1", expectedResourceType: "task", expectedResourceID: nil))
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        ExportURLProtocol.responseHandler = { request in
-            guard request.url?.path == "/v1/commands", request.httpMethod == "GET" else { return (503, [:], Data()) }
-            let key = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "key" })?.value
-            if key == deleteKey {
-                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: deleteKey, kind: "memory.delete", workspaceID: "workspace-1", resourceID: "memory-1", resourceType: "memory"))
-            }
-            return (503, ["Content-Type": "application/json"], Data())
-        }
-
-        await model.recoverPendingCommandsForTesting(api: api, journal: journal)
-
-        let remaining = try await journal.all()
-        XCTAssertEqual(remaining.map(\.idempotencyKey), [laterKey], "the accepted row is removed while the unresolved row remains durable")
-        XCTAssertEqual(memoryRefreshCount, 1, "accepted memory receipts reconcile immediately before replay moves to the next row")
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: exportURL.path))
-    }
 
     func testVoiceMediaEpochFenceRejectsDelayedAndDuplicateLossEvents() throws {
         var fence = VoiceMediaEpochFence()

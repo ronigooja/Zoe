@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
 
@@ -20,9 +19,7 @@ func recallRecoveryFixture(t *testing.T, cfg Config, count int) (*storage.Store,
 	if cfg.Now == nil {
 		cfg.Now = func() time.Time { return time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC) }
 	}
-	cfg.ContextAssembler = func(context.Context, contracts.Principal, string, string, string, int) (contracts.MemoryContext, error) {
-		return contracts.MemoryContext{Items: []contracts.MemoryContextItem{{Content: "garden"}}}, nil
-	}
+
 	svc := newService(store.DB(), cfg)
 	t.Cleanup(svc.Stop)
 	at := cfg.Now().UTC().Format(time.RFC3339Nano)

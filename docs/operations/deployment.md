@@ -37,7 +37,7 @@ silence or compliance: whether upstream obeys must be verified in live calls.
 On the AVAS route the same request also carries `opening_context` items, which the
 gateway forwards as upstream `initial_items`: first the fixed delegation rule
 (cancel, progress, and personal questions are delegated), then at most five
-shallow memory facts and the current tasks. The rule is not configurable by
+the context register and current tasks. The rule is not configurable by
 `ZOE_VOICE_INSTRUCTION_TEXT`. When inspecting delivery in `voice_sessions.opening_context_delivery`:
 `delivered` means the gateway acknowledged `applied`; `unverified` means it did not
 acknowledge or reported `silent: "unverified"`; `unsupported` means nothing was
@@ -80,7 +80,7 @@ startup with the variable name. The raw-window width sets the compact right edge
 raw starts at the retained compact edge even after a failed rebuild.
 
 For this wiring, register failures and Steward failures create no task and hold
-the fixed processing-error speech. Memory writes are staged silently once per
+the fixed processing-error speech. Memory writes are sent directly to the worker once per
 committed turn; recall retains its holding and answer delivery. Task reports use
 Steward text; active attachments append to the same task without stopping it.
 No high-impact confirmation hold or confirm/decline routing is performed.
@@ -359,10 +359,9 @@ Optional settings:
 - `ZOE_DEFAULT_PROFILE_ID`: the server-selected profile for new tasks.
 - `ZOE_RUNTIME_PROFILES`: JSON object keyed by profile ID. Install writes a working single `worker` profile by default and never overwrites an existing non-empty value. Each profile sets `id`, `runtime_route_id`, `model_route_id`, `role`, `isolation_policy`, `capability_ids`, and `scopes`. Client requests cannot override these execution routes or grants.
 - `ZOE_RUNNER_TOKEN`: deployment-provisioned 32-byte base64url runner credential. When set, `ZOE_RUNNER_ID`, `ZOE_RUNNER_WORKSPACES`, and `ZOE_RUNNER_SCOPES` default to `configured-runner`, `default`, and `runner:claim,runner:observe,runner:control:read`.
-- `ZOE_MEMORY_RUNNER_TOKEN_FILE`: optional path to a deployment-managed file containing a distinct 32-byte base64url memory worker credential. When enabled, `ZOE_MEMORY_RUNNER_WORKSPACES` must list exact workspace IDs; `ZOE_MEMORY_RUNNER_ID` defaults to `memory-worker`; and `ZOE_MEMORY_RUNNER_SCOPES` may only contain exactly `memory:jobs:claim,memory:jobs:complete,memory:propose`. The server stores only the credential hash and never logs the token. This credential exposes the durable derived-job API; it does not enable a Mem0 or Qdrant runtime.
-- Memory-worker deployment also requires `ZOE_CONTROL_URL`, the scoped worker credential injected as `ZOE_RUNNER_TOKEN` (provisioned for the server through `ZOE_MEMORY_RUNNER_TOKEN_FILE`), `ZOE_MEM0_LLM_MODEL`, `ZOE_MEM0_LLM_BASE_URL`, and `ZOE_MEM0_LLM_API_KEY` from deployment-managed secret references. Configure the three Mem0 values with `zoe memory configure`; its secret path must remain distinct from the task-model credential. The memory model key is a separate credential issued by the model gateway and entered through `zoe`, never created by Zoe. `ZOE_MEM0_LLM_PROVIDER` must use the accounted `openai` path; `ollama` is rejected until it supports the same accounting boundary; `ZOE_MEM0_HISTORY_DB` and the model cache belong on the private persistent memory volume. Qdrant URL, optional API-key reference, collection/codec, and worker batch/poll settings are deployment configuration. The pinned multilingual embedding revision and dimensions are defined in [worker configuration](../../services/memory/config.py); changing them requires a separate collection and rebuild.
+- Memory-worker deployment also requires the shared `ZOE_MEMORY_API_TOKEN_FILE`, `ZOE_MEM0_LLM_MODEL`, `ZOE_MEM0_LLM_BASE_URL`, and `ZOE_MEM0_LLM_API_KEY` from deployment-managed secret references. Configure the three Mem0 values with `zoe memory configure`; its secret path must remain distinct from the task-model credential. The memory model key is a separate credential issued by the model gateway and entered through `zoe`, never created by Zoe. `ZOE_MEM0_LLM_PROVIDER` must use the accounted `openai` path; `ollama` is rejected until it supports the same accounting boundary; `ZOE_MEM0_HISTORY_DB` and the model cache belong on the private persistent memory volume. Qdrant URL, optional API-key reference, collection/codec, and worker HTTP settings are deployment configuration. The pinned multilingual embedding revision and dimensions are defined in [worker configuration](../../services/memory/config.py); changing them requires a separate collection and rebuild.
 - For local execution, start the worker from the repository root with `python -m services.memory.worker`, or deploy reviewed CI-built worker images with the settings above. The Compose Qdrant service is loopback-bound and disposable; it is not a production persistence configuration. These commands describe source setup and do not establish production installation or recovery.
-- `ZOE_INSTANCE_SCOPES`: comma-separated fixed-owner grants. An explicit value replaces the defaults exactly; it never adds a wildcard or restores omitted grants. Device approval/revocation scopes are not part of the client model. Project/task memory scopes must name their exact scope IDs.
+- `ZOE_INSTANCE_SCOPES`: comma-separated fixed-owner grants. An explicit value replaces the defaults exactly; it never adds a wildcard or restores omitted grants. Device approval/revocation scopes are not part of the client model. Memory scopes are not part of the Go client/runner authorization surface.
 
 ## Fresh-instance operator commands
 

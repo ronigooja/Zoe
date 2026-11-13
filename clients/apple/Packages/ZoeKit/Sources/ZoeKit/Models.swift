@@ -136,47 +136,6 @@ public struct Run: Codable, Equatable, Identifiable, Sendable {
     public var terminationConfirmed: Bool
 }
 
-public struct MemoryClaim: Codable, Equatable, Identifiable, Sendable {
-    public var id: String
-    public var workspaceId: String
-    public var scope: MemoryScope
-    public var subject: String
-    public var key: String
-    public var content: String
-    public var authorityKind: String
-    public var status: String
-    public var revision: Int64
-    public var validFrom: String?
-    public var validTo: String?
-    public var supersedes: String?
-    public var sources: [MemorySource]
-    public var deletedAt: String?
-}
-
-public struct MemoryScope: Codable, Equatable, Sendable {
-    public var kind: String
-    public var id: String?
-    public var principalId: String?
-}
-
-public struct MemorySource: Codable, Equatable, Identifiable, Sendable {
-    public var id: String
-    public var version: Int64
-    public var scope: MemoryScope
-    public var kind: String
-    public var reference: String
-    public var contentHash: String?
-    public var recordedAt: String
-    public var producer: String
-    public var retentionClass: String?
-}
-
-public struct MemorySearchResult: Codable, Equatable, Sendable {
-    public var items: [MemoryClaim]
-    public var missing: [String]
-    public var conflicts: [String]
-}
-
 public struct NotificationRecord: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var kind: String

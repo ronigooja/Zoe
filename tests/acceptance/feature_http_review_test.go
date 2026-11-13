@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
-	"github.com/ronigooja/Zoe/internal/memory"
+	"github.com/ronigooja/Zoe/internal/memoryapi"
 	"github.com/ronigooja/Zoe/internal/storage"
 	"github.com/ronigooja/Zoe/internal/voice"
 )
@@ -41,7 +40,7 @@ func reviewFeatureServer(t *testing.T) (*storage.Store, http.Handler, string, st
 	if err = control.RegisterInstanceRoutes(srv); err != nil {
 		t.Fatal(err)
 	}
-	if err = memory.Register(srv, store); err != nil {
+	if err = memoryapi.RegisterMigrations(store); err != nil {
 		t.Fatal(err)
 	}
 	if err = voice.Register(srv, store, voice.Config{}); err != nil {
@@ -72,63 +71,6 @@ func featureCommand(t *testing.T, h http.Handler, token, key, kind string, paylo
 		t.Fatal(err)
 	}
 	return &receipt
-}
-func TestRestoreDeletionGateClosesBusinessRoutesButAllowsDiagnostics(t *testing.T) {
-	store, h, owner, _, runnerToken := reviewFeatureServer(t)
-	featureCommand(t, h, owner, "gate-memory", "memory.remember", map[string]any{"scope": map[string]any{"kind": "personal"}, "subject": "restore gate", "key": "private", "content": "snapshot-only private memory", "source_kind": "user_note"})
-	before := reviewRequest(h, "GET", "/v1/memory?q=snapshot-only", owner, "", nil)
-	if before.Code != http.StatusOK || !strings.Contains(before.Body.String(), "snapshot-only private memory") {
-		t.Fatalf("fresh instance did not serve memory before restore gate: status=%d body=%s", before.Code, before.Body.String())
-	}
-	for _, path := range []string{"/v1/bootstrap", "/v1/pairings", "/v1/pairings/no-such-pairing"} {
-		if response := reviewRequest(h, "POST", path, owner, "", nil); response.Code != http.StatusNotFound {
-			t.Errorf("removed route %s=%d", path, response.Code)
-		}
-		if response := reviewRequest(h, "POST", path, "", "", nil); response.Code != http.StatusUnauthorized {
-			t.Errorf("missing instance key on %s=%d", path, response.Code)
-		}
-	}
-	if _, err := store.DB().Exec(`UPDATE zoe_instance_state SET restore_deletion_reconciliation_required=1,dispatch_enabled=0,derived_retrieval_enabled=0 WHERE singleton=1`); err != nil {
-		t.Fatal(err)
-	}
-
-	requests := []struct {
-		method, path, token string
-		body                any
-	}{
-		{"GET", "/v1/memory?q=snapshot-only", owner, nil},
-		{"GET", "/v1/memory/context?q=snapshot-only", owner, nil},
-		{"GET", "/v1/export?scope=personal", owner, nil},
-		{"GET", "/v1/snapshot", owner, nil},
-		{"GET", "/v1/commands", owner, nil},
-		{"POST", "/v1/commands", owner, map[string]any{"kind": "task.create"}},
-		{"GET", "/runner/v1/instance", runnerToken, nil},
-		{"POST", "/runner/v1/claims", runnerToken, map[string]any{"limit": 1}},
-	}
-	for _, request := range requests {
-		w := reviewRequest(h, request.method, request.path, request.token, "restore-gate-attempt", request.body)
-		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "restore_deletion_reconciliation_required") {
-			t.Errorf("restore gate did not close %s %s: status=%d body=%s", request.method, request.path, w.Code, w.Body.String())
-		}
-		if strings.Contains(w.Body.String(), "snapshot-only private memory") {
-			t.Errorf("restore gate disclosed memory through %s %s", request.method, request.path)
-		}
-	}
-	for _, path := range []string{"/v1/admin/instance", "/v1/admin/instance/migration-readiness"} {
-		w := reviewRequest(h, "GET", path, owner, "", nil)
-		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"restore_deletion_reconciliation_required":true`) {
-			t.Errorf("restore diagnostic %s unavailable: status=%d body=%s", path, w.Code, w.Body.String())
-		}
-	}
-	if w := reviewRequest(h, "GET", "/healthz", "", "", nil); w.Code != http.StatusOK {
-		t.Errorf("health route was blocked by restore gate: status=%d", w.Code)
-	}
-	for _, alias := range []string{"/v1//memory?q=snapshot-only", "/v1/memory/../memory?q=snapshot-only"} {
-		w := reviewRequest(h, "GET", alias, owner, "", nil)
-		if w.Code == http.StatusOK || strings.Contains(w.Body.String(), "snapshot-only private memory") {
-			t.Errorf("route alias bypassed restore gate at %q: status=%d body=%s", alias, w.Code, w.Body.String())
-		}
-	}
 }
 
 func TestReviewVoiceAtomicTaskSourceOverHTTP(t *testing.T) {

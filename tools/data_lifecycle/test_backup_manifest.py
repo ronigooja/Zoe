@@ -22,7 +22,7 @@ class BackupDeleteManifestTests(unittest.TestCase):
         self.manifest = self.root / "manifest"
         self.record = {
             "sequence": 1, "lineage_id": "fixture-lineage", "generation": 2,
-            "workspace_id": "default", "entity_kind": "memory_claim", "entity_id": "claim-fixture",
+            "workspace_id": "default", "entity_kind": "test_record", "entity_id": "claim-fixture",
             "entity_version": 3, "actor_id": "fixture-owner", "reason_code": "user_requested",
             "deleted_at": "2026-10-21T00:00:00Z", "cleanup_targets": ["qdrant", "backup_delete_manifest"],
             "previous_hash": "", "hash": "a" * 64,

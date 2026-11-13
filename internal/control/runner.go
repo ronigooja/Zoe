@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
-	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/profiles"
 )
 
@@ -55,7 +54,6 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 			writeError(w, e)
 			return
 		}
-		claim = s.attachMemoryContext(r.Context(), claim)
 		writeJSON(w, 200, claim)
 		return
 	}
@@ -239,50 +237,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	claim = s.attachMemoryContext(r.Context(), claim)
 	writeJSON(w, 200, claim)
-}
-
-func (s *Server) attachMemoryContext(ctx context.Context, claim contracts.JobClaim) contracts.JobClaim {
-	memory, unavailable := s.assembleMemoryContext(ctx, claim)
-	if !unavailable {
-		claim.MemoryContext = memory
-	}
-	return claim
-}
-
-func (s *Server) assembleMemoryContext(ctx context.Context, claim contracts.JobClaim) (contracts.MemoryContext, bool) {
-	var owner string
-	if err := s.store.DB().QueryRowContext(ctx, `SELECT coalesce(owner_subject_id,'') FROM tasks WHERE workspace_id=? AND id=?`, claim.WorkspaceID, claim.TaskID).Scan(&owner); err != nil {
-		return contracts.MemoryContext{}, true
-	}
-	if owner == "" {
-		return contracts.MemoryContext{}, false
-	}
-	// Memory context is assembled by the server authority for the task owner,
-	// not by the Worker's per-run tool permissions. The instance scopes are the
-	// authenticated device principal's grants used when the task was created.
-	s.mu.RLock()
-	instanceScopes := append([]string(nil), s.cfg.InstanceScopes...)
-	assembler := s.contextAssembler
-	s.mu.RUnlock()
-	p := contracts.Principal{WorkspaceID: claim.WorkspaceID, SubjectID: owner, Scopes: instanceScopes}
-	if assembler == nil {
-		return contracts.MemoryContext{}, true
-	}
-	budget := int(claim.Budget.MaxInputUnits)
-	if budget <= 0 {
-		budget = contracts.MemoryContextDefaultBudgetTokens
-	}
-	if budget > contracts.MemoryContextMaxBudgetTokens {
-		budget = contracts.MemoryContextMaxBudgetTokens
-	}
-	assembled, err := assembler(ctx, p, claim.TaskID, owner, claim.Goal, budget)
-	if err != nil {
-		logging.Warnf("runner memory context unavailable task=%s error_type=%T", claim.TaskID, err)
-		return contracts.MemoryContext{}, true
-	}
-	return assembled, false
 }
 
 func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
@@ -390,8 +345,7 @@ func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	memory, unavailable := s.assembleMemoryContext(r.Context(), claim)
-	writeJSON(w, http.StatusOK, contracts.RotationContext{Instructions: all, Memory: memory, MemoryUnavailable: unavailable})
+	writeJSON(w, http.StatusOK, contracts.RotationContext{Instructions: all})
 }
 
 func runnerHasAnyWorkspaceScope(p contracts.RunnerPrincipal, scope string) bool {
