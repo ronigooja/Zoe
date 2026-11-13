@@ -132,7 +132,7 @@ func (r *ContextRegister) Route(ctx context.Context, owner RegisterOwner, senten
 	}
 	var mappings strings.Builder
 	for _, key := range keys {
-		fmt.Fprintf(&mappings, "%s: %s\n", key.Subject, key.Key)
+		fmt.Fprintf(&mappings, "key=%s subject=%s\n", key.Key, key.Subject)
 	}
 	input := "Memory keys:\n" + mappings.String() + "\nCompact:\n" + layers.Compact + "\nRaw:\n" + layers.Raw + "\nCurrent sentence:\n" + sentence
 	call := logging.NewModelCall("register", logging.UserHash(owner.OwnerSubjectID), 1, "")

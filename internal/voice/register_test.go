@@ -162,7 +162,7 @@ func TestRegisterCrossCallStableOrderingAndOwnerIsolation(t *testing.T) {
 	if _, err := f.r.Route(context.Background(), f.owner, "that", f.now); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(f.inputs[1], "SECRET_") || !strings.Contains(f.inputs[1], "travel: trip") || f.instructions[1] != RegisterAttributionInstruction {
+	if strings.Contains(f.inputs[1], "SECRET_") || !strings.Contains(f.inputs[1], "key=trip subject=travel") || f.instructions[1] != RegisterAttributionInstruction {
 		t.Fatal("attribution isolation/instruction violated")
 	}
 	keys, err := f.r.MemoryKeys(context.Background(), RegisterOwner{"default", "other"})
@@ -256,6 +256,7 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 		{`{"route":"task","restatement":"none","extra":"x"}`, false},
 		{`{"route":"task","route":"recall","restatement":""}`, false},
 		{`{"memory_key":"absent"}`, false},
+		{`{"memory_key":"travel"}`, false},
 		{`{"memory_key":""}`, false},
 		{`{"memory_key":null}`, false},
 		{`{"memory_key":"trip","route":"task","restatement":"none"}`, false},
@@ -416,7 +417,7 @@ DELETE FROM schema_migrations WHERE namespace='voice' AND version>=219`)
 }
 
 func TestRegisterRouteMemoryRoundTripAndFailures(t *testing.T) {
-	for _, mode := range []string{"success", "repeat", "provider_error", "missing_provider", "unlisted", "foreign", "model_error", "invalid_second"} {
+	for _, mode := range []string{"success", "repeat", "provider_error", "missing_provider", "unlisted", "subject", "foreign", "model_error", "invalid_second"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newRegisterFixture(t)
 			f.output = `{"memory_key":"trip"}`
@@ -436,6 +437,9 @@ func TestRegisterRouteMemoryRoundTripAndFailures(t *testing.T) {
 			}
 			if mode == "unlisted" {
 				f.output = `{"memory_key":"absent"}`
+			}
+			if mode == "subject" {
+				f.output = `{"memory_key":"travel"}`
 			}
 			owner := f.owner
 			if mode == "foreign" {
@@ -458,7 +462,13 @@ func TestRegisterRouteMemoryRoundTripAndFailures(t *testing.T) {
 					f.output = `{"route":"task","restatement":"It refers to the saved trip."}`
 				}
 			}
+			logs := captureRegisterLogs(t)
 			got, err := f.r.Route(context.Background(), owner, "that", f.now)
+			for _, input := range f.inputs {
+				if mode != "foreign" && !strings.HasPrefix(input, "Memory keys:\nkey=trip subject=travel\n\nCompact:\n") {
+					t.Fatalf("missing labelled memory mapping: %q", input)
+				}
+			}
 			if mode == "success" {
 				if err != nil || got != (RouteResult{"task", "It refers to the saved trip."}) || reads != 1 || f.calls != 2 {
 					t.Fatalf("got=%+v reads=%d calls=%d err=%v", got, reads, f.calls, err)
@@ -469,8 +479,11 @@ func TestRegisterRouteMemoryRoundTripAndFailures(t *testing.T) {
 			if f.calls > 2 || reads > 1 {
 				t.Fatal("unbounded memory loop")
 			}
-			if (mode == "unlisted" || mode == "foreign") && reads != 0 {
+			if (mode == "unlisted" || mode == "subject" || mode == "foreign") && reads != 0 {
 				t.Fatal("unlisted memory fetched")
+			}
+			if mode == "subject" && (f.calls != 1 || !strings.Contains(logs.String(), "error_kind=output_invalid")) {
+				t.Fatalf("subject response was not rejected in round one as output_invalid: calls=%d logs=%s", f.calls, logs.String())
 			}
 		})
 	}
