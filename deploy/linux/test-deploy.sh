@@ -35,6 +35,38 @@ print('deployment log severity fixtures passed')
 PY
 }
 check_log_rules
+# Check the current long-syntax YAML layout even without Docker or PyYAML.
+python3 - "$repo_root" <<'PY'
+import pathlib, re, sys
+repo = pathlib.Path(sys.argv[1])
+def block(text, name, indent):
+    matches = list(re.finditer(r'^'+' '*indent+re.escape(name)+r':\s*\n', text, re.M))
+    assert len(matches) == 1, ('missing or duplicate block', name)
+    start = matches[0].end()
+    end = re.search(r'^ {0,'+str(indent)+r'}\S', text[start:], re.M)
+    return text[start:start+end.start()] if end else text[start:]
+for relative in ['deploy/linux/docker-compose.yml', 'services/memory/docker-compose.yml']:
+    text = (repo/relative).read_text()
+    qdrant = block(block(text, 'services', 0), 'qdrant', 2)
+    volumes = block(qdrant, 'volumes', 4)
+    assert re.fullmatch(
+        r'      - type: bind\n'
+        r'        source: \$\{ZOE_MEMORY_DATA_ROOT(?::[^}\n]*)?\}/qdrant\n'
+        r'        target: /qdrant/storage\n'
+        r'        bind:\n'
+        r'          create_host_path: false\n\s*', volumes), (relative, volumes)
+    # Inspect all tmpfs spellings, rejecting unsupported inline YAML as well.
+    tmpfs = ''
+    if re.search(r'^    tmpfs:', qdrant, re.M):
+        tmpfs = block(qdrant, 'tmpfs', 4)
+        entries = [line.strip() for line in tmpfs.splitlines() if line.strip()]
+        assert entries and all(re.fullmatch(r'- /tmp(?::[^\n]*)?', line) for line in entries), (relative, tmpfs)
+    if relative == 'deploy/linux/docker-compose.yml':
+        assert tmpfs, relative
+        for setting in ['user: "1000:1000"', 'read_only: true', 'mem_limit: 2g']:
+            assert qdrant.splitlines().count('    '+setting) == 1, (relative, setting)
+print('Qdrant static Compose storage fixtures passed (both files; production hardening retained)')
+PY
 # Render real Compose files when the CLI is available; no daemon is needed.
 if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then
   python3 - "$repo_root" <<'PY'
@@ -84,12 +116,24 @@ with tempfile.TemporaryDirectory() as directory:
         'qdrant': {'volumes': [{'type': 'bind', 'source': str(root/'qdrant'), 'target': '/qdrant/storage'}]},
         'zoe-memory-worker': {'volumes': [{'type': 'bind', 'source': str(root), 'target': '/var/lib/zoe/memory'}]}}}
     def storage():
+        global operations
         sys.argv = [helper, 'qdrant-storage', 'release', 'env']
         with patch.object(subprocess, 'check_output', return_value=json.dumps(config)), contextlib.redirect_stdout(io.StringIO()) as out:
-            runpy.run_path(helper, run_name='__main__')
+            operations = runpy.run_path(helper, run_name='__main__')
         return out.getvalue().strip()
     assert storage() == str(root/'qdrant')
     assert not (root/'qdrant').exists(), 'path discovery mutated storage'
+    qdrant = config['services'].pop('qdrant')
+    assert storage() == '', 'release without Qdrant must remain supported'
+    config['services']['qdrant'] = qdrant
+    original_volumes = qdrant.pop('volumes')
+    try:
+        storage()
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError('Qdrant without durable storage accepted')
+    qdrant['volumes'] = original_volumes
     (root/'qdrant').mkdir(mode=0o700)
     assert storage() == str(root/'qdrant')
     for change in [{'type': 'tmpfs'}, {'source': str(root/'other') }]:
@@ -103,6 +147,52 @@ with tempfile.TemporaryDirectory() as directory:
         else:
             raise AssertionError('unsafe Qdrant storage accepted')
         mount.update(original)
+    # Exercise the preflight exemption without Docker, root, or host mutation.
+    storage()
+    (root/'qdrant').rmdir()
+    release = root/'release'
+    (release/'bin').mkdir(parents=True)
+    (release/'deploy-linux').mkdir()
+    (release/'deploy-linux/docker-compose.yml').write_text('services: {}\n')
+    (release/'release-manifest.json').write_text(json.dumps({'images': {
+        'zoe-server': {'digest': 'sha256:'+'1'*64, 'ref': 'test/server:test'}}}))
+    for name in ['zoe', 'zoe-server', 'zoe-runner', 'zoe-secret-entrypoint']:
+        executable = release/'bin'/name
+        executable.touch()
+        executable.chmod(0o700)
+    units = root/'units'
+    units.mkdir()
+    for unit in ['zoe-compose', 'zoe-runner', 'zoe-opencode']:
+        (units/(unit+'.service')).touch()
+    env = root/'stack.env'
+    env.touch()
+    def validate():
+        def output(args, **kwargs):
+            return json.dumps(config) if args[0] == 'docker' else ''
+        with patch.object(subprocess, 'check_output', side_effect=output):
+            operations['validate'](str(release), str(env), str(units), '/unused/current')
+    validate()
+    assert not (root/'qdrant').exists(), 'preflight created storage'
+    qdrant = config['services'].pop('qdrant')
+    validate()
+    config['services']['qdrant'] = qdrant
+    for service, spec in [
+        ('qdrant', {'volumes': []}),
+        ('qdrant', {'volumes': [{'type': 'tmpfs', 'target': '/qdrant/storage'}]}),
+        ('other', {'volumes': [{'type': 'bind', 'source': str(root/'missing')}]}),
+    ]:
+        original = config['services'].get(service)
+        config['services'][service] = spec
+        try:
+            validate()
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError('unsafe preflight accepted: '+service)
+        if original is None:
+            del config['services'][service]
+        else:
+            config['services'][service] = original
 print('Qdrant deployment path fixtures passed')
 PY
 [[ "${1:-}" != --logs-only ]] || exit 0
@@ -161,6 +251,10 @@ for revision in [old, new]:
             name = prefix+'_'+suffix
             compose += '      '+name+': ${'+name+':-}\n'
         compose += '      '+prefix+'_API_KEY_FILE: ${'+prefix+'_API_KEY_FILE:+/run/secrets/'+secret+'}\n'
+    compose += ('  qdrant:\n    image: qdrant/qdrant:v1.19.1\n    volumes:\n'
+                '      - type: bind\n        source: '+str(p/'data/qdrant')+'\n        target: /qdrant/storage\n'
+                '  zoe-memory-worker:\n    image: ${ZOE_MEMORY_WORKER_IMAGE}\n    volumes:\n'
+                '      - type: bind\n        source: '+str(p/'data')+'\n        target: /var/lib/zoe/memory\n')
     compose += ('secrets:\n  register_api_key:\n    file: ${ZOE_REGISTER_API_KEY_FILE:-/dev/null}\n'
                 '  compact_api_key:\n    file: ${ZOE_COMPACT_API_KEY_FILE:-/dev/null}\n')
     (root/'deploy-linux/docker-compose.yml').write_text(compose)

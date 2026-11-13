@@ -79,8 +79,8 @@ def env_names(path):
     return names
 
 
-def qdrant_storage(release, env):
-    services = compose(release, env)['services']
+def qdrant_storage(release, env, config=None):
+    services = (config if config is not None else compose(release, env))['services']
     if 'qdrant' not in services:
         return ''  # Older releases may not include memory services.
     mounts = [v for v in services['qdrant'].get('volumes', []) if v.get('target') == '/qdrant/storage']
@@ -159,9 +159,13 @@ def validate(release, env, units, current_prefix):
                         if not (root / tokens[i + 1]).is_file():
                             fail('missing relative Compose path unit=' + unit)
     config = compose(release, env)
+    # Only the validated durable Qdrant directory may be created after preflight.
+    storage = qdrant_storage(release, env, config)
     for service, spec in config['services'].items():
         for volume in spec.get('volumes', []):
             if volume.get('type') == 'bind' and not Path(volume['source']).exists():
+                if service == 'qdrant' and volume.get('target') == '/qdrant/storage' and volume['source'] == storage:
+                    continue
                 fail('missing bind source service=' + service)
     for kind in ('secrets', 'configs'):
         for name, spec in config.get(kind, {}).items():
