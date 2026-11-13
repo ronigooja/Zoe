@@ -6,12 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/modelclient"
 )
 
@@ -24,7 +24,7 @@ func (r *ContextRegister) RebuildCompact(ctx context.Context, now time.Time) err
 	built, failed := 0, 0
 	defer func() {
 		if built > 0 || failed > 0 {
-			log.Printf("register status=rebuild owners_built=%d owners_failed=%d elapsed_ms=%d", built, failed, time.Since(started).Milliseconds())
+			logging.Infof("register status=rebuild owners_built=%d owners_failed=%d elapsed_ms=%d", built, failed, time.Since(started).Milliseconds())
 		}
 	}()
 	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT workspace_id,owner_id FROM voice_sessions ORDER BY workspace_id,owner_id`)
@@ -77,7 +77,7 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 		if errors.As(resultErr, &httpErr) {
 			httpStatus = fmt.Sprintf(" http_status=%d", httpErr.StatusCode)
 		}
-		log.Printf("register status=rebuild_failed stage=%s error_kind=%s%s owner_hash=%x", stage, kind, httpStatus, hash[:4])
+		logging.Errorf("register status=rebuild_failed stage=%s error_kind=%s%s owner_hash=%x", stage, kind, httpStatus, hash[:4])
 	}()
 	if err := validRegisterOwner(o); err != nil {
 		kind = "config"
@@ -127,7 +127,21 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 	}
 	callCtx, cancel := context.WithTimeout(ctx, r.compactTimeout)
 	stage = "call_model"
-	output, err := r.compactModel.Complete(callCtx, RegisterCompactInstruction, fmt.Sprintf("Character limit: %d\n\n%s", r.limit, transcript.String()))
+	call := logging.NewModelCall("register_compact", logging.UserHash(o.OwnerSubjectID), 1, "")
+	input := fmt.Sprintf("Character limit: %d\n\n%s", r.limit, transcript.String())
+	call.Input(RegisterCompactInstruction, input)
+	defer func() {
+		resultKind := "none"
+		if resultErr != nil {
+			resultKind = kind
+		}
+		call.Result(struct {
+			Built bool
+			Stage string
+		}{built, stage}, resultKind)
+	}()
+	output, err := r.compactModel.Complete(callCtx, RegisterCompactInstruction, input)
+	call.Output(output)
 	if err != nil {
 		kind = registerModelErrorKind(callCtx, r.compactModel, err)
 	}
@@ -167,7 +181,7 @@ func (r *ContextRegister) Start(ctx context.Context) {
 	ctx, r.cancel = context.WithCancel(ctx)
 	r.done = make(chan struct{})
 	done := r.done
-	log.Printf("register status=started interval_ms=%d", r.interval.Milliseconds())
+	logging.Infof("register status=started interval_ms=%d", r.interval.Milliseconds())
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(r.interval)

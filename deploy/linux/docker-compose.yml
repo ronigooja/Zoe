@@ -17,6 +17,7 @@ services:
     ports:
       - "127.0.0.1:${ZOE_SERVER_PORT:-8787}:8787"
     environment:
+      ZOE_LOG_LEVEL: ${ZOE_LOG_LEVEL:-debug}
       ZOE_LISTEN_ADDR: 0.0.0.0:8787
       ZOE_DATABASE_PATH: /var/lib/zoe/server/data/zoe.sqlite
       ZOE_RUNTIME_PROFILES: ${ZOE_RUNTIME_PROFILES:?set server-selected runtime profiles}

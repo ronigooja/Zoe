@@ -4,12 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
+	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 func (s *Service) classificationTimeout() time.Duration {
@@ -45,7 +45,7 @@ func (s *Service) prepareHandoff(ctx context.Context, p contracts.Principal, req
 			return nil
 		}
 		if err == nil && (category != "" || existing != "") {
-			log.Printf("voice_classification_wait id=%s wait_ms=%d budget_hit=false", id, time.Since(started).Milliseconds())
+			logging.Infof("voice_classification_wait id=%s wait_ms=%d budget_hit=false", id, time.Since(started).Milliseconds())
 			return nil
 		}
 		if err != nil && waitCtx.Err() == nil {
@@ -53,7 +53,7 @@ func (s *Service) prepareHandoff(ctx context.Context, p contracts.Principal, req
 		}
 		select {
 		case <-waitCtx.Done():
-			log.Printf("voice_routing_wait id=%s wait_ms=%d budget_hit=true reason=routing_timeout", id, time.Since(started).Milliseconds())
+			logging.Warnf("voice_routing_wait id=%s wait_ms=%d budget_hit=true reason=routing_timeout", id, time.Since(started).Milliseconds())
 			return apiError(http.StatusServiceUnavailable, "routing_timeout", "voice routing is not ready; retry this handoff", nil)
 		case <-ticker.C:
 		}

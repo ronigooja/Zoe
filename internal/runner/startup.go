@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"syscall"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 type currentClaimsHTTPError struct{ status int }
@@ -57,7 +57,7 @@ func (e *Engine) StartupCurrent(ctx context.Context, wait time.Duration) ([]cont
 		}
 		claims, err := e.Control.Current(requestCtx)
 		if err == nil {
-			log.Printf("runner startup status=ready attempt=%d", attempt)
+			logging.Infof("runner startup status=ready attempt=%d", attempt)
 			return claims, nil
 		}
 		if ctx.Err() != nil {
@@ -67,7 +67,7 @@ func (e *Engine) StartupCurrent(ctx context.Context, wait time.Duration) ([]cont
 		if wait <= 0 || kind == "" {
 			return nil, err
 		}
-		log.Printf("runner startup status=waiting_for_server attempt=%d error_kind=%s", attempt, kind)
+		logging.Warnf("runner startup status=waiting_for_server attempt=%d error_kind=%s", attempt, kind)
 		if requestCtx.Err() != nil && last != nil {
 			return nil, last
 		}

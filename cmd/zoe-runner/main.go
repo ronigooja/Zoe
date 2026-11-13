@@ -8,7 +8,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strconv"
@@ -18,12 +17,14 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/runner"
 )
 
 func main() {
+	logging.ConfigureFromEnv()
 	if err := run(os.Args[1:]); err != nil {
-		log.Printf("zoe-runner stopped: %v", err)
+		logging.Errorf("zoe-runner stopped: %T", err)
 		os.Exit(1)
 	}
 }
@@ -123,7 +124,7 @@ func run(args []string) error {
 	var triggerAdmissions *runner.TriggerAdmissionWorker
 	if boolEnv("ZOE_RUNNER_CAPABILITY_TRIGGERS_ENABLED", false) {
 		triggerAdmissions = &runner.TriggerAdmissionWorker{Control: control, OnProgramUnsupported: func(count int) {
-			log.Printf("%d capability program trigger(s) remain queued; program_trigger_executor_unavailable", count)
+			logging.Warnf("%d capability program trigger(s) remain queued; program_trigger_executor_unavailable", count)
 		}}
 	}
 	return serve(ctx, engine, deployments, triggerAdmissions, *once, durationEnv("ZOE_RUNNER_IDLE_POLL_INTERVAL", 2*time.Second))
@@ -170,7 +171,7 @@ func serve(ctx context.Context, engine *runner.Engine, deployments *runner.Deplo
 		go func() {
 			defer close(deploymentDone)
 			if err := deployments.Run(ctx, false, idle); err != nil && !errors.Is(err, context.Canceled) {
-				log.Printf("deployment worker polling failed: %v", err)
+				logging.Errorf("deployment worker polling failed: %T", err)
 			}
 		}()
 	}
@@ -179,7 +180,7 @@ func serve(ctx context.Context, engine *runner.Engine, deployments *runner.Deplo
 		go func() {
 			defer close(triggerAdmissionDone)
 			if err := triggerAdmissions.Run(ctx, false, durationEnv("ZOE_RUNNER_TRIGGER_POLL_INTERVAL", 15*time.Second)); err != nil && !errors.Is(err, context.Canceled) {
-				log.Printf("capability trigger admission polling failed: %v", err)
+				logging.Errorf("capability trigger admission polling failed: %T", err)
 			}
 		}()
 	}
@@ -203,13 +204,13 @@ func serve(ctx context.Context, engine *runner.Engine, deployments *runner.Deplo
 				if recovery {
 					label = "run reconciliation remains pending"
 				}
-				log.Printf("%s for run %s: %v", label, safeID(claim.RunID), err)
+				logging.Warnf("%s for run %s: %T", label, safeID(claim.RunID), err)
 			}
 		}()
 	}
 	for _, claim := range current {
 		if len(active) == cap(active) {
-			log.Printf("more current claims than the runner's four-run local limit; leaving run %s for another runner", safeID(claim.RunID))
+			logging.Warnf("more current claims than the runner's four-run local limit; leaving run %s for another runner", safeID(claim.RunID))
 			continue
 		}
 		select {
@@ -260,7 +261,7 @@ func serve(ctx context.Context, engine *runner.Engine, deployments *runner.Deplo
 			<-active
 		default:
 			<-active
-			log.Printf("runner iteration failed; retrying after idle interval: %v", err)
+			logging.Errorf("runner iteration failed; retrying after idle interval: %T", err)
 		}
 		select {
 		case <-ctx.Done():

@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/profiles"
 )
 
@@ -221,7 +221,7 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err err
 		if errors.As(err, &rejected) && rejected.Valid() {
 			return e.reportRejected(ctx, claim, rejected.Code)
 		}
-		log.Printf("runtime create failed for run %s: %v", safeRuntimeID(claim.RunID), err)
+		logging.Errorf("runtime create failed for run %s: %T", safeRuntimeID(claim.RunID), err)
 		return e.markUnknown(ctx, claim)
 	}
 	if binding.SessionID == "" {
@@ -243,7 +243,7 @@ func (e *Engine) sendPrompt(ctx context.Context, claim contracts.JobClaim, spec 
 	if err := e.Runtime.Prompt(ctx, binding, spec.Prompt); err != nil {
 		// The session exists, but a failed request does not prove whether the
 		// prompt reached it. Fence the run rather than risking a duplicate.
-		log.Printf("runtime prompt failed for run %s (error type %T)", safeRuntimeID(claim.RunID), err)
+		logging.Errorf("runtime prompt failed for run %s (error type %T)", safeRuntimeID(claim.RunID), err)
 		return e.markUnknown(ctx, claim)
 	}
 	if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_sent"); err != nil {
@@ -583,7 +583,7 @@ func (e *Engine) contextWindow(ctx context.Context, c contracts.JobClaim) (int64
 		e.windowUnavailable[key] = true
 		e.windowMu.Unlock()
 		if first {
-			log.Printf("context rotation window unavailable for run %s; rotation disabled", safeRuntimeID(c.RunID))
+			logging.Warnf("context rotation window unavailable for run %s; rotation disabled", safeRuntimeID(c.RunID))
 		}
 		return 0, false
 	}
@@ -827,7 +827,7 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 			if err == nil && strings.TrimSpace(summary) != "" {
 				b.WriteString("\n\nUnverified context; verify against the workspace:\n" + truncate(summary, 16000))
 			} else if err != nil {
-				log.Printf("rotation summary unavailable: %v", err)
+				logging.Warnf("rotation summary unavailable run_id=%s error_type=%T", safeRuntimeID(c.RunID), err)
 			}
 		}
 	}

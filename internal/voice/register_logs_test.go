@@ -7,13 +7,19 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 func captureRegisterLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	previousLevel := logging.CurrentLevel()
+	logging.SetLevel(logging.Info)
+	t.Cleanup(func() { logging.SetLevel(previousLevel) })
 	var out bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&out)
@@ -130,4 +136,68 @@ func TestRegisterStartLogs(t *testing.T) {
 		t.Fatalf("missing or duplicated startup log: %s", logs.String())
 	}
 	assertRegisterLogPrivacy(t, logs.String())
+}
+
+func TestRegisterDebugFullModelCalls(t *testing.T) {
+	f := newRegisterFixture(t)
+	f.owner.OwnerSubjectID = "PRIVATE_OWNER_ID"
+	f.session("debug-session", "default", f.owner.OwnerSubjectID)
+	f.turn("debug-session", 0, "user", "PRIVATE_TRANSCRIPT", f.now.Add(-2*time.Hour))
+	f.output = "PRIVATE_COMPACT"
+	logs := captureRegisterLogs(t)
+	logging.SetLevel(logging.Debug)
+	f.rebuild(f.now)
+	f.output = `{"route":"task","restatement":"PRIVATE_RESTATEMENT"}`
+	sentence := strings.Repeat("s", 20000)
+	if _, err := f.r.Route(context.Background(), f.owner, sentence, f.now); err != nil {
+		t.Fatal(err)
+	}
+	for i, input := range f.inputs {
+		if !strings.Contains(logs.String(), "input="+strconv.Quote(input)) || !strings.Contains(logs.String(), "instructions="+strconv.Quote(f.instructions[i])) {
+			t.Fatal("model input truncated or changed")
+		}
+	}
+	for _, text := range []string{sentence, "output=" + strconv.Quote(f.output), "PRIVATE_COMPACT", "model_call_input", "model_call_output", "model_call_result", "component=register_compact", "component=register"} {
+		if !strings.Contains(logs.String(), text) {
+			t.Errorf("missing debug text (%d characters)", len(text))
+		}
+	}
+	for _, forbidden := range []string{"PRIVATE_OWNER_ID", "Authorization", "Bearer", "https://unused.invalid", "api_key=", "http://127.0.0.1"} {
+		if strings.Contains(logs.String(), forbidden) {
+			t.Errorf("forbidden debug metadata %q", forbidden)
+		}
+	}
+}
+
+func TestRegisterDebugMemoryFollowup(t *testing.T) {
+	f := newRegisterFixture(t)
+	f.output = `{"memory_key":"trip"}`
+	f.r.content = func(context.Context, RegisterOwner, string) (string, error) { return "PRIVATE_MEMORY_CONTENT", nil }
+	f.onCall = func() {
+		if f.calls == 2 {
+			f.output = `{"route":"recall","restatement":""}`
+		}
+	}
+	logs := captureRegisterLogs(t)
+	logging.SetLevel(logging.Debug)
+	if _, err := f.r.Route(context.Background(), f.owner, "PRIVATE_SENTENCE", f.now); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range f.inputs {
+		if !strings.Contains(logs.String(), "input="+strconv.Quote(input)) {
+			t.Fatal("followup input changed or truncated")
+		}
+	}
+	for _, field := range []string{"attempt=2", "PRIVATE_MEMORY_CONTENT", "MemoryKey:trip"} {
+		if !strings.Contains(logs.String(), field) {
+			t.Errorf("missing %s", field)
+		}
+	}
+	if strings.Count(logs.String(), "model_call_result ") != 2 {
+		t.Fatal("missing per-attempt results")
+	}
+	firstID := regexp.MustCompile(`model_call_input component=register call_id=([^ ]+) attempt=1`).FindStringSubmatch(logs.String())
+	if len(firstID) != 2 || !strings.Contains(logs.String(), "parent_call_id="+strconv.Quote(firstID[1])) {
+		t.Fatal("followup missing parent call id")
+	}
 }

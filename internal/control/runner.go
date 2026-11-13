@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/profiles"
 )
 
@@ -279,7 +279,7 @@ func (s *Server) assembleMemoryContext(ctx context.Context, claim contracts.JobC
 	}
 	assembled, err := assembler(ctx, p, claim.TaskID, owner, claim.Goal, budget)
 	if err != nil {
-		log.Printf("runner memory context unavailable task=%s error=%s", claim.TaskID, err.Error())
+		logging.Warnf("runner memory context unavailable task=%s error_type=%T", claim.TaskID, err)
 		return contracts.MemoryContext{}, true
 	}
 	return assembled, false
