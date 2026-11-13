@@ -5,11 +5,17 @@ import (
 	"database/sql"
 
 	"github.com/google/uuid"
+	"github.com/ronigooja/Zoe/internal/memoryapi"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
 
 // RegisterMigrations keeps a separately ordered migration stream for memory.
 func RegisterMigrations(store *storage.Store) error {
+	// Every memory-aware opener must recognize worker ingestion state, including
+	// offline key rotation, maintenance, and restore paths.
+	if err := memoryapi.RegisterMigrations(store); err != nil {
+		return err
+	}
 	if err := store.RegisterMigration(storage.Migration{
 		Namespace: "memory",
 		Version:   100,

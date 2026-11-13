@@ -107,17 +107,22 @@ func TestMemoryIngestTranscriptTasksWindowAndCadence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','other',1,'user','private',?); INSERT INTO tasks VALUES('done','workspace','owner','complete',?,'original task sentence','result text'),('failed','workspace','owner','failed',?,'do not send','failure');`, now.Add(time.Second).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+	// Keep the other owner's first batch outside this owner's cadence window:
+	// no state means due immediately, independently of the first owner's timer.
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','other',1,'user','private',?)`, now.Add(48*time.Hour).Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO tasks VALUES('done','workspace','owner','complete',?,'original task sentence','result text'),('failed','workspace','owner','failed',?,'do not send','failure')`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
+	want := "[2026-11-13T11:00:00Z] user: original words\n[2026-11-13T12:00:00Z] assistant: answer\n[2026-11-13T12:00:00Z] completed task:\nuser: original task sentence\nresult: result text\n"
 	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var input map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			t.Error(err)
 		}
-		want := "[2026-11-13T11:00:00Z] user: original words\n[2026-11-13T12:00:00Z] assistant: answer\n[2026-11-13T12:00:00Z] completed task:\nuser: original task sentence\nresult: result text\n"
 		if input["text"] != want || input["user"] != memoryapi.User("workspace", "owner") || r.URL.Path != "/v1/memory/ingest" {
 			t.Errorf("unexpected input: %#v", input)
 		}
@@ -144,6 +149,22 @@ func TestMemoryIngestTranscriptTasksWindowAndCadence(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatal("called worker without content")
+	}
+	want = "[2026-11-13T12:00:01Z] user: future\n"
+	if err := repo.batchStep(context.Background(), client, 24*time.Hour, now.Add(24*time.Hour-time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal("ran just before interval")
+	}
+	if err := repo.batchStep(context.Background(), client, 24*time.Hour, now.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("did not run when due: calls=%d", calls)
+	}
+	if err := db.QueryRow(`SELECT boundary_ns,next_attempt_ms FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary, &next); err != nil || boundary != now.Add(24*time.Hour).UnixNano() || next != now.Add(48*time.Hour).UnixMilli() {
+		t.Fatalf("second state=%d,%d err=%v", boundary, next, err)
 	}
 }
 
@@ -218,8 +239,11 @@ func TestMemoryIngestBoundaryReadAndWindow(t *testing.T) {
 		t.Fatalf("missing boundary=%v err=%v", boundary, err)
 	}
 	from := now.Add(-time.Hour)
-	if _, err := db.Exec(`INSERT INTO memory_ingest_state VALUES('workspace','owner',?,0);
-INSERT INTO voice_transcript_turns VALUES('workspace','session',0,'user','exclude boundary',?),('workspace','session',1,'assistant','include now',?);`, from.UnixNano(), from.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO memory_ingest_state VALUES('workspace','owner',?,0)`, from.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	// Transcript at is RFC3339Nano TEXT; only the ingestion boundary is ns.
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',0,'user','exclude boundary',?),('workspace','session',1,'assistant','include now',?)`, from.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	if boundary, err := repo.BoundaryAt(ctx, "workspace", "owner"); err != nil || !boundary.Equal(from) {

@@ -30,6 +30,12 @@ The new SQLite scheduler tests (`TestMemoryIngestTranscriptTasksWindowAndCadence
 
 Voice handoff follow-up on `aa18a08`: [local component investigation](evidence/voice-live-handoff-2026-11-06.md) reproduces suppressed high-impact question delivery, missing Steward read-as-is wording, and delayed classification creating a task instead of recall. The follow-up moves bounded waiting outside the transaction and removes non-task Steward latency. Scoped spoken high-impact authorization and live acceptance remain open.
 
+### Memory ingestion integration repairs - 2026-11-13
+
+Source: `integ/memory-ingest`, repair based on `800ffdf`; local macOS synthetic fixtures only. Memory migration registration now includes worker ingestion migration 222 for normal startup, offline key rotation, maintenance, and restore callers. The cadence fixture keeps a second owner's initial due batch outside the first owner's interval; assertions additionally cover just-before-due, exactly-due, and next-attempt advancement. Boundary and task fixture inserts use separate SQL executions to avoid restarting anonymous placeholder bindings across statements; production transcript and task timestamps remain RFC3339Nano TEXT.
+
+`go build ./...`, touched-package `go vet`, formatting, whitespace checks, targeted `TestMemory(Batch|Ingest)` tests, `TestMigration222FreshAndUpgrade`, and the in-memory `TestKeyCommandMigrationsIncludeIngestState` passed locally. New file-backed key-command fresh/upgrade/reopen and maintenance reopen tests were attempted but blocked at initial WAL setup by `SQLITE_BUSY`; the existing server bootstrap/restart subprocess test did not reach readiness. Linux coordinator verification of those paths, restore drills, and full memory/runner suites remains pending. No CI, deployment, real-worker, or end-to-end acceptance is claimed.
+
 The Zoe-owned runtime remains unaccepted until evidence covers: streaming provider finish and token/usage propagation through the bridge; in-flight crash recovery without duplicate effects; and runner-enforced tool-step/time/budget limits. The four uncertain historical runs were abandoned by operator decision, so no migration gate remains for them. These are open gates, not claims established by the historical records below.
 
 Known limitations of the current source (PR #4, hosted CI passed):

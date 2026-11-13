@@ -7,7 +7,6 @@ import (
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
-	"github.com/ronigooja/Zoe/internal/memoryapi"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
 
@@ -16,9 +15,6 @@ func Register(s *control.Server, store *storage.Store) error {
 		return errorsf("memory registration requires control server and storage")
 	}
 	if err := RegisterMigrations(store); err != nil {
-		return err
-	}
-	if err := memoryapi.RegisterMigrations(store); err != nil {
 		return err
 	}
 	repository := NewRepositoryWithStore(store)

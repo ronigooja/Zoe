@@ -160,6 +160,8 @@ func ingestChunks(blocks []string, user string) []string {
 }
 
 func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspace, principal string, now time.Time, interval time.Duration) (int, error) {
+	// A new owner is due immediately, from the beginning. Only a successful,
+	// nonempty batch advances the boundary and schedules now + interval.
 	if _, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO memory_ingest_state(workspace_id,principal_id,boundary_ns) VALUES(?,?,0)`, workspace, principal); err != nil {
 		return 0, err
 	}
