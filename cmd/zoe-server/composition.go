@@ -39,36 +39,6 @@ func composeControlServer(store *storage.Store, controlConfig control.Config, vo
 		voiceConfig.RegisterConfig.MemoryBoundary = func(ctx context.Context, o voice.RegisterOwner) (time.Time, error) {
 			return voiceRepository.BoundaryAt(ctx, o.WorkspaceID, o.OwnerSubjectID)
 		}
-		assemble := func(ctx context.Context, o voice.RegisterOwner, query string) (contracts.MemoryContext, error) {
-			p := contracts.Principal{WorkspaceID: o.WorkspaceID, SubjectID: o.OwnerSubjectID, Scopes: []string{"memory:read:personal"}}
-			return voiceConfig.ContextAssembler(ctx, p, "", o.OwnerSubjectID, query, contracts.MemoryContextDefaultBudgetTokens)
-		}
-		voiceConfig.RegisterConfig.MemoryKeys = func(ctx context.Context, o voice.RegisterOwner) ([]voice.MemoryMappingKey, error) {
-			rows, err := store.DB().QueryContext(ctx, `SELECT DISTINCT subject,claim_key FROM memory_claims WHERE workspace_id=? AND scope_kind='personal' AND principal_id=? AND status IN ('active','conflicted') AND deleted_at IS NULL ORDER BY subject,claim_key`, o.WorkspaceID, o.OwnerSubjectID)
-			if err != nil {
-				return nil, err
-			}
-			defer rows.Close()
-			var keys []voice.MemoryMappingKey
-			for rows.Next() {
-				var item voice.MemoryMappingKey
-				if err := rows.Scan(&item.Subject, &item.Key); err != nil {
-					return nil, err
-				}
-				keys = append(keys, item)
-			}
-			return keys, rows.Err()
-		}
-		voiceConfig.RegisterConfig.MemoryContent = func(ctx context.Context, o voice.RegisterOwner, key string) (string, error) {
-			m, err := assemble(ctx, o, key)
-			var text []string
-			for _, item := range m.Items {
-				if item.Key == key {
-					text = append(text, item.Content)
-				}
-			}
-			return strings.Join(text, "\n"), err
-		}
 	}
 	voiceConfig.OutcomeWriter = func(ctx context.Context, p contracts.Principal, sessionID, summary, outcome string) error {
 		return voiceRepository.RecordVoiceOutcome(ctx, p, sessionID, summary, outcome)

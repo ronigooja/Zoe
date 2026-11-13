@@ -83,3 +83,12 @@ func TestModelCallFullInputAndLevelBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestModelCallParentFields(t *testing.T) {
+	if fields := NewModelCall("register", "fixture", 1, "").fields(); strings.Contains(fields, "parent_call_id=") {
+		t.Fatalf("absent parent was logged: %s", fields)
+	}
+	if fields := NewModelCall("fixture", "fixture", 2, "parent").fields(); !strings.Contains(fields, `parent_call_id="parent"`) {
+		t.Fatalf("parent was not retained: %s", fields)
+	}
+}

@@ -61,11 +61,6 @@ func newRegisterFixture(t *testing.T) *registerFixture {
 			return f.boundary, nil
 		}
 		return time.Time{}, nil
-	}, MemoryKeys: func(_ context.Context, o RegisterOwner) ([]MemoryMappingKey, error) {
-		if o != f.owner {
-			return nil, nil
-		}
-		return []MemoryMappingKey{{Subject: "travel", Key: "trip"}}, nil
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -162,12 +157,8 @@ func TestRegisterCrossCallStableOrderingAndOwnerIsolation(t *testing.T) {
 	if _, err := f.r.Route(context.Background(), f.owner, "that", f.now); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(f.inputs[1], "SECRET_") || !strings.Contains(f.inputs[1], "key=trip subject=travel") || f.instructions[1] != RegisterAttributionInstruction {
+	if strings.Contains(f.inputs[1], "SECRET_") || strings.Contains(f.inputs[1], "Memory keys") || f.instructions[1] != RegisterAttributionInstruction {
 		t.Fatal("attribution isolation/instruction violated")
-	}
-	keys, err := f.r.MemoryKeys(context.Background(), RegisterOwner{"default", "other"})
-	if err != nil || len(keys) != 0 {
-		t.Fatal("mapping owner leaked")
 	}
 }
 
@@ -232,13 +223,15 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 	}{
 		{`{"route":"task","restatement":"none"}`, true},
 		{`{"route":"task","restatement":"It refers to the user's trip."}`, true},
-		{`{"route":"memory_write","restatement":""}`, true},
-		{`{"route":"recall","restatement":""}`, true},
+		{`{"route":"memory_write","restatement":"Save the user's travel preference."}`, true},
+		{`{"route":"recall","restatement":"Retrieve the user's travel preference."}`, true},
+		{`{"route":"memory_write","restatement":""}`, false},
+		{`{"route":"recall","restatement":""}`, false},
 		{`{"route":"chat","restatement":""}`, true},
 		{`{"route":"chat","restatement":"none"}`, false},
 		{`{"route":"chat","restatement":" "}`, false},
 		{`{"route":"chat"}`, false},
-		{`{"memory_key":"trip"}`, true},
+		{`{"memory_key":"trip"}`, false},
 		{`{"route":"confirm","restatement":"none"}`, false},
 		{`{"route":"decline","restatement":"none"}`, false},
 		{`{"route":"cancel","restatement":"none"}`, false},
@@ -267,11 +260,11 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 		{`[]`, false}, {`null`, false}, {`none`, false}, {`memory trip`, false}, {``, false},
 	} {
 		t.Run(tc.out, func(t *testing.T) {
-			got, key, err := parseRegisterRoute(tc.out, []MemoryMappingKey{{Subject: "travel", Key: "trip"}})
+			got, err := parseRegisterRoute(tc.out)
 			if (err == nil) != tc.valid {
-				t.Fatalf("valid=%v got=%+v key=%q err=%v", tc.valid, got, key, err)
+				t.Fatalf("valid=%v got=%+v err=%v", tc.valid, got, err)
 			}
-			if tc.valid && key == "" {
+			if tc.valid {
 				f.output = tc.out
 				result, err := f.r.Route(context.Background(), f.owner, "that", f.now)
 				if err != nil || result != got {
@@ -286,7 +279,9 @@ func TestRegisterAttributionInstructionChat(t *testing.T) {
 	for _, required := range []string{
 		"Route chat means the sentence is conversation addressed to the assistant that asks for no work and no memory operation: greetings, small talk, thanks, acknowledgements.",
 		"Route task means everything else: requests for work, changes or cancellation of work, questions about the state of work.",
-		"For memory_write, recall and chat, restatement is empty.",
+		"For chat, restatement is empty.",
+		"For task, memory_write and recall, restatement is required and non-empty:",
+		"For memory_write and recall, restatement is never the literal none.",
 		`{"route":"memory_write|recall|task|chat","restatement":"<text>"}`,
 	} {
 		if !strings.Contains(RegisterAttributionInstruction, required) {
@@ -296,9 +291,28 @@ func TestRegisterAttributionInstructionChat(t *testing.T) {
 	if strings.Contains(RegisterAttributionInstruction, "and conversation addressed to the assistant") {
 		t.Error("task still includes conversation")
 	}
+	for _, forbidden := range []string{"memory_key", "memory keys", "Memory keys", "memory content"} {
+		if strings.Contains(RegisterAttributionInstruction, forbidden) {
+			t.Errorf("obsolete instruction: %s", forbidden)
+		}
+	}
 	for _, r := range RegisterAttributionInstruction {
 		if unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul) {
 			t.Fatalf("instruction contains CJK character %U", r)
+		}
+	}
+}
+
+func TestRegisterRestatementTextValidation(t *testing.T) {
+	for _, route := range []string{"task", "memory_write", "recall"} {
+		for _, text := range []string{"", " leading", "trailing ", "one\ntwo", "one\ttwo", "{text}", "[text]", "`text`", `"quoted"`, "- text", "#text"} {
+			output, err := json.Marshal(map[string]string{"route": route, "restatement": text})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parseRegisterRoute(string(output)); err == nil {
+				t.Errorf("accepted route=%s restatement=%q", route, text)
+			}
 		}
 	}
 }
@@ -416,74 +430,36 @@ DELETE FROM schema_migrations WHERE namespace='voice' AND version>=219`)
 	}
 }
 
-func TestRegisterRouteMemoryRoundTripAndFailures(t *testing.T) {
-	for _, mode := range []string{"success", "repeat", "provider_error", "missing_provider", "unlisted", "subject", "foreign", "model_error", "invalid_second"} {
-		t.Run(mode, func(t *testing.T) {
+func TestRegisterRouteSingleCall(t *testing.T) {
+	for _, tc := range []struct {
+		name, output string
+		valid        bool
+	}{
+		{"task", `{"route":"task","restatement":"none"}`, true},
+		{"memory_write", `{"route":"memory_write","restatement":"Save the user's travel preference."}`, true},
+		{"recall", `{"route":"recall","restatement":"Retrieve the user's travel preference."}`, true},
+		{"chat", `{"route":"chat","restatement":""}`, true},
+		{"empty_memory_write", `{"route":"memory_write","restatement":""}`, false},
+		{"empty_recall", `{"route":"recall","restatement":""}`, false},
+		{"nonempty_chat", `{"route":"chat","restatement":"Hello."}`, false},
+		{"old_memory_key", `{"memory_key":"x"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			f := newRegisterFixture(t)
-			f.output = `{"memory_key":"trip"}`
-			reads := 0
-			f.r.content = func(_ context.Context, owner RegisterOwner, key string) (string, error) {
-				reads++
-				if owner != f.owner || key != "trip" {
-					t.Fatal("memory owner/key mismatch")
-				}
-				if mode == "provider_error" {
-					return "", errors.New("unavailable")
-				}
-				return "saved trip content", nil
-			}
-			if mode == "missing_provider" {
-				f.r.content = nil
-			}
-			if mode == "unlisted" {
-				f.output = `{"memory_key":"absent"}`
-			}
-			if mode == "subject" {
-				f.output = `{"memory_key":"travel"}`
-			}
-			owner := f.owner
-			if mode == "foreign" {
-				owner = RegisterOwner{"default", "other"}
-			}
-			f.onCall = func() {
-				if f.calls != 2 {
-					return
-				}
-				if !strings.Contains(f.inputs[1], "saved trip content") || !strings.Contains(f.inputs[1], "Current sentence:\nthat") {
-					t.Error("memory follow-up lost context")
-				}
-				switch mode {
-				case "repeat":
-				case "model_error":
-					f.fail = true
-				case "invalid_second":
-					f.output = `{"route":"progress","restatement":"none"}`
-				default:
-					f.output = `{"route":"task","restatement":"It refers to the saved trip."}`
-				}
-			}
+			f.output = tc.output
 			logs := captureRegisterLogs(t)
-			got, err := f.r.Route(context.Background(), owner, "that", f.now)
-			for _, input := range f.inputs {
-				if mode != "foreign" && !strings.HasPrefix(input, "Memory keys:\nkey=trip subject=travel\n\nCompact:\n") {
-					t.Fatalf("missing labelled memory mapping: %q", input)
-				}
+			got, err := f.r.Route(context.Background(), f.owner, "that", f.now)
+			if (err == nil) != tc.valid || (!tc.valid && got != (RouteResult{})) {
+				t.Fatalf("got=%+v err=%v", got, err)
 			}
-			if mode == "success" {
-				if err != nil || got != (RouteResult{"task", "It refers to the saved trip."}) || reads != 1 || f.calls != 2 {
-					t.Fatalf("got=%+v reads=%d calls=%d err=%v", got, reads, f.calls, err)
-				}
-			} else if err == nil || got != (RouteResult{}) {
-				t.Fatal("accepted failure", got, err)
+			if f.calls != 1 {
+				t.Fatalf("calls=%d, want exactly one", f.calls)
 			}
-			if f.calls > 2 || reads > 1 {
-				t.Fatal("unbounded memory loop")
+			if f.inputs[0] != "Compact:\n\nRaw:\n\nCurrent sentence:\nthat" || strings.Contains(f.inputs[0], "Memory keys") {
+				t.Fatalf("unexpected input: %q", f.inputs[0])
 			}
-			if (mode == "unlisted" || mode == "subject" || mode == "foreign") && reads != 0 {
-				t.Fatal("unlisted memory fetched")
-			}
-			if mode == "subject" && (f.calls != 1 || !strings.Contains(logs.String(), "error_kind=output_invalid")) {
-				t.Fatalf("subject response was not rejected in round one as output_invalid: calls=%d logs=%s", f.calls, logs.String())
+			if !tc.valid && !strings.Contains(logs.String(), "error_kind=output_invalid") {
+				t.Fatalf("missing invalid-output classification: %s", logs.String())
 			}
 		})
 	}

@@ -52,9 +52,6 @@ func TestRegisterRouteLogs(t *testing.T) {
 			f.turn("private-session", 0, "user", "PRIVATE_SENTENCE", f.now.Add(-2*time.Hour))
 			f.output = "PRIVATE_COMPACT"
 			f.rebuild(f.now)
-			f.r.keys = func(context.Context, RegisterOwner) ([]MemoryMappingKey, error) {
-				return []MemoryMappingKey{{Subject: "private", Key: "PRIVATE_MEMORY_KEY"}}, nil
-			}
 			f.output, f.fail = tc.output, tc.fail
 			logs := captureRegisterLogs(t)
 			_, err := f.r.Route(context.Background(), f.owner, "PRIVATE_SENTENCE", f.now)
@@ -169,15 +166,9 @@ func TestRegisterDebugFullModelCalls(t *testing.T) {
 	}
 }
 
-func TestRegisterDebugMemoryFollowup(t *testing.T) {
+func TestRegisterDebugSingleCall(t *testing.T) {
 	f := newRegisterFixture(t)
-	f.output = `{"memory_key":"trip"}`
-	f.r.content = func(context.Context, RegisterOwner, string) (string, error) { return "PRIVATE_MEMORY_CONTENT", nil }
-	f.onCall = func() {
-		if f.calls == 2 {
-			f.output = `{"route":"recall","restatement":""}`
-		}
-	}
+	f.output = `{"route":"recall","restatement":"Retrieve the user's travel preference."}`
 	logs := captureRegisterLogs(t)
 	logging.SetLevel(logging.Debug)
 	if _, err := f.r.Route(context.Background(), f.owner, "PRIVATE_SENTENCE", f.now); err != nil {
@@ -185,19 +176,18 @@ func TestRegisterDebugMemoryFollowup(t *testing.T) {
 	}
 	for _, input := range f.inputs {
 		if !strings.Contains(logs.String(), "input="+strconv.Quote(input)) {
-			t.Fatal("followup input changed or truncated")
+			t.Fatal("input changed or truncated")
 		}
 	}
-	for _, field := range []string{"attempt=2", "PRIVATE_MEMORY_CONTENT", "MemoryKey:trip"} {
+	for _, field := range []string{"attempt=1", "model_call_input", "model_call_output", "model_call_result", "register_call status=ok route=recall"} {
 		if !strings.Contains(logs.String(), field) {
 			t.Errorf("missing %s", field)
 		}
 	}
-	if strings.Count(logs.String(), "model_call_result ") != 2 {
-		t.Fatal("missing per-attempt results")
+	if f.calls != 1 || strings.Count(logs.String(), "model_call_result ") != 1 {
+		t.Fatal("expected exactly one model call and result")
 	}
-	firstID := regexp.MustCompile(`model_call_input component=register call_id=([^ ]+) attempt=1`).FindStringSubmatch(logs.String())
-	if len(firstID) != 2 || !strings.Contains(logs.String(), "parent_call_id="+strconv.Quote(firstID[1])) {
-		t.Fatal("followup missing parent call id")
+	if strings.Contains(logs.String(), "parent_call_id=") || strings.Contains(logs.String(), "attempt=2") {
+		t.Fatal("single model call has followup metadata")
 	}
 }

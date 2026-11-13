@@ -118,10 +118,10 @@ func TestClassificationSingleFlightDifferentRows(t *testing.T) {
 	defer unblock()
 	// Block inside Route before the model client's own request mutex, so this
 	// tests classification concurrency rather than model-client serialization.
-	r.svc.register.keys = func(context.Context, RegisterOwner) ([]MemoryMappingKey, error) {
+	r.svc.register.boundary = func(context.Context, RegisterOwner) (time.Time, error) {
 		started <- struct{}{}
 		<-release
-		return nil, nil
+		return time.Time{}, nil
 	}
 	r.seedTurn(t, "first-row")
 	r.seedTurn(t, "second-row")
@@ -143,12 +143,12 @@ func TestClassificationSingleFlightRetryAfterFailure(t *testing.T) {
 	r := newClassificationRig(t, nil)
 	r.seedTurn(t, "retry-row")
 	var attempts int
-	r.svc.register.keys = func(context.Context, RegisterOwner) ([]MemoryMappingKey, error) {
+	r.svc.register.boundary = func(context.Context, RegisterOwner) (time.Time, error) {
 		attempts++
 		if attempts == 1 {
-			return nil, errors.New("fixture register failure")
+			return time.Time{}, errors.New("fixture register failure")
 		}
-		return nil, nil
+		return time.Time{}, nil
 	}
 	// Routing errors normally persist an error sentinel. A storage failure leaves
 	// the row eligible for a retry without changing that fail-closed behavior.
@@ -175,7 +175,7 @@ func TestClassificationSingleFlightReleasesOnPanicAndEarlyReturn(t *testing.T) {
 	r.svc.classifyCommittedTurn("missing-row")
 	r.assertResult(t, "missing-row", "task", "new")
 	r.seedTurn(t, "panic-row")
-	r.svc.register.keys = func(context.Context, RegisterOwner) ([]MemoryMappingKey, error) { panic("fixture panic") }
+	r.svc.register.boundary = func(context.Context, RegisterOwner) (time.Time, error) { panic("fixture panic") }
 	func() {
 		defer func() {
 			if recover() == nil {
@@ -187,7 +187,7 @@ func TestClassificationSingleFlightReleasesOnPanicAndEarlyReturn(t *testing.T) {
 	if _, loaded := r.svc.classifying.Load("panic-row"); loaded {
 		t.Fatal("panic retained registry entry")
 	}
-	r.svc.register.keys = nil
+	r.svc.register.boundary = nil
 	r.svc.classifyCommittedTurn("panic-row")
 	r.assertResult(t, "panic-row", "task", "new")
 }
@@ -221,7 +221,7 @@ func TestClassificationSingleFlightDiscardedLogs(t *testing.T) {
 	}
 	logs.Reset()
 	r.seedTurn(t, "failed-row")
-	r.svc.register.keys = func(context.Context, RegisterOwner) ([]MemoryMappingKey, error) { return nil, errors.New("fixture") }
+	r.svc.register.boundary = func(context.Context, RegisterOwner) (time.Time, error) { return time.Time{}, errors.New("fixture") }
 	r.svc.classifyCommittedTurn("failed-row")
 	if !strings.Contains(logs.String(), "voice_routing id=failed-row failed=true storage_error=false") || !strings.Contains(logs.String(), "level=error voice_routing_failure id=failed-row error_kind=routing_or_storage") {
 		t.Fatalf("winning error logs changed: %s", logs.String())

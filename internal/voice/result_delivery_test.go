@@ -491,7 +491,7 @@ func TestRegisterIsNeverCalledInsideATransaction(t *testing.T) {
 		if _, err := r.store.DB().Exec(`UPDATE voice_turns SET content=content WHERE id='turn-lock'`); err != nil {
 			t.Error(err)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"route":"recall","restatement":""}`})
+		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"route":"recall","restatement":"Retrieve the user's saved personal information."}`})
 	}))
 	defer model.Close()
 	register, err := NewRegister(r.store.DB(), RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "compact-fixture", APIKey: "fixture"}, CompactCharacters: 1000})

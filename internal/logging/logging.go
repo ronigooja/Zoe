@@ -90,6 +90,9 @@ func ModelCallFromContext(ctx context.Context, component string) ModelCall {
 }
 func (c ModelCall) ID() string { return c.id }
 func (c ModelCall) fields() string {
+	if c.parent == "" {
+		return fmt.Sprintf("component=%s call_id=%s attempt=%d user_hash=%q", c.component, c.id, c.attempt, c.hash)
+	}
 	return fmt.Sprintf("component=%s call_id=%s attempt=%d parent_call_id=%q user_hash=%q", c.component, c.id, c.attempt, c.parent, c.hash)
 }
 func (c ModelCall) Input(instructions, input string) {

@@ -89,7 +89,9 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 				}
 				if register {
 					restatement := "none"
-					if route != "task" {
+					if route == "memory_write" || route == "recall" {
+						restatement = "The user refers to their preferred airport."
+					} else if route != "task" {
 						restatement = ""
 					}
 					output = fmt.Sprintf(`{"route":%q,"restatement":%q}`, route, restatement)
