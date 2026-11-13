@@ -2,11 +2,11 @@ package voice
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"time"
 
 	"github.com/ronigooja/Zoe/internal/logging"
+	"github.com/ronigooja/Zoe/internal/memoryapi"
 )
 
 // memoryWriteHolding identifies at-most-once writes in the shared durable queue.
@@ -217,6 +217,5 @@ func (s *Service) recallAnswer(ctx context.Context, workspace, owner, question s
 
 // memoryUser uses a JSON tuple so workspace/subject separators cannot collide.
 func memoryUser(workspace, owner string) string {
-	data, _ := json.Marshal([]string{workspace, owner})
-	return string(data)
+	return memoryapi.User(workspace, owner)
 }

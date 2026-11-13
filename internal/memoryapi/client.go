@@ -108,3 +108,18 @@ func (c *Client) Write(ctx context.Context, user, sentence, restatement string) 
 	}
 	return c.call(ctx, "write", map[string]string{"user": user, "sentence": sentence, "restatement": restatement}, &out)
 }
+
+func (c *Client) Ingest(ctx context.Context, user, text string) (added, updated int, err error) {
+	var out struct {
+		Added   int `json:"added"`
+		Updated int `json:"updated"`
+	}
+	err = c.call(ctx, "ingest", map[string]string{"user": user, "text": text}, &out)
+	return out.Added, out.Updated, err
+}
+
+// User uses a JSON tuple so workspace/owner separators cannot collide.
+func User(workspace, owner string) string {
+	data, _ := json.Marshal([]string{workspace, owner})
+	return string(data)
+}

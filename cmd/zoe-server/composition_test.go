@@ -23,6 +23,9 @@ import (
 )
 
 func TestComposedServerRegistersDerivedWorkerCredentialAndFailsClosedWithoutVoiceGateway(t *testing.T) {
+	// Worker-only model configuration must not be parsed by Go startup.
+	t.Setenv("ZOE_MEM0_LLM_BASE_URL", "invalid worker-only URL")
+	t.Setenv("ZOE_MEM0_LLM_MODEL", "")
 	ctx := context.Background()
 	store, err := storage.Open(ctx, storage.Config{Path: ":memory:"})
 	if err != nil {

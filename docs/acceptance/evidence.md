@@ -22,6 +22,12 @@ These retained observations still support current implementation conclusions. Ea
 
 ## Current OpenCode acceptance gates
 
+### Worker memory ingestion component checks - 2026-11-13
+
+Source: `feat/memory-batch-ingest`, based on `163fb5a` or later; local macOS with synthetic fixtures only. `go build ./...` and `go vet ./internal/memory ./internal/memoryapi ./internal/voice ./cmd/zoe-server` passed. One-package targeted `nice -n 10 go test ... -count=1` invocations passed for memory interval/chunking/disabled-client tests, memory API protocol/logging and migration-222 fresh/upgrade tests, server memory-API/composition tests, and voice recall/write/register-memory tests. Formatting and whitespace checks passed.
+
+The new SQLite scheduler tests (`TestMemoryIngestTranscriptTasksWindowAndCadence`, `TestMemoryIngestFailureRetriesAllChunksAndSuccessOnlyCAS`, `TestMemoryIngestCASRejectsConcurrentAdvance`, `TestMemoryIngestBoundaryReadAndWindow`) are added but intentionally not run locally under the coordinator's known `SQLITE_BUSY` restriction on `internal/memory`; existing SQLite memory and runner tests were not run. The coordinator must run them and the full suite on Linux. No CI, deployment, real worker, provider, or end-to-end acceptance is established. Worker model menu entries and environment remain unchanged; Go startup no longer reads that model configuration.
+
 Voice handoff follow-up on `aa18a08`: [local component investigation](evidence/voice-live-handoff-2026-11-06.md) reproduces suppressed high-impact question delivery, missing Steward read-as-is wording, and delayed classification creating a task instead of recall. The follow-up moves bounded waiting outside the transaction and removes non-task Steward latency. Scoped spoken high-impact authorization and live acceptance remain open.
 
 The Zoe-owned runtime remains unaccepted until evidence covers: streaming provider finish and token/usage propagation through the bridge; in-flight crash recovery without duplicate effects; and runner-enforced tool-step/time/budget limits. The four uncertain historical runs were abandoned by operator decision, so no migration gate remains for them. These are open gates, not claims established by the historical records below.

@@ -17,7 +17,7 @@ Milestones sequence delivery without reducing product scope. The [acceptance mat
 
 ## Current status and blockers
 
-Call-end summary jobs and the in-process worker have focused synthetic coverage; [the generation contract](architecture/decisions/0012-voice-conversation-layer.md#stored-call-summary-generation) defines settling, retries, and bounded regeneration. Live model, gateway timing, hosted integration, and recall acceptance remain open.
+Scheduled memory ingestion now sends transcript/task text to the Python worker, replacing Go extraction and staged writes; see the [current contract](architecture.md#memory-retrieval-and-context). Local non-SQLite scheduler, HTTP client, and migration checks exist; SQLite scheduler integration, Linux full-suite, and real Mem0/Qdrant acceptance remain open. Old memory tables are retained for later removal. Call-summary generation is not the current ingestion path.
 
 Roster-aware Steward task management and the compatible Worker executor profile are
 deployed on `bb07671`; see the [contract and current limitations](architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager).
