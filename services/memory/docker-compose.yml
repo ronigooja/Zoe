@@ -17,10 +17,9 @@ services:
       context: ../..
       dockerfile: services/memory/Dockerfile
     environment:
-      ZOE_CONTROL_URL: ${ZOE_CONTROL_URL:?set ZOE_CONTROL_URL}
-      ZOE_RUNNER_TOKEN: ${ZOE_RUNNER_TOKEN:?set ZOE_RUNNER_TOKEN}
+      ZOE_MEMORY_API_TOKEN_FILE: /run/secrets/memory_api_token
+      ZOE_MEMORY_API_ADDR: 0.0.0.0:8788
       ZOE_QDRANT_URL: http://qdrant:6333
-      ZOE_QDRANT_COLLECTION: zoe_memory_v1_paraphrase_multilingual_minilm_l12_384_faf4aa42
       ZOE_MEM0_COLLECTION: zoe_mem0_v1
       ZOE_MEM0_LLM_PROVIDER: ${ZOE_MEM0_LLM_PROVIDER:-openai}
       ZOE_MEM0_LLM_MODEL: ${ZOE_MEM0_LLM_MODEL:?set ZOE_MEM0_LLM_MODEL}
@@ -30,9 +29,15 @@ services:
       ZOE_MEM0_HISTORY_DB: /var/lib/zoe/memory/mem0-history.sqlite
     depends_on:
       - qdrant
+    secrets:
+      - memory_api_token
     volumes:
       - type: bind
         source: ${ZOE_MEMORY_DATA_ROOT:?set a private memory data root}
         target: /var/lib/zoe/memory
         bind:
           create_host_path: false
+
+secrets:
+  memory_api_token:
+    file: ${ZOE_MEMORY_API_TOKEN_FILE:?set ZOE_MEMORY_API_TOKEN_FILE}

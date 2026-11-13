@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from .person_memory import MemoryAPIError, PersonMemory, check_deadline
-from .responses_llm import unaccounted_sync_call
 
 LOG = logging.getLogger("zoe.memory.api")
 MAX_BODY_BYTES = 64 * 1024
@@ -109,8 +108,7 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
             if set(body) != {"user", "text"}:
                 raise MemoryAPIError(400, "request_invalid")
             text = _required_text(body, "text")
-            with unaccounted_sync_call():
-                return self.server.backend.ingest(user, text, self.deadline)
+            return self.server.backend.ingest(user, text, self.deadline)
         if self.path.endswith("/search"):
             if set(body) - {"user", "query", "top_k"}:
                 raise MemoryAPIError(400, "request_invalid")
@@ -124,8 +122,7 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
                 raise MemoryAPIError(400, "request_invalid")
             sentence = _required_text(body, "sentence")
             restatement = _required_text(body, "restatement")
-            with unaccounted_sync_call():
-                return self.server.backend.write(user, sentence, restatement, self.deadline)
+            return self.server.backend.write(user, sentence, restatement, self.deadline)
         if set(body) != {"user"}:
             raise MemoryAPIError(400, "request_invalid")
         return self.server.backend.delete_all(user, self.deadline)
@@ -174,21 +171,16 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
                      (time.monotonic() - started) * 1000)
 
 
-def start_memory_api(controlled: Any) -> MemoryAPIServer | None:
+def create_memory_api(controlled: Any) -> MemoryAPIServer:
     token_file = os.environ.get("ZOE_MEMORY_API_TOKEN_FILE", "")
     if not token_file:
-        LOG.info("memory_api disabled: ZOE_MEMORY_API_TOKEN_FILE is unset")
-        return None
+        raise ValueError("ZOE_MEMORY_API_TOKEN_FILE is required")
     token = Path(token_file).read_text(encoding="utf-8").strip()
     if not token or "\n" in token or "\r" in token:
         raise ValueError("memory API token file must contain one nonempty token")
-    if controlled is None:
-        raise ValueError("memory API is unavailable in deletion-only mode")
     address = os.environ.get("ZOE_MEMORY_API_ADDR", "0.0.0.0:8788")
     host, port = address.rsplit(":", 1)
     timeout = float(os.environ.get("ZOE_MEMORY_API_TIMEOUT_SECONDS", "60"))
     if not 0 < timeout <= 120:
         raise ValueError("memory API timeout must be positive and at most 120 seconds")
-    server = MemoryAPIServer((host, int(port)), PersonMemory(controlled.memory), token, timeout)
-    threading.Thread(target=server.serve_forever, name="memory-api", daemon=True).start()
-    return server
+    return MemoryAPIServer((host, int(port)), PersonMemory(controlled.memory), token, timeout)

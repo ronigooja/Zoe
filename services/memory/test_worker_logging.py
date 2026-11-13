@@ -18,14 +18,14 @@ class WorkerLoggingPrivacyTests(unittest.TestCase):
         try:
             configure_logging()
             logging.getLogger("mem0.memory.main").info("Updating memory with data=%r", "synthetic-private-marker")
-            logging.getLogger("zoe.memory.worker").info("job status kind=%s", "extract")
+            logging.getLogger("zoe.memory.worker").info("memory API status=%s", "ready")
         finally:
             root.removeHandler(handler)
             root.setLevel(previous_level)
 
         output = stream.getvalue()
         self.assertNotIn("synthetic-private-marker", output)
-        self.assertIn("job status kind=extract", output)
+        self.assertIn("memory API status=ready", output)
 
 
 if __name__ == "__main__":
