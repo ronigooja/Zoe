@@ -12,9 +12,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from services.memory.memory_api import MemoryAPIServer, start_memory_api
-from services.memory.person_memory import PersonMemory, WRITE_INSTRUCTIONS, person_user_id
+from services.memory.person_memory import INGEST_INSTRUCTIONS, PersonMemory, WRITE_INSTRUCTIONS, person_user_id
 from services.memory.worker import configure_logging
-from services.memory.test_model_call_accounting import _ResponsesClient, _adapter
+from services.memory.test_model_call_accounting import _ControlAPI, _ResponsesClient, _adapter
+from services.memory.responses_llm import reset_model_call_context, set_model_call_context
 
 
 class FakeMemory:
@@ -49,9 +50,21 @@ class FakeMemory:
         return {"results": [{"id": item.id, "memory": item.payload["data"], "score": .8}
                             for item in self.list(filters=filters, top_k=top_k)[0]]}
 
-    def add(self, text, *, user_id, infer):
-        assert infer is False
+    def add(self, text, *, user_id, infer, prompt=None):
         self.add_calls.append((text, user_id, infer))
+        if infer:
+            raw = self.llm.generate_response([
+                {"role": "system", "content": prompt}, {"role": "user", "content": text},
+            ], response_format={"type": "json_object"})
+            results = []
+            for item in json.loads(raw).get("memory", []):
+                memory_id = f"m{len(self.records) + 1}"
+                self.vector_store.insert(vectors=[[]], ids=[memory_id],
+                                         payloads=[{"user_id": user_id, "data": item["text"]}])
+                self.db.connection.execute("INSERT INTO history VALUES (?,?)", (memory_id, item["text"]))
+                results.append({"id": memory_id, "memory": item["text"], "event": "ADD"})
+            self.db.connection.commit()
+            return {"results": results}
         memory_id = f"m{len(self.add_calls)}"
         self.vector_store.insert(vectors=[[]], ids=[memory_id], payloads=[{"user_id": user_id, "data": text}])
         self.db.connection.execute("INSERT INTO history VALUES (?,?)", (memory_id, text))
@@ -114,6 +127,122 @@ class MemoryAPITests(unittest.TestCase):
         self.assertEqual(self.request("/v1/memory/search", {"user": "u", "query": "a" * 65536})[0], 413)
         for top_k in (0, 21, True, "8"):
             self.assertEqual(self.request("/v1/memory/search", {"user": "u", "query": "q", "top_k": top_k})[0], 400)
+
+    def test_ingest_auth_validation_and_empty_extraction(self):
+        body = {"user": "u", "text": "transcript"}
+        for token in (None, "wrong-token"):
+            self.assertEqual(self.request("/v1/memory/ingest", body, token=token),
+                             (401, {"error_kind": "unauthorized"}))
+        for text in ("", " \n\t", None, 1, [], {}):
+            self.assertEqual(self.request("/v1/memory/ingest", {"user": "u", "text": text}),
+                             (400, {"error_kind": "request_invalid"}))
+        for invalid in ({"user": "u"}, {**body, "extra": True}, {"user": " ", "text": "t"}):
+            self.assertEqual(self.request("/v1/memory/ingest", invalid)[0], 400)
+        self.assertEqual(self.memory.add_calls, [])
+        self.memory.llm.generate_response.assert_not_called()
+        self.assertEqual(self.request("/v1/memory/ingest", body), (200, {"added": 0, "updated": 0}))
+        self.assertEqual(self.memory.add_calls, [("transcript", person_user_id("u"), True)])
+
+    def test_ingest_body_limit_is_route_specific(self):
+        body = {"user": "u", "text": ""}
+        overhead = len(json.dumps(body).encode())
+        body["text"] = "x" * (256 * 1024 - overhead)
+        self.assertEqual(self.request("/v1/memory/ingest", body)[0], 200)
+        body["text"] += "x"
+        self.assertEqual(self.request("/v1/memory/ingest", body), (413, {"error_kind": "body_too_large"}))
+        for path, body in (
+            ("search", {"user": "u", "query": "x" * 65536}),
+            ("write", {"user": "u", "sentence": "x" * 65536, "restatement": "r"}),
+            ("delete-all", {"user": "x" * 65536}),
+        ):
+            self.assertEqual(self.request("/v1/memory/" + path, body)[0], 413)
+
+    def test_ingest_counts_events_and_calls_add_once(self):
+        result = {"results": [{"event": event} for event in ("ADD", "UPDATE", "ADD", "DELETE", "NONE")]}
+        with patch.object(self.memory, "add", return_value=result) as add:
+            self.assertEqual(self.request("/v1/memory/ingest", {"user": "u", "text": "transcript"}),
+                             (200, {"added": 2, "updated": 1}))
+        add.assert_called_once_with("transcript", user_id=person_user_id("u"), infer=True,
+                                    prompt=INGEST_INSTRUCTIONS)
+
+    def test_ingest_person_isolation_and_ownership_history(self):
+        self.memory.llm.generate_response.return_value = '{"memory":[{"text":"private-fact"}]}'
+        for user in ("a", "b"):
+            self.assertEqual(self.request("/v1/memory/ingest", {"user": user, "text": "transcript"}),
+                             (200, {"added": 1, "updated": 0}))
+        self.assertEqual(self.request("/v1/memory/search", {"user": "c", "query": "q"})[1], {"items": []})
+        self.assertEqual(self.request("/v1/memory/search", {"user": "a", "query": "q"})[1]["items"][0]["id"], "m1")
+        self.assertEqual(self.request("/v1/memory/search", {"user": "b", "query": "q"})[1]["items"][0]["id"], "m2")
+        self.assertEqual(self.request("/v1/memory/delete-all", {"user": "a"}), (200, {"deleted": True}))
+        self.assertEqual(list(self.memory.records), ["m2"])
+        self.assertEqual(self.memory.db.connection.execute("SELECT memory_id FROM history").fetchall(), [("m2",)])
+        self.assertEqual(self.memory.db.connection.execute(
+            "SELECT user_id,memory_id FROM zoe_person_memory_ownership").fetchall(), [(person_user_id("b"), "m2")])
+
+    def test_ingest_production_adapter_sync_context_and_failure_cleanup(self):
+        client = _ResponsesClient(SimpleNamespace(output_text='{"memory":[{"text":"private-fact"}]}'))
+        self.memory.llm = _adapter(client)
+        body = {"user": "u", "text": "transcript"}
+        self.assertEqual(self.request("/v1/memory/ingest", body,
+                                      headers={"X-Zoe-Memory-Job-ID": "ignored", "X-Zoe-Memory-Job-Attempt": "invalid"}),
+                         (200, {"added": 1, "updated": 0}))
+        self.assertEqual(client.calls, 1)
+        self.assertEqual(client.retry_values, [0])
+        self.assertGreater(client.last_request["timeout"], 0)
+        self.assertLessEqual(client.last_request["timeout"], 2)
+        with self.assertRaisesRegex(RuntimeError, "unaccounted dispatch"):
+            self.memory.llm.generate_response([])
+        client.error = RuntimeError("private-error secret-marker")
+        with self.assertLogs("zoe.memory.api", level="INFO") as logs:
+            self.assertEqual(self.request("/v1/memory/ingest", body), (502, {"error_kind": "backend_unavailable"}))
+        output = "\n".join(logs.output)
+        self.assertIn("component=memory_ingest status=error error_kind=backend_unavailable", output)
+        self.assertNotIn("private-error", output)
+        self.assertNotIn("secret-marker", output)
+        with self.assertRaisesRegex(RuntimeError, "unaccounted dispatch"):
+            self.memory.llm.generate_response([])
+        self.assertEqual(client.calls, 2)
+
+    def test_ingest_content_debug_only_and_deadline(self):
+        self.memory.llm.generate_response.return_value = '{"memory":[{"text":"private-fact"}]}'
+        for level in ("INFO", "DEBUG"):
+            with self.assertLogs("zoe.memory.api", level=level) as logs:
+                self.assertEqual(self.request("/v1/memory/ingest", {"user": "workspace/owner", "text": "private-transcript"})[0], 200)
+            output = "\n".join(logs.output)
+            for content in ("private-transcript", "private-fact", INGEST_INSTRUCTIONS):
+                self.assertEqual(content in output, level == "DEBUG")
+            for private in ("secret-marker", "workspace/owner"):
+                self.assertNotIn(private, output)
+            self.assertIn("memory_api request kind=ingest status=200 elapsed_ms=", output)
+            self.assertIn("memory_api llm_call component=memory_ingest status=ok error_kind=none elapsed_ms=", output)
+        self.server.request_timeout = .05
+        def slow(*args, **kwargs):
+            time.sleep(.15)
+            return {"results": []}
+        with patch.object(self.memory, "add", side_effect=slow):
+            self.assertEqual(self.request("/v1/memory/ingest", {"user": "u", "text": "transcript"}),
+                             (504, {"error_kind": "deadline_exceeded"}))
+            time.sleep(.2)
+
+    def test_ingest_sync_context_never_bypasses_job_budget(self):
+        api = _ControlAPI(dispatch_allowed=False)
+        client = _ResponsesClient()
+        self.memory.llm = _adapter(client)
+        original_add = self.memory.add
+
+        def accounted_add(*args, **kwargs):
+            token = set_model_call_context(api, {"id": "job-1", "attempt": 1})
+            try:
+                return original_add(*args, **kwargs)
+            finally:
+                reset_model_call_context(token)
+
+        with patch.object(self.memory, "add", side_effect=accounted_add):
+            self.assertEqual(self.request("/v1/memory/ingest", {"user": "u", "text": "transcript"}),
+                             (502, {"error_kind": "backend_unavailable"}))
+        self.assertEqual(client.calls, 0)
+        self.assertEqual([event[0] for event in api.events], ["reserve"])
+        self.assertEqual(self.memory.records, {})
 
     def test_search_no_llm_and_person_isolation(self):
         self.memory.add("private-fact", user_id=person_user_id("workspace/owner"), infer=False)

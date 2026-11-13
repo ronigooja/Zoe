@@ -47,7 +47,7 @@ def reset_model_call_context(token: Token[ModelCallContext | None]) -> None:
 
 @contextmanager
 def unaccounted_sync_call():
-    """Only the synchronous HTTP write handler may opt out of job accounting."""
+    """Only synchronous HTTP write and ingest handlers may opt out of job accounting."""
     token = _unaccounted_sync_call.set(True)
     try:
         yield

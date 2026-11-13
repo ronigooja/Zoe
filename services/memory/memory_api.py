@@ -17,6 +17,7 @@ from .responses_llm import unaccounted_sync_call
 
 LOG = logging.getLogger("zoe.memory.api")
 MAX_BODY_BYTES = 64 * 1024
+MAX_INGEST_BODY_BYTES = 256 * 1024
 
 
 def _required_text(body: dict[str, Any], key: str) -> str:
@@ -78,7 +79,8 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
             size = int(self.headers["Content-Length"])
         except (ValueError, TypeError):
             raise MemoryAPIError(400, "request_invalid") from None
-        if size > MAX_BODY_BYTES:
+        limit = MAX_INGEST_BODY_BYTES if self.path == "/v1/memory/ingest" else MAX_BODY_BYTES
+        if size > limit:
             raise MemoryAPIError(413, "body_too_large")
         if size < 0:
             raise MemoryAPIError(400, "request_invalid")
@@ -98,11 +100,17 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
         if self.command == "GET" and self.path == "/healthz":
             return self.server.backend.health(self.deadline)
         if self.command != "POST" or self.path not in {
-            "/v1/memory/search", "/v1/memory/write", "/v1/memory/delete-all",
+            "/v1/memory/search", "/v1/memory/write", "/v1/memory/ingest", "/v1/memory/delete-all",
         }:
             raise MemoryAPIError(404, "not_found")
         body = self._body()
         user = _required_text(body, "user")
+        if self.path.endswith("/ingest"):
+            if set(body) != {"user", "text"}:
+                raise MemoryAPIError(400, "request_invalid")
+            text = _required_text(body, "text")
+            with unaccounted_sync_call():
+                return self.server.backend.ingest(user, text, self.deadline)
         if self.path.endswith("/search"):
             if set(body) - {"user", "query", "top_k"}:
                 raise MemoryAPIError(400, "request_invalid")
@@ -127,7 +135,7 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
         status = 500
         # Only fixed labels reach INFO, including for attacker-controlled URLs.
         kind = {"/healthz": "health", "/v1/memory/search": "search", "/v1/memory/write": "write",
-                "/v1/memory/delete-all": "delete_all"}.get(self.path, "unknown")
+                "/v1/memory/ingest": "ingest", "/v1/memory/delete-all": "delete_all"}.get(self.path, "unknown")
         try:
             authorization = self.headers.get("Authorization", "").encode("utf-8")
             if len(self.headers.get_all("Authorization", [])) != 1 or not hmac.compare_digest(
