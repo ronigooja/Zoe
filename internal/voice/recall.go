@@ -125,8 +125,7 @@ func recallSpeech(text string) string {
 	if strings.ContainsAny(text, "*#`[]<>_~|") {
 		text = recallUnavailable
 	}
-	text = boundedResultText(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		text = recallUnavailable
 	}
 	return text

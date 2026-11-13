@@ -53,5 +53,5 @@ func (s *Service) memoryAnswer(ctx context.Context, workspace, owner, question s
 	if r.Status != "answer" || strings.TrimSpace(r.Text) == "" || strings.ContainsAny(r.Text, "*#`[]<>_~|") {
 		return fail(n, "invalid_answer")
 	}
-	return "保存的笔记里记着：" + boundedResultText(r.Text), n, "answer"
+	return "保存的笔记里记着：" + r.Text, n, "answer"
 }

@@ -24,7 +24,7 @@ type scoredTaskCandidate struct {
 
 const candidateColumns = `t.id,coalesce(t.title,''),t.status,t.created_at,coalesce(t.finished_at,''),
 CASE WHEN t.status IN ('waiting','awaiting_user') AND t.interaction_state IN ('awaiting_message','explicit_confirmation') THEN coalesce(t.interaction_question,'') ELSE '' END,
-substr(coalesce(t.result,''),1,600)`
+coalesce(t.result,'')`
 
 // taskCandidates retrieves bounded lexical candidates across calls. Ranking chooses
 // membership; the final facts are newest first. It performs no writes or inference.
@@ -88,7 +88,7 @@ ORDER BY julianday(t.created_at) DESC,t.id DESC LIMIT 5`, workspace, owner, work
 			return nil, err
 		}
 		// A term table avoids SQL expression/parameter limits. Score every eligible
-		// task, but fetch result snippets only for the bounded top-ranked set.
+		// task, but fetch full results only for the bounded top-ranked set.
 		// Reserve enough rows to allow for overlap with the always-include set.
 		matches, err := read(`WITH scored AS MATERIALIZED (
 SELECT t.id,t.created_at,(SELECT sum(
@@ -124,7 +124,7 @@ ORDER BY r.score DESC,julianday(t.created_at) DESC,t.id DESC`, string(encodedPat
 	})
 	var out []taskCandidate
 	for _, c := range selected {
-		rows, err := q.QueryContext(ctx, `SELECT substr(coalesce(content,''),1,300) FROM task_entries
+		rows, err := q.QueryContext(ctx, `SELECT coalesce(content,'') FROM task_entries
 WHERE workspace_id=? AND task_id=? AND kind='user_message'
 AND julianday(created_at)>julianday(?) AND julianday(created_at)<=julianday(?)
 ORDER BY julianday(created_at) DESC,id DESC LIMIT 3`, workspace, c.id, c.CreatedAt, stamp(now))

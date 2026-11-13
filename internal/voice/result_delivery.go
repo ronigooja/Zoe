@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
+	"unicode/utf8"
 )
 
 const resultDeliveryMaxAttempts = 3
@@ -17,20 +17,34 @@ const fastReplyLease = 30 * time.Second
 // resultDeliveryLease bounds how long a claimed delivery is hidden from other dispatchers.
 const resultDeliveryLease = 30 * time.Second
 
-func boundedResultText(text string) string {
-	var b strings.Builder
-	for _, r := range text {
-		if unicode.IsControl(r) {
-			r = ' '
+// appendContext preserves text and sends consecutive gateway-sized UTF-8 chunks.
+// A failed attempt stops immediately; the existing delivery retry resends all text.
+func (s *Service) appendContext(ctx context.Context, gateway, text string) (bool, string) {
+	if !utf8.ValidString(text) {
+		return false, "invalid_utf8"
+	}
+	if strings.TrimSpace(text) == "" {
+		return false, "empty_result"
+	}
+	for len(text) > 0 {
+		n := min(len(text), 8000)
+		for n < len(text) && !utf8.RuneStart(text[n]) {
+			n--
 		}
-		b.WriteRune(r)
+		body, _ := json.Marshal(map[string]string{"text": text[:n]})
+		resp, _, err := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions/"+url.PathEscape(gateway)+"/context", body)
+		if resp != nil {
+			resp.Body.Close()
+		}
+		if resp != nil && resp.StatusCode == http.StatusNotImplemented {
+			return false, "route_unsupported"
+		}
+		if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return false, "gateway_failed"
+		}
+		text = text[n:]
 	}
-	text = strings.Join(strings.Fields(b.String()), " ")
-	r := []rune(text)
-	if len(r) > 600 {
-		r = r[:600]
-	}
-	return strings.TrimSpace(string(r))
+	return true, ""
 }
 
 func (s *Service) resultDispatcher() {
@@ -230,18 +244,13 @@ func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session s
 		}
 		return
 	}
-	body, _ := json.Marshal(map[string]string{"text": boundedResultText(text)})
-	resp, _, callErr := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions/"+url.PathEscape(gateway)+"/context", body)
-	if resp != nil {
-		resp.Body.Close()
-	}
-	if callErr == nil && resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	ok, code := s.appendContext(ctx, gateway, text)
+	if ok {
 		_, _ = s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET status='delivered',voice_session_id=?,voice_generation=?,updated_at=? WHERE id=? AND status='pending'`, session, generation, s.now().UTC().Format(time.RFC3339Nano), id)
 		return
 	}
-	code := "gateway_failed"
-	if resp != nil && resp.StatusCode == http.StatusNotImplemented {
-		s.finishFastReply(id, "failed", "route_unsupported")
+	if code != "gateway_failed" {
+		s.finishFastReply(id, "failed", code)
 		return
 	}
 	s.retryFastReply(id, attempts+1, code)
@@ -279,9 +288,12 @@ func (s *Service) deliverResult(ctx context.Context, id, workspace, task, run, s
 		s.retryResult(id, attempt, "entry_missing")
 		return
 	}
-	text = boundedResultText(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		s.finishResult(id, "failed", "empty_result")
+		return
+	}
+	if !utf8.ValidString(text) {
+		s.finishResult(id, "failed", "invalid_utf8")
 		return
 	}
 	var session, gateway string
@@ -299,18 +311,12 @@ func (s *Service) deliverResult(ctx context.Context, id, workspace, task, run, s
 		s.finishResult(id, "skipped_stale", "stale_generation")
 		return
 	}
-	body, _ := json.Marshal(map[string]string{"text": text})
-	resp, _, callErr := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions/"+url.PathEscape(gateway)+"/context", body)
-	if resp != nil {
-		resp.Body.Close()
-	}
-	if callErr == nil && resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	ok, code := s.appendContext(ctx, gateway, text)
+	if ok {
 		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries SET status='delivered',voice_session_id=?,generation=?,updated_at=? WHERE entry_id=? AND status='pending'`, session, generation, s.now().UTC().Format(time.RFC3339Nano), id)
 		return
 	}
-	code := "gateway_failed"
-	if resp != nil && resp.StatusCode == http.StatusNotImplemented {
-		code = "route_unsupported"
+	if code != "gateway_failed" {
 		s.finishResult(id, "failed", code)
 		return
 	}

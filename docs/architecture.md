@@ -4,7 +4,7 @@ This document records the current architecture and its boundaries. It describes 
 
 ## Result delivery
 
-Assistant task results are durably recorded with their authoritative event. When voice account media is enabled, the voice package consumes those events with a durable cursor, creates idempotent delivery rows, and dispatches them to the owner's active voice session as a bounded, sanitized context append. Without a live call they remain available through the existing notification path. Whether the voice model actually SPEAKS the appended text is UNVERIFIED pending a live-call experiment.
+Assistant task results are durably recorded with their authoritative event. When voice account media is enabled, the voice package consumes those events with a durable cursor, creates idempotent delivery rows, and dispatches the full original text to the owner's active voice session under the [context delivery contract](architecture/decisions/0013-context-register.md#6-reports-and-latency). Without a live call they remain available through the existing notification path. Whether the voice model actually SPEAKS the appended text is UNVERIFIED pending a live-call experiment.
 
 ## System and authority
 

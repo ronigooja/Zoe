@@ -3,6 +3,7 @@ package voice
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ronigooja/Zoe/contracts"
@@ -19,7 +20,7 @@ func (m memoryModel) AnswerMemory(ctx context.Context, q string, items []contrac
 }
 
 func TestMemoryAnswerEvidenceFailures(t *testing.T) {
-	for _, mode := range []string{"answer", "empty", "not_found", "model_error", "invalid_answer", "context_error", "unconfigured"} {
+	for _, mode := range []string{"answer", "full_answer", "empty", "not_found", "model_error", "invalid_answer", "context_error", "unconfigured"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := Config{}
 			cfg.ContextAssembler = func(_ context.Context, p contracts.Principal, task, owner, query string, budget int) (contracts.MemoryContext, error) {
@@ -42,6 +43,8 @@ func TestMemoryAnswerEvidenceFailures(t *testing.T) {
 					return answer.Result{}, errors.New("private detail")
 				case "invalid_answer":
 					return answer.Result{Status: "need_transcript"}, nil
+				case "full_answer":
+					return answer.Result{Status: "answer", Text: " \n" + strings.Repeat("coffee 🙂\n\t", 2000) + "\x00 "}, nil
 				}
 				return answer.Result{Status: "answer", Text: "你喜欢咖啡。"}, nil
 			}}
@@ -53,6 +56,9 @@ func TestMemoryAnswerEvidenceFailures(t *testing.T) {
 			want := memoryUnavailable
 			if mode == "answer" {
 				want = "保存的笔记里记着：你喜欢咖啡。"
+			}
+			if mode == "full_answer" {
+				want = "保存的笔记里记着： \n" + strings.Repeat("coffee 🙂\n\t", 2000) + "\x00 "
 			}
 			if mode == "empty" || mode == "not_found" {
 				want = memoryNotFound

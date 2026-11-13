@@ -456,9 +456,6 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 			if reply == "" {
 				reply = stewardErrorSpeech
 			}
-			if runes := []rune(reply); len(runes) > 600 {
-				reply = string(runes[:600])
-			}
 			err := s.heldReplyTx(ctx, tx, cmd, p, reply)
 			if err == nil {
 				_, err = tx.ExecContext(ctx, `UPDATE voice_fast_replies SET intent_kind='task_report' WHERE session_id=? AND generation=? AND turn_id=?`, p.SessionID, p.Generation, p.TurnID)
@@ -509,11 +506,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 					}
 					return r, events, err
 				case "complete":
-					runes := []rune(result)
-					if len(runes) > 600 {
-						runes = runes[:600]
-					}
-					goal = content + "\n上一个任务的结果:\n" + string(runes)
+					goal = content + "\n上一个任务的结果:\n" + result
 				}
 			}
 		}

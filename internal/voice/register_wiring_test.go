@@ -57,6 +57,7 @@ func registerDisabledHTTPServer(t *testing.T, cfg Config) (*httptest.Server, *st
 }
 
 func TestRegisterHandoffRoutesAndActions(t *testing.T) {
+	report := "The task is queued. " + strings.Repeat("Full result 🙂\n", 1000)
 	for _, name := range []string{"disabled", "chat", "memory_write", "recall", "new", "none", "answer", "answer_stale", "cancel", "cancel_live", "cancel_complete", "cancel_failed", "cancel_canceled", "report", "report_empty", "attach_active", "attach_complete", "foreign", "attach_failed", "attach_canceled", "route_error", "choose_error", "no_match", "confirm", "decline"} {
 		t.Run(name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -84,7 +85,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 				}
 				output := fmt.Sprintf(`{"action":%q,"task":%q,"reply":""}`, action, selected)
 				if action == "report" {
-					output = fmt.Sprintf(`{"action":"report","task":%q,"reply":"The task is queued."}`, selected)
+					output = fmt.Sprintf(`{"action":"report","task":%q,"reply":%q}`, selected, report)
 				}
 				if register {
 					restatement := "none"
@@ -292,19 +293,19 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 					t.Fatal("live cancel claimed completion before runner acknowledgement")
 				}
 			case "report", "report_empty":
-				if count(`SELECT count(*) FROM voice_turns WHERE turn_id='current' AND report_text='The task is queued.'`) != 1 {
+				if count(`SELECT count(*) FROM voice_turns WHERE turn_id='current' AND report_text=?`, strings.TrimSpace(report)) != 1 {
 					t.Fatal("report reply was not isolated from the pending question")
 				}
 				want := 1
 				if name == "report_empty" {
 					want = 0
 				}
-				if count(`SELECT count(*) FROM tasks`) != want || count(`SELECT count(*) FROM voice_fast_replies WHERE intent_kind='task_report' AND text='The task is queued.'`) != 1 {
+				if count(`SELECT count(*) FROM tasks`) != want || count(`SELECT count(*) FROM voice_fast_replies WHERE intent_kind='task_report' AND text=?`, strings.TrimSpace(report)) != 1 {
 					t.Fatal("report did not hold model reply")
 				}
 			case "attach_complete":
-				if count(`SELECT count(*) FROM tasks`) != 2 || count(`SELECT count(*) FROM tasks WHERE id=? AND goal=?`, r.ResourceID, text+"\n上一个任务的结果:\n"+strings.Repeat("月", 600)) != 1 {
-					t.Fatal("completed attach lost bounded result")
+				if count(`SELECT count(*) FROM tasks`) != 2 || count(`SELECT count(*) FROM tasks WHERE id=? AND goal=?`, r.ResourceID, text+"\n上一个任务的结果:\n"+strings.Repeat("月", 700)) != 1 {
+					t.Fatal("completed attach lost full result")
 				}
 			default:
 				if count(`SELECT count(*) FROM tasks WHERE id=? AND status='queued' AND interaction_state='none'`, r.ResourceID) != 1 {

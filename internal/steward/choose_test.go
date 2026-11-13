@@ -29,18 +29,15 @@ const choiceNow = "2026-11-12T12:34:56Z"
 
 // Old Choose rejects the reply field, cannot report without a task, and omits now.
 // These HTTP-backed cases exercise the model wire contract, not a parser stub.
-func TestChooseReportReplyBoundsAndNoTask(t *testing.T) {
+func TestChooseReportFullReplyAndNoTask(t *testing.T) {
 	for _, request := range []string{"", "Original request"} {
 		for _, text := range []string{"  No such task was found. \n", " \t" + strings.Repeat("🙂é", 350) + "\n"} {
 			data, _ := json.Marshal(map[string]string{"action": "report", "task": request, "reply": text})
 			s := choiceServer(t, string(data), nil)
 			got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, []Candidate{{Request: "Original request"}})
 			s.Close()
-			want := []rune(strings.TrimSpace(text))
-			if len(want) > 600 {
-				want = want[:600]
-			}
-			if err != nil || got != (Choice{Action: ActionReport, Request: request, Reply: string(want)}) || !utf8.ValidString(got.Reply) {
+			want := strings.TrimSpace(text)
+			if err != nil || got != (Choice{Action: ActionReport, Request: request, Reply: want}) || !utf8.ValidString(got.Reply) {
 				t.Fatalf("choice=%+v err=%v", got, err)
 			}
 		}
@@ -183,8 +180,8 @@ func TestChooseCancelDuplicateRequestsPreserveNewestFirstInput(t *testing.T) {
 	}
 }
 
-func TestChooseInputNoAliasesRuneCapsAndOrder(t *testing.T) {
-	candidates := []Candidate{{Request: strings.Repeat("界", 401)}}
+func TestChooseInputNoAliasesFullFieldsAndOrder(t *testing.T) {
+	var candidates []Candidate
 	for i := 0; i < 12; i++ {
 		candidates = append(candidates, Candidate{
 			Request: strconv.Itoa(i) + strings.Repeat("界🙂", 150), Status: "active",
@@ -193,8 +190,8 @@ func TestChooseInputNoAliasesRuneCapsAndOrder(t *testing.T) {
 			Additions: []string{strings.Repeat("加🙂", 120), "second", "third", "fourth", "fifth", "sixth"},
 		})
 	}
-	// Exactly 400 runes remains usable and must not be shortened to 200.
-	candidates[1].Request = strings.Repeat("界🙂", 200)
+	// Requests longer than the old exclusion threshold remain usable verbatim.
+	candidates[1].Request = strings.Repeat("界🙂", 10000)
 	sentence, restatement := "private original sentence", "private restatement"
 	s := choiceServer(t, choiceReply("attach", candidates[1].Request), func(body []byte) {
 		var outer struct{ Input, Instructions string }
@@ -227,23 +224,23 @@ func TestChooseInputNoAliasesRuneCapsAndOrder(t *testing.T) {
 				t.Errorf("unexpected candidate fields=%d", len(task))
 			}
 			for field, want := range map[string]string{
-				"request": candidates[i+1].Request, "status": "active", "created_at": candidates[i+1].CreatedAt, "finished_at": candidates[i+1].FinishedAt,
-				"question": strings.Repeat("问🙂", 60), "result": strings.Repeat("果🙂", 150),
+				"request": candidates[i].Request, "status": "active", "created_at": candidates[i].CreatedAt, "finished_at": candidates[i].FinishedAt,
+				"question": candidates[i].Question, "result": candidates[i].Result,
 			} {
 				var got string
 				if err := json.Unmarshal(task[field], &got); err != nil || got != want || !utf8.ValidString(got) {
-					t.Errorf("candidate %d field %s not preserved/capped correctly", i, field)
+					t.Errorf("candidate %d field %s not preserved", i, field)
 				}
 			}
 			var additions []string
-			if err := json.Unmarshal(task["additions"], &additions); err != nil || len(additions) != 5 || additions[0] != strings.Repeat("加🙂", 100) || !utf8.ValidString(additions[0]) || additions[4] != "fifth" {
+			if err := json.Unmarshal(task["additions"], &additions); err != nil || len(additions) != 5 || additions[0] != candidates[i].Additions[0] || !utf8.ValidString(additions[0]) || additions[4] != "fifth" {
 				t.Errorf("candidate %d additions not capped correctly", i)
 			}
 		}
 	})
 	defer s.Close()
 	got, err := configured(t, s.URL, "").Choose(context.Background(), sentence, restatement, choiceNow, candidates)
-	if err != nil || got != (Choice{Action: ActionAttach, Request: candidates[1].Request, Dropped: 3}) {
+	if err != nil || got != (Choice{Action: ActionAttach, Request: candidates[1].Request, Dropped: 2}) {
 		t.Fatalf("choice=%+v err=%v", got, err)
 	}
 	if len(candidates[1].Additions) != 6 || utf8.RuneCountInString(candidates[1].Question) != 140 {
@@ -253,7 +250,7 @@ func TestChooseInputNoAliasesRuneCapsAndOrder(t *testing.T) {
 
 func TestChooseDroppedCandidatesCannotMatch(t *testing.T) {
 	overlong := strings.Repeat("🙂", 401)
-	for _, request := range []string{overlong, "excluded", strings.Repeat("🙂", 400)} {
+	for _, request := range []string{"9", "excluded", strings.Repeat("🙂", 400)} {
 		candidates := []Candidate{{Request: overlong}}
 		for i := 0; i < 10; i++ {
 			candidates = append(candidates, Candidate{Request: strconv.Itoa(i)})
@@ -262,7 +259,7 @@ func TestChooseDroppedCandidatesCannotMatch(t *testing.T) {
 		s := choiceServer(t, choiceReply("attach", request), nil)
 		got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, candidates)
 		s.Close()
-		if !errors.Is(err, ErrNoMatch) || errors.Is(err, ErrRequestTooLong) != (request == overlong) || got.Dropped != 2 {
+		if !errors.Is(err, ErrNoMatch) || got.Dropped != 2 {
 			t.Fatalf("dropped=%d err=%v", got.Dropped, err)
 		}
 	}

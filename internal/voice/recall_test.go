@@ -20,7 +20,7 @@ func (f recallModelFunc) Answer(ctx context.Context, q string, items []contracts
 }
 
 func TestRecallMemoryAndRegisterAnswer(t *testing.T) {
-	for _, mode := range []string{"answer", "not_found", "memory_only", "bounded", "empty", "context_error", "timeout"} {
+	for _, mode := range []string{"answer", "full_answer", "not_found", "memory_only", "bounded", "empty", "context_error", "timeout"} {
 		t.Run(mode, func(t *testing.T) {
 			now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
 			_, store, _ := handoffHTTPServerWithConfig(t, Config{})
@@ -67,6 +67,10 @@ func TestRecallMemoryAndRegisterAnswer(t *testing.T) {
 				output := `{"status":"answer","text":"你说过这件事。"}`
 				if mode == "not_found" {
 					output = `{"status":"not_found"}`
+				}
+				if mode == "full_answer" {
+					data, _ := json.Marshal(map[string]string{"status": "answer", "text": " \n" + strings.Repeat("garden 🙂\n\t", 2000) + "\x00 "})
+					output = string(data)
 				}
 				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": output})
 			}))
@@ -123,6 +127,9 @@ func TestRecallMemoryAndRegisterAnswer(t *testing.T) {
 			} else if status != "answer" {
 				t.Fatalf("status=%s text=%q", status, text)
 			}
+			if mode == "full_answer" && text != "对话记录里记着： \n"+strings.Repeat("garden 🙂\n\t", 2000)+"\x00 " {
+				t.Fatal("recall prefix or full answer was changed")
+			}
 		})
 	}
 }
@@ -132,5 +139,12 @@ func TestRecallSpeechRejectsMarkupAndIDs(t *testing.T) {
 		if got := recallSpeech(text); got != recallUnavailable {
 			t.Errorf("unsafe speech=%q", got)
 		}
+	}
+}
+
+func TestRecallSpeechPreservesFullText(t *testing.T) {
+	text := " \n" + strings.Repeat("garden 🙂\n\t", 2000) + "\x00 "
+	if got := recallSpeech(text); got != text {
+		t.Fatal("recall answer was rewritten or truncated")
 	}
 }

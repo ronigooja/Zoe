@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -287,24 +288,92 @@ func TestResultDeliveryConcurrentDispatchersSendOnce(t *testing.T) {
 	}
 }
 
-func TestResultDeliveryTextIsSanitizedAndBounded(t *testing.T) {
+func TestResultDeliveryTextIsPreserved(t *testing.T) {
 	r := newDeliveryRig(t)
-	long := strings.Repeat("天", 700)
-	r.setup(t, "line one\n\nline\ttwo\x00\x07 end "+long)
+	text := "  line one\n\nline\ttwo\x00\x07 end " + strings.Repeat("天", 700) + " \n"
+	r.setup(t, text)
 	r.seedCall(t, "s1", "user-1", 1)
 	r.run(t)
 	if r.posts.Load() != 1 {
 		t.Fatalf("posts=%d", r.posts.Load())
 	}
-	sent := strings.TrimSuffix(strings.TrimPrefix(r.texts[0], "Zoe result for the user: "), " Please tell them briefly.")
-	if strings.ContainsAny(sent, "\n\t\x00\x07") {
-		t.Fatalf("control characters leaked: %q", sent)
+	if r.texts[0] != text {
+		t.Fatal("result text was rewritten or truncated")
 	}
-	if !strings.HasPrefix(sent, "line one line two end ") {
-		t.Fatalf("whitespace not collapsed: %q", sent[:40])
+}
+
+func TestResultDeliveryLongTextChunks(t *testing.T) {
+	for _, text := range []string{strings.Repeat("a", 20000), strings.Repeat("界🙂é\n", 5000)} {
+		r := newDeliveryRig(t)
+		r.setup(t, text)
+		r.seedCall(t, "s1", "user-1", 1)
+		r.run(t)
+		assertContextChunks(t, r.texts, text)
+		if status, _, attempts := r.row(t, "entry-1"); status != "delivered" || attempts != 1 {
+			t.Fatalf("status=%s attempts=%d", status, attempts)
+		}
 	}
-	if n := len([]rune(sent)); n != 600 {
-		t.Fatalf("bounded text has %d runes, want 600", n)
+}
+
+func assertContextChunks(t *testing.T, chunks []string, want string) {
+	t.Helper()
+	if len(chunks) < 3 || strings.Join(chunks, "") != want {
+		t.Fatal("chunks did not preserve complete text in order")
+	}
+	for _, chunk := range chunks {
+		if len(chunk) == 0 || len(chunk) > 8000 || !utf8.ValidString(chunk) {
+			t.Fatalf("invalid chunk: bytes=%d", len(chunk))
+		}
+	}
+}
+
+func TestFastReplyLongTextChunks(t *testing.T) {
+	r := newDeliveryRig(t)
+	r.seedCall(t, "s1", "user-1", 1)
+	text := " \n\t" + strings.Repeat("界🙂", 10000) + "\x00\n "
+	at := r.now().Format(time.RFC3339Nano)
+	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('reply','default','s1',1,'turn',?,'pending',?,?,?)`, text, at, at, at)
+	r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, text, "task_report", 0)
+	assertContextChunks(t, r.texts, text)
+	var status string
+	if err := r.store.DB().QueryRow(`SELECT status FROM voice_fast_replies WHERE id='reply'`).Scan(&status); err != nil || status != "delivered" {
+		t.Fatalf("status=%s err=%v", status, err)
+	}
+}
+
+func TestAppendContextStopsOnChunkFailure(t *testing.T) {
+	for _, code := range []int{http.StatusBadGateway, http.StatusNotImplemented} {
+		var chunks []string
+		gw := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			var p struct{ Text string }
+			_ = json.NewDecoder(req.Body).Decode(&p)
+			chunks = append(chunks, p.Text)
+			if len(chunks) == 2 {
+				w.WriteHeader(code)
+			}
+		}))
+		_, svc := newVoiceTestService(t, Config{GatewayURL: gw.URL, GatewayAPIKey: "gw-key", HTTPClient: gw.Client()})
+		ok, got := svc.appendContext(context.Background(), "gw-session", strings.Repeat("x", 20000))
+		gw.Close()
+		want := "gateway_failed"
+		if code == http.StatusNotImplemented {
+			want = "route_unsupported"
+		}
+		if ok || got != want || len(chunks) != 2 {
+			t.Fatalf("ok=%v code=%s chunks=%d", ok, got, len(chunks))
+		}
+	}
+}
+
+func TestAppendContextRejectsInvalidOrEmptyText(t *testing.T) {
+	r := newDeliveryRig(t)
+	for _, text := range []string{"", " \n\t", string([]byte{0xff})} {
+		if ok, _ := r.svc.appendContext(context.Background(), "gw-session", text); ok {
+			t.Fatal("invalid or empty text accepted")
+		}
+	}
+	if r.posts.Load() != 0 {
+		t.Fatal("invalid or empty text posted")
 	}
 }
 

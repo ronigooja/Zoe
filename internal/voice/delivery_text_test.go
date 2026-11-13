@@ -19,9 +19,9 @@ func TestDeliveredResultIsPlainChineseText(t *testing.T) {
 				t.Fatalf("gateway posts=%d", r.posts.Load())
 			}
 			sent := r.texts[0]
-			assertPlainChineseControlText(t, sent, boundedResultText(text))
-			if !utf8.ValidString(sent) || len([]rune(sent)) > 600 {
-				t.Fatalf("invalid or unbounded result: bytes=%d runes=%d", len(sent), len([]rune(sent)))
+			assertPlainChineseControlText(t, sent, text)
+			if !utf8.ValidString(sent) || sent != text {
+				t.Fatalf("invalid or changed result: bytes=%d runes=%d", len(sent), len([]rune(sent)))
 			}
 			if status, _, attempts := r.row(t, "entry-1"); status != "delivered" || attempts != 1 {
 				t.Fatalf("status=%q attempts=%d", status, attempts)

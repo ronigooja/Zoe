@@ -241,7 +241,7 @@ func TestCandidatesFieldsAdditionsAndNullHandling(t *testing.T) {
 			t.Fatal(err)
 		}
 		if c.Request == "budget waiting" {
-			if c.Question != "Which budget?" || len([]rune(c.Result)) != 600 || len(c.Additions) != 3 || len([]rune(c.Additions[0])) != 300 || !strings.HasPrefix(c.Additions[0], "2") || !strings.HasPrefix(c.Additions[2], "4") {
+			if c.Question != "Which budget?" || c.Result != strings.Repeat("中", 650) || len(c.Additions) != 3 || c.Additions[0] != "2"+strings.Repeat("文", 350) || c.Additions[2] != "4"+strings.Repeat("文", 350) {
 				t.Fatalf("waiting facts=%+v", c)
 			}
 		} else if c.Request == "budget confirmation" {
