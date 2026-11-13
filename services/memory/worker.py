@@ -22,11 +22,17 @@ class Mem0ContentLogFilter(logging.Filter):
     """Mem0 2.2 logs memory contents at INFO and can echo them on failures."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        return not record.name.startswith("mem0")
+        return not record.name.startswith("mem0") or logging.getLogger().isEnabledFor(logging.DEBUG)
 
 
 def configure_logging() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    level = logging.DEBUG if os.environ.get("ZOE_LOG_LEVEL", "info").lower() == "debug" else logging.INFO
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.getLogger().setLevel(level)
+    # Transport debug logs may contain credentials. Content debugging is scoped
+    # to Zoe/Mem0 rather than HTTP libraries.
+    for name in ("httpx", "httpcore", "openai", "urllib3"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     for handler in logging.getLogger().handlers:
         if not any(isinstance(item, Mem0ContentLogFilter) for item in handler.filters):
             handler.addFilter(Mem0ContentLogFilter())
@@ -247,7 +253,16 @@ class DeletionOnlyAdapters:
 
 def main() -> None:
     configure_logging()
-    MemoryWorker(WorkerConfig.from_env()).run_forever()
+    from .memory_api import start_memory_api
+
+    worker = MemoryWorker(WorkerConfig.from_env())
+    server = start_memory_api(worker.mem0)
+    try:
+        worker.run_forever()
+    finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":
