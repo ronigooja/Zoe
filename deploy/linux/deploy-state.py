@@ -65,9 +65,9 @@ def output(command):
     return subprocess.check_output(command, stderr=subprocess.DEVNULL, text=True)
 
 
-def compose(release, env):
+def compose(release, env, file=None):
     return json.loads(output(['docker', 'compose', '--env-file', env, '-f',
-                              str(Path(release) / 'deploy-linux/docker-compose.yml'), 'config', '--format', 'json']))
+                              str(file or Path(release) / 'deploy-linux/docker-compose.yml'), 'config', '--format', 'json']))
 
 
 def env_names(path):
@@ -302,6 +302,8 @@ try:
             fail('service log verification failed')
         if kind == 'server' and not re.search(r'listening', text, re.I):
             fail('server listening log missing')
+    elif command == 'compose':
+        print(json.dumps(compose(*args)))
     elif command == 'qdrant-storage':
         print(qdrant_storage(*args))
     elif command == 'atomic-copy':

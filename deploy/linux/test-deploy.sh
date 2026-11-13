@@ -35,6 +35,44 @@ print('deployment log severity fixtures passed')
 PY
 }
 check_log_rules
+# Render real Compose files when the CLI is available; no daemon is needed.
+if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then
+  python3 - "$repo_root" <<'PY'
+import os, pathlib, re, subprocess, sys, tempfile
+import json
+repo = pathlib.Path(sys.argv[1])
+with tempfile.TemporaryDirectory() as directory:
+    env_file = pathlib.Path(directory)/'stack.env'
+    for relative in ['deploy/linux/docker-compose.yml', 'services/memory/docker-compose.yml']:
+        file = repo/relative
+        values = {name: 'fixture' for name in re.findall(r'\$\{([A-Z_0-9]+):\?', file.read_text())}
+        values['ZOE_MEMORY_DATA_ROOT'] = str(pathlib.Path(directory)/'memory')
+        env_file.write_text(''.join(name+'='+value+'\n' for name, value in values.items()))
+        # Do not let the developer's exported settings override this fixture.
+        env = {name: value for name, value in os.environ.items() if not name.startswith('ZOE_')}
+        rendered = subprocess.check_output([sys.executable, str(repo/'deploy/linux/deploy-state.py'),
+                                            'compose', str(repo), str(env_file), str(file)], env=env, text=True)
+        qdrant = json.loads(rendered)['services']['qdrant']
+        mounts = qdrant.get('volumes', [])
+        assert len(mounts) == 1, (relative, mounts)
+        mount = mounts[0]
+        assert mount['type'] == 'bind', (relative, mount)
+        assert mount['source'] == values['ZOE_MEMORY_DATA_ROOT']+'/qdrant', (relative, mount)
+        assert mount['target'] == '/qdrant/storage', (relative, mount)
+        # Compose omits false (the long-syntax bind default) in normalized JSON.
+        assert mount.get('bind', {}).get('create_host_path', False) is False, (relative, mount)
+        tmpfs = qdrant.get('tmpfs', [])
+        assert not any(path.split(':', 1)[0] == '/qdrant/storage' for path in tmpfs), relative
+        assert qdrant['environment']['QDRANT__STORAGE__SNAPSHOTS_PATH'] == '/qdrant/storage/snapshots', relative
+        if relative == 'deploy/linux/docker-compose.yml':
+            assert qdrant['user'] == '1000:1000' and qdrant['read_only'] is True, relative
+            assert int(qdrant['mem_limit']) == 2*1024*1024*1024, relative
+            assert len(tmpfs) == 1 and tmpfs[0].startswith('/tmp:'), (relative, tmpfs)
+print('Qdrant rendered Compose storage fixtures passed (both files)')
+PY
+else
+  echo 'SKIP Qdrant rendered Compose storage fixtures: docker compose CLI unavailable'
+fi
 # These read-only path checks also run on a non-root development host.
 python3 - "$repo_root/deploy/linux/deploy-state.py" <<'PY'
 import contextlib, io, json, pathlib, runpy, subprocess, sys, tempfile
