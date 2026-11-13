@@ -229,7 +229,7 @@ with tempfile.TemporaryDirectory() as directory:
         assert 'cannot determine' in str(error)
     else:
         raise AssertionError('missing runner paths accepted')
-    env.write_text('ZOE_MEMORY_RUNNER_TOKEN_FILE='+str(secrets_dir/'memory-runner-token')+'\n')
+    env.write_text('ZOE_RUNNER_TOKEN_FILE='+str(secrets_dir/'runner-token')+'\n')
     token.write_text('synthetic-token')
     token.chmod(0o600)
     real_stat = pathlib.Path.stat
@@ -295,7 +295,6 @@ memory_token.chmod(0o600)
 os.chown(memory_token, 65532, 65532)
 env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
        'ZOE_RUNNER_TOKEN_FILE': str(p/'secrets/runner-token'),
-       'ZOE_MEMORY_RUNNER_TOKEN_FILE': str(p/'secrets/memory-runner-token'),
        'ZOE_MEMORY_WORKER_IMAGE': 'ghcr.io/test/zoe-memory-worker@sha256:'+'3'*64,
        'ZOE_RUNNER_IMAGE': 'ghcr.io/test/zoe-runner@sha256:'+'4'*64,
        'ZOE_VOICE_UPSTREAM_ROUTE': 'avas', 'ZOE_STEWARD_TIMEOUT_MS': '30000',

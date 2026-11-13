@@ -836,7 +836,6 @@ func TestPrepareLifecycleFilesFreshTokensSetOwnersAndModes(t *testing.T) {
 	}
 	wantOwners := map[string][2]int{
 		filepath.Join(root, "secrets", "runner-token"):        {65532, 65532},
-		filepath.Join(root, "secrets", "memory-runner-token"): {65532, 65532},
 		filepath.Join(root, "secrets", "memory-api-token"):    {65532, 65532},
 		filepath.Join(root, "runner-secrets", "runner-token"): {4242, 4343},
 	}
@@ -890,10 +889,9 @@ func TestPrepareLifecycleFilesConvergesExistingRootOwnedTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string][]byte{
-		filepath.Join(secrets, "runner-token"):        []byte("existing-runner-token"),
-		filepath.Join(secrets, "memory-runner-token"): []byte("existing-memory-token"),
-		filepath.Join(secrets, "memory-api-token"):    []byte("existing-api-token"),
-		filepath.Join(runnerSecrets, "runner-token"):  []byte("existing-runner-token"),
+		filepath.Join(secrets, "runner-token"):       []byte("existing-runner-token"),
+		filepath.Join(secrets, "memory-api-token"):   []byte("existing-api-token"),
+		filepath.Join(runnerSecrets, "runner-token"): []byte("existing-runner-token"),
 	}
 	for path, data := range want {
 		if err := os.WriteFile(path, data, 0600); err != nil {
@@ -937,10 +935,9 @@ func TestPrepareLifecycleFilesConvergesExistingRootOwnedTokens(t *testing.T) {
 		}
 	}
 	wantOwners := map[string][2]int{
-		filepath.Join(secrets, "runner-token"):        {65532, 65532},
-		filepath.Join(secrets, "memory-runner-token"): {65532, 65532},
-		filepath.Join(secrets, "memory-api-token"):    {65532, 65532},
-		filepath.Join(runnerSecrets, "runner-token"):  {4242, 4343},
+		filepath.Join(secrets, "runner-token"):       {65532, 65532},
+		filepath.Join(secrets, "memory-api-token"):   {65532, 65532},
+		filepath.Join(runnerSecrets, "runner-token"): {4242, 4343},
 	}
 	wantOwners[filepath.Join(root, "data", "runner", "workspaces")] = [2]int{4242, 4343}
 	if len(owners) != len(wantOwners) {

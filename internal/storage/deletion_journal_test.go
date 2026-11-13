@@ -12,7 +12,7 @@ func TestDeletionJournalAppendIsContinuousIdempotentAndTamperEvident(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := DeletionRecord{Sequence: 1, LineageID: "lineage-a", Generation: 1, WorkspaceID: "default", EntityKind: "memory_claim", EntityID: "claim-a", EntityVersion: 2, ActorID: "owner", ReasonCode: "user_requested", DeletedAt: "2026-10-22T00:00:00Z", CleanupTargets: []string{"mem0", "qdrant"}}
+	record := DeletionRecord{Sequence: 1, LineageID: "lineage-a", Generation: 1, WorkspaceID: "default", EntityKind: "test_record", EntityID: "claim-a", EntityVersion: 2, ActorID: "owner", ReasonCode: "user_requested", DeletedAt: "2026-10-22T00:00:00Z", CleanupTargets: []string{"mem0", "qdrant"}}
 	first, err := journal.Append(record)
 	if err != nil {
 		t.Fatal(err)

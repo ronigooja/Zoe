@@ -27,9 +27,6 @@ public final class ZoeAppModel: ObservableObject {
     private let installationID: String
     private var connectionCleanupWarning: String?
 
-    @Published public private(set) var memoryClaims: [MemoryClaim] = []
-    @Published public private(set) var memoryMissing: [String] = []
-    @Published public private(set) var memoryConflicts: [String] = []
     @Published public private(set) var notifications: [NotificationRecord] = []
     @Published public private(set) var pushNotificationsEnabled: Bool
     @Published public private(set) var capabilityReleases: [CapabilityRelease] = []
@@ -73,9 +70,6 @@ public final class ZoeAppModel: ObservableObject {
     private var connectionGeneration = ConnectionGeneration()
     private var exportDownloadTask: Task<ScopedExportArtifact, Error>?
     private var exportRequestID: UUID?
-    private var memoryRefreshSequence: UInt64 = 0
-    private var memoryRefreshInFlight = false
-    private var pendingMemoryRefreshQuery: String?
     private var commandTitleByKey: [String: String] = [:]
     private var commandStatusByKey: [String: PendingCommandSummary.State] = [:]
 #if DEBUG
@@ -85,7 +79,6 @@ public final class ZoeAppModel: ObservableObject {
     var capabilityRevocationSubmitOverrideForTesting: ((Int64, JSONValue) async -> Bool)?
     var capabilityRevocationRefreshOverrideForTesting: (() async -> Void)?
     var exportDownloadOverrideForTesting: ((String) async throws -> ScopedExportArtifact)?
-    var memorySearchOverrideForTesting: ((String) async throws -> MemorySearchResult)?
     var taskEntriesFetchOverrideForTesting: ((String, String?) async throws -> TaskEntriesPage)?
     var snapshotFetchOverrideForTesting: (() async throws -> Snapshot)?
     var pendingCommandReadOverrideForTesting: (() async throws -> [PendingCommand])?
@@ -102,9 +95,6 @@ public final class ZoeAppModel: ObservableObject {
         exportArtifactConnectionEpoch = artifact == nil ? nil : connectionGeneration.value
     }
 
-    func setMemoryClaimsForTesting(_ claims: [MemoryClaim]) {
-        memoryClaims = claims
-    }
 
     func handleEventForTesting(_ envelope: EventEnvelope, expectedConnectionEpoch: UInt64? = nil) async {
         await handle(.event(envelope), expectedGeneration: expectedConnectionEpoch ?? connectionGeneration.value, sourceAPI: nil)
@@ -329,7 +319,6 @@ public final class ZoeAppModel: ObservableObject {
             if pushNotificationsEnabled { NativeNotificationDelivery.shared.registerForRemoteNotifications() }
             if let selectedTaskID { await loadTaskEntries(taskID: selectedTaskID) }
             guard generation == connectionGeneration.value else { return }
-            await refreshMemory()
             guard generation == connectionGeneration.value else { return }
             await refreshNotifications()
             guard generation == connectionGeneration.value else { return }
@@ -503,7 +492,6 @@ public final class ZoeAppModel: ObservableObject {
         if let syncLoop { Task { await syncLoop.cancel() } }
         syncLoop = nil
         cancelExport(status: nil)
-        clearVisibleMemory()
         snapshot = nil
         clearTaskContext(clearDrafts: clearDrafts)
         notifications = []
@@ -554,31 +542,7 @@ public final class ZoeAppModel: ObservableObject {
         return await send(kind: "project.create", payload: .object(payload))
     }
 
-    @discardableResult
-    public func remember(scope: String, scopeID: String?, subject: String, key: String, content: String) async -> Bool {
-        var scopePayload: [String: JSONValue] = ["kind": .string(scope)]
-        if let scopeID { scopePayload["id"] = .string(scopeID) }
-        let payload: JSONValue = .object([
-            "scope": .object(scopePayload),
-            "subject": .string(subject),
-            "key": .string(key),
-            "content": .string(content),
-            "source_kind": .string("user_note")
-        ])
-        let accepted = await send(kind: "memory.remember", payload: payload)
-        if accepted { await refreshMemory() }
-        return accepted
-    }
 
-    public func deleteMemory(_ memory: MemoryClaim) async {
-        let payload: JSONValue = .object([
-            "memory_id": .string(memory.id),
-            "expected_revision": .integer(memory.revision),
-            "reason": .string("user_requested")
-        ])
-        await send(kind: "memory.delete", expectedVersion: memory.revision, payload: payload)
-        await refreshMemory()
-    }
 
     public func markNotificationRead(_ notification: NotificationRecord) async {
         guard notification.readAt == nil else { return }
@@ -633,7 +597,6 @@ public final class ZoeAppModel: ObservableObject {
         do {
             try await refreshSnapshot()
             await refreshNotifications()
-            await refreshMemory()
         } catch {
             if snapshot == nil { setOffline(error) }
             else { setStale(uiText("A push wakeup arrived, but the latest server state could not be loaded.")) }
@@ -660,62 +623,6 @@ public final class ZoeAppModel: ObservableObject {
         }
     }
 
-    public func refreshMemory(query: String = "") async {
-        #if DEBUG
-        let testSearch = memorySearchOverrideForTesting
-        #else
-        let testSearch: ((String) async throws -> MemorySearchResult)? = nil
-        #endif
-        guard api != nil || testSearch != nil else { return }
-        if memoryRefreshInFlight {
-            memoryRefreshSequence &+= 1
-            pendingMemoryRefreshQuery = query
-            return
-        }
-        memoryRefreshInFlight = true
-        defer { memoryRefreshInFlight = false }
-
-        var nextQuery: String? = query
-        while let currentQuery = nextQuery {
-            nextQuery = nil
-            memoryRefreshSequence &+= 1
-            let requestSequence = memoryRefreshSequence
-            let generation = connectionGeneration.value
-            let capturedAPI = api
-            do {
-                let result: MemorySearchResult
-                if let testSearch { result = try await testSearch(currentQuery) }
-                else if let capturedAPI { result = try await capturedAPI.searchMemory(query: currentQuery) }
-                else { throw ZoeError.missingCredential }
-                guard requestSequence == memoryRefreshSequence,
-                      generation == connectionGeneration.value,
-                      testSearch != nil || capturedAPI === self.api else {
-                    nextQuery = pendingMemoryRefreshQuery
-                    pendingMemoryRefreshQuery = nil
-                    continue
-                }
-                memoryClaims = result.items
-                memoryMissing = result.missing
-                memoryConflicts = result.conflicts
-            } catch {
-                guard requestSequence == memoryRefreshSequence,
-                      generation == connectionGeneration.value,
-                      testSearch != nil || capturedAPI === self.api else {
-                    nextQuery = pendingMemoryRefreshQuery
-                    pendingMemoryRefreshQuery = nil
-                    continue
-                }
-                if let failure = error as? ZoeError,
-                   case let .http(status, _, _, _) = failure, status == 401 || status == 403 {
-                    clearMemoryAndPreparedExport(status: uiText("Memory access was denied; cached memory and the prepared export were cleared."))
-                } else {
-                    notice = uiText("Memory could not be refreshed.")
-                }
-            }
-            nextQuery = pendingMemoryRefreshQuery
-            pendingMemoryRefreshQuery = nil
-        }
-    }
 
     public func refreshCapabilities() async {
         guard let api else { return }
@@ -1880,9 +1787,7 @@ public final class ZoeAppModel: ObservableObject {
                 setStale(uiText("The action was accepted, but the latest snapshot could not be loaded."))
             }
             if let taskID = selectedTaskID, outcome.receipt.kind.hasPrefix("task.") { await loadTaskEntries(taskID: taskID) }
-            if outcome.receipt.kind.hasPrefix("memory.") {
-                await reconcileRecoveredMemoryOutcome(outcome, expectedGeneration: generation, sourceAPI: api)
-            }
+
         } catch {
             guard isCurrentConnection(generation, sourceAPI: api) else { return }
             if isNeedsReview(error) {
@@ -1921,7 +1826,7 @@ public final class ZoeAppModel: ObservableObject {
                 if let failure = error as? ZoeError,
                    case let .http(status, _, _, _) = failure,
                    status == 401 || status == 403 {
-                    clearMemoryAndPreparedExport(status: uiText("Server access changed; cached memory and the prepared export were cleared."))
+                    clearPreparedExport(status: uiText("Server access changed; the prepared export was cleared."))
                 }
                 if Self.isAccessDenied(error) {
                     lockWorkspace(clearDrafts: false)
@@ -1939,7 +1844,7 @@ public final class ZoeAppModel: ObservableObject {
         }
         if let current = snapshot, current.authority != latest.authority {
             if Self.authorityIdentityChanged(from: current.authority, to: latest.authority) { clearTaskContext(clearDrafts: true) }
-            clearMemoryAndPreparedExport(status: uiText("Server authority changed; cached memory and the prepared export were cleared."))
+            clearPreparedExport(status: uiText("Server authority changed; the prepared export was cleared."))
         }
         snapshot = latest
         if let selectedTaskID, !latest.tasks.contains(where: { $0.id == selectedTaskID }) {
@@ -2453,11 +2358,6 @@ public final class ZoeAppModel: ObservableObject {
             if let artifact = exportArtifact, !Self.matchesExportAudit(envelope, artifact: artifact) {
                 cancelExport(status: uiText("A server change may have changed export access. The prepared copy was removed."))
             }
-            let memoryChanged = envelope.aggregateType == "memory" && ["memory.revised", "memory.deleted", "memory.proposal_accepted"].contains(envelope.type)
-            if memoryChanged {
-                await handleMemoryOrAuthorizationChange(status: uiText("Server memory changed; prepare a fresh export."))
-                guard isCurrentConnection(expectedGeneration, sourceAPI: sourceAPI), !Task.isCancelled else { return }
-            }
             setStale(uiText("A server change arrived; refreshing the authoritative snapshot."))
             do { try await refreshSnapshot() }
             catch {
@@ -2471,7 +2371,7 @@ public final class ZoeAppModel: ObservableObject {
             if envelope.type.hasPrefix("notification.") { await refreshNotifications() }
         case .snapshotRequired:
             clearTaskHistory()
-            clearMemoryAndPreparedExport(status: uiText("Server history expired; cached memory and the prepared export were cleared."))
+            clearPreparedExport(status: uiText("Server history expired; the prepared export was cleared."))
             setStale(uiText("The saved event cursor expired; loading a fresh snapshot."))
             do { try await refreshSnapshot() }
             catch {
@@ -2480,7 +2380,6 @@ public final class ZoeAppModel: ObservableObject {
             }
             guard isCurrentConnection(expectedGeneration, sourceAPI: sourceAPI), !Task.isCancelled else { return }
             if let taskID = selectedTaskID { await loadTaskEntries(taskID: taskID) }
-            await refreshMemory()
         }
     }
 
@@ -2488,10 +2387,6 @@ public final class ZoeAppModel: ObservableObject {
         generation == connectionGeneration.value && (sourceAPI == nil || sourceAPI === api)
     }
 
-    private func handleMemoryOrAuthorizationChange(status: String) async {
-        clearMemoryAndPreparedExport(status: status)
-        await refreshMemory()
-    }
 
     private func recoverPendingCommands(expectedGeneration: UInt64, sourceAPI: APIClient, coordinator: CommandCoordinator, workspaceID: String?) async {
         guard !isBusy else { return }
@@ -2504,7 +2399,6 @@ public final class ZoeAppModel: ObservableObject {
                 self.commandTitleByKey[outcome.receipt.idempotencyKey] = self.pendingCommandTitle(kind: outcome.command.kind, payload: outcome.command.payload)
                 self.commandStatusByKey[outcome.receipt.idempotencyKey] = .acceptedAwaitingSnapshot
                 await self.reloadPendingCommandSummaries()
-                await self.reconcileRecoveredMemoryOutcome(outcome, expectedGeneration: expectedGeneration, sourceAPI: sourceAPI)
             }, onWorkspaceMismatch: { [weak self] command in
                 guard let self, self.isCurrentConnection(expectedGeneration, sourceAPI: sourceAPI) else { return }
                 self.commandTitleByKey[command.idempotencyKey] = self.pendingCommandTitle(kind: command.kind, payload: command.payload)
@@ -2588,8 +2482,6 @@ public final class ZoeAppModel: ObservableObject {
         case "task.approve": return string("decision") == "reject" ? uiText("Reject requested action") : uiText("Approve requested action")
         case "task.accept_result": return taskName.map { uiFormat("Review result for %@", $0) } ?? uiText("Review task result")
         case "project.create": return uiText("Create project")
-        case "memory.remember": return uiText("Save memory")
-        case "memory.delete": return uiText("Delete memory")
         default: return uiText("Submit saved action")
         }
     }
@@ -2599,15 +2491,8 @@ public final class ZoeAppModel: ObservableObject {
         return status == 409
     }
 
-    private func reconcileRecoveredMemoryOutcome(_ outcome: CommandOutcome, expectedGeneration: UInt64, sourceAPI: APIClient) async {
-        guard outcome.receipt.kind.hasPrefix("memory.") else { return }
-        guard isCurrentConnection(expectedGeneration, sourceAPI: sourceAPI) else { return }
-        clearMemoryAndPreparedExport(status: uiText("A recovered memory command changed server memory; cached memory and the prepared export were cleared."))
-        await refreshMemory()
-    }
 
-    private func clearMemoryAndPreparedExport(status: String) {
-        clearVisibleMemory()
+    private func clearPreparedExport(status: String) {
         cancelExport(status: status)
     }
 
@@ -2653,13 +2538,6 @@ public final class ZoeAppModel: ObservableObject {
         }
     }
 
-    private func clearVisibleMemory() {
-        memoryRefreshSequence &+= 1
-        pendingMemoryRefreshQuery = nil
-        memoryClaims = []
-        memoryMissing = []
-        memoryConflicts = []
-    }
 
     private static func isAccessDenied(_ error: Error) -> Bool {
         guard let failure = error as? ZoeError,

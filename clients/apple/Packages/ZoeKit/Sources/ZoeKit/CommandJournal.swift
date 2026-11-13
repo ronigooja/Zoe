@@ -232,9 +232,6 @@ public actor CommandCoordinator {
         case "task.create": return ("task", nil)
         case "task.append", "task.stop", "task.approve", "task.accept_result": return ("task", string("task_id"))
         case "notification.mark_read": return ("notification", string("notification_id"))
-        case "memory.remember": return ("memory", nil)
-        case "memory.delete": return ("memory", string("memory_id"))
-        case "memory.proposal.approve": return ("memory", nil)
         default: return (nil, nil)
         }
     }

@@ -15,7 +15,7 @@ import (
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
-	"github.com/ronigooja/Zoe/internal/memory"
+	"github.com/ronigooja/Zoe/internal/memoryapi"
 	"github.com/ronigooja/Zoe/internal/steward"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -140,7 +140,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 				serverFixture = registerDisabledHTTPServer
 			}
 			ts, store, key := serverFixture(t, cfg)
-			if err := memory.RegisterMigrations(store); err != nil {
+			if err := memoryapi.RegisterMigrations(store); err != nil {
 				t.Fatal(err)
 			}
 			if err := store.Migrate(context.Background()); err != nil {
@@ -275,7 +275,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 					t.Fatal("chat created a task or fast reply")
 				}
 			case "memory_write":
-				if writes.Load() != 1 || count(`SELECT count(*) FROM memory_staged_writes`) != 0 || count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies WHERE text<>''`) != 0 || count(`SELECT count(*) FROM voice_fast_replies WHERE intent_kind='memory_write_holding' AND status='delivered'`) != 1 {
+				if writes.Load() != 1 || count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies WHERE text<>''`) != 0 || count(`SELECT count(*) FROM voice_fast_replies WHERE intent_kind='memory_write_holding' AND status='delivered'`) != 1 {
 					t.Fatal("memory worker write created task/reply or staged data")
 				}
 			case "recall":
@@ -343,7 +343,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 			if status != 200 || count(`SELECT count(*) FROM tasks`) != before {
 				t.Fatalf("repeat changed task count: %d %s", status, raw)
 			}
-			if name == "memory_write" && (writes.Load() != 1 || count(`SELECT count(*) FROM memory_staged_writes`) != 0 || count(`SELECT count(*) FROM voice_recall_jobs`) != 1) {
+			if name == "memory_write" && (writes.Load() != 1 || count(`SELECT count(*) FROM voice_recall_jobs`) != 1) {
 				t.Fatal("replay wrote twice")
 			}
 			if name == "chat" {

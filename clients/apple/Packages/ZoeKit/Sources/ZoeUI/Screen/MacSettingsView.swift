@@ -7,9 +7,6 @@ public struct MacSettingsView: View {
     @ObservedObject var coordinator: ScreenCoordinator
     @State private var address = ""
     @State private var key = ""
-    @State private var memorySubject = ""
-    @State private var memoryKey = ""
-    @State private var memoryContent = ""
 
     public init(model: ZoeAppModel, coordinator: ScreenCoordinator) {
         self.model = model
@@ -21,7 +18,6 @@ public struct MacSettingsView: View {
             connection.tabItem { Label("Connection & Key", systemImage: "link") }
             account.tabItem { Label("Account", systemImage: "person") }
             simple("Notifications", "Notification preferences are managed by the system and Zoe inbox.").tabItem { Label("Notifications", systemImage: "bell") }
-            memory.tabItem { Label("Memory", systemImage: "brain") }
             simple("Capabilities", "Capability state is authoritative on the connected server.").tabItem { Label("Capabilities", systemImage: "shield") }
             simple("Data", "Local connection data is stored in Zoe’s existing protected storage.").tabItem { Label("Data", systemImage: "externaldrive") }
             aiChanges.tabItem { Label("AI Changes", systemImage: "clock.arrow.circlepath") }
@@ -44,41 +40,6 @@ public struct MacSettingsView: View {
         Form { LabeledContent("Connection", value: model.authentication.isConnected ? "Connected" : "Not connected"); LabeledContent("Server", value: model.serverAddress.isEmpty ? "—" : model.serverAddress); Toggle("Continuous voice", isOn: Binding(get: { model.continuousVoiceEnabled }, set: { value in model.setContinuousVoiceEnabled(value); try? coordinator.registry.write(key: "voice.enabled", value: .bool(value), by: .user) })) }
     }
 
-    private var memory: some View {
-        Form {
-            Section("Add personal memory") {
-                TextField("Subject", text: $memorySubject)
-                TextField("Key", text: $memoryKey)
-                TextField("Content", text: $memoryContent, axis: .vertical)
-                    .lineLimit(3...6)
-                let input = MemoryInputValidation.validate(subject: memorySubject, key: memoryKey, content: memoryContent)
-                Button("Add") {
-                    guard let input else { return }
-                    Task {
-                        if await model.remember(scope: "personal", scopeID: nil, subject: input.subject, key: input.key, content: input.content) {
-                            memorySubject = ""
-                            memoryKey = ""
-                            memoryContent = ""
-                        }
-                    }
-                }
-                .disabled(input == nil || model.isBusy)
-            }
-            Section("Personal memories") {
-                if model.memoryClaims.isEmpty { Text("No memories.").foregroundStyle(.secondary) }
-                else {
-                    ForEach(model.memoryClaims) { memory in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack { Text("\(memory.subject) / \(memory.key)").font(.headline); Spacer(); Button("Delete", role: .destructive) { Task { await model.deleteMemory(memory) } } }
-                            Text(memory.content).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-            if let notice = model.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
-        }
-        .task { await model.refreshMemory() }
-    }
 
     private func simple(_ title: String, _ message: String) -> some View { VStack(alignment: .leading, spacing: 10) { Text(title).font(.title2.bold()); Text(message).foregroundStyle(.secondary); Spacer() }.frame(maxWidth: .infinity, alignment: .leading) }
 

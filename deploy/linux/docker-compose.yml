@@ -29,12 +29,8 @@ services:
       ZOE_RUNNER_SCOPES: ${ZOE_RUNNER_SCOPES:-runner:claim,runner:observe,runner:control:read}
       ZOE_CAPABILITY_RUNTIME_BACKEND: ${ZOE_CAPABILITY_RUNTIME_BACKEND:-}
       ZOE_AVAILABLE_CAPABILITY_IDS: ${ZOE_AVAILABLE_CAPABILITY_IDS:-}
-      ZOE_MEMORY_RUNNER_TOKEN_FILE: /run/secrets/memory_runner_token
       ZOE_MEMORY_API_URL: http://zoe-memory-worker:8788
       ZOE_MEMORY_API_TOKEN_FILE: /run/secrets/memory_api_token
-      ZOE_MEMORY_RUNNER_ID: ${ZOE_MEMORY_RUNNER_ID:-memory-worker}
-      ZOE_MEMORY_RUNNER_WORKSPACES: ${ZOE_MEMORY_RUNNER_WORKSPACES:-default}
-      ZOE_MEMORY_RUNNER_SCOPES: memory:jobs:claim,memory:jobs:complete,memory:propose
       ZOE_MEMORY_BATCH_INTERVAL_HOURS: ${ZOE_MEMORY_BATCH_INTERVAL_HOURS:-24}
       ZOE_MEM0_LLM_BASE_URL: ${ZOE_MEM0_LLM_BASE_URL:?set the existing external model gateway URL}
       ZOE_MEM0_LLM_MODEL: ${ZOE_MEM0_LLM_MODEL:?set a deployment-selected memory model}
@@ -81,8 +77,6 @@ services:
     secrets:
       - source: runner_token
         target: runner_token
-      - source: memory_runner_token
-        target: memory_runner_token
       - source: memory_api_token
         target: memory_api_token
       - source: mem0_llm_api_key
@@ -138,8 +132,7 @@ services:
       HOME: /var/lib/zoe/memory
       ZOE_MEMORY_API_TOKEN_FILE: /run/secrets/memory_api_token
       ZOE_MEMORY_API_ADDR: 0.0.0.0:8788
-      ZOE_SECRET_FILE_MAP: ZOE_RUNNER_TOKEN=/run/secrets/memory_runner_token,ZOE_MEM0_LLM_API_KEY=/run/secrets/mem0_llm_api_key
-      ZOE_CONTROL_URL: http://zoe-server:8787
+      ZOE_SECRET_FILE_MAP: ZOE_MEM0_LLM_API_KEY=/run/secrets/mem0_llm_api_key
       ZOE_QDRANT_URL: http://qdrant:6333
       ZOE_QDRANT_COLLECTION: zoe_memory_v1_paraphrase_multilingual_minilm_l12_384_faf4aa42
       ZOE_MEM0_COLLECTION: zoe_mem0_v1
@@ -154,8 +147,6 @@ services:
         source: ${ZOE_MEMORY_DATA_ROOT:?set a private memory data root}
         target: /var/lib/zoe/memory
     secrets:
-      - source: memory_runner_token
-        target: memory_runner_token
       - source: memory_api_token
         target: memory_api_token
       - source: mem0_llm_api_key
@@ -176,8 +167,6 @@ secrets:
     file: ${ZOE_STEWARD_API_KEY_FILE:-/dev/null}
   runner_token:
     file: ${ZOE_RUNNER_TOKEN_FILE:?set a private runner token file path}
-  memory_runner_token:
-    file: ${ZOE_MEMORY_RUNNER_TOKEN_FILE:?set a distinct memory runner token file path}
   mem0_llm_api_key:
     file: ${ZOE_MEM0_LLM_API_KEY_FILE:?set a deployment-provided provider secret file path}
   voice_gateway_api_key:

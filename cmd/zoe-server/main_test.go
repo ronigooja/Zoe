@@ -197,10 +197,7 @@ func TestServerSubprocessBootstrapAndRestart(t *testing.T) {
 	if !bytes.Contains(body, []byte("preserved owner data")) {
 		t.Fatal("recovery changed owner subject or lost project")
 	}
-	res, body, err = callCommand(newToken, "memory-smoke", map[string]any{"kind": "memory.remember", "payload": map[string]any{"scope": map[string]string{"kind": "personal"}, "subject": "server restart", "key": "memory readiness", "content": "memory command is available after restart", "source_kind": "user_note"}})
-	if err != nil || res.StatusCode != http.StatusOK {
-		t.Fatalf("memory write after restart status=%v err=%v body=%s", responseStatus(res), err, body)
-	}
+
 	res, body, err = call(http.MethodGet, "/v1/memory?q=available+after+restart", newToken, nil)
 	if err != nil || res.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("memory command is available after restart")) {
 		t.Fatalf("memory search after restart status=%v err=%v body=%s", responseStatus(res), err, body)

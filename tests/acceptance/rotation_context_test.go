@@ -1,20 +1,15 @@
 package acceptance
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
-	"github.com/ronigooja/Zoe/internal/memory"
 	"github.com/ronigooja/Zoe/internal/runner"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -47,13 +42,7 @@ func newRotationContextFixture(t *testing.T, failingAssembler bool) *rotationCon
 	device, token := reviewToken(t), reviewToken(t)
 	var store *storage.Store
 	var handler http.Handler
-	if failingAssembler {
-		store, handler = memoryRunnerServerWithAssembler(t, rotationContextConfig(token, []string{"runner:claim", "runner:observe", "runner:control:read"}), func(context.Context, contracts.Principal, string, string, string, int) (contracts.MemoryContext, error) {
-			return contracts.MemoryContext{}, errors.New("injected assembler failure")
-		})
-	} else {
-		store, handler = memoryRunnerServer(t, rotationContextConfig(token, []string{"runner:claim", "runner:observe", "runner:control:read"}))
-	}
+	store, handler = runnerContextServer(t, rotationContextConfig(token, []string{"runner:claim", "runner:observe", "runner:control:read"}))
 	reviewInitializeInstance(t, handler, reviewToken(t), device)
 	created := reviewRequest(handler, http.MethodPost, "/v1/commands", device, "rotation-task", contracts.CommandRequest{Kind: "task.create", Payload: json.RawMessage(`{"title":"rotation context","goal":"context goal","source":"user","initial_message":"first"}`)})
 	if created.Code != http.StatusOK {
@@ -80,66 +69,6 @@ func newRotationContextFixture(t *testing.T, failingAssembler bool) *rotationCon
 		t.Fatalf("claim=%+v err=%v", claim, err)
 	}
 	return &rotationContextFixture{store: store, h: handler, server: live, client: client, claim: claim, device: device, token: token}
-}
-
-func rememberRotationMemory(t *testing.T, f *rotationContextFixture, content string) (string, int64) {
-	t.Helper()
-	w := reviewRequest(f.h, http.MethodPost, "/v1/commands", f.device, "rotation-memory", contracts.CommandRequest{Kind: "memory.remember", Payload: mustJSON(t, map[string]any{"scope": map[string]string{"kind": "personal"}, "subject": "rotation", "key": "context", "content": content, "source_kind": "user_note"})})
-	if w.Code != http.StatusOK {
-		t.Fatalf("memory remember=%d %s", w.Code, w.Body.String())
-	}
-	var receipt contracts.CommandReceipt
-	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
-		t.Fatal(err)
-	}
-	return receipt.ResourceID, receipt.ResourceVersion
-}
-
-func TestRotationContextReturnsOrderedInstructionsAndMemory(t *testing.T) {
-	f := newRotationContextFixture(t, false)
-	rememberRotationMemory(t, f, "remembered rotation context")
-	got, err := f.client.RotationContext(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got.Instructions, []string{"first", "second", "third"}) {
-		t.Fatalf("instructions=%v", got.Instructions)
-	}
-	if len(got.Memory.Items) != 1 || got.Memory.Items[0].Content != "remembered rotation context" {
-		t.Fatalf("memory=%+v", got.Memory)
-	}
-	if got.Memory.Manifest.ID == "" || len(got.Memory.Manifest.Entries) != 1 {
-		t.Fatalf("manifest=%+v", got.Memory.Manifest)
-	}
-}
-
-func TestRotationContextOmitsDeletedMemory(t *testing.T) {
-	f := newRotationContextFixture(t, false)
-	memoryID, revision := rememberRotationMemory(t, f, "delete this rotation memory")
-	deleted := reviewRequest(f.h, http.MethodPost, "/v1/commands", f.device, "rotation-memory-delete", contracts.CommandRequest{Kind: "memory.delete", Payload: mustJSON(t, map[string]any{"memory_id": memoryID, "expected_revision": revision, "reason": "user_requested"})})
-	if deleted.Code != http.StatusOK {
-		t.Fatalf("memory delete=%d %s", deleted.Code, deleted.Body.String())
-	}
-	got, err := f.client.RotationContext(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, item := range got.Memory.Items {
-		if item.Content == "delete this rotation memory" {
-			t.Fatalf("deleted memory returned: %+v", got.Memory.Items)
-		}
-	}
-}
-
-func TestRotationContextMemoryFailureReturnsUnavailableNotStale(t *testing.T) {
-	f := newRotationContextFixture(t, true)
-	got, err := f.client.RotationContext(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.MemoryUnavailable || len(got.Memory.Items) != 0 || !reflect.DeepEqual(got.Instructions, []string{"first", "second", "third"}) {
-		t.Fatalf("rotation context=%+v", got)
-	}
 }
 
 func TestRotationContextRejectsWrongRunnerFenceAttemptScopeAndTerminal(t *testing.T) {
@@ -240,32 +169,4 @@ func taskIDForRotation(t *testing.T, f *rotationContextFixture) string {
 		t.Fatal(err)
 	}
 	return taskID
-}
-
-func memoryRunnerServerWithAssembler(t *testing.T, cfg control.Config, assembler control.ContextAssembler) (*storage.Store, http.Handler) {
-	t.Helper()
-	store := openStore(t, filepath.Join(t.TempDir(), "memory-runner.db"))
-	if err := storage.RegisterCoreMigrations(store); err != nil {
-		t.Fatal(err)
-	}
-	if err := control.RegisterInstanceMaintenanceMigration(store); err != nil {
-		t.Fatal(err)
-	}
-	srv, err := control.NewServer(store, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := memory.Register(srv, store); err != nil {
-		t.Fatal(err)
-	}
-	if err := srv.RegisterContextAssembler(assembler); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Migrate(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := srv.RegisterRunnerCredential(context.Background(), cfg.RunnerToken, cfg.RunnerID, cfg.RunnerWorkspaceIDs, cfg.RunnerScopes); err != nil {
-		t.Fatal(err)
-	}
-	return store, bindReviewHandler(srv.Handler(), store)
 }

@@ -182,15 +182,6 @@ public final class APIClient: @unchecked Sendable {
         return candidate
     }
 
-    public func searchMemory(query: String = "", limit: Int = 50) async throws -> MemorySearchResult {
-        var components = URLComponents(url: try makeURL(path: ["v1", "memory"]), resolvingAgainstBaseURL: false)
-        components?.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "limit", value: String(limit))]
-        guard let url = components?.url else { throw ZoeError.invalidServerURL }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        try authorize(&request)
-        return try await perform(request)
-    }
 
     public func voiceConfig() async throws -> VoiceConfig {
         try await request(path: ["v1", "voice", "config"], method: "GET", authenticated: true)

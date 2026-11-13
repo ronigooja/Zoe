@@ -15,7 +15,7 @@ import (
 
 	"github.com/ronigooja/Zoe/internal/capabilities"
 	"github.com/ronigooja/Zoe/internal/control"
-	"github.com/ronigooja/Zoe/internal/memory"
+	"github.com/ronigooja/Zoe/internal/memoryapi"
 	"github.com/ronigooja/Zoe/internal/storage"
 	"github.com/ronigooja/Zoe/internal/voice"
 )
@@ -165,7 +165,7 @@ func registerMigrations(store *storage.Store) error {
 	if err := control.RegisterInstanceMaintenanceMigration(store); err != nil {
 		return err
 	}
-	if err := memory.RegisterMigrations(store); err != nil {
+	if err := memoryapi.RegisterMigrations(store); err != nil {
 		return err
 	}
 	if err := voice.RegisterMigrations(store); err != nil {

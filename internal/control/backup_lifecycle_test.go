@@ -83,7 +83,7 @@ func TestAppendBackupDeleteManifestRejectsSymlink(t *testing.T) {
 func backupManifestFixture(sequence int64, claimID string) storage.DeletionRecord {
 	return storage.DeletionRecord{
 		Sequence: sequence, LineageID: "fixture-lineage", Generation: 1,
-		WorkspaceID: "default", EntityKind: "memory_claim", EntityID: claimID,
+		WorkspaceID: "default", EntityKind: "test_record", EntityID: claimID,
 		EntityVersion: sequence + 1, ActorID: "fixture-owner", ReasonCode: "user_requested",
 		DeletedAt: "2026-10-22T00:00:00Z", CleanupTargets: []string{"backup_delete_manifest"},
 		Hash: "fixture-journal-hash",

@@ -23,7 +23,7 @@ import (
 
 	"github.com/ronigooja/Zoe/internal/capabilities"
 	"github.com/ronigooja/Zoe/internal/control"
-	"github.com/ronigooja/Zoe/internal/memory"
+	"github.com/ronigooja/Zoe/internal/memoryapi"
 	"github.com/ronigooja/Zoe/internal/storage"
 	"github.com/ronigooja/Zoe/internal/voice"
 )
@@ -83,14 +83,6 @@ func TestMaintenanceRESTEncryptedRestoreDrill(t *testing.T) {
 	_ = gateTx.Rollback()
 	if err != nil || derivedEnabled {
 		t.Fatalf("REST fence left derived retrieval enabled: enabled=%t err=%v", derivedEnabled, err)
-	}
-	// The derived-data gate must close with the source fence. Keep a real
-	// deletion ledger row in the snapshot and verify it remains present later.
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO memory_claims(id,workspace_id,scope_kind,scope_id,principal_id,subject,claim_key,authority_kind,status,revision,created_at,updated_at,deleted_at) VALUES('deleted-claim','default','workspace','','','ops drill','deleted','user_confirmed','tombstoned',1,?,?,?)`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO memory_tombstones(claim_id,workspace_id,revision,actor_id,reason,deleted_at) VALUES('deleted-claim','default',1,'ops-owner','drill deletion',?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		t.Fatal(err)
 	}
 	key := make([]byte, 32)
 	if _, err = rand.Read(key); err != nil {
@@ -225,216 +217,6 @@ func TestMaintenanceRESTEncryptedRestoreDrill(t *testing.T) {
 	assertRestoredAuthority(t, activeDB, true, true, false)
 }
 
-// TestEncryptedBackupPersistsNonemptyDeletionManifest exercises the production
-// backup CLI against disposable authority and sidecar files. The deletion
-// journal includes external targets whose live providers are absent, so the
-// verified restore remains closed for reconciliation.
-func TestEncryptedBackupPersistsNonemptyDeletionManifest(t *testing.T) {
-	python := os.Getenv("ZOE_OPS_PYTHON")
-	if python == "" {
-		t.Skip("set ZOE_OPS_PYTHON to run the encrypted backup manifest drill")
-	}
-	repoRoot := repositoryRoot(t)
-	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "source", "data", "zoe.sqlite")
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	store, err := openDrillStore(ctx, dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	repository := memory.NewRepositoryWithStore(store)
-	now := time.Now().UTC()
-	scope := memory.Scope{Kind: memory.ScopeWorkspace}
-	source := memory.Source{ID: "ops-delete-source", Version: 1, Scope: scope, Kind: "user_note", Reference: "ops-drill", RecordedAt: now, Producer: "user"}
-	tx, err := store.DB().BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	claim, err := repository.PutTx(ctx, tx, memory.WriteInput{
-		WorkspaceID: "default", ActorID: "ops-owner",
-		Source: source,
-		Claim:  memory.Claim{WorkspaceID: "default", Scope: scope, Subject: "ops drill", Key: "deleted claim", Content: "temporary drill record", Authority: memory.AuthorityUserConfirmed, Status: memory.ClaimActive, Revision: 1, Sources: []memory.Source{source}},
-	})
-	if err != nil {
-		_ = tx.Rollback()
-		t.Fatal(err)
-	}
-	if err = tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	tx, err = store.DB().BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = repository.DeleteTx(ctx, tx, memory.DeleteInput{WorkspaceID: "default", ActorID: "ops-owner", ClaimID: claim.ID, Expected: 1, ReasonCode: "user_requested"}); err != nil {
-		_ = tx.Rollback()
-		t.Fatal(err)
-	}
-	if err = tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	journal, err := storage.NewDeletionJournal(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	journalRows, err := journal.ReadAll()
-	if err != nil || len(journalRows) != 1 {
-		t.Fatalf("expected one durable deletion row, rows=%#v err=%v", journalRows, err)
-	}
-	manifestDir := filepath.Join(tmp, "backup-maintenance")
-	if err = os.Mkdir(manifestDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	backupDeleteManifest := filepath.Join(manifestDir, "deletions.jsonl")
-	if err = control.AppendBackupDeleteManifest(backupDeleteManifest, journalRows[0], journalRows); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = control.FenceInstance(ctx, store, "nonempty deletion backup drill", 1); err != nil {
-		t.Fatal(err)
-	}
-	if err = store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	key := make([]byte, 32)
-	if _, err = rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
-	keyFile := filepath.Join(tmp, "backup.key")
-	writePrivate(t, keyFile, key)
-	backupDir := filepath.Join(tmp, "backups")
-	runPython(t, python, repoRoot, "tools/zoe_backup.py", "--database", dbPath, "--destination", backupDir, "--key-file", keyFile, "--backup-delete-manifest", backupDeleteManifest)
-	entries, err := os.ReadDir(backupDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var artifact string
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".zoe-backup") {
-			if artifact != "" {
-				t.Fatal("backup command created more than one encrypted artifact")
-			}
-			artifact = filepath.Join(backupDir, entry.Name())
-		}
-	}
-	if artifact == "" {
-		t.Fatalf("encrypted backup artifact missing from %s", backupDir)
-	}
-	verifiedDir := filepath.Join(tmp, "verified")
-	if err = os.Mkdir(verifiedDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	inspect := `import json,sys; from pathlib import Path; from data_lifecycle.common import read_key,unpack_verified; from data_lifecycle.retention import _read_manifest; artifact=Path(sys.argv[1]); key=read_key(Path(sys.argv[2])); payload,manifest=unpack_verified(artifact,key,Path(sys.argv[3])); print(json.dumps({"deletion":manifest["backup_delete_manifest"],"retention":_read_manifest(artifact.parent,key)},sort_keys=True))`
-	result := runPythonCode(python, repoRoot, inspect, artifact, keyFile, verifiedDir)
-	if result.err != nil {
-		t.Fatalf("decrypt and verify backup: %v\n%s", result.err, result.text)
-	}
-	var verified struct {
-		Deletion struct {
-			Baseline string   `json:"baseline"`
-			Sequence int64    `json:"sequence"`
-			Targets  []string `json:"targets"`
-			Version  int      `json:"version"`
-		} `json:"deletion"`
-		Retention struct {
-			Entries []struct {
-				Artifact         string   `json:"artifact"`
-				DeletionBaseline string   `json:"deletion_baseline"`
-				DeletionSequence int64    `json:"deletion_sequence"`
-				DeletionTargets  []string `json:"deletion_targets"`
-			} `json:"entries"`
-		} `json:"retention"`
-	}
-	if err = json.Unmarshal([]byte(result.text), &verified); err != nil {
-		t.Fatalf("decode decrypted backup evidence: %v; output=%s", err, result.text)
-	}
-	if verified.Deletion.Sequence != 1 || verified.Deletion.Baseline == "" || verified.Deletion.Version != 1 || len(verified.Deletion.Targets) == 0 {
-		t.Fatalf("encrypted manifest deletion head is incomplete: %#v", verified.Deletion)
-	}
-	hasBackupTarget := false
-	if len(verified.Retention.Entries) == 1 {
-		for _, target := range verified.Retention.Entries[0].DeletionTargets {
-			if target == "backup_delete_manifest" {
-				hasBackupTarget = true
-			}
-		}
-	}
-	if len(verified.Retention.Entries) != 1 || verified.Retention.Entries[0].Artifact != filepath.Base(artifact) || verified.Retention.Entries[0].DeletionSequence != 1 || verified.Retention.Entries[0].DeletionBaseline != verified.Deletion.Baseline || !hasBackupTarget {
-		t.Fatalf("authenticated retention ownership does not bind the nonempty deletion snapshot: %#v", verified.Retention.Entries)
-	}
-	latestLedger := filepath.Join(tmp, "latest.deletion-ledger")
-	latestBytes, err := os.ReadFile(dbPath + ".deletion-ledger")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(latestLedger, latestBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	maintenance := filepath.Join(tmp, "zoe-maintenance")
-	build := exec.Command("go", "build", "-o", maintenance, "./cmd/zoe-maintenance")
-	build.Dir = repoRoot
-	if output, buildErr := build.CombinedOutput(); buildErr != nil {
-		t.Fatalf("build maintenance CLI: %v\n%s", buildErr, output)
-	}
-	headFile := filepath.Join(tmp, "latest-head.json")
-	headCommand := exec.Command(maintenance, "deletion-head", "--database", dbPath, "--output", headFile)
-	if output, headErr := headCommand.CombinedOutput(); headErr != nil {
-		t.Fatalf("read latest deletion head: %v\n%s", headErr, output)
-	}
-	restore := filepath.Join(tmp, "restore")
-	runPython(t, python, repoRoot, "tools/zoe_restore.py", "--artifact", artifact, "--key-file", keyFile, "--latest-deletion-ledger", latestLedger, "--latest-deletion-head-file", headFile, "--restore-directory", restore)
-	var restoreState struct {
-		RestoreState struct {
-			DeletionRecordsVerified map[string]any `json:"deletion_records_verified"`
-			TrustedHead             struct {
-				SnapshotSequence int64 `json:"snapshot_sequence"`
-				JournalSequence  int64 `json:"journal_sequence"`
-			} `json:"trusted_deletion_head"`
-		} `json:"restore_state"`
-	}
-	stateBytes, err := os.ReadFile(filepath.Join(restore, "restore-state.json"))
-	if err != nil {
-		t.Fatalf("read restored deletion authority state: %v", err)
-	}
-	if err = json.Unmarshal(stateBytes, &restoreState); err != nil {
-		t.Fatalf("decode restored deletion authority state: %v", err)
-	}
-	if len(restoreState.RestoreState.DeletionRecordsVerified) == 0 || restoreState.RestoreState.TrustedHead.SnapshotSequence != 1 || restoreState.RestoreState.TrustedHead.JournalSequence != 1 {
-		t.Fatalf("restored external deletion head is not verified: %#v", restoreState)
-	}
-	pendingDB := filepath.Join(restore, "data", "zoe.sqlite.restore-pending")
-	activeDB := filepath.Join(restore, "data", "zoe.sqlite")
-	prepare := exec.Command(maintenance, "prepare-restore", "--database", pendingDB, "--activate-as", activeDB, "--new-instance-id", "nonempty-delete-target", "--expected-epoch", "2")
-	if output, prepareErr := prepare.CombinedOutput(); prepareErr != nil {
-		t.Fatalf("prepare nonempty deletion restore: %v\n%s", prepareErr, output)
-	}
-	reconcile := exec.Command(maintenance, "reconcile-deletions", "--database", activeDB, "--restore-state", filepath.Join(restore, "restore-state.json"))
-	output, reconcileErr := reconcile.CombinedOutput()
-	if reconcileErr != nil {
-		t.Fatalf("reconcile nonempty deletion head: %v\n%s", reconcileErr, output)
-	}
-	var reconciliation struct {
-		Replayed       int      `json:"replayed"`
-		GateCleared    bool     `json:"gate_cleared"`
-		BlockedTargets []string `json:"blocked_targets"`
-	}
-	if err = json.Unmarshal(output, &reconciliation); err != nil {
-		t.Fatalf("decode reconciliation result: %v; output=%s", err, output)
-	}
-	missingExternalAdapter := false
-	for _, target := range reconciliation.BlockedTargets {
-		if target == "mem0:adapter_missing" || target == "qdrant:adapter_missing" {
-			missingExternalAdapter = true
-		}
-	}
-	if reconciliation.GateCleared || !missingExternalAdapter {
-		t.Fatalf("external deletion adapters were falsely accepted: %#v", reconciliation)
-	}
-	assertRestoredAuthority(t, activeDB, false, false, true)
-}
-
 type runnerInstance struct {
 	InstanceID      string `json:"instance_id"`
 	Epoch           int64  `json:"epoch"`
@@ -485,7 +267,7 @@ func openDrillStore(ctx context.Context, path string) (*storage.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	register := []func(*storage.Store) error{storage.RegisterCoreMigrations, memory.RegisterMigrations, voice.RegisterMigrations, capabilities.RegisterMigrations, control.RegisterInstanceMaintenanceMigration}
+	register := []func(*storage.Store) error{storage.RegisterCoreMigrations, memoryapi.RegisterMigrations, voice.RegisterMigrations, capabilities.RegisterMigrations, control.RegisterInstanceMaintenanceMigration}
 	for _, fn := range register {
 		if err = fn(store); err != nil {
 			_ = store.Close()
@@ -506,15 +288,12 @@ func assertRestoredAuthority(t *testing.T, path string, expectedDispatch, expect
 		t.Fatal(err)
 	}
 	defer db.Close()
-	var dispatch, derived, reconciliationRequired, tombstones int
+	var dispatch, derived, reconciliationRequired int
 	if err = db.QueryRow(`SELECT dispatch_enabled,derived_retrieval_enabled,restore_deletion_reconciliation_required FROM zoe_instance_state WHERE singleton=1`).Scan(&dispatch, &derived, &reconciliationRequired); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.QueryRow(`SELECT count(*) FROM memory_tombstones`).Scan(&tombstones); err != nil {
-		t.Fatal(err)
-	}
-	if (dispatch == 1) != expectedDispatch || (derived == 1) != expectedDerived || (reconciliationRequired == 1) != expectedReconciliation || tombstones != 1 {
-		t.Fatalf("restored dispatch=%d derived=%d reconciliation_required=%d tombstones=%d expected_dispatch=%t expected_reconciliation=%t", dispatch, derived, reconciliationRequired, tombstones, expectedDispatch, expectedReconciliation)
+	if (dispatch == 1) != expectedDispatch || (derived == 1) != expectedDerived || (reconciliationRequired == 1) != expectedReconciliation {
+		t.Fatalf("restored dispatch=%d derived=%d reconciliation_required=%d", dispatch, derived, reconciliationRequired)
 	}
 }
 

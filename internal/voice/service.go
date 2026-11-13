@@ -35,10 +35,8 @@ type Config struct {
 	AccountMediaLifecycle  AccountMediaLifecycle
 	HeartbeatTimeout       time.Duration
 	Now                    func() time.Time
-	ContextAssembler       control.ContextAssembler
 	OpeningContextBudget   int
 	ContextCharBudget      int
-	OutcomeWriter          func(context.Context, contracts.Principal, string, string, string) error
 	UpstreamRoute          string
 	ResultDeliveryEnabled  bool
 	ResultDeliveryInterval time.Duration
@@ -63,10 +61,8 @@ type Service struct {
 	accountMedia           AccountMediaLifecycle
 	heartbeatTimeout       time.Duration
 	now                    func() time.Time
-	contextAssembler       control.ContextAssembler
 	openingBudget          int
 	contextCharBudget      int
-	outcomeWriter          func(context.Context, contracts.Principal, string, string, string) error
 	upstreamRoute          string
 	resultDeliveryEnabled  bool
 	resultDeliveryInterval time.Duration
@@ -176,26 +172,13 @@ func (s *Service) buildOpeningContext(ctx context.Context, p contracts.Principal
 	if s.upstreamRoute == "avas" {
 		return s.buildAVASOpeningContext(ctx, p)
 	}
-	if s.contextAssembler == nil || s.openingBudget <= 0 {
-		return nil
-	}
-	assembled, err := s.contextAssembler(ctx, p, "", p.SubjectID, "", contracts.MemoryContextDefaultBudgetTokens)
-	if err != nil || len(assembled.Items) == 0 {
+	if s.openingBudget <= 0 {
 		return nil
 	}
 	version := 1
 	_ = s.db.QueryRowContext(ctx, `SELECT coalesce(max(opening_context_version),0)+1 FROM voice_sessions WHERE workspace_id=? AND owner_id=?`, p.WorkspaceID, p.SubjectID).Scan(&version)
 	c := &openingContext{Kind: "full", Version: version}
 	used := 0
-	for _, item := range assembled.Items {
-		text := strings.TrimSpace(item.Subject + ": " + item.Key + " = " + item.Content)
-		cost := len([]rune(text))
-		if cost == 0 || used+cost > s.openingBudget {
-			break
-		}
-		c.Items = append(c.Items, openingContextItem{Role: "user", Text: text})
-		used += cost
-	}
 	rows, err := s.db.QueryContext(ctx, `SELECT title,goal FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND status IN ('queued','running') ORDER BY updated_at DESC LIMIT 8`, p.WorkspaceID, p.SubjectID)
 	if err == nil {
 		defer rows.Close()
@@ -232,24 +215,6 @@ func (s *Service) buildAVASOpeningContext(ctx context.Context, p contracts.Princ
 		c.Items = append(c.Items, openingContextItem{Role: "user", Text: text})
 		used += cost
 		return true
-	}
-	if s.contextAssembler != nil {
-		assembled, err := s.contextAssembler(ctx, p, "", p.SubjectID, "", contracts.MemoryContextDefaultBudgetTokens)
-		if err == nil {
-			facts := 0
-			for _, item := range assembled.Items {
-				key, content := strings.TrimSpace(item.Key), strings.TrimSpace(item.Content)
-				if key == "" || content == "" {
-					continue
-				}
-				// AVAS facts use key:content, omitting internal subject IDs and
-				// the assembler's machine-style equals sign.
-				if facts == 5 || !appendItem(key+":"+content) {
-					break
-				}
-				facts++
-			}
-		}
 	}
 	if s.register != nil {
 		text, err := s.register.AssembleContext(ctx, RegisterOwner{p.WorkspaceID, p.SubjectID}, s.now(), max(0, s.openingBudget-used))
@@ -384,7 +349,6 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 		mux.HandleFunc("GET /v1/voice/sessions/{session_id}", svc.handleReadSession)
 		mux.HandleFunc("POST /v1/voice/sessions/{session_id}/connected", svc.handleConnected)
 		mux.HandleFunc("POST /v1/voice/sessions/{session_id}/heartbeat", svc.handleHeartbeat)
-		mux.HandleFunc("POST /v1/voice/sessions/{session_id}/outcome", svc.handleOutcome)
 		mux.HandleFunc("POST /v1/voice/sessions/{session_id}/hangup", svc.handleHangup)
 		mux.HandleFunc("GET /v1/voice/sessions/{session_id}/turns", svc.handleTurns)
 		mux.HandleFunc("GET /v1/voice/sessions/{session_id}/receipts", svc.handleReceipts)
@@ -434,14 +398,7 @@ func newService(db *sql.DB, cfg Config) *Service {
 		interval = time.Second
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, contextAssembler: cfg.ContextAssembler, openingBudget: budget, contextCharBudget: contextBudget, outcomeWriter: cfg.OutcomeWriter, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
-}
-
-func (s *Service) writeOutcome(ctx context.Context, p contracts.Principal, sessionID, summary, outcome string) error {
-	if s.outcomeWriter == nil {
-		return errors.New("voice outcome memory writer is unavailable")
-	}
-	return s.outcomeWriter(ctx, p, sessionID, summary, outcome)
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func (s *Service) rotateIfOverBudget(ctx context.Context, p contracts.Principal) error {

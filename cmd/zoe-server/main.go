@@ -19,7 +19,6 @@ import (
 	"github.com/ronigooja/Zoe/internal/capabilities"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/logging"
-	"github.com/ronigooja/Zoe/internal/memory"
 	"github.com/ronigooja/Zoe/internal/modelclient"
 	"github.com/ronigooja/Zoe/internal/steward"
 	"github.com/ronigooja/Zoe/internal/storage"
@@ -52,10 +51,6 @@ func run() error {
 		return err
 	}
 	profiles, err := loadProfiles(os.Getenv("ZOE_RUNTIME_PROFILES"))
-	if err != nil {
-		return err
-	}
-	memoryRunner, err := loadMemoryRunnerCredentialFromEnv()
 	if err != nil {
 		return err
 	}
@@ -121,7 +116,7 @@ func run() error {
 	server, err := composeControlServer(store, cfg, voice.Config{MemoryAPI: memoryAPIFromEnv(), InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
-	}, memory.DerivedConfig{BackupDeleteManifestPath: strings.TrimSpace(os.Getenv("ZOE_BACKUP_DELETE_MANIFEST_PATH"))})
+	})
 	if err != nil {
 		return err
 	}
@@ -141,11 +136,6 @@ func run() error {
 	}
 	if runnerToken != "" {
 		if err = control.RegisterRunnerCredentialIfMissing(ctx, store, runnerToken, env("ZOE_RUNNER_ID", "configured-runner"), splitEnv("ZOE_RUNNER_WORKSPACES", "default"), splitEnv("ZOE_RUNNER_SCOPES", "runner:claim,runner:observe,runner:control:read")); err != nil {
-			return err
-		}
-	}
-	if memoryRunner.Enabled {
-		if err = registerMemoryRunnerCredential(ctx, store, memoryRunner); err != nil {
 			return err
 		}
 	}

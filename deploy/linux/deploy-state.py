@@ -83,7 +83,7 @@ def env_names(path):
 def memory_token_path(env):
     values = {}
     for line in Path(env).read_text().splitlines():
-        match = re.match(r'^\s*(?:export\s+)?(ZOE_(?:MEMORY_API_TOKEN|MEMORY_RUNNER_TOKEN|RUNNER_TOKEN)_FILE)\s*=(.*)$', line)
+        match = re.match(r'^\s*(?:export\s+)?(ZOE_(?:MEMORY_API_TOKEN|RUNNER_TOKEN)_FILE)\s*=(.*)$', line)
         if match:
             if match[1] in values:
                 fail('duplicate memory token path variable name=' + match[1])
@@ -97,7 +97,7 @@ def memory_token_path(env):
         path = Path(values[key])
     else:
         directories = {str(Path(values[k]).parent) for k in
-                       ('ZOE_RUNNER_TOKEN_FILE', 'ZOE_MEMORY_RUNNER_TOKEN_FILE') if k in values}
+                       ('ZOE_RUNNER_TOKEN_FILE',) if k in values}
         if len(directories) != 1:
             fail('cannot determine memory token secrets directory from runner token paths')
         path = Path(directories.pop()) / 'memory-api-token'

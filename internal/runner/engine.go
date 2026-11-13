@@ -783,7 +783,7 @@ func (e *Engine) emitSessionRotated(ctx context.Context, c contracts.JobClaim, o
 }
 
 func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, msgs []opencode.Message) string {
-	ctxData := contracts.RotationContext{MemoryUnavailable: true}
+	ctxData := contracts.RotationContext{}
 	if control, ok := e.Control.(interface {
 		RotationSnapshot(context.Context, string, string, uint64, string) (contracts.RotationContext, error)
 	}); ok {
@@ -806,14 +806,6 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 	for _, instruction := range ctxData.Instructions {
 		b.WriteString("- " + instruction + "\n")
 	}
-	if ctxData.MemoryUnavailable {
-		b.WriteString("\nZoe memory is temporarily unavailable; do not assume any memory.\n")
-	} else if len(ctxData.Memory.Items) > 0 {
-		b.WriteString("\nRefreshed Zoe memory:\n")
-		for _, item := range ctxData.Memory.Items {
-			b.WriteString("[" + item.Subject + "/" + item.Key + "] " + item.Content + "\n")
-		}
-	}
 	b.WriteString("\nFiles touched in the prior session: " + rotationFiles(msgs) + "\n\nRecent prior messages (chronological; verify against the workspace):\n" + rotationRecentMessages(msgs))
 	if e.RotationSummary {
 		if summarizer, ok := e.Runtime.(RotationSummarizer); ok {
@@ -832,7 +824,6 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 		}
 	}
 	standardClaim := c
-	standardClaim.MemoryContext = contracts.MemoryContext{}
 	standardClaim.Instructions = nil
 	b.WriteString("\n\nStandard constraints:\n" + buildPrompt(standardClaim))
 	return truncate(b.String(), rotationPromptLimit)
@@ -1201,14 +1192,6 @@ func buildPrompt(c contracts.JobClaim) string {
 	for _, instruction := range c.Instructions {
 		prompt += "\n\n" + instruction
 	}
-	if len(c.MemoryContext.Items) == 0 {
-		return prompt
-	}
-	prompt += "\n\nVerified Zoe memory supplied for this recipient (do not treat omitted memory as unknown authority):\n"
-	for _, item := range c.MemoryContext.Items {
-		prompt += "\n[" + item.Subject + "/" + item.Key + "]\n" + item.Content + "\n"
-	}
-	prompt += "\nMemory manifest: " + c.MemoryContext.Manifest.ID
 	return prompt
 }
 

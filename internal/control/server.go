@@ -36,8 +36,6 @@ type Config struct {
 	WaitSweepInterval  time.Duration
 }
 
-type ContextAssembler func(context.Context, contracts.Principal, string, string, string, int) (contracts.MemoryContext, error)
-
 type RuntimeProfile struct {
 	ID              string      `json:"id"`
 	Harness         string      `json:"harness,omitempty"`
@@ -222,29 +220,6 @@ type Server struct {
 	sealed             bool
 	pushSender         PushSender
 	shutdownHooks      []func()
-	contextAssembler   ContextAssembler
-}
-
-func (s *Server) RegisterContextAssembler(assembler ContextAssembler) error {
-	if assembler == nil {
-		return errors.New("context assembler is required")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.sealed {
-		return errors.New("control server is sealed")
-	}
-	s.contextAssembler = assembler
-	return nil
-}
-
-// ContextAssembler returns the registered memory authority assembler for
-// feature-owned context handoffs. The returned function is read-only and must
-// preserve the recipient and scope checks enforced by the authority.
-func (s *Server) ContextAssembler() ContextAssembler {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.contextAssembler
 }
 
 // RegisterShutdownHook registers a feature-owned background worker stop hook.
@@ -268,9 +243,7 @@ func (s *Server) Shutdown() {
 func DefaultOwnerScopes() []string {
 	return []string{
 		"client:read", "client:command", "device:push", "capability:deployment:revoke",
-		"export:read", "instance:admin", "client:admin", "capability:read", "capability:release:submit", "capability:deployment:request", "capability:deployment:authorize", "voice:read", "voice:open", "voice:pool:reconcile", "voice:turn:commit", "memory:context:any",
-		"memory:read:personal", "memory:write:personal", "memory:delete:personal",
-		"memory:read:workspace", "memory:write:workspace", "memory:delete:workspace",
+		"export:read", "instance:admin", "client:admin", "capability:read", "capability:release:submit", "capability:deployment:request", "capability:deployment:authorize", "voice:read", "voice:open", "voice:pool:reconcile", "voice:turn:commit",
 	}
 }
 

@@ -137,7 +137,6 @@ def main() -> int:
         # Check the deletion ledger is present and authentic before making the staged copy
         # available to a server or any derived retrieval service.
         database_manifest = manifest.get("database", {})
-        deletion = manifest.get("database", {}).get("deletion_ledger")
         snapshot_head = database_manifest.get("trusted_deletion_head")
         source_db = payload / "authority" / "zoe.sqlite"
         source_journal = payload / "authority" / "zoe.sqlite.deletion-ledger"
@@ -181,8 +180,7 @@ def main() -> int:
             "instance_id": "",
             "dispatch_enabled": False,
             "requires_old_instance_isolation": True,
-            "requires_deletion_reconciliation_before_derived_reads": bool(deletion),
-            "deletion_records_verified": deletion,
+            "requires_deletion_reconciliation_before_derived_reads": True,
             "trusted_deletion_head": {
                 **trusted_head,
                 "journal_file_sha256": metadata["file_sha256"],

@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
@@ -40,9 +39,7 @@ func RegisterExportRoutes(s *Server) error {
 	}); err != nil {
 		return err
 	}
-	return s.RegisterRunnerRoutes(func(mux *http.ServeMux) {
-		mux.HandleFunc("POST /runner/v1/memory/export-temp/cleanup", s.handleExportTempCleanup)
-	})
+	return nil
 }
 
 type exportCounter struct {
@@ -53,9 +50,6 @@ type exportCounter struct {
 	Approvals        int64 `json:"approvals"`
 	Runs             int64 `json:"runs"`
 	Evidence         int64 `json:"evidence"`
-	Memories         int64 `json:"memories"`
-	Revisions        int64 `json:"memory_revisions"`
-	Sources          int64 `json:"memory_sources"`
 	VoiceLinks       int64 `json:"voice_associations"`
 	VoiceResults     int64 `json:"voice_result_deliveries"`
 	VoiceTranscripts int64 `json:"voice_transcript_turns"`
@@ -135,10 +129,6 @@ func (s *Server) handleScopedExport(w http.ResponseWriter, r *http.Request) {
 	}
 	if !HasScope(p, "export:read") || !HasScope(p, "client:read") {
 		writeError(w, apiError(http.StatusForbidden, "forbidden", "export:read and client:read scopes are required", nil))
-		return
-	}
-	if scope == "personal" && !HasScope(p, "memory:read:personal") || scope == "workspace" && !hasAnyExportMemoryGrant(p) {
-		writeError(w, apiError(http.StatusForbidden, "forbidden", "the requested memory read scope is required", nil))
 		return
 	}
 
@@ -413,12 +403,13 @@ func buildExportManifest(id string, p contracts.Principal, scope string, cursor 
 			"export_audit_event_cursor": strconv.FormatInt(cursor+1, 10), "export_audit_event_id": id,
 			"export_audit_event_type": "data.export.prepared", "source": "sqlite_authority",
 		},
-		"content":     map[string]any{"inventory": []string{"projects", "tasks", "task_dependencies", "task_entries", "approvals", "runs", "evidence", "memory_claims", "memory_revisions", "memory_sources", "voice_associations", "voice_result_deliveries", "voice_transcript_turns", "capability_authorizations"}, "counts": counts},
+		"content":     map[string]any{"inventory": []string{"projects", "tasks", "task_dependencies", "task_entries", "approvals", "runs", "evidence", "voice_associations", "voice_result_deliveries", "voice_transcript_turns", "capability_authorizations"}, "counts": counts},
 		"permissions": map[string]any{"scope": scope, "row_visibility": "principal_authorized", "secret_values": "excluded"},
 		"artifacts":   map[string]any{"bytes": "referenced_not_included", "voice_audio_bytes": "omitted"},
 		"derived":     map[string]any{"mem0": "not_included_rebuildable", "qdrant": "not_included_rebuildable", "cache": "not_included"},
 		"omissions":   []string{"backup_credentials_external_volume", "service_configuration_secret_values", "large_artifact_bytes", "voice_audio_bytes", "legacy_voice_turn_delegation_records"},
 		"integrity":   map[string]any{"data_bytes": dataBytes, "data_sha256": dataHash},
+		"memory":      map[string]any{"included": false, "reason": "Memory is stored in Mem0 and is not included; the worker has no export endpoint."},
 		"streaming":   map[string]any{"memory_threshold_bytes": int64(64 << 20), "archive_hard_limit_bytes": maxScopedArchiveBytes, "max_field_bytes": maxScopedExportFieldBytes},
 	}
 }
@@ -451,79 +442,6 @@ func validateExportFieldBounds(ctx context.Context, tx *sql.Tx, p contracts.Prin
 		if size > maxScopedExportFieldBytes {
 			return errExportFieldTooLarge
 		}
-	}
-	claims, err := tx.QueryContext(ctx, `SELECT id,scope_kind,scope_id,principal_id,length(CAST(subject AS BLOB)),length(CAST(claim_key AS BLOB)) FROM memory_claims WHERE workspace_id=? AND deleted_at IS NULL AND status!='tombstoned'`, p.WorkspaceID)
-	if err != nil {
-		return err
-	}
-	for claims.Next() {
-		var id, kind, scopeID, owner string
-		var subjectBytes, keyBytes int64
-		if err = claims.Scan(&id, &kind, &scopeID, &owner, &subjectBytes, &keyBytes); err != nil {
-			claims.Close()
-			return err
-		}
-		allowed, accessErr := exportMemoryScopeAllowed(ctx, tx, p, kind, scopeID, owner)
-		if accessErr != nil {
-			claims.Close()
-			return accessErr
-		}
-		if !allowed || (scope == "personal" && kind != "personal") || (scope == "workspace" && kind == "personal") {
-			continue
-		}
-		if subjectBytes > maxScopedExportFieldBytes || keyBytes > maxScopedExportFieldBytes {
-			claims.Close()
-			return errExportFieldTooLarge
-		}
-		var revisionBytes int64
-		if err = tx.QueryRowContext(ctx, `SELECT coalesce(max(length(CAST(content AS BLOB))),0) FROM memory_revisions WHERE claim_id=?`, id).Scan(&revisionBytes); err != nil {
-			claims.Close()
-			return err
-		}
-		if revisionBytes > maxScopedExportFieldBytes {
-			claims.Close()
-			return errExportFieldTooLarge
-		}
-		sources, sourceErr := tx.QueryContext(ctx, `SELECT s.scope_kind,s.scope_id,s.principal_id,length(CAST(s.reference AS BLOB)),length(CAST(s.content_hash AS BLOB)),length(CAST(s.producer AS BLOB)) FROM memory_revision_sources rs JOIN memory_sources s ON s.workspace_id=rs.workspace_id AND s.id=rs.source_id AND s.version=rs.source_version WHERE rs.claim_id=? AND rs.workspace_id=? AND s.deleted_at IS NULL`, id, p.WorkspaceID)
-		if sourceErr != nil {
-			claims.Close()
-			return sourceErr
-		}
-		for sources.Next() {
-			var sourceKind, sourceScope, sourceOwner string
-			var referenceBytes, hashBytes, producerBytes int64
-			if sourceErr = sources.Scan(&sourceKind, &sourceScope, &sourceOwner, &referenceBytes, &hashBytes, &producerBytes); sourceErr != nil {
-				break
-			}
-			sourceAllowed, accessErr := exportMemoryScopeAllowed(ctx, tx, p, sourceKind, sourceScope, sourceOwner)
-			if accessErr != nil {
-				sourceErr = accessErr
-				break
-			}
-			if sourceAllowed && (referenceBytes > maxScopedExportFieldBytes || hashBytes > maxScopedExportFieldBytes || producerBytes > maxScopedExportFieldBytes) {
-				sourceErr = errExportFieldTooLarge
-				break
-			}
-		}
-		if sourceErr == nil {
-			sourceErr = sources.Err()
-		}
-		closeErr := sources.Close()
-		if sourceErr != nil {
-			claims.Close()
-			return sourceErr
-		}
-		if closeErr != nil {
-			claims.Close()
-			return closeErr
-		}
-	}
-	if err = claims.Err(); err != nil {
-		claims.Close()
-		return err
-	}
-	if err = claims.Close(); err != nil {
-		return err
 	}
 	return nil
 }
@@ -560,98 +478,6 @@ func exportAuthorizationFingerprint(ctx context.Context, q *sql.Tx, p contracts.
 		if closeErr != nil {
 			return nil, closeErr
 		}
-	}
-	var claims *sql.Rows
-	var err error
-	if exportScope == "personal" {
-		claims, err = q.QueryContext(ctx, `SELECT id,scope_kind,scope_id,principal_id,revision,status FROM memory_claims WHERE workspace_id=? AND scope_kind='personal' AND principal_id=? AND deleted_at IS NULL AND status!='tombstoned' ORDER BY id`, p.WorkspaceID, p.SubjectID)
-	} else {
-		claims, err = q.QueryContext(ctx, `SELECT id,scope_kind,scope_id,principal_id,revision,status FROM memory_claims WHERE workspace_id=? AND scope_kind IN ('workspace','project','task') AND deleted_at IS NULL AND status!='tombstoned' ORDER BY id`, p.WorkspaceID)
-	}
-	if err != nil {
-		return nil, err
-	}
-	for claims.Next() {
-		var id, kind, scopeID, principalID, status string
-		var revision int64
-		if err = claims.Scan(&id, &kind, &scopeID, &principalID, &revision, &status); err != nil {
-			claims.Close()
-			return nil, err
-		}
-		allowed, accessErr := exportMemoryScopeAllowed(ctx, q, p, kind, scopeID, principalID)
-		if accessErr != nil {
-			claims.Close()
-			return nil, accessErr
-		}
-		if !allowed {
-			continue
-		}
-		_, _ = io.WriteString(h, id+"\x00"+strconv.FormatInt(revision, 10)+"\x00"+status+"\x00")
-		revisions, queryErr := q.QueryContext(ctx, `SELECT revision,content,authority_kind,status,recorded_at,extractor_version FROM memory_revisions WHERE claim_id=? ORDER BY revision`, id)
-		if queryErr != nil {
-			claims.Close()
-			return nil, queryErr
-		}
-		for revisions.Next() {
-			var rev int64
-			var content, authority, revStatus, recorded, extractor string
-			if queryErr = revisions.Scan(&rev, &content, &authority, &revStatus, &recorded, &extractor); queryErr != nil {
-				break
-			}
-			_, _ = io.WriteString(h, strconv.FormatInt(rev, 10)+"\x00"+content+"\x00"+authority+"\x00"+revStatus+"\x00"+recorded+"\x00"+extractor+"\x00")
-			sources, sourceErr := q.QueryContext(ctx, `SELECT s.id,s.version,s.scope_kind,s.scope_id,s.principal_id,s.reference,coalesce(s.deleted_at,'') FROM memory_revision_sources rs JOIN memory_sources s ON s.workspace_id=rs.workspace_id AND s.id=rs.source_id AND s.version=rs.source_version WHERE rs.claim_id=? AND rs.revision=? AND rs.workspace_id=? ORDER BY s.id,s.version`, id, rev, p.WorkspaceID)
-			if sourceErr != nil {
-				queryErr = sourceErr
-				break
-			}
-			for sources.Next() {
-				var sourceID, sourceKind, sourceScopeID, sourcePrincipalID, reference, deleted string
-				var sourceVersion int64
-				if sourceErr = sources.Scan(&sourceID, &sourceVersion, &sourceKind, &sourceScopeID, &sourcePrincipalID, &reference, &deleted); sourceErr != nil {
-					break
-				}
-				sourceAllowed, permissionErr := exportMemoryScopeAllowed(ctx, q, p, sourceKind, sourceScopeID, sourcePrincipalID)
-				if permissionErr != nil {
-					sourceErr = permissionErr
-					break
-				}
-				if sourceAllowed {
-					_, _ = io.WriteString(h, sourceID+"\x00"+strconv.FormatInt(sourceVersion, 10)+"\x00"+reference+"\x00"+deleted+"\x00")
-				}
-			}
-			if sourceErr == nil {
-				sourceErr = sources.Err()
-			}
-			closeSourceErr := sources.Close()
-			if sourceErr != nil {
-				queryErr = sourceErr
-				break
-			}
-			if closeSourceErr != nil {
-				queryErr = closeSourceErr
-				break
-			}
-		}
-		if queryErr == nil {
-			queryErr = revisions.Err()
-		}
-		closeRevisionErr := revisions.Close()
-		if queryErr != nil {
-			claims.Close()
-			return nil, queryErr
-		}
-		if closeRevisionErr != nil {
-			claims.Close()
-			return nil, closeRevisionErr
-		}
-	}
-	err = claims.Err()
-	closeErr := claims.Close()
-	if err != nil {
-		return nil, err
-	}
-	if closeErr != nil {
-		return nil, closeErr
 	}
 	return h.Sum(nil), nil
 }
@@ -731,12 +557,6 @@ func writeExportDocument(ctx context.Context, tx *sql.Tx, out io.Writer, p contr
 	if err := writeRows(ctx, tx, out, &counts.Capabilities, capabilityQuery, []any{p.WorkspaceID, p.SubjectID, scope}); err != nil {
 		return err
 	}
-	if _, err := io.WriteString(out, `,"memory":`); err != nil {
-		return err
-	}
-	if err := writeMemoryRows(ctx, tx, out, p, scope, counts); err != nil {
-		return err
-	}
 	_, err := io.WriteString(out, `}`)
 	return err
 }
@@ -749,15 +569,6 @@ func exportVisibilityPredicate() visibility {
 		task:      `(t.owner_subject_id=?2)`,
 		taskOther: `(dep.owner_subject_id=?2)`,
 		taskOnT:   `(t.owner_subject_id=?2)`}
-}
-
-func hasAnyExportMemoryGrant(p contracts.Principal) bool {
-	for _, scope := range p.Scopes {
-		if scope == "memory:read:workspace" || strings.HasPrefix(scope, "memory:read:project:") || strings.HasPrefix(scope, "memory:read:task:") {
-			return true
-		}
-	}
-	return false
 }
 
 func writeRows(ctx context.Context, tx *sql.Tx, out io.Writer, target *int64, query string, args []any) error {
@@ -800,273 +611,4 @@ func writeJSONValue(out io.Writer, value any) error {
 	}
 	_, err = out.Write(data)
 	return err
-}
-
-func writeMemoryRows(ctx context.Context, tx *sql.Tx, out io.Writer, p contracts.Principal, exportScope string, counts *exportCounter) error {
-	var rows *sql.Rows
-	var err error
-	if exportScope == "personal" {
-		rows, err = tx.QueryContext(ctx, `SELECT id,scope_kind,scope_id,principal_id,subject,claim_key,authority_kind,status,revision,coalesce(valid_from,''),coalesce(valid_to,''),coalesce(supersedes_id,'') FROM memory_claims WHERE workspace_id=? AND scope_kind='personal' AND principal_id=? AND deleted_at IS NULL AND status!='tombstoned' ORDER BY created_at,id`, p.WorkspaceID, p.SubjectID)
-	} else {
-		rows, err = tx.QueryContext(ctx, `SELECT id,scope_kind,scope_id,principal_id,subject,claim_key,authority_kind,status,revision,coalesce(valid_from,''),coalesce(valid_to,''),coalesce(supersedes_id,'') FROM memory_claims WHERE workspace_id=? AND scope_kind IN ('workspace','project','task') AND deleted_at IS NULL AND status!='tombstoned' ORDER BY created_at,id`, p.WorkspaceID)
-	}
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	if _, err = io.WriteString(out, `[`); err != nil {
-		return err
-	}
-	first := true
-	for rows.Next() {
-		var id, kind, scopeID, principalID, subject, key, authority, status, validFrom, validTo, supersedes string
-		var revision int64
-		if err = rows.Scan(&id, &kind, &scopeID, &principalID, &subject, &key, &authority, &status, &revision, &validFrom, &validTo, &supersedes); err != nil {
-			return err
-		}
-		allowed, err := exportMemoryScopeAllowed(ctx, tx, p, kind, scopeID, principalID)
-		if err != nil {
-			return err
-		}
-		if !allowed {
-			continue
-		}
-		if !first {
-			if _, err = io.WriteString(out, `,`); err != nil {
-				return err
-			}
-		}
-		first = false
-		counts.Memories++
-		if _, err = io.WriteString(out, `{"id":`); err != nil {
-			return err
-		}
-		if err = writeJSONValue(out, id); err != nil {
-			return err
-		}
-		claim := map[string]any{"scope": map[string]any{"kind": kind, "id": scopeID, "principal_id": principalID}, "subject": subject, "key": key, "authority_kind": authority, "status": status, "revision": revision}
-		if validFrom != "" {
-			claim["valid_from"] = validFrom
-		}
-		if validTo != "" {
-			claim["valid_to"] = validTo
-		}
-		if supersedes != "" {
-			included, checkErr := exportMemoryClaimIncluded(ctx, tx, p, exportScope, supersedes)
-			if checkErr != nil {
-				return checkErr
-			}
-			if included {
-				claim["supersedes"] = supersedes
-			}
-		}
-		if _, err = io.WriteString(out, `,"record":`); err != nil {
-			return err
-		}
-		if err = writeJSONValue(out, claim); err != nil {
-			return err
-		}
-		if _, err = io.WriteString(out, `,"revisions":`); err != nil {
-			return err
-		}
-		if err = writeMemoryRevisions(ctx, tx, out, p, id, counts); err != nil {
-			return err
-		}
-		if _, err = io.WriteString(out, `}`); err != nil {
-			return err
-		}
-	}
-	if err = rows.Err(); err != nil {
-		return err
-	}
-	_, err = io.WriteString(out, `]`)
-	return err
-}
-
-func exportMemoryScopeAllowed(ctx context.Context, tx *sql.Tx, p contracts.Principal, kind, id, owner string) (bool, error) {
-	switch kind {
-	case "personal":
-		return owner == p.SubjectID && HasScope(p, "memory:read:personal"), nil
-	case "workspace":
-		return HasScope(p, "memory:read:workspace"), nil
-	case "project":
-		if !HasScope(p, "memory:read:workspace") && !HasScope(p, "memory:read:project:"+id) {
-			return false, nil
-		}
-		return PrincipalCanAccessProject(ctx, tx, p, id)
-	case "task":
-		if !HasScope(p, "memory:read:workspace") && !HasScope(p, "memory:read:task:"+id) {
-			return false, nil
-		}
-		return PrincipalCanAccessTask(ctx, tx, p, id)
-	default:
-		return false, nil
-	}
-}
-
-func writeMemoryRevisions(ctx context.Context, tx *sql.Tx, out io.Writer, p contracts.Principal, claimID string, counts *exportCounter) error {
-	rows, err := tx.QueryContext(ctx, `SELECT revision,content,authority_kind,status,recorded_at,extractor_version FROM memory_revisions WHERE claim_id=? ORDER BY revision`, claimID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	if _, err = io.WriteString(out, `[`); err != nil {
-		return err
-	}
-	first := true
-	for rows.Next() {
-		var revision int64
-		var content, authority, status, recorded, extractor string
-		if err = rows.Scan(&revision, &content, &authority, &status, &recorded, &extractor); err != nil {
-			return err
-		}
-		if !first {
-			if _, err = io.WriteString(out, `,`); err != nil {
-				return err
-			}
-		}
-		first = false
-		counts.Revisions++
-		if _, err = io.WriteString(out, `{"revision":`); err != nil {
-			return err
-		}
-		if err = writeJSONValue(out, revision); err != nil {
-			return err
-		}
-		if _, err = io.WriteString(out, `,"content":`); err != nil {
-			return err
-		}
-		if err = writeJSONValue(out, content); err != nil {
-			return err
-		}
-		if _, err = io.WriteString(out, `,"authority_kind":`); err != nil {
-			return err
-		}
-		if err = writeJSONValue(out, authority); err != nil {
-			return err
-		}
-		if _, err = io.WriteString(out, `,"status":`); err != nil {
-			return err
-		}
-		if err = writeJSONValue(out, status); err != nil {
-			return err
-		}
-		if _, err = io.WriteString(out, `,"recorded_at":`); err != nil {
-			return err
-		}
-		if err = writeJSONValue(out, recorded); err != nil {
-			return err
-		}
-		if _, err = io.WriteString(out, `,"extractor_version":`); err != nil {
-			return err
-		}
-		if err = writeJSONValue(out, extractor); err != nil {
-			return err
-		}
-		if _, err = io.WriteString(out, `,"sources":`); err != nil {
-			return err
-		}
-		if err = writeMemorySources(ctx, tx, out, p, claimID, revision, counts); err != nil {
-			return err
-		}
-		if _, err = io.WriteString(out, `}`); err != nil {
-			return err
-		}
-	}
-	if err = rows.Err(); err != nil {
-		return err
-	}
-	_, err = io.WriteString(out, `]`)
-	return err
-}
-
-func writeMemorySources(ctx context.Context, tx *sql.Tx, out io.Writer, p contracts.Principal, claimID string, revision int64, counts *exportCounter) error {
-	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.version,s.scope_kind,s.scope_id,s.principal_id,s.kind,s.reference,s.content_hash,s.recorded_at,s.producer
-FROM memory_revision_sources rs JOIN memory_sources s ON s.workspace_id=rs.workspace_id AND s.id=rs.source_id AND s.version=rs.source_version
-WHERE rs.claim_id=? AND rs.revision=? AND rs.workspace_id=? AND s.deleted_at IS NULL ORDER BY s.id,s.version`, claimID, revision, p.WorkspaceID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	if _, err = io.WriteString(out, `[`); err != nil {
-		return err
-	}
-	first := true
-	for rows.Next() {
-		var id, kind, scopeID, principalID, sourceKind, reference, contentHash, recorded, producer string
-		var version int64
-		if err = rows.Scan(&id, &version, &kind, &scopeID, &principalID, &sourceKind, &reference, &contentHash, &recorded, &producer); err != nil {
-			return err
-		}
-		allowed, err := exportMemoryScopeAllowed(ctx, tx, p, kind, scopeID, principalID)
-		if err != nil {
-			return err
-		}
-		if !allowed {
-			continue
-		}
-		if !first {
-			if _, err = io.WriteString(out, `,`); err != nil {
-				return err
-			}
-		}
-		first = false
-		counts.Sources++
-		safeReference, err := safeExportSourceReference(ctx, tx, p, reference)
-		if err != nil {
-			return err
-		}
-		if err = writeJSONValue(out, map[string]any{"id": id, "version": version, "scope": map[string]any{"kind": kind, "id": scopeID, "principal_id": principalID}, "kind": sourceKind, "reference": safeReference, "content_hash": contentHash, "recorded_at": recorded, "producer": producer}); err != nil {
-			return err
-		}
-	}
-	if err = rows.Err(); err != nil {
-		return err
-	}
-	_, err = io.WriteString(out, `]`)
-	return err
-}
-
-func exportMemoryClaimIncluded(ctx context.Context, tx *sql.Tx, p contracts.Principal, exportScope, claimID string) (bool, error) {
-	var kind, scopeID, principalID string
-	err := tx.QueryRowContext(ctx, `SELECT scope_kind,scope_id,principal_id FROM memory_claims WHERE workspace_id=? AND id=? AND deleted_at IS NULL AND status!='tombstoned'`, p.WorkspaceID, claimID).Scan(&kind, &scopeID, &principalID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if exportScope == "personal" && kind != "personal" || exportScope == "workspace" && kind == "personal" {
-		return false, nil
-	}
-	return exportMemoryScopeAllowed(ctx, tx, p, kind, scopeID, principalID)
-}
-
-func safeExportSourceReference(ctx context.Context, tx *sql.Tx, p contracts.Principal, reference string) (string, error) {
-	prefix, id, ok := strings.Cut(reference, ":")
-	if !ok || id == "" {
-		return "", nil
-	}
-	visible := exportVisibilityPredicate()
-	var count int
-	switch prefix {
-	case "task_entry":
-		err := tx.QueryRowContext(ctx, `SELECT count(*) FROM task_entries e JOIN tasks t ON t.id=e.task_id AND t.workspace_id=e.workspace_id WHERE e.id=?3 AND e.workspace_id=?1 AND `+visible.taskOnT, p.WorkspaceID, p.SubjectID, id).Scan(&count)
-		if err != nil {
-			return "", err
-		}
-	case "evidence":
-		err := tx.QueryRowContext(ctx, `SELECT count(*) FROM evidence e JOIN tasks t ON t.id=e.task_id AND t.workspace_id=e.workspace_id WHERE e.id=?3 AND e.workspace_id=?1 AND `+visible.taskOnT, p.WorkspaceID, p.SubjectID, id).Scan(&count)
-		if err != nil {
-			return "", err
-		}
-	default:
-		// Events and command receipts are intentionally outside this export
-		// projection, so their opaque identities are redacted here.
-		return "", nil
-	}
-	if count != 1 {
-		return "", nil
-	}
-	return reference, nil
 }

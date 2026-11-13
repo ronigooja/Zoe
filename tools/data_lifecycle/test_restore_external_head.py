@@ -14,7 +14,7 @@ def record_line(sequence: int, generation: int, previous_hash: str) -> tuple[byt
         "lineage_id": "lineage-fixture",
         "generation": generation,
         "workspace_id": "default",
-        "entity_kind": "memory_claim",
+        "entity_kind": "test_record",
         "entity_id": f"claim-{sequence}",
         "entity_version": 2,
         "actor_id": "owner",

@@ -12,7 +12,7 @@
   ],
   "service_units": ["zoe-compose.service", "zoe-runner.service", "zoe-backup.service", "zoe-backup.timer"],
   "external_resources": [
-    {"kind": "zoe_opencode_runtime", "id": "REPLACE_WITH_OWNED_OPENCODE_RUNTIME_ID"},
+    {"kind": "opencode_runtime", "id": "REPLACE_WITH_OWNED_OPENCODE_RUNTIME_ID"},
     {"kind": "capability_container", "id": "REPLACE_WITH_OWNED_SERVICE_ID"},
     {"kind": "managed_volume", "id": "REPLACE_WITH_OWNED_VOLUME_ID"},
     {"kind": "qdrant_index", "id": "REPLACE_WITH_OWNED_INDEX_ID"},

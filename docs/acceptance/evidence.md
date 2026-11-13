@@ -22,6 +22,12 @@ These retained observations still support current implementation conclusions. Ea
 
 ## Current OpenCode acceptance gates
 
+### Claim-memory removal boundary - 2026-11-13
+
+When evaluating the fresh-schema claim-removal branch, historical claim-memory, runner-memory context, native memory-management, and old-backup compatibility evidence below is superseded, not acceptance of the replacement. Memory is worker-owned; exports explicitly exclude it. Generic journal/manifest safety remains independent of memory deletion. Linux SQLite suites, macOS Swift builds, real Mem0/Qdrant behavior, deployment, and end-to-end acceptance require separate coordinator evidence.
+
+Local synthetic checks on this branch: whole-repository Go build/vet; targeted worker HTTP deletion/no-retry, protocol, migration, scheduler utilities and SQLite ingestion/cadence/CAS fixtures, voice acknowledgement/recall replay, generic journal, lifecycle-token and server composition checks passed. Generic manifest/export component checks passed with canonical temporary paths. Documentation checks and deployment log/static fixtures passed; rendered Compose fixtures skipped because Docker Compose was unavailable. Export acceptance, runner rotation, and maintenance reopen checks were blocked by local `SQLITE_BUSY`. Python lifecycle fixtures passed using the existing operator environment. No Swift build, Linux suite, deployment, or real-worker acceptance is claimed.
+
 ### Worker memory ingestion component checks - 2026-11-13
 
 Source: `feat/memory-batch-ingest`, based on `163fb5a` or later; local macOS with synthetic fixtures only. `go build ./...` and `go vet ./internal/memory ./internal/memoryapi ./internal/voice ./cmd/zoe-server` passed. One-package targeted `nice -n 10 go test ... -count=1` invocations passed for memory interval/chunking/disabled-client tests, memory API protocol/logging and migration-222 fresh/upgrade tests, server memory-API/composition tests, and voice recall/write/register-memory tests. Formatting and whitespace checks passed.

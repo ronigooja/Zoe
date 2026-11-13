@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-from datetime import datetime
 import fcntl
 import hashlib
 import json
@@ -18,7 +17,6 @@ import struct
 import tarfile
 import tempfile
 from typing import Any, Iterator
-import uuid
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -31,9 +29,6 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 CHUNK = 1024 * 1024
 
-DELETION_LEDGER_STATE = "memory_deletion_ledger_state"
-DELETION_LEDGER_EVENTS = "memory_deletion_events"
-DELETION_LEDGER_BASELINE = "legacy_snapshot_only"
 
 
 def fail(message: str) -> None:
@@ -117,8 +112,7 @@ def sqlite_snapshot(source: Path, destination: Path) -> dict[str, Any]:
                 instance_state = {"instance_id": row[0], "epoch": int(row[1]), "dispatch_enabled": bool(row[2]), "derived_retrieval_enabled": bool(row[3]), "fence_reason": row[4], "fenced_at": row[5], "lineage_id": row[6], "generation": int(row[7]), "deletion_sequence": int(row[8]), "event_count": event_count, "event_cursor_sum": event_cursor_sum}
             else:
                 fail("instance deletion baseline singleton is missing")
-        deletion_ledger = deletion_ledger_metadata(dst)
-        return {"integrity": "ok", "migrations": migrations, "deletion_record_counts": deletion, "instance_state": instance_state, "deletion_ledger": deletion_ledger}
+        return {"integrity": "ok", "migrations": migrations, "deletion_record_counts": deletion, "instance_state": instance_state}
     finally:
         dst.close()
         src.close()
@@ -184,124 +178,6 @@ def independent_deletion_journal_metadata(path: Path, instance_state: dict[str, 
         "snapshot_event_count": int(instance_state["event_count"]),
         "snapshot_event_cursor_sum": int(instance_state["event_cursor_sum"]),
     }
-
-
-def deletion_ledger_metadata(connection: sqlite3.Connection) -> dict[str, Any] | None:
-    """Read and validate claim-deletion ledger metadata from one frozen SQLite image.
-
-    A database predating the ledger is represented explicitly as None. It is
-    still a legacy snapshot and never proves that post-snapshot deletions are
-    complete.
-    """
-    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    has_state = DELETION_LEDGER_STATE in tables
-    has_events = DELETION_LEDGER_EVENTS in tables
-    if not has_state and not has_events:
-        return None
-    if has_state != has_events:
-        fail("memory deletion ledger tables are incomplete in SQLite snapshot")
-
-    state_columns = {row[1] for row in connection.execute(f'PRAGMA table_info("{DELETION_LEDGER_STATE}")')}
-    event_columns = {row[1] for row in connection.execute(f'PRAGMA table_info("{DELETION_LEDGER_EVENTS}")')}
-    if not {"singleton", "ledger_id", "ledger_generation", "baseline_kind", "initialized_at"} <= state_columns:
-        fail("memory deletion ledger state schema is unsupported")
-    if not {"sequence", "ledger_generation", "event_type", "workspace_id", "claim_id", "revision", "deleted_at"} <= event_columns:
-        fail("memory deletion ledger events schema is unsupported")
-
-    state_rows = connection.execute(
-        "SELECT ledger_id,ledger_generation,baseline_kind,initialized_at FROM memory_deletion_ledger_state WHERE singleton=1"
-    ).fetchall()
-    if len(state_rows) != 1 or connection.execute("SELECT count(*) FROM memory_deletion_ledger_state").fetchone()[0] != 1:
-        fail("memory deletion ledger state must contain exactly one singleton row")
-    ledger_id, generation, baseline, initialized_at = state_rows[0]
-    try:
-        if not isinstance(ledger_id, str) or str(uuid.UUID(ledger_id)) != ledger_id.lower():
-            fail("memory deletion ledger identity is invalid")
-    except (ValueError, AttributeError):
-        fail("memory deletion ledger identity is invalid")
-    if isinstance(generation, bool) or not isinstance(generation, int) or generation != 1:
-        fail("memory deletion ledger generation is unsupported")
-    if baseline != DELETION_LEDGER_BASELINE:
-        fail("memory deletion ledger baseline is unsupported")
-    if not valid_ledger_timestamp(initialized_at):
-        fail("memory deletion ledger initialization time is invalid")
-
-    count, distinct_count, non_integer_count, minimum, watermark = connection.execute(
-        "SELECT count(*),count(DISTINCT sequence),"
-        "sum(CASE WHEN typeof(sequence) != 'integer' THEN 1 ELSE 0 END),"
-        "coalesce(min(sequence),0),coalesce(max(sequence),0) FROM memory_deletion_events"
-    ).fetchone()
-    if non_integer_count or count != distinct_count or count != watermark or (count > 0 and minimum != 1):
-        fail("memory deletion ledger sequence is not contiguous in SQLite snapshot")
-    sequence_table = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'"
-    ).fetchone()
-    if sequence_table is None:
-        fail("memory deletion ledger sequence high-water is missing")
-    sequence_rows = connection.execute("SELECT seq FROM sqlite_sequence WHERE name='memory_deletion_events'").fetchall()
-    if len(sequence_rows) > 1:
-        fail("memory deletion ledger sequence high-water is ambiguous")
-    sequence_high_water = sequence_rows[0][0] if sequence_rows else 0
-    if isinstance(sequence_high_water, bool) or not isinstance(sequence_high_water, int):
-        fail("memory deletion ledger sequence high-water is invalid")
-    if sequence_high_water != watermark:
-        fail("memory deletion ledger sequence high-water does not match its events")
-
-    invalid = connection.execute(
-        "SELECT 1 FROM memory_deletion_events WHERE typeof(ledger_generation) != 'integer' OR ledger_generation != 1 "
-        "OR typeof(event_type) != 'text' OR event_type != 'claim_deleted' "
-        "OR typeof(workspace_id) != 'text' OR trim(workspace_id) = '' "
-        "OR typeof(claim_id) != 'text' OR trim(claim_id) = '' "
-        "OR typeof(revision) != 'integer' OR revision IS NULL OR revision <= 0 "
-        "OR typeof(deleted_at) != 'text' OR trim(deleted_at) = '' LIMIT 1"
-    ).fetchone()
-    if invalid is not None:
-        fail("memory deletion ledger contains an unsupported or malformed event")
-    for (deleted_at,) in connection.execute("SELECT deleted_at FROM memory_deletion_events"):
-        if not valid_ledger_timestamp(deleted_at):
-            fail("memory deletion ledger contains an unsupported or malformed event")
-
-    return {
-        "ledger_id": ledger_id,
-        "generation": int(generation),
-        "baseline_kind": baseline,
-        "initialized_at": initialized_at,
-        "watermark": int(watermark),
-        "event_count": int(count),
-    }
-
-
-def valid_ledger_timestamp(value: Any) -> bool:
-    if not isinstance(value, str) or not value.strip():
-        return False
-    try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
-    except ValueError:
-        return False
-    return parsed.utcoffset() is not None
-
-
-def validate_deletion_ledger_manifest(database_metadata: Any, database: dict[str, Any]) -> None:
-    """Require the manifest to match deletion-ledger facts in the SQLite file."""
-    if not isinstance(database, dict):
-        fail("backup database metadata is malformed")
-    manifest = database.get("deletion_ledger")
-    actual = database_metadata
-    if actual is None:
-        if manifest is not None:
-            fail("manifest deletion ledger metadata does not match legacy SQLite database")
-        return
-    if not isinstance(manifest, dict) or set(manifest) != {
-        "ledger_id", "generation", "baseline_kind", "initialized_at", "watermark", "event_count"
-    }:
-        fail("manifest deletion ledger metadata is missing or malformed")
-    for key in ("generation", "watermark", "event_count"):
-        if isinstance(manifest.get(key), bool) or not isinstance(manifest.get(key), int):
-            fail("manifest deletion ledger metadata has invalid field types")
-    if not all(isinstance(manifest.get(key), str) for key in ("ledger_id", "baseline_kind", "initialized_at")):
-        fail("manifest deletion ledger metadata has invalid field types")
-    if manifest != actual:
-        fail("manifest deletion ledger metadata does not match SQLite database")
 
 
 def load_inventory(path: Path | None) -> dict[str, Any]:
@@ -515,15 +391,8 @@ def verify_manifest(payload: Path) -> dict[str, Any]:
             rows = [{"version": int(v), "name": str(n), "namespace": str(ns)} for v, n, ns in conn.execute(f"SELECT version,name,{namespace} FROM schema_migrations ORDER BY version")]
         if rows != database_manifest.get("migrations"):
             fail("schema migration inventory does not match SQLite database")
-        ledger_metadata = deletion_ledger_metadata(conn)
-        if ledger_metadata is None and any(
-            migration.get("namespace") == "memory"
-            and migration.get("version") == 102
-            and migration.get("name") == "memory_claim_deletion_ledger_v1"
-            for migration in rows
-        ):
-            fail("memory deletion ledger tables are missing after their migration")
-        validate_deletion_ledger_manifest(ledger_metadata, database_manifest)
+        if any(migration.get("namespace") == "memory" for migration in rows):
+            fail("backup uses an unsupported schema namespace")
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if "zoe_instance_state" not in tables:
             fail("backup has no verifiable instance deletion baseline")

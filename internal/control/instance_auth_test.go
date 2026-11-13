@@ -197,7 +197,7 @@ func TestInternalCredentialsRemainScopedAndRevokedAfterRegistrationRetry(t *test
 	store, server, key := instanceAuthFixture(t)
 	runner, _ := GenerateInstanceKey()
 	worker, _ := GenerateInstanceKey()
-	for _, entry := range []struct{ token, id, scope string }{{runner, "runner", "runner:claim"}, {worker, "memory", "memory:jobs:claim"}} {
+	for _, entry := range []struct{ token, id, scope string }{{runner, "runner", "runner:claim"}, {worker, "ingest", "voice:turn:ingest"}} {
 		if err := server.RegisterRunnerCredential(context.Background(), entry.token, entry.id, []string{"default"}, []string{entry.scope}); err != nil {
 			t.Fatal(err)
 		}

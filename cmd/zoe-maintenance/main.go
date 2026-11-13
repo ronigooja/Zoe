@@ -22,7 +22,7 @@ import (
 
 	"github.com/ronigooja/Zoe/internal/capabilities"
 	"github.com/ronigooja/Zoe/internal/control"
-	"github.com/ronigooja/Zoe/internal/memory"
+	"github.com/ronigooja/Zoe/internal/memoryapi"
 	"github.com/ronigooja/Zoe/internal/storage"
 	"github.com/ronigooja/Zoe/internal/voice"
 )
@@ -173,7 +173,7 @@ func run(args []string) error {
 			return err
 		}
 		defer store.Close()
-		result, err := memory.ReconcileDeletionJournalWithTrustedHead(ctx, store, trusted)
+		result, err := storage.ReconcileDeletionJournalWithTrustedHead(ctx, store, trusted)
 		if err != nil {
 			return err
 		}
@@ -261,8 +261,8 @@ func run(args []string) error {
 	}
 }
 
-func readTrustedDeletionHead(path string) (memory.TrustedDeletionHead, error) {
-	var trusted memory.TrustedDeletionHead
+func readTrustedDeletionHead(path string) (storage.TrustedDeletionHead, error) {
+	var trusted storage.TrustedDeletionHead
 	if path == "" {
 		return trusted, errors.New("--restore-state is required for deletion reconciliation")
 	}
@@ -279,7 +279,7 @@ func readTrustedDeletionHead(path string) (memory.TrustedDeletionHead, error) {
 	}
 	var envelope struct {
 		RestoreState struct {
-			TrustedDeletionHead *memory.TrustedDeletionHead `json:"trusted_deletion_head"`
+			TrustedDeletionHead *storage.TrustedDeletionHead `json:"trusted_deletion_head"`
 		} `json:"restore_state"`
 	}
 	data, err := os.ReadFile(path)
@@ -313,7 +313,7 @@ func openStore(ctx context.Context, database string) (*storage.Store, error) {
 	if err = storage.RegisterCoreMigrations(store); err != nil {
 		return register(err)
 	}
-	if err = memory.RegisterMigrations(store); err != nil {
+	if err = memoryapi.RegisterMigrations(store); err != nil {
 		return register(err)
 	}
 	if err = voice.RegisterMigrations(store); err != nil {

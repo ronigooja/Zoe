@@ -31,9 +31,7 @@ func TestVoiceAVASCreateAcknowledgement(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]any{"answer_sdp": "answer", "voice_session_id": "gateway", "opening_context": json.RawMessage(tc.acknowledgement), "context_chars": tc.chars})
 			}))
 			defer gateway.Close()
-			store, svc := newVoiceTestService(t, Config{GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), UpstreamRoute: "avas", ContextAssembler: func(context.Context, contracts.Principal, string, string, string, int) (contracts.MemoryContext, error) {
-				return contracts.MemoryContext{Items: []contracts.MemoryContextItem{{Subject: "user", Key: "rule", Content: "context"}}}, nil
-			}})
+			store, svc := newVoiceTestService(t, Config{GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), UpstreamRoute: "avas"})
 			created, err := svc.create(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user", DeviceID: "device"}, createRequest{RequestID: "ack", OfferSDP: "offer"})
 			if err != nil {
 				t.Fatal(err)

@@ -110,3 +110,35 @@ func TestUserTuple(t *testing.T) {
 		t.Fatal("owner tuple changed or collided")
 	}
 }
+
+func TestDeleteAllIsSynchronousAndDoesNotRetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, failed := range []bool{false, true} {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			var input map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil || len(input) != 1 || input["user"] != User("workspace", "owner") || r.Method != http.MethodPost || r.URL.Path != "/v1/memory/"+"delete-all" || r.Header.Get("Authorization") != "Bearer fixture" {
+				t.Error("invalid owner deletion request")
+			}
+			if failed {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"error_kind":"backend_unavailable"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"deleted":true}`))
+		}))
+		client, err := New(server.URL, path, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = client.DeleteAll(context.Background(), User("workspace", "owner"))
+		server.Close()
+		if (err != nil) != failed || calls != 1 {
+			t.Fatalf("failed=%t calls=%d error=%v", failed, calls, err)
+		}
+	}
+}
