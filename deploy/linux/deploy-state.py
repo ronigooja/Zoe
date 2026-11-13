@@ -267,7 +267,13 @@ try:
         text = Path(path).read_text(errors='replace')
         bad = [line for line in text.splitlines() if re.search(r'panic|fatal|migration', line, re.I)]
         if kind == 'runner':
-            bad = [line for line in text.splitlines() if re.search(r'error|panic|fatal', line, re.I)]
+            # Structured retry diagnostics may mention error_kind without being errors.
+            # Keep the content-based fallback for legacy, unlevelled runner logs.
+            bad = [line for line in text.splitlines() if
+                   re.search(r'panic|fatal', line, re.I) or
+                   re.search(r'\blevel=(?:error|fatal|panic)\b', line, re.I) or
+                   (not re.search(r'\blevel=', line, re.I) and
+                    re.search(r'error', line, re.I))]
         if bad:
             print('log failures count=' + str(len(bad)))
             # Never echo arbitrary log content: only allowlisted diagnostic words.

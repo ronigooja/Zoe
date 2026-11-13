@@ -2,6 +2,40 @@
 # Synthetic host only: no Docker daemon, systemd, network, or real host data.
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Log-only fixtures also run without root or Linux host utilities.
+check_log_rules() {
+  python3 - "$repo_root/deploy/linux/deploy-state.py" <<'PY'
+import pathlib, subprocess, sys, tempfile
+prefix = 'runner iteration failed; retrying after idle interval: '
+cases = [
+    ('runner', 'level=warn '+prefix+'error_kind=refused', True),
+    ('runner', 'level=info register status=error', True),
+    ('runner', 'level=debug error_kind=unknown', True),
+    ('runner', 'level=error '+prefix+'error_kind=unknown', False),
+    ('runner', 'LEVEL=ERROR failed', False),
+    ('runner', 'level=fatal stopped', False),
+    ('runner', 'level=panic stopped', False),
+    ('runner', 'legacy error retrying', False),
+    ('runner', 'level=warn unexpected panic anywhere', False),
+    ('runner', 'level=info fatal anywhere', False),
+    ('runner', 'runner ready', True),
+    ('server', 'listening\nlevel=info register status=error', True),
+    ('server', 'listening\nlevel=info migration failed', False),
+]
+with tempfile.TemporaryDirectory() as directory:
+    path = pathlib.Path(directory)/'service.log'
+    for kind, line, passes in cases:
+        path.write_text(line+' secret=DO_NOT_LEAK_SENTINEL\n')
+        result = subprocess.run([sys.executable, sys.argv[1], 'logs', str(path), kind], capture_output=True, text=True)
+        assert (result.returncode == 0) == passes, (kind, line, result.returncode)
+        assert 'DO_NOT_LEAK_SENTINEL' not in result.stdout+result.stderr
+        if not passes:
+            assert 'log failures count=1' in result.stdout
+print('deployment log severity fixtures passed')
+PY
+}
+check_log_rules
+[[ "${1:-}" != --logs-only ]] || exit 0
 [[ $EUID -eq 0 ]] || { echo 'run test-deploy.sh as root (CI uses sudo)'; exit 1; }
 task_root="$(mktemp -d)"
 trap 'rm -rf -- "$task_root"' EXIT
@@ -154,6 +188,8 @@ elif cmd == 'journalctl':
     assert args == ['-u','zoe-runner','--since',value,'--no-pager']
     record()
     print('runner ready')
+    if case == 'happy':
+        print('level=warn runner iteration failed; retrying after idle interval: error_kind=connection_refused')
 elif cmd == 'sleep': pass
 elif cmd == 'docker':
     if args[0] == 'compose':

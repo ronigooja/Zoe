@@ -113,11 +113,11 @@ func (c *ControlClient) Claim(ctx context.Context) (*contracts.JobClaim, error) 
 		return nil, nil
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, safeHTTPError("claim", response.StatusCode)
+		return nil, controlHTTPError{operation: "claim", status: response.StatusCode}
 	}
 	var claim contracts.JobClaim
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&claim); err != nil {
-		return nil, fmt.Errorf("decode runner claim: %w", err)
+		return nil, controlDecodeError{fmt.Errorf("decode runner claim: %w", err)}
 	}
 	return &claim, nil
 }
@@ -148,13 +148,13 @@ func (c *ControlClient) Current(ctx context.Context) ([]contracts.JobClaim, erro
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, currentClaimsHTTPError{status: response.StatusCode}
+		return nil, controlHTTPError{operation: "read current claims", status: response.StatusCode}
 	}
 	var body struct {
 		Claims []contracts.JobClaim `json:"claims"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&body); err != nil {
-		return nil, fmt.Errorf("decode current claims: %w", err)
+		return nil, controlDecodeError{fmt.Errorf("decode current claims: %w", err)}
 	}
 	return body.Claims, nil
 }

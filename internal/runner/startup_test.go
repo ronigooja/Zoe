@@ -122,7 +122,7 @@ func TestStartupCurrentCapReturnsLastError(t *testing.T) {
 	defer server.Close()
 	start := time.Now()
 	_, err := startupTestEngine(t, server, server.Client()).StartupCurrent(context.Background(), 650*time.Millisecond)
-	var status currentClaimsHTTPError
+	var status controlHTTPError
 	if !errors.As(err, &status) || status.status != 503 || calls.Load() != 2 || time.Since(start) > time.Second {
 		t.Fatalf("expected bounded wait with last HTTP error: calls=%d err=%v", calls.Load(), err)
 	}

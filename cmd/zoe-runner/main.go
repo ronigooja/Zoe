@@ -261,7 +261,7 @@ func serve(ctx context.Context, engine *runner.Engine, deployments *runner.Deplo
 			<-active
 		default:
 			<-active
-			logging.Errorf("runner iteration failed; retrying after idle interval: %T", err)
+			logClaimFailure(ctx, err)
 		}
 		select {
 		case <-ctx.Done():
@@ -269,6 +269,17 @@ func serve(ctx context.Context, engine *runner.Engine, deployments *runner.Deplo
 		case <-time.After(idle):
 		}
 	}
+}
+
+func logClaimFailure(ctx context.Context, err error) {
+	if ctx.Err() != nil {
+		return
+	}
+	if kind := runner.TransientErrorKind(err); kind != "" {
+		logging.Warnf("runner iteration failed; retrying after idle interval: error_kind=%s", kind)
+		return
+	}
+	logging.Errorf("runner iteration failed; retrying after idle interval: error_kind=unclassified")
 }
 
 func startupWaitEnv() (time.Duration, error) {
