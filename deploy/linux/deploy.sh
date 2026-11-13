@@ -205,6 +205,9 @@ for release in "$dl/server" "$dl/cli"; do
 done
 cmp -s "$dl/server/bin/zoe" "$dl/cli/bin/zoe"
 [[ "$("$dl/cli/bin/zoe" --source-revision)" == "$sha" ]]
+# Resolve a missing legacy-host setting without editing or sourcing the env file.
+ZOE_MEMORY_API_TOKEN_FILE="$(state_op memory-token-path "$env_file")"
+export ZOE_MEMORY_API_TOKEN_FILE
 bash "$script_dir/deployment-candidate.sh" "$dl/server/release-manifest.json" --compose "$dl/server/deploy-linux/docker-compose.yml" --env-file "$env_file" --output "$scratch/plan.json" >/dev/null 2>&1
 state_op validate "$dl/server" "$env_file" "$units" "$current_prefix"
 python3 - "$dl/server/release-manifest.json" "$sha" <<'PY'
@@ -219,7 +222,7 @@ if [[ -e "$releases/$sha" ]]; then
 fi
 ok
 if [[ "$dry_run" == true ]]; then
-  echo 'deploy plan=backup,pull-changed-images,install-cli,switch,restart,verify; rollback=automatic'
+  echo 'deploy plan=backup,memory-token,pull-changed-images,install-cli,switch,restart,verify; rollback=automatic'
   echo 'deploy summary=dry-run; release,env,database,CLI,services unchanged'
   exit 0
 fi
@@ -254,6 +257,8 @@ fi
 ok
 # From this point failures also restore image environment / CLI before switching.
 armed=true
+step=memory-token
+state_op memory-token "$env_file"
 step=images
 state_op images "$releases/$sha" "$env_file" > "$scratch/images"
 while IFS='=' read -r key ref; do

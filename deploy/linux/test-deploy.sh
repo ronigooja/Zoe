@@ -200,6 +200,76 @@ with tempfile.TemporaryDirectory() as directory:
             del config['services'][service]
         else:
             config['services'][service] = original
+    # Only the planned memory secret may be absent; configs/other secrets fail.
+    secrets_dir = root/'secrets'
+    secrets_dir.mkdir()
+    env.write_text('ZOE_RUNNER_TOKEN_FILE='+str(secrets_dir/'runner-token')+'\n')
+    token = secrets_dir/'memory-api-token'
+    config['secrets'] = {'memory_api_token': {'file': str(token)}}
+    validate()
+    assert not token.exists() and 'ZOE_MEMORY_API_TOKEN_FILE=' not in env.read_text()
+    for kind, name, path in [('secrets', 'other', token), ('configs', 'memory_api_token', token),
+                             ('secrets', 'memory_api_token', root/'unexpected')]:
+        original = config.get(kind)
+        config[kind] = {name: {'file': str(path)}}
+        try:
+            validate()
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError('unplanned missing file accepted: '+kind+'/'+name)
+        if original is None:
+            del config[kind]
+        else:
+            config[kind] = original
+    env.write_text('UNRELATED=$(touch SHOULD_NEVER_RUN)\n')
+    try:
+        operations['memory_token_path'](str(env))
+    except SystemExit as error:
+        assert 'cannot determine' in str(error)
+    else:
+        raise AssertionError('missing runner paths accepted')
+    env.write_text('ZOE_MEMORY_RUNNER_TOKEN_FILE='+str(secrets_dir/'memory-runner-token')+'\n')
+    token.write_text('synthetic-token')
+    token.chmod(0o600)
+    real_stat = pathlib.Path.stat
+    def token_stat(path, *args, **kwargs):
+        result = real_stat(path, *args, **kwargs)
+        if path == token:
+            fields = list(result)
+            fields[4:6] = [65532, 65532]
+            return type(result)(fields)
+        return result
+    with patch.object(pathlib.Path, 'stat', token_stat):
+        assert operations['memory_token_path'](str(env)) == str(token)
+        original = env.read_bytes()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            operations['provision_memory_token'](str(env))
+        assert out.getvalue() == 'deploy step=memory-token status=present\n'
+        assert token.read_text() == 'synthetic-token'
+        assert env.read_bytes() == original + ('ZOE_MEMORY_API_TOKEN_FILE='+str(token)+'\n').encode()
+    with patch.object(pathlib.Path, 'stat', lambda path, *a, **kw: real_stat(path, *a, **kw)):
+        if token.stat().st_uid != 65532 or token.stat().st_gid != 65532:
+            try:
+                operations['memory_token_path'](str(env))
+            except SystemExit as error:
+                assert 'owner/group' in str(error)
+        else:
+            raise AssertionError('wrong token ownership accepted')
+    token.unlink()
+    env.write_bytes(original)
+    def install_token(args, **kwargs):
+        assert args[:8] == ['install', '-m', '0600', '-o', '65532', '-g', '65532', '--']
+        source, ready = map(pathlib.Path, args[8:])
+        assert source.parent == secrets_dir and not token.exists()
+        ready.write_bytes(source.read_bytes())
+        ready.chmod(0o600)
+    with patch.object(subprocess, 'run', side_effect=install_token), contextlib.redirect_stdout(io.StringIO()) as out:
+        operations['provision_memory_token'](str(env))
+    assert out.getvalue() == 'deploy step=memory-token status=created\n'
+    assert __import__('re').fullmatch('[0-9a-f]{64}', token.read_text())
+    assert token.stat().st_mode & 0o777 == 0o600
+    assert not list(secrets_dir.glob('.zoe-memory-token-*'))
 print('Qdrant deployment path fixtures passed')
 PY
 [[ "${1:-}" != --logs-only ]] || exit 0
@@ -218,10 +288,14 @@ p = pathlib.Path(os.environ['FIXTURE']); repo = pathlib.Path(os.environ['REPO_RO
 old, new = os.environ['OLD_SHA'], os.environ['NEW_SHA']
 for name in ['releases', 'units', 'bin', 'shims', 'archives', 'data']:
     (p/name).mkdir()
-memory_token = p/'memory_api_token'
+(p/'secrets').mkdir()
+memory_token = p/'secrets/memory-api-token'
 memory_token.write_text('fixture-memory-token\n')
 memory_token.chmod(0o600)
+os.chown(memory_token, 65532, 65532)
 env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
+       'ZOE_RUNNER_TOKEN_FILE': str(p/'secrets/runner-token'),
+       'ZOE_MEMORY_RUNNER_TOKEN_FILE': str(p/'secrets/memory-runner-token'),
        'ZOE_MEMORY_WORKER_IMAGE': 'ghcr.io/test/zoe-memory-worker@sha256:'+'3'*64,
        'ZOE_RUNNER_IMAGE': 'ghcr.io/test/zoe-runner@sha256:'+'4'*64,
        'ZOE_VOICE_UPSTREAM_ROUTE': 'avas', 'ZOE_STEWARD_TIMEOUT_MS': '30000',
@@ -239,6 +313,13 @@ if os.environ['CASE'] == 'happy':
     for prefix in ['ZOE_REGISTER', 'ZOE_COMPACT']:
         for suffix in ['BASE_URL', 'MODEL', 'API_KEY_FILE']:
             env.pop(prefix+'_'+suffix)
+if os.environ['CASE'] in ['token-create', 'token-dry-run', 'token-rollback']:
+    env.pop('ZOE_MEMORY_API_TOKEN_FILE')
+    memory_token.unlink()
+if os.environ['CASE'] == 'token-empty':
+    memory_token.write_text('')
+if os.environ['CASE'] == 'token-mode':
+    memory_token.chmod(0o644)
 (p/'stack.env').write_text(''.join(k+'='+v+'\n' for k,v in env.items()))
 (p/'stack.env').chmod(0o640)
 server_env = {k:v for k,v in env.items() if not k.endswith('_IMAGE')}
@@ -417,6 +498,15 @@ elif cmd == 'install':
         assert not (p/'data/qdrant').exists()
         record()
         (p/'data/qdrant').mkdir(mode=0o700)
+    elif len(args) == 9 and args[:7] == ['-m','0600','-o','65532','-g','65532','--']:
+        source, target = map(pathlib.Path, args[7:])
+        assert source.parent == p/'secrets' and target == pathlib.Path(str(source)+'.ready')
+        assert re.fullmatch('[0-9a-f]{64}', source.read_text())
+        assert (p/('stack.env.pre-'+new[:12])).read_bytes() == (p/'initial-env').read_bytes()
+        assert (p/'stack.env').read_bytes() == (p/'initial-env').read_bytes()
+        record()
+        shutil.copyfile(source, target)
+        target.chmod(0o600)  # Record requested ownership without chowning in the shim.
     else:
         # CLI installation still needs the host utility; never recurse into this shim.
         path = os.pathsep.join(entry for entry in os.environ['PATH'].split(os.pathsep)
@@ -447,7 +537,7 @@ elif cmd == 'docker':
         assert args == ['logs','--since',value,'server-container']
         record()
         print('listening')
-        if case in ['verify-failure','restore-required']: print('panic secret=DO_NOT_LEAK_SENTINEL')
+        if case in ['verify-failure','restore-required','token-rollback']: print('panic secret=DO_NOT_LEAK_SENTINEL')
     else: sys.exit(2)
 else: sys.exit(2)
 PY
@@ -474,6 +564,56 @@ fixture dry-run
 deploy --dry-run
 unchanged
 [[ ! -e "$FIXTURE/releases/$new" && ! -e "$FIXTURE/releases/$new.dl" ]]
+fixture token-dry-run
+deploy --dry-run
+unchanged
+[[ ! -e "$FIXTURE/secrets/memory-api-token" ]]
+for failure in token-empty token-mode; do
+  fixture "$failure"
+  if deploy; then echo "expected token refusal: $failure"; exit 1; fi
+  unchanged
+  grep -q 'memory token file' "$FIXTURE/logs/$new.log"
+done
+fixture token-create
+deploy
+python3 - "$FIXTURE" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1]); token = p/'secrets/memory-api-token'
+value = token.read_bytes()
+assert re.fullmatch(b'[0-9a-f]{64}', value)
+assert token.stat().st_mode & 0o777 == 0o600
+assert (p/'stack.env.pre-222222222222').read_bytes() == (p/'initial-env').read_bytes()
+assert 'ZOE_MEMORY_API_TOKEN_FILE='+str(token)+'\n' in (p/'stack.env').read_text()
+before = (p/'stack.env.pre-222222222222').stat(); after = (p/'stack.env').stat()
+assert after.st_mode & 0o777 == 0o640
+assert (after.st_uid, after.st_gid) == (before.st_uid, before.st_gid)
+calls = (p/'calls').read_text()
+assert calls.count('install -m 0600 -o 65532 -g 65532 -- ') == 1
+assert calls.index('install -m 0600') < calls.index('systemctl restart zoe-compose')
+for log in (p/'logs').glob('*'):
+    if log.is_file():
+        assert value not in log.read_bytes(), 'token leaked into fixture log'
+(p/'token-before').write_bytes(value)
+PY
+cp "$FIXTURE/calls" "$FIXTURE/calls-before"
+deploy
+cmp -s "$FIXTURE/calls" "$FIXTURE/calls-before"
+cmp -s "$FIXTURE/token-before" "$FIXTURE/secrets/memory-api-token"
+# Manual rollback must bypass token validation/provisioning, even if absent.
+rm "$FIXTURE/secrets/memory-api-token"
+PATH="$FIXTURE/shims:$PATH" bash "$repo_root/deploy/linux/deploy.sh" --rollback --sha "$old"
+[[ ! -e "$FIXTURE/secrets/memory-api-token" ]]
+cmp -s "$FIXTURE/initial-env" "$FIXTURE/stack.env"
+fixture token-rollback
+if deploy; then echo 'expected token deployment rollback'; exit 1; fi
+cmp -s "$FIXTURE/initial-env" "$FIXTURE/stack.env"
+[[ -s "$FIXTURE/secrets/memory-api-token" ]]
+grep -q 'deploy step=rollback status=ok' "$FIXTURE/logs/$new.log"
+python3 - "$FIXTURE" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); value = (p/'secrets/memory-api-token').read_bytes()
+assert all(value not in log.read_bytes() for log in (p/'logs').glob('*') if log.is_file())
+PY
 fixture happy
 # Regression: the former shared RFC3339 argument fails on journalctl v219;
 # Docker accepts it, but rejects the journal's @epoch form.
@@ -489,6 +629,8 @@ deploy
 [[ "$("$FIXTURE/bin/zoe" --source-revision)" == "$new" ]]
 [[ -f "$FIXTURE/logs/$new.done" && -f "$FIXTURE/db.sqlite.pre-${new:0:12}" ]]
 [[ -x "$FIXTURE/releases/$old/bin/zoe" ]]
+grep -q 'deploy step=memory-token status=present' "$FIXTURE/logs/$new.log"
+[[ "$(cat "$FIXTURE/secrets/memory-api-token")" == fixture-memory-token ]]
 [[ ! -e "$FIXTURE/releases/$new.dl" ]]
 [[ "$(grep -c '^docker pull ' "$FIXTURE/calls")" == 1 ]]
 [[ "$(stat -c '%a' "$FIXTURE/stack.env.pre-${new:0:12}")" == 640 ]]
@@ -573,4 +715,14 @@ for failure in verify-failure restore-required inactive-service runner-new-error
     if grep -q 'DATA LOSS:' "$FIXTURE/logs/$new.log"; then exit 1; fi
   fi
 done
+python3 - "$task_root" <<'PY'
+import pathlib, re, sys
+root = pathlib.Path(sys.argv[1])
+values = [path.read_bytes() for pattern in ['*/secrets/memory-api-token', '*/token-before']
+          for path in root.glob(pattern) if re.fullmatch(b'[0-9a-f]{64}', path.read_bytes())]
+assert values
+for log in root.glob('*/logs/*'):
+    if log.is_file():
+        assert all(value not in log.read_bytes() for value in values), 'token leaked into fixture logs'
+PY
 echo 'host deployment transaction tests passed'

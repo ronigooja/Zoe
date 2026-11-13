@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shlex
 import sqlite3
 import stat
@@ -77,6 +78,76 @@ def env_names(path):
         if match:
             names.add(match[1])
     return names
+
+
+def memory_token_path(env):
+    values = {}
+    for line in Path(env).read_text().splitlines():
+        match = re.match(r'^\s*(?:export\s+)?(ZOE_(?:MEMORY_API_TOKEN|MEMORY_RUNNER_TOKEN|RUNNER_TOKEN)_FILE)\s*=(.*)$', line)
+        if match:
+            if match[1] in values:
+                fail('duplicate memory token path variable name=' + match[1])
+            # Parse literal paths only, never evaluate shell substitutions.
+            parts = shlex.split(match[2], comments=True)
+            if len(parts) != 1 or any(c in parts[0] for c in '$`\n\r'):
+                fail('memory token requires a literal file path')
+            values[match[1]] = parts[0]
+    key = 'ZOE_MEMORY_API_TOKEN_FILE'
+    if key in values:
+        path = Path(values[key])
+    else:
+        directories = {str(Path(values[k]).parent) for k in
+                       ('ZOE_RUNNER_TOKEN_FILE', 'ZOE_MEMORY_RUNNER_TOKEN_FILE') if k in values}
+        if len(directories) != 1:
+            fail('cannot determine memory token secrets directory from runner token paths')
+        path = Path(directories.pop()) / 'memory-api-token'
+    if not path.is_absolute() or path.parent.resolve() != path.parent or not path.parent.is_dir() or path.is_symlink():
+        fail('memory token requires an existing canonical secrets directory and regular file')
+    if path.exists():
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size == 0:
+            fail('memory token file must be regular and non-empty')
+        if stat.S_IMODE(info.st_mode) != 0o600 or (info.st_uid, info.st_gid) != (65532, 65532):
+            fail('memory token file requires mode 0600 and owner/group 65532:65532')
+    return str(path)
+
+
+def provision_memory_token(env):
+    token = Path(memory_token_path(env))
+    created = not token.exists()
+    if created:
+        fd, temporary = tempfile.mkstemp(dir=token.parent, prefix='.zoe-memory-token-')
+        try:
+            with os.fdopen(fd, 'w') as out:
+                out.write(secrets.token_hex(32))
+                out.flush()
+                os.fsync(out.fileno())
+            # Install onto transaction-owned scratch, never onto a live token.
+            subprocess.run(['install', '-m', '0600', '-o', '65532', '-g', '65532',
+                            '--', temporary, temporary + '.ready'], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if token.exists() or token.is_symlink():
+                fail('memory token appeared during provisioning; refusing overwrite')
+            os.rename(temporary + '.ready', token)
+        finally:
+            for name in (temporary, temporary + '.ready'):
+                if os.path.exists(name):
+                    os.unlink(name)
+    path = Path(env)
+    if 'ZOE_MEMORY_API_TOKEN_FILE' not in env_names_file(env):
+        # Append in place: preserve ownership, mode and every existing byte.
+        with path.open('ab') as out:
+            original = path.read_bytes()
+            out.write((b'\n' if original and not original.endswith(b'\n') else b'') +
+                      ('ZOE_MEMORY_API_TOKEN_FILE=' + shlex.quote(str(token)) + '\n').encode())
+            out.flush()
+            os.fsync(out.fileno())
+    print('deploy step=memory-token status=' + ('created' if created else 'present'))
+
+
+def env_names_file(path):
+    return {m[1] for line in Path(path).read_text().splitlines()
+            if (m := re.match(r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z_0-9]*)\s*=', line))}
 
 
 def qdrant_storage(release, env, config=None):
@@ -167,13 +238,15 @@ def validate(release, env, units, current_prefix):
                 if service == 'qdrant' and volume.get('target') == '/qdrant/storage' and volume['source'] == storage:
                     continue
                 fail('missing bind source service=' + service)
-    # Includes the shared memory_api_token: missing files fail before deployment.
+    token = memory_token_path(env) if 'memory_api_token' in config.get('secrets', {}) else ''
     for kind in ('secrets', 'configs'):
         for name, spec in config.get(kind, {}).items():
             # Unconfigured optional secrets use the empty character device.
             if kind == 'secrets' and spec.get('file') == '/dev/null':
                 continue
             if spec.get('file') and not Path(spec['file']).is_file():
+                if kind == 'secrets' and name == 'memory_api_token' and spec['file'] == token:
+                    continue  # Only this validated token is provisioned after backup.
                 fail('missing ' + kind + ' source name=' + name)
     image_refs(release)
 
@@ -233,6 +306,10 @@ try:
         extract(*args)
     elif command == 'validate':
         validate(*args)
+    elif command == 'memory-token-path':
+        print(memory_token_path(*args))
+    elif command == 'memory-token':
+        provision_memory_token(*args)
     elif command == 'images':
         for key, ref in image_refs(args[0]).items():
             old = ''
