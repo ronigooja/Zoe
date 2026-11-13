@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -114,9 +115,9 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg := Config{Steward: client, RegisterConfig: &RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "compact-fixture", APIKey: "fixture"}, CompactCharacters: 1000}}
-			writes := 0
+			var writes atomic.Int32
 			cfg.MemoryAPI = workerClient(t, func(w http.ResponseWriter, req *http.Request) {
-				writes++
+				writes.Add(1)
 				if name == "memory_failure" {
 					w.WriteHeader(503)
 					return
@@ -259,6 +260,9 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 			} else {
 				r = commitAndHandoff(t, ts, key, "current", text)
 			}
+			if name == "memory_write" || name == "memory_disabled" || name == "memory_failure" {
+				waitRecall(t, func() bool { return count(`SELECT count(*) FROM voice_recall_jobs WHERE status='done'`) == 1 })
+			}
 			switch name {
 			case "chat":
 				if r.ResourceType != "voice_turn" || r.ResourceID != "current" || r.ResourceVersion != 1 {
@@ -271,7 +275,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 					t.Fatal("chat created a task or fast reply")
 				}
 			case "memory_write":
-				if writes != 1 || count(`SELECT count(*) FROM memory_staged_writes`) != 0 || count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies`) != 0 {
+				if writes.Load() != 1 || count(`SELECT count(*) FROM memory_staged_writes`) != 0 || count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies WHERE text<>''`) != 0 || count(`SELECT count(*) FROM voice_fast_replies WHERE intent_kind='memory_write_holding' AND status='delivered'`) != 1 {
 					t.Fatal("memory worker write created task/reply or staged data")
 				}
 			case "recall":
@@ -339,7 +343,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 			if status != 200 || count(`SELECT count(*) FROM tasks`) != before {
 				t.Fatalf("repeat changed task count: %d %s", status, raw)
 			}
-			if name == "memory_write" && (writes != 1 || count(`SELECT count(*) FROM memory_staged_writes`) != 0) {
+			if name == "memory_write" && (writes.Load() != 1 || count(`SELECT count(*) FROM memory_staged_writes`) != 0 || count(`SELECT count(*) FROM voice_recall_jobs`) != 1) {
 				t.Fatal("replay wrote twice")
 			}
 			if name == "chat" {

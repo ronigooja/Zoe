@@ -404,7 +404,6 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if handled != 0 {
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, nil
 	}
-	originalContent := content
 	content = strings.TrimSpace(content)
 	if category != "task" && category != "memory_write" && category != "recall" && category != "chat" {
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech)
@@ -412,25 +411,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if category == "chat" {
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, s.markHandledTx(ctx, tx, cmd, p)
 	}
-	if category == "memory_write" {
-		var key string
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&key); err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-		var restatement string
-		if err := tx.QueryRowContext(ctx, `SELECT report_text FROM voice_turns WHERE id=?`, key).Scan(&restatement); err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-		err := s.recall.MemoryAPI.Write(ctx, memoryUser(cmd.Principal.WorkspaceID, owner), originalContent, restatement)
-		if err != nil {
-			return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}, nil, s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech)
-		}
-		if err == nil {
-			err = s.markHandledTx(ctx, tx, cmd, p)
-		}
-		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, err
-	}
-	if category == "recall" {
+	if category == "recall" || category == "memory_write" {
 		id := uuid.NewString()
 		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
 		var restatement string
@@ -439,6 +420,14 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		}
 		holding := ""
 		intent := "recall_holding"
+		if category == "memory_write" {
+			intent = memoryWriteHolding
+			// Preserve the exact committed revision without extending the job
+			// schema: a write holding receipt uses that voice_turns row's ID.
+			if err := tx.QueryRowContext(ctx, `SELECT id FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&id); err != nil {
+				return contracts.CommandResult{}, nil, err
+			}
+		}
 		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'delivered',?,?,?)`, id, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, holding, intent, at, at, at)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err

@@ -13,6 +13,9 @@ import (
 const recallNotFound = "我没有在我们的对话记录里找到相关内容。"
 const recallUnavailable = "我现在没法查看对话记录，请稍后再试。"
 
+// memoryWriteHolding identifies at-most-once writes in the shared durable queue.
+const memoryWriteHolding = "memory_write_holding"
+
 // recallFailureSpeech applies fixed wording without implying a failed check found no evidence.
 func recallFailureSpeech(status string) string {
 	return evidenceFailureSpeech(status, recallNotFound, recallUnavailable)
@@ -64,6 +67,9 @@ func (s *Service) recoverRecall(ctx context.Context, startup bool) {
 	}
 	rows.Close()
 	for _, id := range ids {
+		// A running write may already have reached Mem0. Finalize with one
+		// idempotent error receipt, never reset to pending or call the worker.
+		// Recall recovery retains its existing fallback behavior as well.
 		s.persistRecallRetry(ctx, id, s.recallFallback(ctx, id))
 	}
 }
@@ -189,15 +195,29 @@ func (s *Service) dispatchRecall(ctx context.Context) {
 func (s *Service) runRecall(id string) {
 	ctx, cancel := context.WithTimeout(s.recallCtx, s.recallTimeout())
 	defer cancel()
-	var workspace, owner, session, turn, question string
+	var workspace, owner, session, turn, question, kind string
 	var generation int64
-	if err := s.db.QueryRowContext(ctx, `SELECT workspace_id,owner_id,session_id,generation,turn_id,question FROM voice_recall_jobs WHERE id=?`, id).Scan(&workspace, &owner, &session, &generation, &turn, &question); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT j.workspace_id,j.owner_id,j.session_id,j.generation,j.turn_id,j.question,h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.id=? AND j.status='running'`, id).Scan(&workspace, &owner, &session, &generation, &turn, &question, &kind); err != nil {
 		return
 	}
 	started := time.Now()
 	var text, status string
 	var count int
-	text, count, status = s.recallAnswer(ctx, workspace, owner, question)
+	if kind == memoryWriteHolding {
+		// The CAS claim is already committed and this read is closed before
+		// calling the worker, so slow writes hold no SQLite transaction.
+		var sentence string
+		err := s.db.QueryRowContext(ctx, `SELECT v.content FROM voice_turns v JOIN voice_recall_jobs j ON j.holding_id=v.id WHERE j.id=? AND v.workspace_id=j.workspace_id AND v.session_id=j.session_id AND v.generation=j.generation AND v.turn_id=j.turn_id AND v.handoff_handled=1`, id).Scan(&sentence)
+		if err == nil {
+			err = s.recall.MemoryAPI.Write(ctx, memoryUser(workspace, owner), sentence, question)
+		}
+		status = "write_ok"
+		if err != nil {
+			text, status = stewardErrorSpeech, "write_error"
+		}
+	} else {
+		text, count, status = s.recallAnswer(ctx, workspace, owner, question)
+	}
 	elapsedMS := time.Since(started).Milliseconds()
 	// Model deadlines get a fallback, but shutdown leaves the lease for recovery.
 	if s.recallCtx.Err() != nil {
