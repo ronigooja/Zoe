@@ -381,10 +381,18 @@ elif cmd == 'date':
     print(epoch())
 elif cmd == 'sleep': pass
 elif cmd == 'install':
-    assert args == ['-d','-m','0700','-o','1000','-g','1000','--',str(p/'data/qdrant')]
-    assert not (p/'data/qdrant').exists()
-    record()
-    (p/'data/qdrant').mkdir(mode=0o700)
+    if args == ['-d','-m','0700','-o','1000','-g','1000','--',str(p/'data/qdrant')]:
+        assert not (p/'data/qdrant').exists()
+        record()
+        (p/'data/qdrant').mkdir(mode=0o700)
+    else:
+        # CLI installation still needs the host utility; never recurse into this shim.
+        path = os.pathsep.join(entry for entry in os.environ['PATH'].split(os.pathsep)
+                               if pathlib.Path(entry).resolve() != (p/'shims').resolve())
+        real_install = shutil.which('install', path=path)
+        if real_install is None:
+            sys.exit('real install not found outside fixture shims')
+        os.execv(real_install, [real_install, *args])
 elif cmd == 'docker':
     if args[0] == 'compose':
         if 'config' in args and '--format' in args: print((p/'config.json').read_text())
