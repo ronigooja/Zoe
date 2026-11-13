@@ -78,6 +78,7 @@ type Service struct {
 	resultDeliveryInterval time.Duration
 	steward                TaskSteward
 	register               *ContextRegister
+	classifying            sync.Map // Voice-turn row IDs currently being classified.
 	recall                 Config
 	recallCtx              context.Context
 	recallCancel           context.CancelFunc

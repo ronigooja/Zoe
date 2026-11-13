@@ -576,6 +576,11 @@ func (s *Service) commandCommitTurn(ctx context.Context, tx *sql.Tx, cmd control
 }
 
 func (s *Service) classifyCommittedTurn(id string) {
+	if _, loaded := s.classifying.LoadOrStore(id, struct{}{}); loaded {
+		return
+	}
+	defer s.classifying.Delete(id)
+
 	ctx, cancel := context.WithTimeout(context.Background(), s.classificationTimeout())
 	defer cancel()
 	var content, workspace, owner string
@@ -639,7 +644,15 @@ func (s *Service) classifyCommittedTurn(id string) {
 	}
 	writeCtx, stop := context.WithTimeout(context.Background(), time.Second)
 	defer stop()
-	_, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_action=?,steward_task_id=?,report_text=? WHERE id=? AND triage_category IS NULL`, route.Route, string(choice.Action), taskID, choice.Reply, id)
+	result, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_action=?,steward_task_id=?,report_text=? WHERE id=? AND triage_category IS NULL`, route.Route, string(choice.Action), taskID, choice.Reply, id)
+	if writeErr == nil {
+		var affected int64
+		affected, writeErr = result.RowsAffected()
+		if writeErr == nil && affected == 0 {
+			logging.Warnf("voice_routing_discarded id=%s reason=already_classified", id)
+			return
+		}
+	}
 	logging.Infof("voice_routing id=%s failed=%t storage_error=%t", id, err != nil, writeErr != nil)
 	if err != nil || writeErr != nil {
 		logging.Errorf("voice_routing_failure id=%s error_kind=routing_or_storage", id)
