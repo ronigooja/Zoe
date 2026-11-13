@@ -5,6 +5,6 @@
   },
   "service_config_paths": [],
   "artifact_paths": [],
-  "persistent_volume_paths": [],
+  "persistent_volume_paths": [{"root_id": "zoe", "path": "memory/qdrant"}],
   "secret_refs": []
 }

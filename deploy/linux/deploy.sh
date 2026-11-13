@@ -32,7 +32,7 @@ health_attempts="${ZOE_DEPLOY_HEALTH_ATTEMPTS:-30}"
 if [[ ! "$health_attempts" =~ ^[0-9]+$ ]]; then usage; fi
 if ((health_attempts < 1 || health_attempts > 30)); then usage; fi
 [[ $EUID -eq 0 ]] || { echo 'deploy step=preflight status=fail reason=root-required'; exit 1; }
-for tool in python3 docker systemctl journalctl gh curl sha256sum tar flock cp mv ln readlink cmp date sleep diff cut cat rm mkdir mktemp touch uname chmod; do
+for tool in python3 docker systemctl journalctl gh curl sha256sum tar flock cp mv ln readlink cmp date sleep diff cut cat rm mkdir mktemp touch uname chmod install; do
   command -v "$tool" >/dev/null || { echo "deploy step=preflight status=fail missing=$tool"; exit 1; }
 done
 # A lock is operational metadata, not deployment mutation. Dry-run leaves none.
@@ -269,6 +269,12 @@ ZOE_RELEASES_DIR="$releases" ZOE_BIN_DIR="$bin_dir" bash "$dl/cli/deploy-linux/i
 [[ "$("$bin_dir/zoe" --source-revision)" == "$sha" ]]
 ok
 step=switch
+qdrant_storage="$(state_op qdrant-storage "$releases/$sha" "$env_file")"
+# Do not let Compose auto-create a root-owned directory on existing hosts.
+# Existing storage (and every other data directory) is left untouched.
+if [[ -n "$qdrant_storage" && ! -d "$qdrant_storage" ]]; then
+  install -d -m 0700 -o 1000 -g 1000 -- "$qdrant_storage"
+fi
 state_op idle "$db"
 selector "$sha"
 # Last check immediately before service restart; no remote calls between them.

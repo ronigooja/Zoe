@@ -35,6 +35,38 @@ print('deployment log severity fixtures passed')
 PY
 }
 check_log_rules
+# These read-only path checks also run on a non-root development host.
+python3 - "$repo_root/deploy/linux/deploy-state.py" <<'PY'
+import contextlib, io, json, pathlib, runpy, subprocess, sys, tempfile
+from unittest.mock import patch
+helper = sys.argv[1]
+with tempfile.TemporaryDirectory() as directory:
+    root = pathlib.Path(directory).resolve()
+    config = {'services': {
+        'qdrant': {'volumes': [{'type': 'bind', 'source': str(root/'qdrant'), 'target': '/qdrant/storage'}]},
+        'zoe-memory-worker': {'volumes': [{'type': 'bind', 'source': str(root), 'target': '/var/lib/zoe/memory'}]}}}
+    def storage():
+        sys.argv = [helper, 'qdrant-storage', 'release', 'env']
+        with patch.object(subprocess, 'check_output', return_value=json.dumps(config)), contextlib.redirect_stdout(io.StringIO()) as out:
+            runpy.run_path(helper, run_name='__main__')
+        return out.getvalue().strip()
+    assert storage() == str(root/'qdrant')
+    assert not (root/'qdrant').exists(), 'path discovery mutated storage'
+    (root/'qdrant').mkdir(mode=0o700)
+    assert storage() == str(root/'qdrant')
+    for change in [{'type': 'tmpfs'}, {'source': str(root/'other') }]:
+        mount = config['services']['qdrant']['volumes'][0]
+        original = mount.copy()
+        mount.update(change)
+        try:
+            storage()
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError('unsafe Qdrant storage accepted')
+        mount.update(original)
+print('Qdrant deployment path fixtures passed')
+PY
 [[ "${1:-}" != --logs-only ]] || exit 0
 [[ $EUID -eq 0 ]] || { echo 'run test-deploy.sh as root (CI uses sudo)'; exit 1; }
 task_root="$(mktemp -d)"
@@ -71,6 +103,8 @@ if os.environ['CASE'] == 'happy':
 (p/'stack.env').chmod(0o640)
 config = {'services': {'zoe-server': {'environment': {k:v for k,v in env.items() if not k.endswith('_IMAGE')},
                                     'volumes': [{'type': 'bind', 'source': str(p/'data')}]}}}
+config['services']['qdrant'] = {'volumes': [{'type': 'bind', 'source': str(p/'data/qdrant'), 'target': '/qdrant/storage'}]}
+config['services']['zoe-memory-worker'] = {'volumes': [{'type': 'bind', 'source': str(p/'data'), 'target': '/var/lib/zoe/memory'}]}
 (p/'config.json').write_text(json.dumps(config))
 for revision in [old, new]:
     root = p/'releases'/revision if revision == old else p/'source'
@@ -214,6 +248,11 @@ elif cmd == 'date':
     assert args == ['+%s']
     print(epoch())
 elif cmd == 'sleep': pass
+elif cmd == 'install':
+    assert args == ['-d','-m','0700','-o','1000','-g','1000','--',str(p/'data/qdrant')]
+    assert not (p/'data/qdrant').exists()
+    record()
+    (p/'data/qdrant').mkdir(mode=0o700)
 elif cmd == 'docker':
     if args[0] == 'compose':
         if 'config' in args and '--format' in args: print((p/'config.json').read_text())
@@ -241,7 +280,7 @@ elif cmd == 'docker':
 else: sys.exit(2)
 PY
   chmod 0755 "$FIXTURE/shims/shim"
-  for tool in docker systemctl gh curl journalctl sleep date; do ln -s shim "$FIXTURE/shims/$tool"; done
+  for tool in docker systemctl gh curl journalctl sleep date install; do ln -s shim "$FIXTURE/shims/$tool"; done
   export ZOE_RELEASES_DIR="$FIXTURE/releases" ZOE_ENV_FILE="$FIXTURE/stack.env" ZOE_DB_PATH="$FIXTURE/db.sqlite"
   export ZOE_API_URL=http://local/healthz ZOE_UNITS_DIR="$FIXTURE/units" ZOE_BIN_DIR="$FIXTURE/bin"
   export ZOE_DEPLOY_LOG_DIR="$FIXTURE/logs" ZOE_DEPLOY_HEALTH_ATTEMPTS=1
@@ -288,6 +327,10 @@ journal=re.search(r'^journalctl -u zoe-runner --since @([0-9]+) --no-pager$',cal
 assert journal, 'deployment did not pass portable epoch to journalctl'
 assert journal[1] == (p/'zoe-runner-restart-epoch').read_text(), 'runner cutoff predates its restart'
 assert re.search(r'^docker logs --since 1700000000 server-container$',calls,re.M), 'server cutoff changed'
+install = 'install -d -m 0700 -o 1000 -g 1000 -- '+str(p/'data/qdrant')
+assert calls.splitlines().count(install) == 1
+assert calls.index(install) < calls.index('systemctl restart zoe-compose')
+assert (p/'data/qdrant').stat().st_mode & 0o777 == 0o700
 PY
 cp "$FIXTURE/calls" "$FIXTURE/calls-before"
 deploy
@@ -301,6 +344,7 @@ deploy
 [[ "$(readlink -f "$FIXTURE/releases/current")" == "$FIXTURE/releases/$new" ]]
 [[ "$(cat "$FIXTURE/releases/.deploy-$new/db-backup")" == *'.attempt-'* ]]
 [[ -f "$FIXTURE/db.sqlite.pre-${new:0:12}" ]]
+[[ "$(grep -c '^install ' "$FIXTURE/calls")" == 1 ]]
 [[ "$(find "$FIXTURE/releases" -maxdepth 1 -type d -name ".deploy-$new.attempt-*" | wc -l | tr -d ' ')" == 1 ]]
 fixture incomplete
 mkdir "$FIXTURE/releases/.deploy-$new"
@@ -309,7 +353,15 @@ grep -q 'incomplete transaction' "$FIXTURE/logs/$new.log"
 unchanged
 for success in runner-old-error runner-new-warn; do
   fixture "$success"
+  # Existing storage must retain its contents, ownership and mode, not converge.
+  mkdir "$FIXTURE/data/qdrant"
+  chmod 0750 "$FIXTURE/data/qdrant"
+  touch "$FIXTURE/data/qdrant/keep"
+  before_owner="$(stat -c '%u:%g' "$FIXTURE/data/qdrant")"
   deploy
+  [[ -f "$FIXTURE/data/qdrant/keep" ]]
+  [[ "$(stat -c '%a:%u:%g' "$FIXTURE/data/qdrant")" == "750:$before_owner" ]]
+  if grep -q '^install ' "$FIXTURE/calls"; then echo 'existing Qdrant storage was changed'; exit 1; fi
   [[ -f "$FIXTURE/releases/.deploy-$new/runner-changed" && -f "$FIXTURE/logs/$new.done" ]]
   [[ ! -f "$FIXTURE/releases/.deploy-$new/rolled-back" ]]
   grep -q 'deploy step=verify status=ok' "$FIXTURE/logs/$new.log"

@@ -79,6 +79,26 @@ def env_names(path):
     return names
 
 
+def qdrant_storage(release, env):
+    services = compose(release, env)['services']
+    if 'qdrant' not in services:
+        return ''  # Older releases may not include memory services.
+    mounts = [v for v in services['qdrant'].get('volumes', []) if v.get('target') == '/qdrant/storage']
+    if len(mounts) != 1 or mounts[0].get('type') != 'bind':
+        fail('Qdrant requires durable bind storage')
+    path = Path(mounts[0]['source'])
+    memory_mounts = services.get('zoe-memory-worker', {}).get('volumes', [])
+    roots = [Path(v['source']) for v in memory_mounts
+             if v.get('type') == 'bind' and v.get('target') == '/var/lib/zoe/memory']
+    if len(roots) != 1 or path != roots[0] / 'qdrant' or not path.is_absolute():
+        fail('Qdrant storage must be under the memory data root')
+    if not path.parent.is_dir() or path.parent.resolve() != path.parent or path.is_symlink():
+        fail('Qdrant storage requires an existing canonical memory root')
+    if path.exists() and not path.is_dir():
+        fail('Qdrant storage must be a directory')
+    return str(path)
+
+
 def image_refs(release):
     manifest = read(Path(release) / 'release-manifest.json')
     result = {}
@@ -282,6 +302,8 @@ try:
             fail('service log verification failed')
         if kind == 'server' and not re.search(r'listening', text, re.I):
             fail('server listening log missing')
+    elif command == 'qdrant-storage':
+        print(qdrant_storage(*args))
     elif command == 'atomic-copy':
         source, destination = map(Path, args)
         atomic(destination, source.read_text(), stat.S_IMODE(source.stat().st_mode))

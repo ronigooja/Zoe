@@ -3,9 +3,14 @@ services:
     image: qdrant/qdrant:v1.19.1
     ports:
       - "127.0.0.1:6333:6333"
-    # This instance is intentionally disposable; rebuilds repopulate it from Go authority.
-    tmpfs:
-      - /qdrant/storage
+    environment:
+      QDRANT__STORAGE__SNAPSHOTS_PATH: /qdrant/storage/snapshots
+    volumes:
+      - type: bind
+        source: ${ZOE_MEMORY_DATA_ROOT:?set a private memory data root}/qdrant
+        target: /qdrant/storage
+        bind:
+          create_host_path: false
 
   memory-worker:
     build:
@@ -26,7 +31,8 @@ services:
     depends_on:
       - qdrant
     volumes:
-      - memory-worker-state:/var/lib/zoe/memory
-
-volumes:
-  memory-worker-state:
+      - type: bind
+        source: ${ZOE_MEMORY_DATA_ROOT:?set a private memory data root}
+        target: /var/lib/zoe/memory
+        bind:
+          create_host_path: false

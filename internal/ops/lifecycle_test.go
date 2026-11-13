@@ -703,6 +703,7 @@ func TestPrepareHostCreatesFreshLayoutAndIsIdempotent(t *testing.T) {
 	}{
 		root:                                     {0750, 0, 4343},
 		filepath.Join(data, "server"):            {0700, 65532, 65532},
+		filepath.Join(data, "memory/qdrant"):     {0700, 1000, 1000},
 		filepath.Join(data, "runner/workspaces"): {0700, 4242, 4343},
 	}
 	for _, owner := range owners {
@@ -731,6 +732,9 @@ func TestPrepareHostCreatesFreshLayoutAndIsIdempotent(t *testing.T) {
 	managed := make(map[string]bool, len(owners))
 	for _, owner := range owners {
 		managed[owner.path] = true
+	}
+	if !managed[filepath.Join(data, "memory/qdrant")] {
+		t.Fatal("Qdrant storage was not prepared")
 	}
 	for _, path := range []string{
 		filepath.Join(root, "secrets"), filepath.Join(root, "runner-secrets"),

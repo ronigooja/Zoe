@@ -114,8 +114,13 @@ services:
     pids_limit: 128
     mem_limit: 2g
     cpus: 2.0
+    volumes:
+      - type: bind
+        source: ${ZOE_MEMORY_DATA_ROOT:?set a private memory data root}/qdrant
+        target: /qdrant/storage
+        bind:
+          create_host_path: false
     tmpfs:
-      - /qdrant/storage:rw,noexec,nosuid,nodev,size=2g,mode=0700,uid=1000,gid=1000
       - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
     environment:
       QDRANT__STORAGE__SNAPSHOTS_PATH: /qdrant/storage/snapshots
