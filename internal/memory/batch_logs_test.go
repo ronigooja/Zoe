@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/modelclient"
 )
 
@@ -21,8 +23,38 @@ func (m batchErrorModel) Complete(context.Context, string, string) (string, erro
 	return "", m.err
 }
 
+func TestBatchDebugModelCalls(t *testing.T) {
+	_, repo, _, now := batchFixture(t)
+	buf := captureBatchLogs(t)
+	logging.SetLevel(logging.Debug)
+	output := `[{"subject":"user","key":"preference","content":"PRIVATE_BATCH_OUTPUT"}]`
+	var sent string
+	model := batchFakeModel(t, 200, output, func(instructions, input string) {
+		sent = input
+		if instructions != MemoryExtractionInstruction {
+			t.Error("unexpected instructions")
+		}
+	})
+	if ok, err := repo.RunBatch(context.Background(), "default", "owner", now, time.Hour, model); err != nil || !ok {
+		t.Fatalf("batch: %v %v", ok, err)
+	}
+	for _, field := range []string{"instructions=" + strconv.Quote(MemoryExtractionInstruction), "input=" + strconv.Quote(sent), "output=" + strconv.Quote(output), "model_call_input", "model_call_output", "model_call_result", "component=memory_batch", "PRIVATE_BATCH_OUTPUT"} {
+		if !strings.Contains(buf.String(), field) {
+			t.Errorf("missing debug field (%d characters)", len(field))
+		}
+	}
+	for _, forbidden := range []string{"Authorization", "Bearer", "http://127.0.0.1", "owner\""} {
+		if strings.Contains(buf.String(), forbidden) {
+			t.Errorf("forbidden debug metadata %q", forbidden)
+		}
+	}
+}
+
 func captureBatchLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	previousLevel := logging.CurrentLevel()
+	logging.SetLevel(logging.Info)
+	t.Cleanup(func() { logging.SetLevel(previousLevel) })
 	var buf bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&buf)

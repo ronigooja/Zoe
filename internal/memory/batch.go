@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/modelclient"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -250,7 +251,21 @@ func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, 
 	chars = utf8.RuneCount(data)
 	stage, kind = "call_model", ""
 	callCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	call := logging.NewModelCall("memory_batch", hashString(principal)[:8], 1, "")
+	call.Input(MemoryExtractionInstruction, string(data))
+	var extracted []extractedMemory
+	defer func() {
+		resultKind := "none"
+		if runErr != nil {
+			resultKind, _ = batchErrorKind(runErr, stage, kind)
+		}
+		call.Result(struct {
+			Claims    []extractedMemory
+			Committed bool
+		}{extracted, ok}, resultKind)
+	}()
 	text, err := model.Complete(callCtx, MemoryExtractionInstruction, string(data))
+	call.Output(text)
 	if err != nil && errors.Is(callCtx.Err(), context.DeadlineExceeded) {
 		kind = "model_timeout"
 	}
@@ -259,7 +274,6 @@ func (r *Repository) RunBatch(ctx context.Context, workspace, principal string, 
 		return false, err
 	}
 	stage, kind = "parse_output", "output_invalid"
-	var extracted []extractedMemory
 	if err = modelclient.Decode(text, &extracted); err != nil {
 		return false, err
 	}

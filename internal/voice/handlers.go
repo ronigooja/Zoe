@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/memory"
 	"github.com/ronigooja/Zoe/internal/steward"
 )
@@ -264,7 +264,7 @@ func (s *Service) releaseSession(ctx context.Context, p contracts.Principal, ses
 		return 0, "", true, err
 	}
 	if !terminationVerified {
-		log.Printf("voice reaper/client release unverified for session %s", sessionID)
+		logging.Warnf("voice reaper/client release unverified for session %s", sessionID)
 	}
 	if terminationVerified {
 		return http.StatusOK, "ended", poolBlocked, nil
@@ -606,7 +606,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 			if s.steward == nil {
 				err = errors.New("steward is disabled")
 			} else {
-				choice, err = s.steward.Choose(ctx, content, route.Restatement, s.now().UTC().Format(time.RFC3339Nano), facts)
+				choice, err = s.steward.Choose(logging.WithUserHash(ctx, logging.UserHash(owner)), content, route.Restatement, s.now().UTC().Format(time.RFC3339Nano), facts)
 			}
 			if err == nil && choice.Request != "" {
 				matched := false
@@ -640,7 +640,10 @@ func (s *Service) classifyCommittedTurn(id string) {
 	writeCtx, stop := context.WithTimeout(context.Background(), time.Second)
 	defer stop()
 	_, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_action=?,steward_task_id=?,report_text=? WHERE id=? AND triage_category IS NULL`, route.Route, string(choice.Action), taskID, choice.Reply, id)
-	log.Printf("voice_routing id=%s failed=%t storage_error=%t", id, err != nil, writeErr != nil)
+	logging.Infof("voice_routing id=%s failed=%t storage_error=%t", id, err != nil, writeErr != nil)
+	if err != nil || writeErr != nil {
+		logging.Errorf("voice_routing_failure id=%s error_kind=routing_or_storage", id)
+	}
 }
 
 func (s *Service) handleTurns(w http.ResponseWriter, r *http.Request) {

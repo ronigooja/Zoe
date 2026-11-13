@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ronigooja/Zoe/internal/steward"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -22,22 +20,25 @@ import (
 	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/capabilities"
 	"github.com/ronigooja/Zoe/internal/control"
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/memory"
 	"github.com/ronigooja/Zoe/internal/modelclient"
+	"github.com/ronigooja/Zoe/internal/steward"
 	"github.com/ronigooja/Zoe/internal/storage"
 	"github.com/ronigooja/Zoe/internal/voice"
 )
 
 func main() {
+	logging.ConfigureFromEnv()
 	if len(os.Args) > 1 {
 		if err := manageInstanceKey(os.Args[1], os.Args[2:]); err != nil {
-			log.Printf("instance key rotation failed: %v", err)
+			logging.Errorf("instance key rotation failed: %T", err)
 			os.Exit(1)
 		}
 		return
 	}
 	if err := run(); err != nil {
-		log.Printf("zoe-server stopped: %v", err)
+		logging.Errorf("zoe-server stopped: %T", err)
 		os.Exit(1)
 	}
 }
@@ -48,7 +49,7 @@ func run() error {
 	if dbPath == "" {
 		return errors.New("ZOE_DATABASE_PATH is required")
 	}
-	registerConfig, err := registerConfigForStartup(os.Getenv, os.ReadFile, log.Printf)
+	registerConfig, err := registerConfigForStartup(os.Getenv, os.ReadFile, logging.Infof)
 	if err != nil {
 		return err
 	}
@@ -108,7 +109,8 @@ func run() error {
 	}
 	stewardClient, err := steward.FromEnv(os.Getenv, os.ReadFile)
 	if err != nil {
-		log.Fatalf("steward configuration: %v", err)
+		logging.Errorf("steward configuration: %T", err)
+		return err
 	}
 	var taskSteward voice.TaskSteward
 	if stewardClient != nil {
@@ -149,7 +151,7 @@ func run() error {
 		return err
 	}
 	if instanceKeyRows == 0 {
-		log.Printf("instance key is pending; waiting for zoe key init")
+		logging.Infof("instance key is pending; waiting for zoe key init")
 	}
 	if runnerToken != "" {
 		if err = control.RegisterRunnerCredentialIfMissing(ctx, store, runnerToken, env("ZOE_RUNNER_ID", "configured-runner"), splitEnv("ZOE_RUNNER_WORKSPACES", "default"), splitEnv("ZOE_RUNNER_SCOPES", "runner:claim,runner:observe,runner:control:read")); err != nil {
@@ -179,7 +181,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("zoe-server listening on %s", listener.Addr())
+	logging.Infof("zoe-server listening on %s", listener.Addr())
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- httpServer.Serve(listener)
@@ -268,7 +270,7 @@ func runPushWorker(stop <-chan struct{}, controlServer *control.Server) {
 		case <-ticker.C:
 			workCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			if err := controlServer.DispatchPushDeliveries(workCtx, 50); err != nil {
-				log.Printf("push delivery worker failed: %v", err)
+				logging.Errorf("push delivery worker failed: %T", err)
 			}
 			cancel()
 		}

@@ -5,10 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 const (
@@ -142,7 +143,7 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		ids = append(ids, id)
-		log.Printf("client diagnostic id=%s device_hash=%s phase=%s status=%d error_type=%s", id, deviceHashText, logSafe(event.Phase, 64), event.HTTPStatus, logSafe(event.ErrorType, 64))
+		logging.Infof("client diagnostic id=%s device_hash=%s phase=%s status=%d error_type=%s", id, deviceHashText, logSafe(event.Phase, 64), event.HTTPStatus, logSafe(event.ErrorType, 64))
 	}
 	// Keep this table short-lived and independent from the business event stream.
 	_, _ = tx.ExecContext(r.Context(), `DELETE FROM client_diagnostic_events WHERE received_at < ?`, now.Add(-diagnosticRetention).Format(time.RFC3339Nano))

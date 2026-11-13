@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"sort"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/modelclient"
 )
 
@@ -113,7 +113,10 @@ func (r *ContextRegister) Route(ctx context.Context, owner RegisterOwner, senten
 		} else {
 			kind = "none"
 		}
-		log.Printf("register_call status=%s route=%s elapsed_ms=%d error_kind=%s", status, route, time.Since(started).Milliseconds(), kind)
+		logging.Infof("register_call status=%s route=%s elapsed_ms=%d error_kind=%s", status, route, time.Since(started).Milliseconds(), kind)
+		if resultErr != nil {
+			logging.Errorf("register status=route_failed error_kind=%s", kind)
+		}
 	}()
 	if validRegisterOwner(owner) != nil {
 		kind = "config"
@@ -132,7 +135,16 @@ func (r *ContextRegister) Route(ctx context.Context, owner RegisterOwner, senten
 		fmt.Fprintf(&mappings, "%s: %s\n", key.Subject, key.Key)
 	}
 	input := "Memory keys:\n" + mappings.String() + "\nCompact:\n" + layers.Compact + "\nRaw:\n" + layers.Raw + "\nCurrent sentence:\n" + sentence
+	call := logging.NewModelCall("register", logging.UserHash(owner.OwnerSubjectID), 1, "")
+	call.Input(RegisterAttributionInstruction, input)
+	defer func() {
+		if resultErr == nil {
+			kind = "none"
+		}
+		call.Result(result, kind)
+	}()
 	output, err := r.model.Complete(ctx, RegisterAttributionInstruction, input)
+	call.Output(output)
 	if err != nil {
 		kind = registerModelErrorKind(ctx, r.model, err)
 		return RouteResult{}, err
@@ -151,7 +163,12 @@ func (r *ContextRegister) Route(ctx context.Context, owner RegisterOwner, senten
 	if err != nil {
 		return RouteResult{}, err
 	}
-	output, err = r.model.Complete(ctx, RegisterAttributionInstruction, input+"\nRequested memory key:\n"+key+"\nRequested memory content:\n"+content)
+	call.Result(struct{ Route, MemoryKey string }{result.Route, key}, "none")
+	call = logging.NewModelCall("register", logging.UserHash(owner.OwnerSubjectID), 2, call.ID())
+	followup := input + "\nRequested memory key:\n" + key + "\nRequested memory content:\n" + content
+	call.Input(RegisterAttributionInstruction, followup)
+	output, err = r.model.Complete(ctx, RegisterAttributionInstruction, followup)
+	call.Output(output)
 	if err != nil {
 		kind = registerModelErrorKind(ctx, r.model, err)
 		return RouteResult{}, err

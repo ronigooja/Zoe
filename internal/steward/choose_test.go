@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 func choiceReply(action, request string) string {
@@ -306,6 +308,9 @@ func TestChooseEmptyCandidatesAndInstructionLanguage(t *testing.T) {
 }
 
 func TestChooseLogsExcludePrivateData(t *testing.T) {
+	previousLevel := logging.CurrentLevel()
+	logging.SetLevel(logging.Info)
+	t.Cleanup(func() { logging.SetLevel(previousLevel) })
 	var logs bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&logs)
@@ -324,6 +329,41 @@ func TestChooseLogsExcludePrivateData(t *testing.T) {
 	for _, field := range []string{"steward_call configured_ms=30000", "effective_ms=", "elapsed_ms=", "error_kind="} {
 		if !strings.Contains(logs.String(), field) {
 			t.Errorf("missing log field %q", field)
+		}
+	}
+}
+
+func TestChooseDebugFullModelCalls(t *testing.T) {
+	previousLevel := logging.CurrentLevel()
+	logging.SetLevel(logging.Debug)
+	t.Cleanup(func() { logging.SetLevel(previousLevel) })
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	output := choiceReply("new", "")
+	var sent string
+	s := choiceServer(t, output, func(data []byte) {
+		var request struct{ Instructions, Input string }
+		if err := json.Unmarshal(data, &request); err != nil {
+			t.Error(err)
+		}
+		sent = request.Input
+	})
+	defer s.Close()
+	sentence := strings.Repeat("x", 20000)
+	ctx := logging.WithUserHash(context.Background(), logging.UserHash("private-owner"))
+	if _, err := configured(t, s.URL, "").Choose(ctx, sentence, "private-restatement", choiceNow, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"instructions=" + strconv.Quote(chooseInstructions), "input=" + strconv.Quote(sent), "output=" + strconv.Quote(output), "model_call_input", "model_call_output", "model_call_result", sentence} {
+		if !strings.Contains(logs.String(), text) {
+			t.Errorf("missing debug field (%d characters)", len(text))
+		}
+	}
+	for _, secret := range []string{s.URL, "Authorization", "Bearer", "private-owner"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Errorf("forbidden debug metadata %q", secret)
 		}
 	}
 }

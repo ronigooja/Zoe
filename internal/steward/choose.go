@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"strings"
 	"time"
+
+	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 const (
@@ -46,7 +47,7 @@ func (c *Client) Choose(ctx context.Context, sentence, restatement, now string, 
 	started := time.Now()
 	configured, effective := c.CallBudget(ctx)
 	defer func() {
-		log.Printf("steward_call configured_ms=%d effective_ms=%d elapsed_ms=%d error_kind=%s", configured.Milliseconds(), effective.Milliseconds(), time.Since(started).Milliseconds(), errorKind(resultErr))
+		logging.Infof("steward_call configured_ms=%d effective_ms=%d elapsed_ms=%d error_kind=%s", configured.Milliseconds(), effective.Milliseconds(), time.Since(started).Milliseconds(), errorKind(resultErr))
 	}()
 	ctx, cancel := context.WithTimeout(ctx, effective)
 	defer cancel()
@@ -84,7 +85,16 @@ func (c *Client) Choose(ctx context.Context, sentence, restatement, now string, 
 	if err != nil {
 		return choice, errors.New("could not encode steward choice input")
 	}
+	call := logging.ModelCallFromContext(ctx, "steward")
+	call.Input(chooseInstructions, string(data))
+	defer func() {
+		call.Result(choice, errorKind(resultErr))
+		if resultErr != nil {
+			logging.Errorf("steward status=choose_failed error_kind=%s", errorKind(resultErr))
+		}
+	}()
 	output, err := c.transport.Complete(ctx, chooseInstructions, string(data))
+	call.Output(output)
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}

@@ -3,12 +3,12 @@ package voice
 import (
 	"context"
 	"errors"
-	"log"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 const recallNotFound = "我没有在我们的对话记录里找到相关内容。"
@@ -218,7 +218,7 @@ func (s *Service) runRecall(id string) {
 		}
 		status = "persist_fallback"
 	}
-	log.Printf("voice recall id=%s candidates=%d status=%s elapsed_ms=%d", id, count, status, elapsedMS)
+	logging.Infof("voice recall id=%s candidates=%d status=%s elapsed_ms=%d", id, count, status, elapsedMS)
 	s.dispatchFastReplies(persist)
 }
 

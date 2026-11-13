@@ -11,9 +11,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 func TestStewardTimeoutLogBudgets(t *testing.T) {
+	previousLevel := logging.CurrentLevel()
+	logging.SetLevel(logging.Info)
+	t.Cleanup(func() { logging.SetLevel(previousLevel) })
 	for _, tc := range []struct {
 		name             string
 		parent, injected time.Duration

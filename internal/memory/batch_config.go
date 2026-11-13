@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"time"
 
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/modelclient"
 )
 
@@ -32,7 +32,7 @@ func BatchModelFromEnv(getenv func(string) string, readFile func(string) ([]byte
 }
 
 func (r *Repository) runBatches(ctx context.Context, model BatchModel, interval time.Duration) {
-	log.Printf("memory_batch status=scheduler_started interval_hours=%d", interval/time.Hour)
+	logging.Infof("memory_batch status=scheduler_started interval_hours=%d", interval/time.Hour)
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	// Registration precedes migrations; the first tick happens after startup.
@@ -144,9 +144,9 @@ func logBatchFailure(err error, stage, kind, principal string, in batchInput, ch
 	if status != 0 {
 		httpField = fmt.Sprintf(" http_status=%d", status)
 	}
-	log.Printf("memory_batch status=failed stage=%s error_kind=%s%s %s", stage, kind, httpField, batchLogFields(principal, in, chars, elapsed))
+	logging.Errorf("memory_batch status=failed stage=%s error_kind=%s%s %s", stage, kind, httpField, batchLogFields(principal, in, chars, elapsed))
 }
 
 func logBatchSuccess(principal string, in batchInput, chars, claims int, elapsed time.Duration) {
-	log.Printf("memory_batch status=ok %s claims=%d staged=%d boundary_advanced=true", batchLogFields(principal, in, chars, elapsed), claims, len(in.ExplicitRequests))
+	logging.Infof("memory_batch status=ok %s claims=%d staged=%d boundary_advanced=true", batchLogFields(principal, in, chars, elapsed), claims, len(in.ExplicitRequests))
 }

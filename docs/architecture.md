@@ -1,5 +1,7 @@
 # Zoe architecture
 
+When producing server or runner diagnostics, follow the [logging standard](operations/logging.md).
+
 This document records the current architecture and its boundaries. It describes responsibility and required behavior; it is not an implementation or delivery claim—see the [acceptance evidence register](acceptance/evidence.md) and [master plan](master-plan.md). [Product requirements](product.md) define the full scope. Archived research is historical provenance rather than a competing current design.
 
 ## Result delivery

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/control"
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/steward"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -569,7 +569,7 @@ func (s *Service) attestStaleCreates(ctx context.Context) {
 	cutoff := s.now().UTC().Add(-2 * time.Minute).Format("2006-01-02T15:04:05.000000000Z")
 	rows, err := s.db.QueryContext(ctx, `SELECT id,generation,state,gateway_request_id FROM voice_sessions WHERE gateway_request_id<>'' AND ((state='allocating' AND julianday(COALESCE(created_at,updated_at)) < julianday(?)) OR (state='quarantined' AND last_error_code='gateway_outcome_unknown'))`, cutoff)
 	if err != nil {
-		log.Printf("voice gateway attestation query failed: %v", err)
+		logging.Errorf("voice gateway attestation query failed: %T", err)
 		return
 	}
 	type candidate struct {
@@ -585,13 +585,13 @@ func (s *Service) attestStaleCreates(ctx context.Context) {
 		}
 	}
 	if err := rows.Close(); err != nil {
-		log.Printf("voice gateway attestation rows close failed: %v", err)
+		logging.Errorf("voice gateway attestation rows close failed: %T", err)
 		return
 	}
 	for _, c := range candidates {
 		if s.queryGatewayOutcome(ctx, c.requestID) == "never_established" {
 			if err := s.resolveGatewayNeverEstablished(ctx, c.id, c.generation, c.state); err != nil {
-				log.Printf("voice gateway attestation resolution failed for session %s: %v", c.id, err)
+				logging.Errorf("voice gateway attestation resolution failed for session %s: %T", c.id, err)
 			}
 		}
 	}
@@ -604,7 +604,7 @@ func (s *Service) reapStale(ctx context.Context) {
 	// is incorrect because RFC3339Nano trims trailing fractional zeroes.
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM voice_sessions WHERE state='active' AND julianday(COALESCE(heartbeat_at,created_at,updated_at)) < julianday(?)`, cutoffValue)
 	if err != nil {
-		log.Printf("voice reaper query failed: %v", err)
+		logging.Errorf("voice reaper query failed: %T", err)
 		return
 	}
 	var ids []string
@@ -616,13 +616,13 @@ func (s *Service) reapStale(ctx context.Context) {
 		ids = append(ids, id)
 	}
 	if err := rows.Close(); err != nil {
-		log.Printf("voice reaper rows close failed: %v", err)
+		logging.Errorf("voice reaper rows close failed: %T", err)
 		return
 	}
 	for _, id := range ids {
 		claim, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET state='ending',updated_at=? WHERE id=? AND state='active' AND julianday(COALESCE(heartbeat_at,created_at,updated_at)) < julianday(?)`, s.now().UTC().Format(time.RFC3339Nano), id, cutoffValue)
 		if err != nil {
-			log.Printf("voice reaper claim failed: %v", err)
+			logging.Errorf("voice reaper claim failed: %T", err)
 			continue
 		}
 		changed, _ := claim.RowsAffected()
@@ -633,19 +633,19 @@ func (s *Service) reapStale(ctx context.Context) {
 		var generation, accountLeaseGeneration, gatewayMediaGeneration int64
 		var gatewayUnbound, gatewayUnbindUnknown int
 		if err := s.db.QueryRowContext(ctx, `SELECT workspace_id,owner_id,gateway_session_id,generation,account_lease_id,account_lease_generation,gateway_media_generation,gateway_unbound,gateway_unbind_unknown FROM voice_sessions WHERE id=? AND state='ending'`, id).Scan(&workspaceID, &ownerID, &gatewayID, &generation, &accountLeaseID, &accountLeaseGeneration, &gatewayMediaGeneration, &gatewayUnbound, &gatewayUnbindUnknown); err != nil {
-			log.Printf("voice reaper load failed: %v", err)
+			logging.Errorf("voice reaper load failed: %T", err)
 			continue
 		}
 		if gatewayID == "" {
 			if err := s.markSession(ctx, id, "quarantined", "gateway_session_unbound", nil, ""); err != nil {
-				log.Printf("voice reaper quarantine failed for session %s: %v", id, err)
+				logging.Errorf("voice reaper quarantine failed for session %s: %T", id, err)
 			}
 			continue
 		}
 		// Missing heartbeat implies the client stopped its local media, so media_closed is trusted for this system reclaim.
 		_, _, _, err = s.releaseSession(ctx, contracts.Principal{WorkspaceID: workspaceID, SubjectID: ownerID}, id, generation, gatewayID, accountLeaseID, accountLeaseGeneration, gatewayMediaGeneration, gatewayUnbound, gatewayUnbindUnknown, true)
 		if err != nil {
-			log.Printf("voice reaper release failed for session %s: %v", id, err)
+			logging.Errorf("voice reaper release failed for session %s: %T", id, err)
 		}
 	}
 }
