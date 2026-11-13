@@ -53,16 +53,8 @@ func TestMemoryAnswerEvidenceFailures(t *testing.T) {
 			}
 			_, svc := newVoiceTestService(t, cfg)
 			text, _, _ := svc.memoryAnswer(context.Background(), "default", "owner", "question")
-			want := memoryUnavailable
-			if mode == "answer" {
-				want = "保存的笔记里记着：你喜欢咖啡。"
-			}
-			if mode == "full_answer" {
-				want = "保存的笔记里记着： \n" + strings.Repeat("coffee 🙂\n\t", 2000) + "\x00 "
-			}
-			if mode == "empty" || mode == "not_found" {
-				want = memoryNotFound
-			}
+			// Legacy assemblers/answerers must never bypass the worker boundary.
+			want := stewardErrorSpeech
 			if text != want {
 				t.Fatalf("text=%q want=%q", text, want)
 			}

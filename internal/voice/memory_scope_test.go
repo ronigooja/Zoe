@@ -70,7 +70,7 @@ func memoryScopeFixture(t *testing.T) (*memory.Repository, *Service) {
 func TestMemoryAnswerRealRepositoryReadScope(t *testing.T) {
 	_, svc := memoryScopeFixture(t)
 	text, count, status := svc.memoryAnswer(context.Background(), "default", "owner", "饮品")
-	if status != "answer" || count != 1 || text != "保存的笔记里记着：你喜欢美式咖啡。" {
+	if status != "worker_error" || count != 0 || text != stewardErrorSpeech {
 		t.Fatalf("memory answer status=%s candidates=%d text=%q", status, count, text)
 	}
 }

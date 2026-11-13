@@ -167,6 +167,7 @@ def validate(release, env, units, current_prefix):
                 if service == 'qdrant' and volume.get('target') == '/qdrant/storage' and volume['source'] == storage:
                     continue
                 fail('missing bind source service=' + service)
+    # Includes the shared memory_api_token: missing files fail before deployment.
     for kind in ('secrets', 'configs'):
         for name, spec in config.get(kind, {}).items():
             # Unconfigured optional secrets use the empty character device.

@@ -2,12 +2,11 @@ package voice
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/logging"
 )
 
@@ -36,7 +35,7 @@ func (s *Service) recallTimeout() time.Duration {
 	if s.recall.RecallTimeout > 0 {
 		return s.recall.RecallTimeout
 	}
-	return 8 * time.Second
+	return 60 * time.Second
 }
 
 // A running job's lease starts at its delivered holding receipt's updated_at.
@@ -70,12 +69,7 @@ func (s *Service) recoverRecall(ctx context.Context, startup bool) {
 }
 
 func (s *Service) recallFallback(ctx context.Context, id string) string {
-	var intent string
-	_ = s.db.QueryRowContext(ctx, `SELECT h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.id=?`, id).Scan(&intent)
-	if intent == "memory_read_holding" {
-		return evidenceFailureSpeech("unavailable", memoryNotFound, memoryUnavailable)
-	}
-	return recallFailureSpeech("unavailable")
+	return stewardErrorSpeech
 }
 
 func (s *Service) persistRecall(ctx context.Context, id, text string) error {
@@ -85,6 +79,13 @@ func (s *Service) persistRecall(ctx context.Context, id, text string) error {
 	}
 	defer tx.Rollback()
 	at := s.now().UTC().Format(time.RFC3339Nano)
+	if text == "" {
+		_, err = tx.ExecContext(ctx, `UPDATE voice_recall_jobs SET status='done' WHERE id=? AND status='running'`, id)
+		if err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) SELECT id,workspace_id,session_id,generation,'recall-answer:'||turn_id,?,'recall_answer','pending',?,?,? FROM voice_recall_jobs WHERE id=? AND status='running'`, text, at, at, at, id)
 	if err != nil {
 		return err
@@ -131,8 +132,8 @@ func recallSpeech(text string) string {
 	return text
 }
 
-// dispatchRecall starts work only after the holding receipt is delivered. The
-// durable compare-and-set prevents retried handoffs/dispatchers starting twice.
+// dispatchRecall uses a silent delivered receipt for new jobs. The durable
+// compare-and-set prevents retried handoffs/dispatchers starting twice.
 func (s *Service) dispatchRecall(ctx context.Context) {
 	s.recoverRecall(ctx, false)
 	rows, err := s.db.QueryContext(ctx, `SELECT j.id FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.status='pending' AND h.status='delivered' LIMIT 25`)
@@ -194,17 +195,9 @@ func (s *Service) runRecall(id string) {
 		return
 	}
 	started := time.Now()
-	var intent string
-	if err := s.db.QueryRowContext(ctx, `SELECT h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.id=?`, id).Scan(&intent); err != nil {
-		return
-	}
 	var text, status string
 	var count int
-	if intent == "memory_read_holding" {
-		text, count, status = s.memoryAnswer(ctx, workspace, owner, question)
-	} else {
-		text, count, status = s.recallAnswer(ctx, workspace, owner, question)
-	}
+	text, count, status = s.recallAnswer(ctx, workspace, owner, question)
 	elapsedMS := time.Since(started).Milliseconds()
 	// Model deadlines get a fallback, but shutdown leaves the lease for recovery.
 	if s.recallCtx.Err() != nil {
@@ -223,56 +216,19 @@ func (s *Service) runRecall(id string) {
 }
 
 func (s *Service) recallAnswer(ctx context.Context, workspace, owner, question string) (string, int, string) {
-	fail := func(n int, status string) (string, int, string) {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			status = "timeout"
-		}
-		return recallFailureSpeech(status), n, status
+	items, err := s.recall.MemoryAPI.Search(ctx, memoryUser(workspace, owner), question)
+	if err != nil {
+		return stewardErrorSpeech, 0, "worker_error"
 	}
-	if s.recall.Answerer == nil {
-		return fail(0, "unconfigured")
+	texts := make([]string, 0, len(items))
+	for _, item := range items {
+		texts = append(texts, item.Text)
 	}
-	var items []contracts.MemoryContextItem
-	if s.contextAssembler != nil {
-		p := contracts.Principal{WorkspaceID: workspace, SubjectID: owner, Scopes: []string{"memory:read:personal"}}
-		memory, err := s.contextAssembler(ctx, p, "", owner, question, contracts.MemoryContextDefaultBudgetTokens)
-		if err != nil || ctx.Err() != nil {
-			return fail(0, "context_error")
-		}
-		items = memory.Items
-	}
-	n := len(items)
-	conversation := ""
-	if s.register != nil {
-		budget := s.recall.RecallContextCharBudget
-		if budget <= 0 {
-			budget = 16 * 1024
-		}
-		var err error
-		conversation, err = s.register.AssembleContext(ctx, RegisterOwner{workspace, owner}, s.now(), budget)
-		if err != nil || ctx.Err() != nil {
-			return fail(n, "context_error")
-		}
-	}
-	if n == 0 && strings.TrimSpace(conversation) == "" {
-		return fail(0, "not_found")
-	}
-	result, err := s.recall.Answerer.Answer(ctx, question, items, conversation)
-	if err != nil || ctx.Err() != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return fail(n, "timeout")
-		}
-		return fail(n, "model_error")
-	}
-	if result.Status != "answer" || strings.TrimSpace(result.Text) == "" {
-		if result.Status == "not_found" {
-			return fail(n, "not_found")
-		}
-		return fail(n, "invalid_request")
-	}
-	text := recallSpeech(result.Text)
-	if text != recallUnavailable {
-		text = "对话记录里记着：" + text
-	}
-	return text, n, "answer"
+	return strings.Join(texts, "\n"), len(items), "ok"
+}
+
+// memoryUser uses a JSON tuple so workspace/subject separators cannot collide.
+func memoryUser(workspace, owner string) string {
+	data, _ := json.Marshal([]string{workspace, owner})
+	return string(data)
 }

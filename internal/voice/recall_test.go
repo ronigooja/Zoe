@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/answer"
+	"github.com/ronigooja/Zoe/internal/memoryapi"
 )
 
 type recallModelFunc func(context.Context, string, []contracts.MemoryContextItem, string) (answer.Result, error)
@@ -19,116 +22,75 @@ func (f recallModelFunc) Answer(ctx context.Context, q string, items []contracts
 	return f(ctx, q, items, conversation)
 }
 
-func TestRecallMemoryAndRegisterAnswer(t *testing.T) {
-	for _, mode := range []string{"answer", "full_answer", "not_found", "memory_only", "bounded", "empty", "context_error", "timeout"} {
+func workerClient(t *testing.T, handler http.HandlerFunc) *memoryapi.Client {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := memoryapi.New(server.URL, path, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func TestRecallWorkerUnmodifiedContext(t *testing.T) {
+	for _, mode := range []string{"found", "empty", "failure", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
-			now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
-			_, store, _ := handoffHTTPServerWithConfig(t, Config{})
-			// Real owner-scoped register and transcript rows exercise the isolation boundary.
-			if _, err := store.DB().Exec(`INSERT INTO voice_context_registers(workspace_id,owner_subject_id,compact,compact_through,source_memory_boundary) VALUES('default','owner','owner compact','2026-11-12T10:00:00Z','0001-01-01T00:00:00Z'),('default','other','private compact','2026-11-12T10:00:00Z','0001-01-01T00:00:00Z'); INSERT INTO voice_transcript_turns(workspace_id,session_id,seq,role,text,at,received_at) VALUES('default','handoff-session',1,'user','owner recent','2026-11-12T11:00:00Z','2026-11-12T11:00:00Z');`); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) SELECT 'private-session',workspace_id,'other',device_id,'private-request',request_hash,1,state,created_at,updated_at FROM voice_sessions WHERE id='handoff-session'; INSERT INTO voice_transcript_turns(workspace_id,session_id,seq,role,text,at,received_at) VALUES('default','private-session',1,'user','private recent','2026-11-12T11:00:00Z','2026-11-12T11:00:00Z');`); err != nil {
-				t.Fatal(err)
-			}
+			r := newDeliveryRig(t)
+			text := " \n**unmodified** 🙂\t" + strings.Repeat("memory 🙂\n", 2000) + "\x00 "
 			calls := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calls++
-				var body struct {
-					Input string `json:"input"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-					t.Error(err)
-				}
-				var input struct {
-					Items        []contracts.MemoryContextItem `json:"memory_items"`
-					Conversation string                        `json:"conversation"`
-				}
-				if err := json.Unmarshal([]byte(body.Input), &input); err != nil {
-					t.Error(err)
-				}
-				if len(input.Items) != 1 || input.Items[0].Content != "owner fact" {
-					t.Errorf("memory=%+v", input.Items)
-				}
-				if mode == "memory_only" {
-					if input.Conversation != "" {
-						t.Error("unexpected conversation")
+			if mode != "disabled" {
+				r.svc.recall.MemoryAPI = workerClient(t, func(w http.ResponseWriter, req *http.Request) {
+					calls++
+					var body map[string]string
+					_ = json.NewDecoder(req.Body).Decode(&body)
+					if req.URL.Path != "/v1/memory/search" || body["query"] != "register restatement" || body["user"] != memoryUser("default", "owner") {
+						t.Errorf("request=%v path=%s", body, req.URL.Path)
 					}
-				} else if mode == "bounded" {
-					if len([]rune(input.Conversation)) > 16 || !strings.Contains(input.Conversation, "owner recent") {
-						t.Errorf("unbounded or missing recent context=%q", input.Conversation)
+					if mode == "failure" {
+						w.WriteHeader(503)
+						return
 					}
-				} else if !strings.Contains(input.Conversation, "owner compact") || !strings.Contains(input.Conversation, "owner recent") {
-					t.Errorf("conversation=%q", input.Conversation)
-				}
-				if strings.Contains(body.Input, "private") {
-					t.Error("owner isolation lost")
-				}
-				output := `{"status":"answer","text":"你说过这件事。"}`
-				if mode == "not_found" {
-					output = `{"status":"not_found"}`
-				}
-				if mode == "full_answer" {
-					data, _ := json.Marshal(map[string]string{"status": "answer", "text": " \n" + strings.Repeat("garden 🙂\n\t", 2000) + "\x00 "})
-					output = string(data)
-				}
-				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": output})
-			}))
-			defer server.Close()
-			client, err := answer.FromEnv(func(key string) string {
-				return map[string]string{"ZOE_ANSWER_BASE_URL": server.URL, "ZOE_ANSWER_MODEL": "fixture", "ZOE_ANSWER_API_KEY_FILE": "/fixture"}[key]
-			}, func(string) ([]byte, error) { return []byte("fixture"), nil })
-			if err != nil {
-				t.Fatal(err)
+					items := []memoryapi.Item{}
+					if mode == "found" {
+						items = append(items, memoryapi.Item{Text: text})
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+				})
 			}
-			cfg := Config{Now: func() time.Time { return now }, Answerer: client}
-			if mode == "bounded" {
-				cfg.RecallContextCharBudget = 16
-			}
-			cfg.ContextAssembler = func(ctx context.Context, p contracts.Principal, task, owner, query string, budget int) (contracts.MemoryContext, error) {
-				if p.WorkspaceID != "default" || p.SubjectID != "owner" || owner != "owner" || task != "" || budget != 2048 || query != "question" {
-					t.Fatal("memory scope/budget changed")
+			got, _, _ := r.svc.recallAnswer(context.Background(), "default", "owner", "register restatement")
+			switch mode {
+			case "found":
+				if got != text {
+					t.Fatal("memory text changed")
 				}
-				if mode == "context_error" {
-					return contracts.MemoryContext{}, context.Canceled
+				ok, code := r.svc.appendContext(context.Background(), "gateway", got)
+				if !ok {
+					t.Fatal(code)
 				}
-				if mode == "empty" {
-					return contracts.MemoryContext{}, nil
+				if strings.Join(r.texts, "") != text || len(r.texts) < 2 {
+					t.Fatal("chunking changed content")
 				}
-				return contracts.MemoryContext{Items: []contracts.MemoryContextItem{{Content: "owner fact"}}}, nil
-			}
-			svc := newService(store.DB(), cfg)
-			defer svc.Stop()
-			if mode != "memory_only" && mode != "empty" {
-				svc.register = &ContextRegister{db: store.DB(), rawWindow: 2 * time.Hour}
-			}
-			ctx := context.Background()
-			if mode == "timeout" {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
-				defer cancel()
-			}
-			text, _, status := svc.recallAnswer(ctx, "default", "owner", "question")
-			wantCalls := 1
-			if mode == "empty" || mode == "context_error" || mode == "timeout" {
-				wantCalls = 0
-			}
-			if calls != wantCalls {
-				t.Fatalf("calls=%d want=%d", calls, wantCalls)
-			}
-			if mode == "not_found" || mode == "empty" {
-				if text != recallNotFound || status != "not_found" {
-					t.Fatalf("text=%q status=%s", text, status)
+				for _, chunk := range r.texts {
+					if len(chunk) > 8000 {
+						t.Fatal("oversized chunk")
+					}
 				}
-			} else if mode == "context_error" || mode == "timeout" {
-				if text != recallUnavailable {
-					t.Fatal(text)
+			case "empty":
+				if got != "" {
+					t.Fatal(got)
 				}
-			} else if status != "answer" {
-				t.Fatalf("status=%s text=%q", status, text)
+			default:
+				if got != stewardErrorSpeech {
+					t.Fatal(got)
+				}
 			}
-			if mode == "full_answer" && text != "对话记录里记着： \n"+strings.Repeat("garden 🙂\n\t", 2000)+"\x00 " {
-				t.Fatal("recall prefix or full answer was changed")
+			if mode != "disabled" && calls != 1 {
+				t.Fatal(calls)
 			}
 		})
 	}
@@ -144,7 +106,49 @@ func TestRecallSpeechRejectsMarkupAndIDs(t *testing.T) {
 
 func TestRecallSpeechPreservesFullText(t *testing.T) {
 	text := " \n" + strings.Repeat("garden 🙂\n\t", 2000) + "\x00 "
-	if got := recallSpeech(text); got != text {
-		t.Fatal("recall answer was rewritten or truncated")
+	if recallSpeech(text) != text {
+		t.Fatal("text changed")
+	}
+}
+
+func TestRecallWorkerDurableFailureAndEmpty(t *testing.T) {
+	for _, mode := range []string{"disabled", "failure", "empty"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := Config{}
+			if mode != "disabled" {
+				cfg.MemoryAPI = workerClient(t, func(w http.ResponseWriter, req *http.Request) {
+					if mode == "failure" {
+						w.WriteHeader(503)
+						return
+					}
+					_, _ = w.Write([]byte(`{"items":[]}`))
+				})
+			}
+			store, svc := recallRecoveryFixture(t, cfg, 1)
+			svc.dispatchRecall(context.Background())
+			waitRecall(t, func() bool {
+				var state string
+				_ = store.DB().QueryRow(`SELECT status FROM voice_recall_jobs WHERE id='job-0'`).Scan(&state)
+				return state == "done"
+			})
+			svc.dispatchRecall(context.Background())
+			var tasks, replies int
+			_ = store.DB().QueryRow(`SELECT count(*) FROM tasks`).Scan(&tasks)
+			_ = store.DB().QueryRow(`SELECT count(*) FROM voice_fast_replies WHERE intent_kind='recall_answer'`).Scan(&replies)
+			want := 1
+			if mode == "empty" {
+				want = 0
+			}
+			if tasks != 0 || replies != want {
+				t.Fatalf("tasks=%d replies=%d want=%d", tasks, replies, want)
+			}
+			if want == 1 {
+				var speech string
+				_ = store.DB().QueryRow(`SELECT text FROM voice_fast_replies WHERE intent_kind='recall_answer'`).Scan(&speech)
+				if speech != "Processing error." {
+					t.Fatal(speech)
+				}
+			}
+		})
 	}
 }

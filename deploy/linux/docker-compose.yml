@@ -30,6 +30,8 @@ services:
       ZOE_CAPABILITY_RUNTIME_BACKEND: ${ZOE_CAPABILITY_RUNTIME_BACKEND:-}
       ZOE_AVAILABLE_CAPABILITY_IDS: ${ZOE_AVAILABLE_CAPABILITY_IDS:-}
       ZOE_MEMORY_RUNNER_TOKEN_FILE: /run/secrets/memory_runner_token
+      ZOE_MEMORY_API_URL: http://zoe-memory-worker:8788
+      ZOE_MEMORY_API_TOKEN_FILE: /run/secrets/memory_api_token
       ZOE_MEMORY_RUNNER_ID: ${ZOE_MEMORY_RUNNER_ID:-memory-worker}
       ZOE_MEMORY_RUNNER_WORKSPACES: ${ZOE_MEMORY_RUNNER_WORKSPACES:-default}
       ZOE_MEMORY_RUNNER_SCOPES: memory:jobs:claim,memory:jobs:complete,memory:propose
@@ -87,6 +89,8 @@ services:
         target: runner_token
       - source: memory_runner_token
         target: memory_runner_token
+      - source: memory_api_token
+        target: memory_api_token
       - source: mem0_llm_api_key
         target: mem0_llm_api_key
       - source: voice_gateway_api_key
@@ -140,6 +144,8 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
     environment:
       HOME: /var/lib/zoe/memory
+      ZOE_MEMORY_API_TOKEN_FILE: /run/secrets/memory_api_token
+      ZOE_MEMORY_API_ADDR: 0.0.0.0:8788
       ZOE_SECRET_FILE_MAP: ZOE_RUNNER_TOKEN=/run/secrets/memory_runner_token,ZOE_MEM0_LLM_API_KEY=/run/secrets/mem0_llm_api_key
       ZOE_CONTROL_URL: http://zoe-server:8787
       ZOE_QDRANT_URL: http://qdrant:6333
@@ -158,6 +164,8 @@ services:
     secrets:
       - source: memory_runner_token
         target: memory_runner_token
+      - source: memory_api_token
+        target: memory_api_token
       - source: mem0_llm_api_key
         target: mem0_llm_api_key
     depends_on:
@@ -170,6 +178,8 @@ networks:
     external: true
 
 secrets:
+  memory_api_token:
+    file: ${ZOE_MEMORY_API_TOKEN_FILE:?set a shared memory API token file path}
   steward_api_key:
     file: ${ZOE_STEWARD_API_KEY_FILE:-/dev/null}
   runner_token:

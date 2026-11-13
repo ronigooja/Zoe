@@ -58,7 +58,7 @@ func registerDisabledHTTPServer(t *testing.T, cfg Config) (*httptest.Server, *st
 
 func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 	report := "The task is queued. " + strings.Repeat("Full result 🙂\n", 1000)
-	for _, name := range []string{"disabled", "chat", "memory_write", "recall", "new", "none", "answer", "answer_stale", "cancel", "cancel_live", "cancel_complete", "cancel_failed", "cancel_canceled", "report", "report_empty", "attach_active", "attach_complete", "foreign", "attach_failed", "attach_canceled", "route_error", "choose_error", "no_match", "confirm", "decline"} {
+	for _, name := range []string{"disabled", "chat", "memory_write", "memory_disabled", "memory_failure", "recall", "new", "none", "answer", "answer_stale", "cancel", "cancel_live", "cancel_complete", "cancel_failed", "cancel_canceled", "report", "report_empty", "attach_active", "attach_complete", "foreign", "attach_failed", "attach_canceled", "route_error", "choose_error", "no_match", "confirm", "decline"} {
 		t.Run(name, func(t *testing.T) {
 			var mu sync.Mutex
 			registerCalls, stewardCalls := 0, 0
@@ -114,6 +114,23 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg := Config{Steward: client, RegisterConfig: &RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "compact-fixture", APIKey: "fixture"}, CompactCharacters: 1000}}
+			writes := 0
+			cfg.MemoryAPI = workerClient(t, func(w http.ResponseWriter, req *http.Request) {
+				writes++
+				if name == "memory_failure" {
+					w.WriteHeader(503)
+					return
+				}
+				var body map[string]string
+				_ = json.NewDecoder(req.Body).Decode(&body)
+				if body["sentence"] != "remember my preferred airport is LHR" || body["restatement"] != "The user refers to their preferred airport." || body["user"] != memoryUser("default", "owner") || req.URL.Path != "/v1/memory/write" {
+					t.Errorf("write body=%v path=%s", body, req.URL.Path)
+				}
+				_, _ = w.Write([]byte(`{"operations":[]}`))
+			})
+			if name == "memory_disabled" {
+				cfg.MemoryAPI = nil
+			}
 			if name == "disabled" {
 				cfg.RegisterConfig = nil
 			}
@@ -173,6 +190,8 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 			switch name {
 			case "chat", "memory_write", "recall":
 				route = name
+			case "memory_disabled", "memory_failure":
+				route = "memory_write"
 			case "answer", "cancel", "report", "none":
 				action = name
 			case "answer_stale":
@@ -207,7 +226,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if name == "memory_write" {
+			if name == "memory_write" || name == "memory_disabled" || name == "memory_failure" {
 				text = "remember my preferred airport is LHR"
 			}
 			var r contracts.CommandReceipt
@@ -252,18 +271,18 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 					t.Fatal("chat created a task or fast reply")
 				}
 			case "memory_write":
-				if count(`SELECT count(*) FROM memory_staged_writes WHERE original_text=?`, text) != 1 || count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies`) != 0 {
-					t.Fatal("memory staging created task/reply or missed original")
+				if writes != 1 || count(`SELECT count(*) FROM memory_staged_writes`) != 0 || count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies`) != 0 {
+					t.Fatal("memory worker write created task/reply or staged data")
 				}
 			case "recall":
-				if count(`SELECT count(*) FROM voice_recall_jobs WHERE question=?`, text) != 1 || count(`SELECT count(*) FROM tasks`) != 0 {
+				if count(`SELECT count(*) FROM voice_recall_jobs WHERE question=?`, "The user refers to their preferred airport.") != 1 || count(`SELECT count(*) FROM tasks`) != 0 {
 					t.Fatal("recall not queued")
 				}
 			case "none":
 				if count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies`) != 0 {
 					t.Fatal("none had side effects")
 				}
-			case "disabled", "route_error", "choose_error", "no_match", "confirm", "decline":
+			case "disabled", "route_error", "choose_error", "no_match", "confirm", "decline", "memory_disabled", "memory_failure":
 				if count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies WHERE text=?`, stewardErrorSpeech) != 1 {
 					t.Fatal("model error did not fail closed")
 				}
@@ -320,8 +339,8 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 			if status != 200 || count(`SELECT count(*) FROM tasks`) != before {
 				t.Fatalf("repeat changed task count: %d %s", status, raw)
 			}
-			if name == "memory_write" && count(`SELECT count(*) FROM memory_staged_writes`) != 1 {
-				t.Fatal("replay staged twice")
+			if name == "memory_write" && (writes != 1 || count(`SELECT count(*) FROM memory_staged_writes`) != 0) {
+				t.Fatal("replay wrote twice")
 			}
 			if name == "chat" {
 				mu.Lock()

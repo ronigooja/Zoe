@@ -19,7 +19,6 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/logging"
-	"github.com/ronigooja/Zoe/internal/memory"
 	"github.com/ronigooja/Zoe/internal/steward"
 )
 
@@ -405,6 +404,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if handled != 0 {
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, nil
 	}
+	originalContent := content
 	content = strings.TrimSpace(content)
 	if category != "task" && category != "memory_write" && category != "recall" && category != "chat" {
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech)
@@ -417,7 +417,14 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		if err := tx.QueryRowContext(ctx, `SELECT id FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&key); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		err := memory.NewRepository(s.db).StageWriteTx(ctx, tx, cmd.Principal.WorkspaceID, owner, key, content, cmd.AcceptedAt)
+		var restatement string
+		if err := tx.QueryRowContext(ctx, `SELECT report_text FROM voice_turns WHERE id=?`, key).Scan(&restatement); err != nil {
+			return contracts.CommandResult{}, nil, err
+		}
+		err := s.recall.MemoryAPI.Write(ctx, memoryUser(cmd.Principal.WorkspaceID, owner), originalContent, restatement)
+		if err != nil {
+			return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}, nil, s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech)
+		}
 		if err == nil {
 			err = s.markHandledTx(ctx, tx, cmd, p)
 		}
@@ -426,16 +433,17 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if category == "recall" {
 		id := uuid.NewString()
 		at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
-		holding := s.recall.RecallHoldingText
-		if strings.TrimSpace(holding) == "" {
-			holding = "我查一下我们之前的对话。"
+		var restatement string
+		if err := tx.QueryRowContext(ctx, `SELECT report_text FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&restatement); err != nil {
+			return contracts.CommandResult{}, nil, err
 		}
+		holding := ""
 		intent := "recall_holding"
-		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?)`, id, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, holding, intent, at, at, at)
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'delivered',?,?,?)`, id, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, holding, intent, at, at, at)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_recall_jobs(id,workspace_id,owner_id,session_id,generation,turn_id,question,holding_id) VALUES(?,?,?,?,?,?,?,(SELECT id FROM voice_fast_replies WHERE session_id=? AND generation=? AND turn_id=?))`, uuid.NewString(), cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.SessionID, p.Generation, p.TurnID, content, p.SessionID, p.Generation, p.TurnID)
+		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_recall_jobs(id,workspace_id,owner_id,session_id,generation,turn_id,question,holding_id) VALUES(?,?,?,?,?,?,?,(SELECT id FROM voice_fast_replies WHERE session_id=? AND generation=? AND turn_id=?))`, uuid.NewString(), cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.SessionID, p.Generation, p.TurnID, restatement, p.SessionID, p.Generation, p.TurnID)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
@@ -527,7 +535,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 }
 
 // stewardErrorSpeech is a plain statement; the Steward error detail stays in the logs.
-const stewardErrorSpeech = "处理出错了,请反馈给开发者。"
+const stewardErrorSpeech = "Processing error."
 
 func (s *Service) commandCommitTurn(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
 	if !control.HasScope(cmd.Principal, "client:command") && !control.HasScope(cmd.Principal, "voice:turn:commit") {
@@ -644,6 +652,9 @@ func (s *Service) classifyCommittedTurn(id string) {
 	}
 	writeCtx, stop := context.WithTimeout(context.Background(), time.Second)
 	defer stop()
+	if route.Route == "recall" || route.Route == "memory_write" {
+		choice.Reply = route.Restatement
+	}
 	result, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_action=?,steward_task_id=?,report_text=? WHERE id=? AND triage_category IS NULL`, route.Route, string(choice.Action), taskID, choice.Reply, id)
 	if writeErr == nil {
 		var affected int64

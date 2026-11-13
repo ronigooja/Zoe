@@ -2,7 +2,10 @@ package voice
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +17,18 @@ import (
 
 func recallRecoveryFixture(t *testing.T, cfg Config, count int) (*storage.Store, *Service) {
 	t.Helper()
+	if cfg.Answerer != nil {
+		model := cfg.Answerer
+		cfg.MemoryAPI = workerClient(t, func(w http.ResponseWriter, req *http.Request) {
+			_, _ = io.Copy(io.Discard, req.Body)
+			result, err := model.Answer(req.Context(), "question", nil, "")
+			if err != nil {
+				w.WriteHeader(503)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{{"text": result.Text, "id": "fixture", "score": 1}}})
+		})
+	}
 	_, store, _ := handoffHTTPServerWithConfig(t, Config{})
 	if cfg.Now == nil {
 		cfg.Now = func() time.Time { return time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC) }
@@ -62,7 +77,7 @@ func TestRecallRecoveryRestartAndLease(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := recallSpeech(recallUnavailable)
+			want := stewardErrorSpeech
 			if mode == "existing_answer" {
 				want = "对话记录里记着：We discussed the garden."
 				_, err = store.DB().Exec(`INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('job-0','default','handoff-session',1,'recall-answer:job-0',?,'recall_answer','pending',?,?,?)`, want, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
@@ -120,7 +135,7 @@ func TestRecallPersistenceRetriesThenFallback(t *testing.T) {
 	}
 	var text string
 	_ = store.DB().QueryRow(`SELECT text FROM voice_fast_replies WHERE id='job-0'`).Scan(&text)
-	if text != recallSpeech(recallUnavailable) || calls.Load() != 1 {
+	if text != stewardErrorSpeech || calls.Load() != 1 {
 		t.Fatalf("fallback text=%q model calls=%d", text, calls.Load())
 	}
 }
@@ -165,6 +180,7 @@ func TestRecallWorkersBoundedAndStopJoins(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Stop did not cancel and join recall workers")
 	}
+	waitRecall(t, func() bool { return active.Load() == 0 && canceled.Load() == 4 })
 	if active.Load() != 0 || canceled.Load() != 4 {
 		t.Fatalf("workers after Stop: active=%d canceled=%d", active.Load(), canceled.Load())
 	}

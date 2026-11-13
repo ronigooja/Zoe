@@ -837,6 +837,7 @@ func TestPrepareLifecycleFilesFreshTokensSetOwnersAndModes(t *testing.T) {
 	wantOwners := map[string][2]int{
 		filepath.Join(root, "secrets", "runner-token"):        {65532, 65532},
 		filepath.Join(root, "secrets", "memory-runner-token"): {65532, 65532},
+		filepath.Join(root, "secrets", "memory-api-token"):    {65532, 65532},
 		filepath.Join(root, "runner-secrets", "runner-token"): {4242, 4343},
 	}
 	wantOwners[filepath.Join(root, "data", "runner", "workspaces")] = [2]int{4242, 4343}
@@ -849,6 +850,12 @@ func TestPrepareLifecycleFilesFreshTokensSetOwnersAndModes(t *testing.T) {
 		}
 	}
 	for path := range wantOwners {
+		if strings.HasSuffix(path, "/memory-api-token") {
+			if mode := dataMode(t, path); mode != 0600 {
+				t.Errorf("memory API token mode=%04o", mode)
+			}
+			continue
+		}
 		if strings.HasSuffix(path, "/runner/workspaces") {
 			if mode := dataMode(t, path); mode != 0700 {
 				t.Errorf("%s mode = %04o, want 0700", path, mode)
@@ -885,6 +892,7 @@ func TestPrepareLifecycleFilesConvergesExistingRootOwnedTokens(t *testing.T) {
 	want := map[string][]byte{
 		filepath.Join(secrets, "runner-token"):        []byte("existing-runner-token"),
 		filepath.Join(secrets, "memory-runner-token"): []byte("existing-memory-token"),
+		filepath.Join(secrets, "memory-api-token"):    []byte("existing-api-token"),
 		filepath.Join(runnerSecrets, "runner-token"):  []byte("existing-runner-token"),
 	}
 	for path, data := range want {
@@ -918,6 +926,12 @@ func TestPrepareLifecycleFilesConvergesExistingRootOwnedTokens(t *testing.T) {
 		if !bytes.Equal(data, original) {
 			t.Errorf("%s content changed", path)
 		}
+		if strings.HasSuffix(path, "/memory-api-token") {
+			if mode := dataMode(t, path); mode != 0600 {
+				t.Errorf("memory API token mode=%04o", mode)
+			}
+			continue
+		}
 		if mode := dataMode(t, path); mode != 0400 {
 			t.Errorf("%s mode = %04o, want 0400", path, mode)
 		}
@@ -925,6 +939,7 @@ func TestPrepareLifecycleFilesConvergesExistingRootOwnedTokens(t *testing.T) {
 	wantOwners := map[string][2]int{
 		filepath.Join(secrets, "runner-token"):        {65532, 65532},
 		filepath.Join(secrets, "memory-runner-token"): {65532, 65532},
+		filepath.Join(secrets, "memory-api-token"):    {65532, 65532},
 		filepath.Join(runnerSecrets, "runner-token"):  {4242, 4343},
 	}
 	wantOwners[filepath.Join(root, "data", "runner", "workspaces")] = [2]int{4242, 4343}

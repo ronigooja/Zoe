@@ -20,11 +20,13 @@ import (
 	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/logging"
+	"github.com/ronigooja/Zoe/internal/memoryapi"
 	"github.com/ronigooja/Zoe/internal/steward"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
 
 type Config struct {
+	MemoryAPI               *memoryapi.Client
 	InstructionText         string
 	IngestEnabled           bool
 	GatewayURL              string

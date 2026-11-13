@@ -39,6 +39,13 @@ check_log_rules
 python3 - "$repo_root" <<'PY'
 import pathlib, re, sys
 repo = pathlib.Path(sys.argv[1])
+compose = (repo/'deploy/linux/docker-compose.yml').read_text()
+assert compose.count('ZOE_MEMORY_API_TOKEN_FILE: /run/secrets/memory_api_token') == 2
+assert compose.count('- source: memory_api_token') == 2
+assert 'ZOE_MEMORY_API_URL: http://zoe-memory-worker:8788' in compose
+assert 'ZOE_MEMORY_API_ADDR: 0.0.0.0:8788' in compose
+expected = (repo/'deploy/linux/expected-env.txt').read_text().splitlines()
+assert 'ZOE_MEMORY_API_URL' in expected and 'ZOE_MEMORY_API_TOKEN_FILE' in expected
 def block(text, name, indent):
     matches = list(re.finditer(r'^'+' '*indent+re.escape(name)+r':\s*\n', text, re.M))
     assert len(matches) == 1, ('missing or duplicate block', name)

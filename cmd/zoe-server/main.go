@@ -121,6 +121,7 @@ func run() error {
 		return fmt.Errorf("answer configuration: %w", err)
 	}
 	answerTimeout, err := modelclient.Timeout("ZOE_ANSWER", os.Getenv, 8000, 500, 30000)
+	_ = answerTimeout // Retained configuration validation; voice recall no longer uses the answer model.
 	if err != nil {
 		return err
 	}
@@ -132,7 +133,7 @@ func run() error {
 	if answerClient != nil {
 		answerer = answerClient
 	}
-	server, err := composeControlServer(store, cfg, voice.Config{InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, Answerer: answerer, RecallTimeout: answerTimeout, RecallHoldingText: os.Getenv("ZOE_RECALL_HOLDING_TEXT"), GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	server, err := composeControlServer(store, cfg, voice.Config{MemoryAPI: memoryAPIFromEnv(), InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, Answerer: answerer, RecallTimeout: 60 * time.Second, RecallHoldingText: os.Getenv("ZOE_RECALL_HOLDING_TEXT"), GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	}, memory.DerivedConfig{BackupDeleteManifestPath: strings.TrimSpace(os.Getenv("ZOE_BACKUP_DELETE_MANIFEST_PATH"))})

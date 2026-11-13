@@ -307,6 +307,7 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	prepPaths := []string{
 		filepath.Join(o.Root, "secrets", "runner-token"),
 		filepath.Join(o.Root, "secrets", "memory-runner-token"),
+		filepath.Join(o.Root, "secrets", "memory-api-token"),
 		filepath.Join(o.Root, "runner-secrets", "runner-token"),
 	}
 	var prepSnapshots []fileSnapshot
@@ -801,7 +802,7 @@ func prepareLifecycleFiles(o LifecycleOptions) error {
 			return err
 		}
 	}
-	for _, name := range []string{"runner-token", "memory-runner-token"} {
+	for _, name := range []string{"runner-token", "memory-runner-token", "memory-api-token"} {
 		p := filepath.Join(o.Root, "secrets", name)
 		if _, e := os.Stat(p); os.IsNotExist(e) {
 			b := make([]byte, 32)
@@ -814,6 +815,11 @@ func prepareLifecycleFiles(o LifecycleOptions) error {
 		}
 		if err := prepareLifecycleSecret(p, ContainerUID, ContainerGID); err != nil {
 			return err
+		}
+		if name == "memory-api-token" {
+			if err := os.Chmod(p, 0600); err != nil {
+				return err
+			}
 		}
 	}
 	runnerSecret := filepath.Join(o.Root, "runner-secrets", "runner-token")
@@ -997,6 +1003,7 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 			}
 		}
 	}
+	stack["ZOE_MEMORY_API_TOKEN_FILE"] = filepath.Join(o.Root, "secrets", "memory-api-token")
 	for _, key := range []string{"ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_REGISTER_BASE_URL", "ZOE_REGISTER_MODEL", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_REGISTER_THINKING", "ZOE_REGISTER_TIMEOUT_MS", "ZOE_REGISTER_API_KEY_FILE", "ZOE_COMPACT_BASE_URL", "ZOE_COMPACT_MODEL", "ZOE_COMPACT_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_COMPACT_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE"} {
 		if value := strings.TrimSpace(oldStack[key]); value != "" {
 			stack[key] = value
@@ -1135,7 +1142,7 @@ func isReleaseOwnedEnvKey(key string) bool {
 	switch key {
 	case "ZOE_SERVER_IMAGE", "ZOE_MEMORY_WORKER_IMAGE",
 		"ZOE_SERVER_DATA_ROOT", "ZOE_MEMORY_DATA_ROOT", "ZOE_RUNNER_TOKEN_FILE",
-		"ZOE_MEMORY_RUNNER_TOKEN_FILE", "ZOE_MEM0_LLM_API_KEY_FILE", "ZOE_COMPOSE_FILE",
+		"ZOE_MEMORY_RUNNER_TOKEN_FILE", "ZOE_MEMORY_API_TOKEN_FILE", "ZOE_MEM0_LLM_API_KEY_FILE", "ZOE_COMPOSE_FILE",
 		"ZOE_CONTROL_URL", "ZOE_RUNNER_JOURNAL_PATH":
 		return true
 	default:
