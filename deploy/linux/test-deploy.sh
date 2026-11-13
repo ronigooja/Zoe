@@ -218,12 +218,17 @@ p = pathlib.Path(os.environ['FIXTURE']); repo = pathlib.Path(os.environ['REPO_RO
 old, new = os.environ['OLD_SHA'], os.environ['NEW_SHA']
 for name in ['releases', 'units', 'bin', 'shims', 'archives', 'data']:
     (p/name).mkdir()
+memory_token = p/'memory_api_token'
+memory_token.write_text('fixture-memory-token\n')
+memory_token.chmod(0o600)
 env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
        'ZOE_MEMORY_WORKER_IMAGE': 'ghcr.io/test/zoe-memory-worker@sha256:'+'3'*64,
        'ZOE_RUNNER_IMAGE': 'ghcr.io/test/zoe-runner@sha256:'+'4'*64,
        'ZOE_VOICE_UPSTREAM_ROUTE': 'avas', 'ZOE_STEWARD_TIMEOUT_MS': '30000',
        'ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS': '35000', 'ZOE_REGISTER_TIMEOUT_MS': '30000',
        'ZOE_MEMORY_BATCH_INTERVAL_HOURS': '24',
+       'ZOE_MEMORY_API_URL': 'http://zoe-memory-worker:8788',
+       'ZOE_MEMORY_API_TOKEN_FILE': str(memory_token),
        'ZOE_REGISTER_BASE_URL': 'https://route.invalid', 'ZOE_REGISTER_MODEL': 'route',
        'ZOE_REGISTER_API_KEY_FILE': '/run/secrets/register_api_key',
        'ZOE_COMPACT_BASE_URL': 'https://compact.invalid', 'ZOE_COMPACT_MODEL': 'compact',
@@ -236,10 +241,21 @@ if os.environ['CASE'] == 'happy':
             env.pop(prefix+'_'+suffix)
 (p/'stack.env').write_text(''.join(k+'='+v+'\n' for k,v in env.items()))
 (p/'stack.env').chmod(0o640)
-config = {'services': {'zoe-server': {'environment': {k:v for k,v in env.items() if not k.endswith('_IMAGE')},
+server_env = {k:v for k,v in env.items() if not k.endswith('_IMAGE')}
+server_env['ZOE_MEMORY_API_TOKEN_FILE'] = '/run/secrets/memory_api_token'
+# For every fixture scenario, keep required running names in sync with the verifier.
+for name in (repo/'deploy/linux/expected-env.txt').read_text().splitlines():
+    if name and not name.startswith('#'):
+        server_env.setdefault(name, '')
+config = {'secrets': {'memory_api_token': {'file': str(memory_token)}},
+          'services': {'zoe-server': {'environment': server_env,
+                                    'secrets': [{'source': 'memory_api_token'}],
                                     'volumes': [{'type': 'bind', 'source': str(p/'data')}]}}}
 config['services']['qdrant'] = {'volumes': [{'type': 'bind', 'source': str(p/'data/qdrant'), 'target': '/qdrant/storage'}]}
-config['services']['zoe-memory-worker'] = {'volumes': [{'type': 'bind', 'source': str(p/'data'), 'target': '/var/lib/zoe/memory'}]}
+config['services']['zoe-memory-worker'] = {'environment': {
+    'ZOE_MEMORY_API_TOKEN_FILE': '/run/secrets/memory_api_token'},
+    'secrets': [{'source': 'memory_api_token'}],
+    'volumes': [{'type': 'bind', 'source': str(p/'data'), 'target': '/var/lib/zoe/memory'}]}
 (p/'config.json').write_text(json.dumps(config))
 for revision in [old, new]:
     root = p/'releases'/revision if revision == old else p/'source'
@@ -253,24 +269,33 @@ for revision in [old, new]:
         shutil.copy(repo/'deploy/linux'/f'{unit}.service', root/'deploy-linux')
     shutil.copy(repo/'deploy/linux/install-cli.sh', root/'deploy-linux')
     compose = 'services:\n  zoe-server:\n    image: ${ZOE_SERVER_IMAGE}\n    environment:\n'
+    optional_names = {prefix+'_'+suffix for prefix in ['ZOE_REGISTER', 'ZOE_COMPACT']
+                      for suffix in ['BASE_URL', 'MODEL', 'API_KEY_FILE']}
+    for name, value in server_env.items():
+        if name not in optional_names:
+            compose += '      '+name+': '+json.dumps(value)+'\n'
     for prefix, secret in [('ZOE_REGISTER', 'register_api_key'), ('ZOE_COMPACT', 'compact_api_key')]:
         for suffix in ['BASE_URL', 'MODEL']:
             name = prefix+'_'+suffix
             compose += '      '+name+': ${'+name+':-}\n'
         compose += '      '+prefix+'_API_KEY_FILE: ${'+prefix+'_API_KEY_FILE:+/run/secrets/'+secret+'}\n'
-    compose += ('  qdrant:\n    image: qdrant/qdrant:v1.19.1\n    volumes:\n'
+    compose += ('    secrets:\n      - source: memory_api_token\n'
+                '  qdrant:\n    image: qdrant/qdrant:v1.19.1\n    volumes:\n'
                 '      - type: bind\n        source: '+str(p/'data/qdrant')+'\n        target: /qdrant/storage\n'
-                '  zoe-memory-worker:\n    image: ${ZOE_MEMORY_WORKER_IMAGE}\n    volumes:\n'
+                '  zoe-memory-worker:\n    image: ${ZOE_MEMORY_WORKER_IMAGE}\n'
+                '    environment:\n      ZOE_MEMORY_API_TOKEN_FILE: /run/secrets/memory_api_token\n'
+                '    secrets:\n      - source: memory_api_token\n    volumes:\n'
                 '      - type: bind\n        source: '+str(p/'data')+'\n        target: /var/lib/zoe/memory\n')
     compose += ('secrets:\n  register_api_key:\n    file: ${ZOE_REGISTER_API_KEY_FILE:-/dev/null}\n'
-                '  compact_api_key:\n    file: ${ZOE_COMPACT_API_KEY_FILE:-/dev/null}\n')
+                '  compact_api_key:\n    file: ${ZOE_COMPACT_API_KEY_FILE:-/dev/null}\n'
+                '  memory_api_token:\n    file: ${ZOE_MEMORY_API_TOKEN_FILE:?set memory API token file}\n')
     (root/'deploy-linux/docker-compose.yml').write_text(compose)
 root = p/'source'
 case = os.environ['CASE']
 if case == 'runner-unchanged-error':
     shutil.copy(p/'releases'/old/'bin/zoe-runner', root/'bin/zoe-runner')
 if case == 'happy':
-    config['secrets'] = {'register_api_key': {'file': '/dev/null'}, 'compact_api_key': {'file': '/dev/null'}}
+    config['secrets'].update({'register_api_key': {'file': '/dev/null'}, 'compact_api_key': {'file': '/dev/null'}})
     (p/'config.json').write_text(json.dumps(config))
 if case == 'missing-unit-path':
     (root/'bin/zoe-runner').unlink()
