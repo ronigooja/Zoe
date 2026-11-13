@@ -19,13 +19,16 @@ Set `ZOE_LOG_LEVEL=debug|info|warn|error`; the default is **debug**. Values are 
 
 Existing metadata events include `register status=`, `memory_batch status=`, `register_call`, `steward_call`, `runner startup`, `voice_routing`, `voice_classification_wait`, `voice_routing_wait` and `voice recall`. Call timing summaries remain INFO; separate failures use ERROR and recoverable conditions use WARN.
 
-At DEBUG, each Register, Steward, register compaction and memory batch call emits:
+At DEBUG, Register, Steward and register compaction calls emit the following events;
+memory HTTP calls emit input and raw output when those stages are reached:
 
 - `model_call_input`: full `instructions` and `input`, exactly as sent to the model.
 - `model_call_output`: full raw `output`, before parsing, including invalid output.
 - `model_call_result`: parsed `result` (route/action/selected request or memory IDs/counts, as applicable) and safe `error_kind`.
 
-All three carry `component=register|steward|register_compact|memory_batch`, a unique logging-only `call_id`, `attempt`, `parent_call_id` and `user_hash`. Register memory follow-up is attempt 2 with the first call as parent. Hashes reuse the owner's SHA-256 prefix; raw user IDs are not logged. Steward receives its owner's hash through context, without adding identity to model input. Text is quoted/escaped on one line, never truncated by the logger. No model-client internals are instrumented.
+Components include `register`, `steward`, `register_compact`, `memory_search`, `memory_write` and `memory_ingest`. Events carry a logging-only `call_id`, `attempt`, `parent_call_id` and `user_hash` when available. Register routing makes one call, with no memory follow-up round. Hashes reuse the owner's SHA-256 prefix; raw user IDs are not logged as metadata. Steward receives its owner's hash through context, without adding identity to model input. Text is quoted/escaped on one line, never truncated by the logger. Sources: [logging.go](../../internal/logging/logging.go), [memory client](../../internal/memoryapi/client.go).
+
+When inspecting memory traffic, Go DEBUG input/output contains the full HTTP JSON payload, including its opaque person identifier, and raw worker response; the client does not emit a parsed `model_call_result`. The Python worker logs full write/ingest model input and raw output at DEBUG and metadata timing/status at INFO ([person_memory.py](../../services/memory/person_memory.py)). Its HTTP transport libraries stay at WARNING and Mem0 content logs are suppressed unless DEBUG is enabled ([worker.py](../../services/memory/worker.py)). Go defaults to DEBUG; Python defaults to INFO, independently. Do not infer worker log level from the server's setting.
 
 ## Gateway and storage boundary
 

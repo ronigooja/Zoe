@@ -1,5 +1,7 @@
 # ADR 0012: Zoe-owned conversation layer for real-time voice
 
+Current-memory note (2026-11-13): [ADR 0013 decision 3](0013-context-register.md#3-memory-cadence) supersedes the answer-model, summary-retrieval and memory-write descriptions below; they are historical, not current behavior.
+
 Status: historical; deployed on `bb07671`, removed on main. When implementing or configuring current voice behavior, use [ADR 0013](0013-context-register.md), not the historical contracts below. Extends [ADR 0009](0009-voice-steward-impact-policy.md). Evidence: [evidence register](../../acceptance/evidence.md#live-voice-call-avas-route--2026-11-05).
 
 Status note (2026-11-12): when reading routing/context, impact and held-confirmation policy, opening instructions, Steward references/actions, progress, reply language and memory cadence below, treat them as historical: **deployed on `bb07671`, removed on main** by [ADR 0013](0013-context-register.md). Main uses the register and alias-free `Choose`; triage, `Assign`, `Decide`, fixed progress sentences and confirmation routing are removed. Historical sections and links preserve evidence, not current setup instructions. Recall evidence and transport boundaries remain unless explicitly replaced. No replacement deployment or live acceptance is claimed.
@@ -81,7 +83,7 @@ sentence text or model errors.
 
 When triage selects `recall` and the impact gate allows the read-only path, persist a holding reply and a turn-idempotent recall job without creating a task. Run model work outside transactions only after the holding delivery receipt. Reuse progress delivery leases, receipts, generation fencing and gateway retry limits for both plain `/context` messages. Recall text has a fixed read-as-is instruction; malformed markup or empty answers become the unavailable-check sentence defined below.
 
-Historically, recall selected bounded summaries by date and owner/workspace scope. Summary retrieval and its limit setting are removed on main; current recall uses memory and register context as defined in ADR 0013. `ZOE_RECALL_HOLDING_TEXT` overrides the short default holding sentence. The existing `ZOE_ANSWER_*` client configuration supplies the model and total recall deadline (`ZOE_ANSWER_TIMEOUT_MS`, default 8000).
+Historically, recall selected bounded summaries by date and owner/workspace scope. Summary retrieval and its limit setting are removed on main; current recall searches worker memory with the register restatement as defined in ADR 0013. The historical holding-text setting remains in configuration but new memory jobs use silent receipts. The former `ZOE_ANSWER_*` client and answer model are removed.
 
 The answer model receives summary/excerpt data, never evidence instructions. A transcript request may name only selected summary IDs; read only their inclusive sequence ranges. Excerpts total at most 16 KiB of UTF-8 including role labels, with at most one additional model round. When no summaries exist or the answer reports `not_found`, say "I could not find that in our conversation records." When configuration, storage, timezone, model, deadline or validation failures prevent checking, say "I could not check the records right now, please try again." Both fixed sentences retain the existing English fallback. Logs contain job IDs, candidate counts, status codes and answer-call `elapsed_ms` only; private questions, summaries, transcript text and model error bodies are never logged.
 
@@ -107,7 +109,7 @@ sent upstream is a plain statement with no command to the model and no English
 prefix. Logs contain IDs, counts, and fixed statuses only. The read runs with the
 narrowest scope it needs (`memory:read:personal`) for the owner only.
 
-When triage selects `memory_write`, the current component sends a fixed plain Chinese
+Historically, when triage selected `memory_write`, the component sent a fixed plain Chinese
 statement that it cannot save once per turn through the plain fast-reply
 queue, without a Worker task or save claim. Write ingestion is blocked:
 `Repository.RecordVoiceOutcome` creates a source-only extract job, but
