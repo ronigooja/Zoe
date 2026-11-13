@@ -3,6 +3,7 @@ package memoryapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -33,6 +34,12 @@ func TestClientProtocolAndLogging(t *testing.T) {
 			}
 			if r.URL.Path == "/v1/memory/search" {
 				_, _ = w.Write([]byte(`{"items":[{"id":"id","text":"PRIVATE_RESPONSE","score":0.8}]}`))
+			} else if r.URL.Path == "/v1/memory/ingest" {
+				var input map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input["user"] != User("workspace", "owner") || input["text"] != "PRIVATE_INGEST" {
+					t.Errorf("invalid ingest payload: %v", err)
+				}
+				_, _ = w.Write([]byte(`{"added":2,"updated":1}`))
 			} else {
 				_, _ = w.Write([]byte(`{"operations":[]}`))
 			}
@@ -48,11 +55,14 @@ func TestClientProtocolAndLogging(t *testing.T) {
 		if err := client.Write(context.Background(), "person", "PRIVATE_SENTENCE", "PRIVATE_RESTATEMENT"); err != nil {
 			t.Fatal(err)
 		}
+		if added, updated, err := client.Ingest(context.Background(), User("workspace", "owner"), "PRIVATE_INGEST"); err != nil || added != 2 || updated != 1 {
+			t.Fatalf("ingest=%d/%d err=%v", added, updated, err)
+		}
 		server.Close()
 		if strings.Contains(logs.String(), "PRIVATE_TOKEN") {
 			t.Fatal("token leaked")
 		}
-		for _, value := range []string{"PRIVATE_QUERY", "PRIVATE_RESPONSE", "PRIVATE_SENTENCE", "PRIVATE_RESTATEMENT", "component=memory_search", "component=memory_write"} {
+		for _, value := range []string{"PRIVATE_QUERY", "PRIVATE_RESPONSE", "PRIVATE_SENTENCE", "PRIVATE_RESTATEMENT", "PRIVATE_INGEST", "component=memory_ingest", "component=memory_search", "component=memory_write"} {
 			if strings.Contains(logs.String(), value) != (level == logging.Debug) {
 				t.Errorf("level=%v missing/unexpected %s", level, value)
 			}
@@ -92,5 +102,11 @@ func TestClientFailures(t *testing.T) {
 	var client *Client
 	if err := client.Write(context.Background(), "person", "sentence", "restatement"); err == nil {
 		t.Fatal("disabled accepted")
+	}
+}
+
+func TestUserTuple(t *testing.T) {
+	if User("workspace", "owner") != `["workspace","owner"]` || User("a:b", "c") == User("a", "b:c") {
+		t.Fatal("owner tuple changed or collided")
 	}
 }

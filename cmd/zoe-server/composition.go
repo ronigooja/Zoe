@@ -30,6 +30,10 @@ func composeControlServer(store *storage.Store, controlConfig control.Config, vo
 	if err = memory.Register(server, store); err != nil {
 		return nil, err
 	}
+	interval, err := memory.BatchInterval(os.Getenv("ZOE_MEMORY_BATCH_INTERVAL_HOURS"))
+	if err != nil {
+		return nil, err
+	}
 	if err = memory.RegisterDerived(server, store, memoryConfig); err != nil {
 		return nil, err
 	}
@@ -54,6 +58,11 @@ func composeControlServer(store *storage.Store, controlConfig control.Config, vo
 	}
 	if err = control.RegisterExportRoutes(server); err != nil {
 		return nil, err
+	}
+	if voiceConfig.MemoryAPI != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		server.RegisterShutdownHook(cancel)
+		voiceRepository.StartBatches(ctx, voiceConfig.MemoryAPI, interval)
 	}
 	return server, nil
 }

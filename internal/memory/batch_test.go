@@ -6,308 +6,227 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
-	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/memoryapi"
 )
 
-func batchFixture(t *testing.T) (*sql.DB, *Repository, time.Time, time.Time) {
-	t.Helper()
-	store, repo := newMemoryTestRepo(t)
-	db := store.DB()
-	// Minimal real SQLite transcript fixture reproduces the production columns;
-	// importing voice here would introduce a memory/voice import cycle.
-	_, err := db.Exec(`CREATE TABLE voice_sessions(id TEXT PRIMARY KEY,workspace_id TEXT,owner_id TEXT);
-CREATE TABLE voice_transcript_turns(workspace_id TEXT,session_id TEXT,seq INTEGER,role TEXT,text TEXT,at TEXT,received_at TEXT,PRIMARY KEY(session_id,seq));
-INSERT INTO voice_sessions VALUES('a','default','owner'),('b','default','owner'),('other','default','other');
-INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('device','default','owner','fixture','approved','2026-11-12T00:00:00Z');`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC().Truncate(time.Second)
-	from := now.Add(-24 * time.Hour)
-	_, err = db.Exec(`INSERT INTO memory_batch_boundaries(workspace_id,principal_id,boundary_ns) VALUES('default','owner',?)`, from.UnixNano())
-	if err != nil {
-		t.Fatal(err)
-	}
-	turn := func(session string, seq int, role, text string, at time.Time) {
-		t.Helper()
-		_, e := db.Exec(`INSERT INTO voice_transcript_turns VALUES('default',?,?,?,?,?,?)`, session, seq, role, text, at.Format(time.RFC3339Nano), at.Format(time.RFC3339Nano))
-		if e != nil {
-			t.Fatal(e)
+func TestMemoryBatchInterval(t *testing.T) {
+	for _, value := range []string{"0", "169", "bad"} {
+		if _, err := BatchInterval(value); err == nil {
+			t.Fatalf("accepted %q", value)
 		}
 	}
-	turn("a", 0, "user", "at boundary excluded", from)
-	turn("b", 0, "assistant", "assistant is data", from.Add(time.Hour))
-	turn("a", 1, "user", "I prefer tea", from.Add(time.Hour))
-	turn("a", 2, "assistant", "at now included", now)
-	turn("a", 3, "user", "future excluded", now.Add(time.Nanosecond))
-	turn("other", 0, "user", "other owner secret", from.Add(time.Hour))
-	for _, task := range []struct {
-		id, owner, status string
-		at                time.Time
-	}{{"done", "owner", "complete", now}, {"old", "owner", "complete", from}, {"future", "owner", "complete", now.Add(time.Second)}, {"foreign", "other", "complete", now}, {"failed", "owner", "failed", now}} {
-		_, err = db.Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,finished_at,result,created_by_device_id,command_id,owner_subject_id) VALUES(?,'default',?,'rewritten goal','voice','fixture',?,1,?,?,?,'full durable result','device',?,?)`, task.id, "original request "+task.id, task.status, from.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), task.at.Format(time.RFC3339Nano), task.id, task.owner)
-		if err != nil {
-			t.Fatal(err)
+	for value, want := range map[string]time.Duration{"": 24 * time.Hour, "1": time.Hour, "168": 168 * time.Hour} {
+		if got, err := BatchInterval(value); err != nil || got != want {
+			t.Fatalf("%q: %v %v", value, got, err)
 		}
 	}
-	return db, repo, from, now
 }
 
-func batchFakeModel(t *testing.T, status int, output string, inspect func(string, string)) BatchModel {
+func TestMemoryIngestChunks(t *testing.T) {
+	user := memoryapi.User("workspace", "owner")
+	for _, blocks := range [][]string{
+		{strings.Repeat("a", ingestChunkBytes), "next turn\n"},
+		{strings.Repeat("界", ingestChunkBytes), "next turn\n"},
+		{strings.Repeat("\x00\"\\<\n", ingestChunkBytes)},
+		{"small turn\n", strings.Repeat("b", ingestChunkBytes-1)},
+	} {
+		chunks := ingestChunks(blocks, user)
+		if strings.Join(chunks, "") != strings.Join(blocks, "") {
+			t.Fatal("text changed")
+		}
+		for _, chunk := range chunks {
+			if len(chunk) == 0 || len(chunk) > ingestChunkBytes || !utf8.ValidString(chunk) || !ingestBodyFits(user, chunk) {
+				t.Fatalf("invalid chunk: bytes=%d", len(chunk))
+			}
+		}
+	}
+	blocks := []string{strings.Repeat("a", ingestChunkBytes-10), "whole turn!\n"}
+	chunks := ingestChunks(blocks, user)
+	if len(chunks) != 2 || chunks[1] != blocks[1] {
+		t.Fatal("split an avoidable turn")
+	}
+}
+
+func TestMemoryBatchDisabled(t *testing.T) {
+	if (*Repository)(nil).StartBatches(context.Background(), nil, time.Hour) {
+		t.Fatal("started disabled scheduler")
+	}
+}
+
+func ingestFixture(t *testing.T) (*sql.DB, *Repository, time.Time) {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Instructions string `json:"instructions"`
-			Input        string `json:"input"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Error(err)
-		}
-		if inspect != nil {
-			inspect(req.Instructions, req.Input)
-		}
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": output})
-	}))
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(`CREATE TABLE voice_sessions(id TEXT PRIMARY KEY,workspace_id TEXT,owner_id TEXT);
+CREATE TABLE voice_transcript_turns(workspace_id TEXT,session_id TEXT,seq INTEGER,role TEXT,text TEXT,at TEXT);
+CREATE TABLE tasks(id TEXT,workspace_id TEXT,owner_subject_id TEXT,status TEXT,finished_at TEXT,title TEXT,result TEXT);
+CREATE TABLE memory_ingest_state(workspace_id TEXT,principal_id TEXT,boundary_ns INTEGER NOT NULL,next_attempt_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(workspace_id,principal_id));
+INSERT INTO voice_sessions VALUES('session','workspace','owner'),('other','workspace','other');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db, NewRepository(db), time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+}
+
+func ingestWorker(t *testing.T, handler func(http.ResponseWriter, *http.Request)) *memoryapi.Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(handler))
 	t.Cleanup(server.Close)
-	env := map[string]string{"ZOE_MEM0_LLM_BASE_URL": server.URL, "ZOE_MEM0_LLM_MODEL": "fixture", "ZOE_MEM0_LLM_API_KEY_FILE": "fixture"}
-	client, err := BatchModelFromEnv(func(k string) string { return env[k] }, func(string) ([]byte, error) { return []byte("test-only"), nil })
+	token := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(token, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := memoryapi.New(server.URL, token, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return client
 }
 
-func TestMemoryBatchInterval(t *testing.T) {
-	for _, s := range []string{"0", "169", "bad"} {
-		if _, err := BatchInterval(s); err == nil {
-			t.Fatalf("accepted %q", s)
-		}
-	}
-	for _, s := range []string{"", "1", "24", "168"} {
-		if _, err := BatchInterval(s); err != nil {
+func TestMemoryIngestTranscriptTasksWindowAndCadence(t *testing.T) {
+	db, repo, now := ingestFixture(t)
+	for _, turn := range []struct {
+		seq        int
+		role, text string
+		at         time.Time
+	}{
+		{2, "assistant", "answer", now}, {1, "user", "original words", now.Add(-time.Hour)}, {3, "user", "future", now.Add(time.Second)},
+	} {
+		if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',?,?,?,?)`, turn.seq, turn.role, turn.text, turn.at.Format(time.RFC3339Nano)); err != nil {
 			t.Fatal(err)
 		}
 	}
-}
-
-func TestMemoryBatchWindowKeysIsolationAtomicSuccessAndRead(t *testing.T) {
-	db, repo, _, now := batchFixture(t)
-	ctx := context.Background()
-	writeMemory(t, ctx, db, repo, Scope{Kind: ScopePersonal, PrincipalID: "owner"}, "existing fact", "existing-source", 0)
-	calls := 0
-	model := batchFakeModel(t, 200, `[{"subject":"user","key":"drink","content":"I prefer tea"}]`, func(instruction, input string) {
-		calls++
-		if instruction != MemoryExtractionInstruction {
-			t.Error("instruction changed")
-		}
-		var in batchInput
-		if err := json.Unmarshal([]byte(input), &in); err != nil {
-			t.Fatal(err)
-		}
-		if len(in.Transcript) != 3 || in.Transcript[0].Session != "a" || in.Transcript[1].Session != "b" || in.Transcript[2].Text != "at now included" {
-			t.Errorf("window/order: %#v", in.Transcript)
-		}
-		if len(in.Tasks) != 1 || in.Tasks[0].Request != "original request done" || in.Tasks[0].Result != "full durable result" {
-			t.Errorf("tasks: %#v", in.Tasks)
-		}
-		if len(in.Keys) != 1 {
-			t.Errorf("keys: %#v", in.Keys)
-		}
-		for _, s := range []string{"other owner secret", "future excluded", "at boundary excluded", "rewritten goal"} {
-			if strings.Contains(input, s) {
-				t.Errorf("leaked %s", s)
-			}
-		}
-	})
-	ok, err := repo.RunBatch(ctx, "default", "owner", now, 24*time.Hour, model)
-	if err != nil || !ok {
-		t.Fatalf("run=%v err=%v", ok, err)
-	}
-	boundary, err := repo.ReadBoundary(ctx, "default", "owner")
-	if err != nil || !boundary.Equal(now) {
-		t.Fatalf("boundary=%v err=%v", boundary, err)
-	}
-	var count int
-	if err = db.QueryRow(`SELECT count(*) FROM memory_proposals`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("proposals=%d err=%v", count, err)
-	}
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"memory:read:personal"}}
-	_, claims, err := repo.AssembleContext(ctx, p, "", "owner", "drink", contracts.MemoryContextDefaultBudgetTokens)
-	if err != nil || len(claims) != 1 || claims[0].Status != ClaimActive || claims[0].Content != "I prefer tea" || claims[0].Authority != AuthorityModelInferred || len(claims[0].Sources) != 1 || claims[0].Sources[0].Kind != "memory_batch" {
-		t.Fatalf("batch not readable: %#v err=%v", claims, err)
-	}
-	p.SubjectID = "other"
-	_, claims, err = repo.AssembleContext(ctx, p, "", "other", "drink", contracts.MemoryContextDefaultBudgetTokens)
-	if err != nil || len(claims) != 0 {
-		t.Fatalf("owner read leak: %#v err=%v", claims, err)
-	}
-	// Idempotent repeat and a later empty period never dispatch a model.
-	if ok, err = repo.RunBatch(ctx, "default", "owner", now, 24*time.Hour, model); err != nil || ok {
-		t.Fatalf("rerun %v %v", ok, err)
-	}
-	_, err = db.Exec(`DELETE FROM voice_transcript_turns WHERE session_id='a' AND seq=3;DELETE FROM tasks WHERE id='future'`)
-	if err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','other',1,'user','private',?); INSERT INTO tasks VALUES('done','workspace','owner','complete',?,'original task sentence','result text'),('failed','workspace','owner','failed',?,'do not send','failure');`, now.Add(time.Second).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err = repo.RunBatch(ctx, "default", "owner", now.Add(25*time.Hour), 24*time.Hour, model); err != nil || ok {
-		t.Fatalf("empty %v %v", ok, err)
+	calls := 0
+	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var input map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Error(err)
+		}
+		want := "[2026-11-13T11:00:00Z] user: original words\n[2026-11-13T12:00:00Z] assistant: answer\n[2026-11-13T12:00:00Z] completed task:\nuser: original task sentence\nresult: result text\n"
+		if input["text"] != want || input["user"] != memoryapi.User("workspace", "owner") || r.URL.Path != "/v1/memory/ingest" {
+			t.Errorf("unexpected input: %#v", input)
+		}
+		w.Write([]byte(`{"added":2,"updated":1}`))
+	})
+	if err := repo.batchStep(context.Background(), client, 24*time.Hour, now); err != nil {
+		t.Fatal(err)
 	}
 	if calls != 1 {
 		t.Fatalf("calls=%d", calls)
 	}
-	other, err := repo.ReadBoundary(ctx, "default", "other")
-	if err != nil || !other.Equal(time.Unix(0, 0)) {
-		t.Fatalf("owner leaked: %v %v", other, err)
+	var boundary, next int64
+	if err := db.QueryRow(`SELECT boundary_ns,next_attempt_ms FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary, &next); err != nil || boundary != now.UnixNano() || next != now.Add(24*time.Hour).UnixMilli() {
+		t.Fatalf("state=%d,%d err=%v", boundary, next, err)
 	}
-	if err = db.QueryRow(`SELECT count(*) FROM memory_claims`).Scan(&count); err != nil || count != 2 {
-		t.Fatalf("idempotence claims=%d err=%v", count, err)
+	if err := repo.batchStep(context.Background(), client, 24*time.Hour, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal("ran before interval")
+	}
+	if _, err := repo.runBatch(context.Background(), client, "workspace", "nobody", now, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal("called worker without content")
 	}
 }
 
-func TestMemoryBatchUpdatesExistingKeyWithoutDuplicates(t *testing.T) {
-	db, repo, _, now := batchFixture(t)
+func TestMemoryIngestFailureRetriesAllChunksAndSuccessOnlyCAS(t *testing.T) {
+	db, repo, now := ingestFixture(t)
+	for seq := 0; seq < 2; seq++ {
+		if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',?,'user',?,?)`, seq, strings.Repeat("a", 150*1024), now.Format(time.RFC3339Nano)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls, fail := 0, true
+	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var input map[string]string
+		json.NewDecoder(r.Body).Decode(&input)
+		if len(input["text"]) > ingestChunkBytes {
+			t.Error("oversized")
+		}
+		var boundary int64
+		if err := db.QueryRow(`SELECT boundary_ns FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary); err != nil || boundary != 0 {
+			t.Errorf("advanced before all success: %d %v", boundary, err)
+		}
+		if fail && calls == 2 {
+			w.WriteHeader(503)
+			return
+		}
+		w.Write([]byte(`{"added":1,"updated":0}`))
+	})
+	if err := repo.batchStep(context.Background(), client, time.Hour, now); err == nil {
+		t.Fatal("failure ignored")
+	}
+	var boundary, next int64
+	if err := db.QueryRow(`SELECT boundary_ns,next_attempt_ms FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary, &next); err != nil || boundary != 0 || next != 0 {
+		t.Fatalf("failed state changed: %d %d %v", boundary, next, err)
+	}
+	fail = false
+	if err := repo.batchStep(context.Background(), client, time.Hour, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 4 {
+		t.Fatalf("did not retry all chunks: %d", calls)
+	}
+	if err := db.QueryRow(`SELECT boundary_ns FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary); err != nil || boundary != now.Add(time.Minute).UnixNano() {
+		t.Fatalf("boundary=%d err=%v", boundary, err)
+	}
+}
+
+func TestMemoryIngestCASRejectsConcurrentAdvance(t *testing.T) {
+	db, repo, now := ingestFixture(t)
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
+		if _, err := db.Exec(`UPDATE memory_ingest_state SET boundary_ns=42 WHERE principal_id='owner'`); err != nil {
+			t.Error(err)
+		}
+		w.Write([]byte(`{"added":1,"updated":0}`))
+	})
+	if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now, time.Hour); err != ErrVersionConflict {
+		t.Fatalf("CAS error=%v", err)
+	}
+	var boundary int64
+	if err := db.QueryRow(`SELECT boundary_ns FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary); err != nil || boundary != 42 {
+		t.Fatalf("overwrote concurrent boundary: %d %v", boundary, err)
+	}
+}
+
+func TestMemoryIngestBoundaryReadAndWindow(t *testing.T) {
+	db, repo, now := ingestFixture(t)
 	ctx := context.Background()
-	first := writeMemory(t, ctx, db, repo, Scope{Kind: ScopePersonal, PrincipalID: "owner"}, "old fact", "original", 0)
-	output, _ := json.Marshal([]extractedMemory{{Subject: first.Subject, Key: first.Key, Content: "updated durable fact"}})
-	model := batchFakeModel(t, 200, string(output), nil)
-	if ok, err := repo.RunBatch(ctx, "default", "owner", now, time.Hour, model); err != nil || !ok {
-		t.Fatalf("update=%v err=%v", ok, err)
+	if boundary, err := repo.BoundaryAt(ctx, "workspace", "owner"); err != nil || !boundary.IsZero() {
+		t.Fatalf("missing boundary=%v err=%v", boundary, err)
 	}
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"memory:read:personal"}}
-	_, claims, err := repo.AssembleContext(ctx, p, "", "owner", "", contracts.MemoryContextDefaultBudgetTokens)
-	if err != nil || len(claims) != 1 || claims[0].ID != first.ID || claims[0].Revision != first.Revision+1 || claims[0].Content != "updated durable fact" || claims[0].Status != ClaimActive {
-		t.Fatalf("update %#v err=%v", claims, err)
-	}
-	var count int
-	if err = db.QueryRow(`SELECT count(*) FROM memory_claims`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("duplicates=%d err=%v", count, err)
-	}
-}
-
-func TestMemoryBatchTrustDoesNotEscapeOtherWritePaths(t *testing.T) {
-	db, repo, _, now := batchFixture(t)
-	ctx := context.Background()
-	source := Source{ID: "forged-batch", Version: 1, Scope: Scope{Kind: ScopePersonal, PrincipalID: "owner"}, Kind: "memory_batch", Reference: "forged", Producer: "memory-batch", RecordedAt: now}
-	claim := Claim{ID: "fixture", WorkspaceID: "default", Scope: source.Scope, Subject: "user", Key: "drink", Content: "untrusted", Authority: AuthorityModelInferred, Status: ClaimActive, Revision: 1, Sources: []Source{source}}
-	if err := claim.ValidateForWrite(); err == nil {
-		t.Fatal("public validation accepted active model output")
-	}
-	claim.ID = ""
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
+	from := now.Add(-time.Hour)
+	if _, err := db.Exec(`INSERT INTO memory_ingest_state VALUES('workspace','owner',?,0);
+INSERT INTO voice_transcript_turns VALUES('workspace','session',0,'user','exclude boundary',?),('workspace','session',1,'assistant','include now',?);`, from.UnixNano(), from.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback()
-	if _, err = repo.PutTx(ctx, tx, WriteInput{WorkspaceID: "default", ActorID: "owner", Claim: claim, Source: source}); err == nil {
-		t.Fatal("manual write forged batch trust")
-	}
-	if _, err = repo.putBatchClaimTx(ctx, tx, "default", "other", source, extractedMemory{Subject: "u", Key: "k", Content: "v"}); err == nil {
-		t.Fatal("batch owner mismatch accepted")
-	}
-	if _, err = repo.putBatchClaimTx(ctx, tx, "default", "owner", source, extractedMemory{Subject: "u", Key: "k", Content: "v"}); err == nil {
-		t.Fatal("batch without evidence accepted")
-	}
-	if err = tx.Rollback(); err != nil {
-		t.Fatal(err)
-	}
-	source.Kind = "user_note"
-	tx, err = db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
-	if err = insertSourceTx(ctx, tx, "default", source); err != nil {
-		t.Fatal(err)
-	}
-	if err = tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	proposal, err := repo.CreateProposal(ctx, contracts.RunnerPrincipal{WorkspaceIDs: []string{"default"}}, runnerProposalRequest{WorkspaceID: "default", SourceID: source.ID, SourceVersion: 1, ExtractorVersion: "other", Scope: source.Scope, Subject: "u", Key: "k", Content: "v"})
-	if err != nil || proposal.Status != "pending" {
-		t.Fatalf("other proposal=%#v err=%v", proposal, err)
-	}
-	var count int
-	if err = db.QueryRow(`SELECT count(*) FROM memory_claims`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("other path created claims=%d err=%v", count, err)
-	}
-}
-
-func TestMemoryBatchEmptyExtractionAdvancesWithoutClaims(t *testing.T) {
-	db, repo, _, now := batchFixture(t)
-	model := batchFakeModel(t, 200, `[]`, nil)
-	ok, err := repo.RunBatch(context.Background(), "default", "owner", now, time.Hour, model)
-	if err != nil || !ok {
-		t.Fatalf("run=%v err=%v", ok, err)
-	}
-	boundary, err := repo.ReadBoundary(context.Background(), "default", "owner")
-	if err != nil || !boundary.Equal(now) {
+	if boundary, err := repo.BoundaryAt(ctx, "workspace", "owner"); err != nil || !boundary.Equal(from) {
 		t.Fatalf("boundary=%v err=%v", boundary, err)
 	}
-	var count int
-	if err = db.QueryRow(`SELECT count(*) FROM memory_claims`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("claims=%d err=%v", count, err)
-	}
-}
-
-func TestMemoryBatchLeaseFencesModelDispatch(t *testing.T) {
-	db, repo, from, now := batchFixture(t)
-	_, err := db.Exec(`UPDATE memory_batch_boundaries SET lease_token='other',lease_until_ms=? WHERE principal_id='owner'`, now.Add(time.Minute).UnixMilli())
-	if err != nil {
-		t.Fatal(err)
-	}
-	model := batchFakeModel(t, 200, `[]`, func(string, string) { t.Error("leased owner called model") })
-	if ok, err := repo.RunBatch(context.Background(), "default", "owner", now, time.Hour, model); err != nil || ok {
-		t.Fatalf("leased run=%v err=%v", ok, err)
-	}
-	boundary, err := repo.ReadBoundary(context.Background(), "default", "owner")
-	if err != nil || !boundary.Equal(from) {
-		t.Fatalf("boundary=%v err=%v", boundary, err)
-	}
-}
-
-func TestMemoryBatchFailuresRollbackAndRetry(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		status  int
-		output  string
-		trigger string
-	}{{"model", 500, `[]`, ""}, {"invalid_json", 200, `{}`, ""}, {"null", 200, `null`, ""}, {"invalid_fields", 200, `[{"subject":"u","key":"k","content":""}]`, ""}, {"write", 200, `[{"subject":"u","key":"k","content":"v"}]`, `CREATE TRIGGER fail_boundary BEFORE UPDATE OF boundary_ns ON memory_batch_boundaries BEGIN SELECT RAISE(ABORT,'fixture write failure'); END;`}} {
-		t.Run(tc.name, func(t *testing.T) {
-			db, repo, from, now := batchFixture(t)
-			ctx := context.Background()
-			if tc.trigger != "" {
-				if _, err := db.Exec(tc.trigger); err != nil {
-					t.Fatal(err)
-				}
-			}
-			model := batchFakeModel(t, tc.status, tc.output, nil)
-			if ok, err := repo.RunBatch(ctx, "default", "owner", now, 24*time.Hour, model); err == nil || ok {
-				t.Fatalf("expected failure: %v %v", ok, err)
-			}
-			boundary, err := repo.ReadBoundary(ctx, "default", "owner")
-			if err != nil || !boundary.Equal(from) {
-				t.Fatalf("boundary moved: %v %v", boundary, err)
-			}
-			for _, table := range []string{"memory_claims", "memory_proposals", "memory_sources", "memory_batch_inputs"} {
-				var count int
-				if err = db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
-					t.Fatalf("partial %s=%d err=%v", table, count, err)
-				}
-			}
-			if tc.trigger != "" {
-				if _, err = db.Exec(`DROP TRIGGER fail_boundary`); err != nil {
-					t.Fatal(err)
-				}
-			}
-			retry := batchFakeModel(t, 200, `[{"subject":"u","key":"k","content":"v"}]`, nil)
-			if ok, err := repo.RunBatch(ctx, "default", "owner", now.Add(2*time.Minute), 24*time.Hour, retry); err != nil || !ok {
-				t.Fatalf("retry: %v %v", ok, err)
-			}
-		})
+	blocks, err := repo.batchInput(ctx, "workspace", "owner", from, now)
+	if err != nil || len(blocks) != 1 || blocks[0] != "[2026-11-13T12:00:00Z] assistant: include now\n" {
+		t.Fatalf("blocks=%v err=%v", blocks, err)
 	}
 }
