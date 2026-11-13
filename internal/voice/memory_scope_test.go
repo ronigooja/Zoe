@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
-	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/memory"
 	"github.com/ronigooja/Zoe/internal/storage"
@@ -57,21 +56,16 @@ func memoryScopeFixture(t *testing.T) (*memory.Repository, *Service) {
 			t.Errorf("voice read scopes=%v", p.Scopes)
 		}
 		return assembler(ctx, p, task, owner, query, budget)
-	}, Answerer: memoryModel{fn: func(_ context.Context, _ string, items []contracts.MemoryContextItem) (answer.Result, error) {
-		if len(items) != 1 || items[0].Content != "喜欢美式咖啡" {
-			t.Fatalf("retrieved items=%+v", items)
-		}
-		return answer.Result{Status: "answer", Text: "你喜欢美式咖啡。"}, nil
-	}}})
+	}})
 	t.Cleanup(svc.Stop)
 	return repo, svc
 }
 
-func TestMemoryAnswerRealRepositoryReadScope(t *testing.T) {
+func TestMemoryRecallDoesNotReadLegacyRepository(t *testing.T) {
 	_, svc := memoryScopeFixture(t)
-	text, count, status := svc.memoryAnswer(context.Background(), "default", "owner", "饮品")
+	text, count, status := svc.recallAnswer(context.Background(), "default", "owner", "饮品")
 	if status != "worker_error" || count != 0 || text != stewardErrorSpeech {
-		t.Fatalf("memory answer status=%s candidates=%d text=%q", status, count, text)
+		t.Fatalf("memory recall status=%s candidates=%d text=%q", status, count, text)
 	}
 }
 

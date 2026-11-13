@@ -260,15 +260,11 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	if memoryErr != nil {
 		return memoryErr
 	}
-	answer, err := d.AnswerConfig()
-	if err != nil {
-		return err
-	}
 	steward, err := d.StewardConfig()
 	if err != nil {
 		return err
 	}
-	warnings := ModelKeyWarnings(register, compact, steward, ModelConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, ModelConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath})
+	warnings := ModelKeyWarnings(register, compact, steward, ModelConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath})
 	for _, warning := range warnings {
 		if o.Out != nil {
 			fmt.Fprintln(o.Out, warning)
@@ -995,14 +991,6 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 	if value, ok := oldStack["ZOE_VOICE_INSTRUCTION_TEXT"]; ok {
 		stack["ZOE_VOICE_INSTRUCTION_TEXT"] = value
 	}
-	for _, kind := range []string{"ANSWER"} {
-		for _, suffix := range []string{"BASE_URL", "MODEL", "REASONING_EFFORT", "THINKING", "TIMEOUT_MS", "API_KEY_FILE"} {
-			key := "ZOE_" + kind + "_" + suffix
-			if value, ok := oldStack[key]; ok {
-				stack[key] = value
-			}
-		}
-	}
 	stack["ZOE_MEMORY_API_TOKEN_FILE"] = filepath.Join(o.Root, "secrets", "memory-api-token")
 	for _, key := range []string{"ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_REGISTER_BASE_URL", "ZOE_REGISTER_MODEL", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_REGISTER_THINKING", "ZOE_REGISTER_TIMEOUT_MS", "ZOE_REGISTER_API_KEY_FILE", "ZOE_COMPACT_BASE_URL", "ZOE_COMPACT_MODEL", "ZOE_COMPACT_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_COMPACT_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE"} {
 		if value := strings.TrimSpace(oldStack[key]); value != "" {
@@ -1154,13 +1142,6 @@ func isOperatorOwnedEnvKey(key string) bool {
 	if key == "ZOE_VOICE_INSTRUCTION_TEXT" {
 		return true
 	}
-	for _, kind := range []string{"ANSWER"} {
-		for _, suffix := range []string{"BASE_URL", "MODEL", "REASONING_EFFORT", "THINKING", "TIMEOUT_MS", "API_KEY_FILE"} {
-			if key == "ZOE_"+kind+"_"+suffix {
-				return true
-			}
-		}
-	}
 	switch key {
 	case "ZOE_RUNTIME_PROFILES", "ZOE_DEFAULT_PROFILE_ID", "ZOE_MAX_RUNS", "ZOE_RUNNER_ROUTES", "ZOE_AGENT_CONTEXT_WINDOW_RATIO", "ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "ZOE_AGENT_MAX_ROTATIONS", "ZOE_AGENT_ROTATION_SUMMARY":
 		return true
@@ -1180,9 +1161,6 @@ func isOperatorOwnedEnvKey(key string) bool {
 func validOperatorEnvValue(key, value string) bool {
 	if key == "ZOE_VOICE_INSTRUCTION_TEXT" {
 		return true // Startup validates the optional instruction; updates preserve it verbatim.
-	}
-	if strings.HasPrefix(key, "ZOE_ANSWER_") {
-		return isOperatorOwnedEnvKey(key)
 	}
 	if value == "" || value == "{}" {
 		return false

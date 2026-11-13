@@ -22,8 +22,6 @@ type operation func(args []string, in io.Reader, out, errOut io.Writer) error
 // menu while remaining usable from scripts.
 var operations = map[string]operation{
 	"setup":              unavailable("setup"),
-	"answer configure":   unavailable("answer configure"),
-	"answer test":        unavailable("answer test"),
 	"provider configure": unavailable("provider configure"),
 	"provider test":      unavailable("provider test"),
 	"memory configure":   unavailable("memory configure"),
@@ -111,7 +109,7 @@ func normalizeCommand(value string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: zoe [setup|install|update|uninstall|provider configure|provider test|memory configure|memory test|answer configure|answer test|key init|key rotate|status|voice configure|voice test|voice status|client-policy show|client-policy set]")
+	return errors.New("usage: zoe [setup|install|update|uninstall|provider configure|provider test|memory configure|memory test|key init|key rotate|status|voice configure|voice test|voice status|client-policy show|client-policy set]")
 }
 
 func menu(in io.Reader, out, errOut io.Writer) error {
@@ -141,19 +139,17 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		fmt.Fprintln(out, "  13) Test Steward model")
 		fmt.Fprintln(out, "  14) Configure Memory extraction model (24-hour batch and memory worker)")
 		fmt.Fprintln(out, "  15) Test Memory extraction model")
-		fmt.Fprintln(out, "  16) Configure Memory answer model (recall and memory questions)")
-		fmt.Fprintln(out, "  17) Test Memory answer model")
 		fmt.Fprintln(out, "Voice:")
-		fmt.Fprintln(out, "  18) Configure voice gateway")
-		fmt.Fprintln(out, "  19) Test voice gateway")
-		fmt.Fprintln(out, "  20) Show voice gateway status")
-		fmt.Fprintln(out, "  21) Configure voice instruction")
+		fmt.Fprintln(out, "  16) Configure voice gateway")
+		fmt.Fprintln(out, "  17) Test voice gateway")
+		fmt.Fprintln(out, "  18) Show voice gateway status")
+		fmt.Fprintln(out, "  19) Configure voice instruction")
 		fmt.Fprintln(out, "Access:")
-		fmt.Fprintln(out, "  22) Create instance key")
-		fmt.Fprintln(out, "  23) Rotate instance key")
+		fmt.Fprintln(out, "  20) Create instance key")
+		fmt.Fprintln(out, "  21) Rotate instance key")
 		fmt.Fprintln(out, "Client policy:")
-		fmt.Fprintln(out, "  24) Show client policy")
-		fmt.Fprintln(out, "  25) Set client policy")
+		fmt.Fprintln(out, "  22) Show client policy")
+		fmt.Fprintln(out, "  23) Set client policy")
 		fmt.Fprintln(out, "  0) Exit")
 		fmt.Fprint(out, "Select an option: ")
 		line, err := inputLine(in)
@@ -167,28 +163,14 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		if choice == "0" || strings.EqualFold(choice, "q") || strings.EqualFold(choice, "quit") || strings.EqualFold(choice, "exit") {
 			return nil
 		}
-		if choice == "21" {
+		if choice == "19" {
 			if err := menuVoiceInstruction(configureMenuIO(root, in, out, errOut)); err != nil && !errors.Is(err, io.EOF) {
 				fmt.Fprintln(errOut, "Error:", err)
 			}
 			continue
 		}
-		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "15": "memory test", "18": "voice configure", "19": "voice test", "20": "voice status", "22": "key init", "23": "key rotate", "24": "client-policy show", "25": "client-policy set"}[choice]
+		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "15": "memory test", "16": "voice configure", "17": "voice test", "18": "voice status", "20": "key init", "21": "key rotate", "22": "client-policy show", "23": "client-policy set"}[choice]
 		if !ok {
-			if choice == "16" {
-				kind := "answer"
-				if err := menuRecallModel(configureMenuIO(root, in, out, errOut), kind); err != nil && !errors.Is(err, io.EOF) {
-					fmt.Fprintln(errOut, "Error:", err)
-				}
-				continue
-			}
-			if choice == "17" {
-				kind := "answer"
-				if err := recallTestOperation(kind, []string{"--root", root}, in, out, errOut); err != nil {
-					fmt.Fprintln(errOut, "Error:", err)
-				}
-				continue
-			}
 			if choice == "8" || choice == "10" || choice == "12" || choice == "14" {
 				kind := map[string]string{"8": "Register", "10": "Compact", "12": "Steward", "14": "Memory"}[choice]
 				err := menuModel(configureMenuIO(root, in, out, errOut), kind)
@@ -204,7 +186,7 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 				}
 				continue
 			}
-			fmt.Fprintln(errOut, "Please choose a number from 0 to 25.")
+			fmt.Fprintln(errOut, "Please choose a number from 0 to 23.")
 			continue
 		}
 		if err := operations[name](nil, in, out, errOut); err != nil {

@@ -28,15 +28,9 @@ func TestDeploymentModeHybridModelConfiguration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, kind := range []string{"Register", "Compact", "answer"} {
+	for _, kind := range []string{"Register", "Compact"} {
 		t.Run(kind, func(t *testing.T) {
-			args := []string{"--root", root, "--base-url", "https://gateway.example/v1", "--model", kind + "-model", "--key-stdin"}
-			var err error
-			if kind == "Register" || kind == "Compact" {
-				err = menuModel(ConfigureMenuIO{Root: root, In: strings.NewReader("https://gateway.example/v1\n" + kind + "-model\nnone\ndisabled\n\nn\n"), Out: io.Discard, ErrOut: io.Discard, PromptSecret: func(io.Writer) ([]byte, error) { return []byte("private-key"), nil }}, kind)
-			} else {
-				err = recallConfigureOperation(kind, args, strings.NewReader("private-key"), io.Discard, io.Discard)
-			}
+			err := menuModel(ConfigureMenuIO{Root: root, In: strings.NewReader("https://gateway.example/v1\n" + kind + "-model\nnone\ndisabled\n\nn\n"), Out: io.Discard, ErrOut: io.Discard, PromptSecret: func(io.Writer) ([]byte, error) { return []byte("private-key"), nil }}, kind)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -50,7 +44,7 @@ func TestDeploymentModeHybridModelConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"REGISTER", "COMPACT", "ANSWER"} {
+	for _, name := range []string{"REGISTER", "COMPACT"} {
 		if !strings.Contains(string(b), "ZOE_"+name+"_MODEL=") {
 			t.Errorf("missing %s configuration", name)
 		}

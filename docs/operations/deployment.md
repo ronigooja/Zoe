@@ -257,23 +257,12 @@ Responses requests never send the chat `thinking` field. Explicit thinking setti
 
 [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode) defaults to enabled with effort `high`; its Responses `none` disables thinking. DeepSeek maps `minimal` to `low`, `medium` and `xhigh` to `high`, and supports `max`; Zoe accepts `medium` but rejects `minimal` and `xhigh` for gateway compatibility. See its [Responses API guide](https://api-docs.deepseek.com/guides/responses_api). Memory effort validation uses the same accepted values; its existing empty-effort fallback remains `medium`.
 
-### Call-recall model endpoints
+### Call recall
 
-For memory and conversation recall, configure the Memory answer endpoint through the Models
-menu or `zoe answer configure`. It accepts `--base-url`,
-`--model`, `--effort` (empty, none, low, medium, high, max), `--thinking` (empty, enabled,
-disabled), `--key-stdin`, and `--disable`. Keys are written atomically with mode
-0600 and server ownership 65532:65532 to `/etc/zoe/secrets/answer-api-key`.
-An empty base URL disables the endpoint; updates preserve its settings.
-Environment names and secret references are in the [stack example](../../deploy/linux/zoe-stack.env.example).
-The answer timeout defaults to 8000 ms (range 500–30000). The client uses Responses first and remembers a
-Chat Completions fallback after HTTP 404, 405, or 501. The thinking/effort wire
-contract is the same as the wire table above, including temperature suppression.
-Existing keys must be readable by the server user before saving or probing;
-status and update warn about unreadable configured keys, and update stops before
-service changes. `zoe answer test` invokes the runtime
-client with synthetic evidence and reports PASS/FAIL, API style, and latency;
-`zoe status` reports configuration without credential contents. Apply with `zoe update`.
+For memory and conversation recall, the server searches the memory worker using
+the register restatement and appends retrieved text to the upstream voice model.
+No separate model endpoint or credential is required for recall. Memory extraction
+continues to use `ZOE_MEM0_LLM_*`; see the [stack example](../../deploy/linux/zoe-stack.env.example).
 
 When the register routes recall, the answer client receives owner-scoped memory items
 and bounded register conversation context (compact plus raw recent turns) in one model

@@ -11,16 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ronigooja/Zoe/contracts"
-	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/memoryapi"
 )
-
-type recallModelFunc func(context.Context, string, []contracts.MemoryContextItem, string) (answer.Result, error)
-
-func (f recallModelFunc) Answer(ctx context.Context, q string, items []contracts.MemoryContextItem, conversation string) (answer.Result, error) {
-	return f(ctx, q, items, conversation)
-}
 
 func workerClient(t *testing.T, handler http.HandlerFunc) *memoryapi.Client {
 	t.Helper()
@@ -30,7 +22,7 @@ func workerClient(t *testing.T, handler http.HandlerFunc) *memoryapi.Client {
 	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	client, err := memoryapi.New(server.URL, path, time.Second)
+	client, err := memoryapi.New(server.URL, path, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,21 +85,6 @@ func TestRecallWorkerUnmodifiedContext(t *testing.T) {
 				t.Fatal(calls)
 			}
 		})
-	}
-}
-
-func TestRecallSpeechRejectsMarkupAndIDs(t *testing.T) {
-	for _, text := range []string{"**garden**", "[garden](https://example.com)", "12345678-1234-1234-1234-123456789abc"} {
-		if got := recallSpeech(text); got != recallUnavailable {
-			t.Errorf("unsafe speech=%q", got)
-		}
-	}
-}
-
-func TestRecallSpeechPreservesFullText(t *testing.T) {
-	text := " \n" + strings.Repeat("garden 🙂\n\t", 2000) + "\x00 "
-	if recallSpeech(text) != text {
-		t.Fatal("text changed")
 	}
 }
 

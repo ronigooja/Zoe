@@ -17,7 +17,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/contracts"
-	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/memoryapi"
@@ -26,36 +25,29 @@ import (
 )
 
 type Config struct {
-	MemoryAPI               *memoryapi.Client
-	InstructionText         string
-	IngestEnabled           bool
-	GatewayURL              string
-	GatewayAPIKey           string
-	HTTPClient              *http.Client
-	MaxOfferBytes           int64
-	AccountMediaLifecycle   AccountMediaLifecycle
-	HeartbeatTimeout        time.Duration
-	Now                     func() time.Time
-	ContextAssembler        control.ContextAssembler
-	OpeningContextBudget    int
-	ContextCharBudget       int
-	OutcomeWriter           func(context.Context, contracts.Principal, string, string, string) error
-	UpstreamRoute           string
-	ResultDeliveryEnabled   bool
-	ResultDeliveryInterval  time.Duration
-	ContextRegister         *ContextRegister
-	RegisterConfig          *RegisterConfig
-	ClassificationTimeout   time.Duration
-	Steward                 TaskSteward
-	Answerer                Answerer
-	RecallTimeout           time.Duration
-	RecallLease             time.Duration
-	RecallContextCharBudget int
-	RecallHoldingText       string
-}
-
-type Answerer interface {
-	Answer(context.Context, string, []contracts.MemoryContextItem, string) (answer.Result, error)
+	MemoryAPI              *memoryapi.Client
+	InstructionText        string
+	IngestEnabled          bool
+	GatewayURL             string
+	GatewayAPIKey          string
+	HTTPClient             *http.Client
+	MaxOfferBytes          int64
+	AccountMediaLifecycle  AccountMediaLifecycle
+	HeartbeatTimeout       time.Duration
+	Now                    func() time.Time
+	ContextAssembler       control.ContextAssembler
+	OpeningContextBudget   int
+	ContextCharBudget      int
+	OutcomeWriter          func(context.Context, contracts.Principal, string, string, string) error
+	UpstreamRoute          string
+	ResultDeliveryEnabled  bool
+	ResultDeliveryInterval time.Duration
+	ContextRegister        *ContextRegister
+	RegisterConfig         *RegisterConfig
+	ClassificationTimeout  time.Duration
+	Steward                TaskSteward
+	RecallTimeout          time.Duration
+	RecallLease            time.Duration
 }
 
 type TaskSteward interface {

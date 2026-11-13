@@ -10,7 +10,6 @@ models by purpose; Configure and Test are paired:
 | 10 / 11 | Compact: hourly conversation compaction | `ZOE_COMPACT_*` |
 | 12 / 13 | Steward: task routing and replies | `ZOE_STEWARD_*` |
 | 14 / 15 | Memory extraction: 24-hour batch and memory worker | `ZOE_MEM0_LLM_*` |
-| 16 / 17 | Memory answer: recall and memory questions | `ZOE_ANSWER_*` |
 
 When using Register or Compact, each group independently requires `BASE_URL`,
 `MODEL`, and `API_KEY_FILE`. Optional suffixes are `REASONING_EFFORT`, `THINKING`,
@@ -33,8 +32,9 @@ fails the probe rather than issuing a second request. No Register, Compact, or
 Steward CLI subcommands or flags are provided.
 
 When using the current menu, triage and call-summary Configure/Test entries and
-their CLI commands are unavailable. Use Register for routing and Memory answer
-for recall; see [deployment configuration](deployment.md#register-routing-configuration).
+their CLI commands are unavailable. Recall uses the register restatement to search
+the memory worker and appends retrieved text to the upstream voice model; see
+[deployment configuration](deployment.md#register-routing-configuration).
 
-When navigating non-model entries, Voice is 18-21, Access is 22-23, Client policy
-is 24-25, and Exit is 0; Overview and System retain entries 1-5.
+When navigating non-model entries, Voice is 16-19, Access is 20-21, Client policy
+is 22-23, and Exit is 0; Overview and System retain entries 1-5.

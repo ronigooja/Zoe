@@ -40,19 +40,17 @@ Models:
   13) Test Steward model
   14) Configure Memory extraction model (24-hour batch and memory worker)
   15) Test Memory extraction model
-  16) Configure Memory answer model (recall and memory questions)
-  17) Test Memory answer model
 Voice:
-  18) Configure voice gateway
-  19) Test voice gateway
-  20) Show voice gateway status
-  21) Configure voice instruction
+  16) Configure voice gateway
+  17) Test voice gateway
+  18) Show voice gateway status
+  19) Configure voice instruction
 Access:
-  22) Create instance key
-  23) Rotate instance key
+  20) Create instance key
+  21) Rotate instance key
 Client policy:
-  24) Show client policy
-  25) Set client policy
+  22) Show client policy
+  23) Set client policy
   0) Exit
 Select an option: `
 	if out.String() != want || errOut.Len() != 0 {

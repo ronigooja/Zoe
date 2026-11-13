@@ -904,11 +904,7 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	inspect.MemoryModel = memory.Model
 	inspect.MemoryReasoningEffort = memory.ReasoningEffort
 	status := opsManager().Inspect(ctx, inspect)
-	answer, err := d.AnswerConfig()
-	if err != nil {
-		return err
-	}
-	for _, warning := range ops.ModelKeyWarnings(ops.ModelConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}, ops.ModelConfig{BaseURL: answer.BaseURL, SecretPath: answer.SecretPath}) {
+	for _, warning := range ops.ModelKeyWarnings(ops.ModelConfig{BaseURL: memory.BaseURL, SecretPath: memory.SecretPath}) {
 		fmt.Fprintln(out, warning)
 	}
 	fmt.Fprintf(out, "Deployment: %s\n", status.Mode)
@@ -944,9 +940,6 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 			fmt.Fprintln(out, warning)
 		}
 		fmt.Fprintf(out, "%s: host=%s model=%s effort=%s thinking=%s\n", kind, safeLabel(safeHost(c.BaseURL)), safeLabel(c.Model), safeLabel(c.ReasoningEffort), safeLabel(c.Thinking))
-	}
-	if err := printRecallStatus(d, out); err != nil {
-		return err
 	}
 	current := filepath.Join(*optRoot, "releases", "current")
 	if revision, readErr := os.ReadFile(filepath.Join(current, "SOURCE_REVISION")); readErr == nil {

@@ -11,24 +11,11 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
-	"github.com/ronigooja/Zoe/internal/answer"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
 
 func recallRecoveryFixture(t *testing.T, cfg Config, count int) (*storage.Store, *Service) {
 	t.Helper()
-	if cfg.Answerer != nil {
-		model := cfg.Answerer
-		cfg.MemoryAPI = workerClient(t, func(w http.ResponseWriter, req *http.Request) {
-			_, _ = io.Copy(io.Discard, req.Body)
-			result, err := model.Answer(req.Context(), "question", nil, "")
-			if err != nil {
-				w.WriteHeader(503)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{{"text": result.Text, "id": "fixture", "score": 1}}})
-		})
-	}
 	_, store, _ := handoffHTTPServerWithConfig(t, Config{})
 	if cfg.Now == nil {
 		cfg.Now = func() time.Time { return time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC) }
@@ -79,7 +66,7 @@ func TestRecallRecoveryRestartAndLease(t *testing.T) {
 			}
 			want := stewardErrorSpeech
 			if mode == "existing_answer" {
-				want = "对话记录里记着：We discussed the garden."
+				want = "We discussed the garden."
 				_, err = store.DB().Exec(`INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('job-0','default','handoff-session',1,'recall-answer:job-0',?,'recall_answer','pending',?,?,?)`, want, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 				if err != nil {
 					t.Fatal(err)
@@ -111,11 +98,12 @@ func TestRecallRecoveryRestartAndLease(t *testing.T) {
 
 func TestRecallPersistenceRetriesThenFallback(t *testing.T) {
 	var calls atomic.Int32
-	model := recallModelFunc(func(context.Context, string, []contracts.MemoryContextItem, string) (answer.Result, error) {
+	worker := workerClient(t, func(w http.ResponseWriter, req *http.Request) {
+		_, _ = io.Copy(io.Discard, req.Body)
 		calls.Add(1)
-		return answer.Result{Status: "answer", Text: "We discussed the garden."}, nil
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{{"text": "We discussed the garden."}}})
 	})
-	store, svc := recallRecoveryFixture(t, Config{Answerer: model}, 1)
+	store, svc := recallRecoveryFixture(t, Config{MemoryAPI: worker}, 1)
 	svc.Start()
 	// ABORT rolls back the insert and job completion. Only final answer inserts
 	// fail; a fallback must still be committed by the same transaction boundary.
@@ -136,7 +124,7 @@ func TestRecallPersistenceRetriesThenFallback(t *testing.T) {
 	var text string
 	_ = store.DB().QueryRow(`SELECT text FROM voice_fast_replies WHERE id='job-0'`).Scan(&text)
 	if text != stewardErrorSpeech || calls.Load() != 1 {
-		t.Fatalf("fallback text=%q model calls=%d", text, calls.Load())
+		t.Fatalf("fallback text=%q worker calls=%d", text, calls.Load())
 	}
 }
 
@@ -145,20 +133,21 @@ func TestRecallWorkersBoundedAndStopJoins(t *testing.T) {
 	entered := make(chan struct{}, 12)
 	release := make(chan struct{})
 	defer close(release)
-	model := recallModelFunc(func(ctx context.Context, _ string, _ []contracts.MemoryContextItem, _ string) (answer.Result, error) {
+	worker := workerClient(t, func(w http.ResponseWriter, req *http.Request) {
+		_, _ = io.Copy(io.Discard, req.Body)
 		n := active.Add(1)
 		defer active.Add(-1)
 		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
 		}
 		entered <- struct{}{}
 		select {
-		case <-ctx.Done():
+		case <-req.Context().Done():
 			canceled.Add(1)
 		case <-release:
 		}
-		return answer.Result{}, ctx.Err()
+		w.WriteHeader(http.StatusServiceUnavailable)
 	})
-	store, svc := recallRecoveryFixture(t, Config{Answerer: model, RecallTimeout: 30 * time.Second}, 12)
+	store, svc := recallRecoveryFixture(t, Config{MemoryAPI: worker, RecallTimeout: 30 * time.Second}, 12)
 	svc.Start()
 	svc.dispatchRecall(context.Background())
 	for i := 0; i < 4; i++ {
@@ -192,13 +181,14 @@ func TestRecallWorkersBoundedAndStopJoins(t *testing.T) {
 	}
 }
 
-func TestRecallReplayDoesNotRepeatModelOrAnswer(t *testing.T) {
+func TestRecallReplayDoesNotRepeatWorkerOrReply(t *testing.T) {
 	var calls atomic.Int32
-	model := recallModelFunc(func(context.Context, string, []contracts.MemoryContextItem, string) (answer.Result, error) {
+	worker := workerClient(t, func(w http.ResponseWriter, req *http.Request) {
+		_, _ = io.Copy(io.Discard, req.Body)
 		calls.Add(1)
-		return answer.Result{Status: "answer", Text: "我们聊过花园。"}, nil
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{{"text": "We discussed the garden."}}})
 	})
-	store, svc := recallRecoveryFixture(t, Config{Answerer: model}, 1)
+	store, svc := recallRecoveryFixture(t, Config{MemoryAPI: worker}, 1)
 	svc.dispatchRecall(context.Background())
 	waitRecall(t, func() bool {
 		var state string
@@ -212,6 +202,6 @@ func TestRecallReplayDoesNotRepeatModelOrAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if calls.Load() != 1 || replies != 1 {
-		t.Fatalf("model calls=%d replies=%d", calls.Load(), replies)
+		t.Fatalf("worker calls=%d replies=%d", calls.Load(), replies)
 	}
 }

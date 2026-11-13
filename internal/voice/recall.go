@@ -3,32 +3,14 @@ package voice
 import (
 	"context"
 	"encoding/json"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/ronigooja/Zoe/internal/logging"
 )
 
-const recallNotFound = "我没有在我们的对话记录里找到相关内容。"
-const recallUnavailable = "我现在没法查看对话记录，请稍后再试。"
-
 // memoryWriteHolding identifies at-most-once writes in the shared durable queue.
 const memoryWriteHolding = "memory_write_holding"
-
-// recallFailureSpeech applies fixed wording without implying a failed check found no evidence.
-func recallFailureSpeech(status string) string {
-	return evidenceFailureSpeech(status, recallNotFound, recallUnavailable)
-}
-
-// evidenceFailureSpeech applies to recall and memory reads; only absent evidence
-// may use not-found wording, while every failed check reports unavailability.
-func evidenceFailureSpeech(status, notFound, unavailable string) string {
-	if status == "not_found" {
-		return recallSpeech(notFound)
-	}
-	return recallSpeech(unavailable)
-}
 
 // recallWorkerLimit bounds model work per service, including persistence retries.
 const recallWorkerLimit = 4
@@ -122,20 +104,6 @@ func (s *Service) persistRecallRetry(ctx context.Context, id, text string) bool 
 		}
 	}
 	return false
-}
-
-var recallIDs = regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\b`)
-
-func recallSpeech(text string) string {
-	text = recallIDs.ReplaceAllString(text, "")
-	// Reject markup instead of risking reading formatting, links or evidence IDs aloud.
-	if strings.ContainsAny(text, "*#`[]<>_~|") {
-		text = recallUnavailable
-	}
-	if strings.TrimSpace(text) == "" {
-		text = recallUnavailable
-	}
-	return text
 }
 
 // dispatchRecall uses a silent delivered receipt for new jobs. The durable

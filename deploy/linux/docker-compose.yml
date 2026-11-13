@@ -70,12 +70,6 @@ services:
       ZOE_STEWARD_THINKING: ${ZOE_STEWARD_THINKING:-}
       ZOE_STEWARD_TIMEOUT_MS: ${ZOE_STEWARD_TIMEOUT_MS:-30000}
       ZOE_STEWARD_API_KEY_FILE: /run/secrets/steward_api_key
-      ZOE_ANSWER_BASE_URL: ${ZOE_ANSWER_BASE_URL:-}
-      ZOE_ANSWER_MODEL: ${ZOE_ANSWER_MODEL:-}
-      ZOE_ANSWER_REASONING_EFFORT: ${ZOE_ANSWER_REASONING_EFFORT:-}
-      ZOE_ANSWER_THINKING: ${ZOE_ANSWER_THINKING:-}
-      ZOE_ANSWER_TIMEOUT_MS: ${ZOE_ANSWER_TIMEOUT_MS:-8000}
-      ZOE_ANSWER_API_KEY_FILE: /run/secrets/answer_api_key
       ZOE_RECALL_HOLDING_TEXT: ${ZOE_RECALL_HOLDING_TEXT:-}
       ZOE_SECRET_FILE_MAP: ZOE_RUNNER_TOKEN=/run/secrets/runner_token${ZOE_VOICE_SECRET_MAP:-}
     entrypoint: ["/usr/local/bin/zoe-secret-entrypoint"]
@@ -103,8 +97,6 @@ services:
         target: compact_api_key
       - source: steward_api_key
         target: steward_api_key
-      - source: answer_api_key
-        target: answer_api_key
     networks:
       - default
 
@@ -196,5 +188,3 @@ secrets:
     file: ${ZOE_REGISTER_API_KEY_FILE:-/dev/null}
   compact_api_key:
     file: ${ZOE_COMPACT_API_KEY_FILE:-/dev/null}
-  answer_api_key:
-    file: ${ZOE_ANSWER_API_KEY_FILE:-/dev/null}
