@@ -94,6 +94,8 @@ for revision in [old, new]:
     (root/'deploy-linux/docker-compose.yml').write_text(compose)
 root = p/'source'
 case = os.environ['CASE']
+if case == 'runner-unchanged-error':
+    shutil.copy(p/'releases'/old/'bin/zoe-runner', root/'bin/zoe-runner')
 if case == 'happy':
     config['secrets'] = {'register_api_key': {'file': '/dev/null'}, 'compact_api_key': {'file': '/dev/null'}}
     (p/'config.json').write_text(json.dumps(config))
@@ -138,6 +140,12 @@ import datetime, json, os, pathlib, re, shutil, sqlite3, sys
 p=pathlib.Path(os.environ['FIXTURE']); cmd=pathlib.Path(sys.argv[0]).name; args=sys.argv[1:]
 old,new=os.environ['OLD_SHA'],os.environ['NEW_SHA']; case=os.environ['CASE']
 current=(p/'releases/current').resolve().name
+def epoch():
+    return int((p/'clock').read_text()) if (p/'clock').exists() else 1700000000
+def restarted(unit):
+    value = epoch()+10
+    (p/'clock').write_text(str(value))
+    (p/(unit+'-restart-epoch')).write_text(str(value))
 def record():
     with (p/'calls').open('a') as out: out.write(cmd+' '+ ' '.join(args)+'\n')
 def healthy():
@@ -176,6 +184,8 @@ elif cmd == 'systemctl':
             # Real systemctl returns success for ANY active unit in this list.
             inactive = 'zoe-opencode' if case == 'inactive-service' and current == new else None
             sys.exit(0 if any(unit != inactive for unit in units) else 3)
+        if args[0] == 'restart' and current == new:
+            restarted(args[1])
         if args[:2] == ['restart','zoe-compose'] and current == new and not (p/'restarted').exists():
             (p/'restarted').touch()
             with sqlite3.connect(p/'db.sqlite') as db:
@@ -187,9 +197,22 @@ elif cmd == 'journalctl':
     if not re.fullmatch(r'@[0-9]+', value): sys.exit('unsupported journal timestamp')
     assert args == ['-u','zoe-runner','--since',value,'--no-pager']
     record()
-    print('runner ready')
-    if case == 'happy':
-        print('level=warn runner iteration failed; retrying after idle interval: error_kind=connection_refused')
+    cutoff = int(value[1:])
+    runner_epoch = int((p/'zoe-runner-restart-epoch').read_text()) if (p/'zoe-runner-restart-epoch').exists() else epoch()
+    lines = [(runner_epoch, 'level=info runner startup status=ready')]
+    prefix = 'runner iteration failed; retrying after idle interval: '
+    if case == 'runner-old-error':
+        lines.append((runner_epoch-1, 'level=error '+prefix+'*url.Error'))
+    if case in ['runner-new-error', 'runner-unchanged-error']:
+        lines.append((runner_epoch+1, 'level=error '+prefix+'*url.Error'))
+    if case in ['happy', 'runner-new-warn']:
+        lines.append((runner_epoch, 'level=warn '+prefix+'error_kind=connection_refused'))
+    for timestamp, line in sorted(lines):
+        if timestamp >= cutoff:
+            print(line)
+elif cmd == 'date':
+    assert args == ['+%s']
+    print(epoch())
 elif cmd == 'sleep': pass
 elif cmd == 'docker':
     if args[0] == 'compose':
@@ -218,7 +241,7 @@ elif cmd == 'docker':
 else: sys.exit(2)
 PY
   chmod 0755 "$FIXTURE/shims/shim"
-  for tool in docker systemctl gh curl journalctl sleep; do ln -s shim "$FIXTURE/shims/$tool"; done
+  for tool in docker systemctl gh curl journalctl sleep date; do ln -s shim "$FIXTURE/shims/$tool"; done
   export ZOE_RELEASES_DIR="$FIXTURE/releases" ZOE_ENV_FILE="$FIXTURE/stack.env" ZOE_DB_PATH="$FIXTURE/db.sqlite"
   export ZOE_API_URL=http://local/healthz ZOE_UNITS_DIR="$FIXTURE/units" ZOE_BIN_DIR="$FIXTURE/bin"
   export ZOE_DEPLOY_LOG_DIR="$FIXTURE/logs" ZOE_DEPLOY_HEALTH_ATTEMPTS=1
@@ -258,12 +281,13 @@ deploy
 [[ ! -e "$FIXTURE/releases/$new.dl" ]]
 [[ "$(grep -c '^docker pull ' "$FIXTURE/calls")" == 1 ]]
 [[ "$(stat -c '%a' "$FIXTURE/stack.env.pre-${new:0:12}")" == 640 ]]
-python3 - "$FIXTURE/calls" <<'PY'
+python3 - "$FIXTURE" <<'PY'
 import pathlib, re, sys
-calls=pathlib.Path(sys.argv[1]).read_text()
+p=pathlib.Path(sys.argv[1]); calls=(p/'calls').read_text()
 journal=re.search(r'^journalctl -u zoe-runner --since @([0-9]+) --no-pager$',calls,re.M)
 assert journal, 'deployment did not pass portable epoch to journalctl'
-assert re.search(r'^docker logs --since '+journal[1]+r' server-container$',calls,re.M), 'Docker and journal cutoffs differ'
+assert journal[1] == (p/'zoe-runner-restart-epoch').read_text(), 'runner cutoff predates its restart'
+assert re.search(r'^docker logs --since 1700000000 server-container$',calls,re.M), 'server cutoff changed'
 PY
 cp "$FIXTURE/calls" "$FIXTURE/calls-before"
 deploy
@@ -283,7 +307,16 @@ mkdir "$FIXTURE/releases/.deploy-$new"
 if deploy; then echo 'incomplete transaction was accepted'; exit 1; fi
 grep -q 'incomplete transaction' "$FIXTURE/logs/$new.log"
 unchanged
-for failure in verify-failure restore-required inactive-service; do
+for success in runner-old-error runner-new-warn; do
+  fixture "$success"
+  deploy
+  [[ -f "$FIXTURE/releases/.deploy-$new/runner-changed" && -f "$FIXTURE/logs/$new.done" ]]
+  [[ ! -f "$FIXTURE/releases/.deploy-$new/rolled-back" ]]
+  grep -q 'deploy step=verify status=ok' "$FIXTURE/logs/$new.log"
+  runner_epoch="$(cat "$FIXTURE/zoe-runner-restart-epoch")"
+  grep -q "^journalctl -u zoe-runner --since @$runner_epoch --no-pager$" "$FIXTURE/calls"
+done
+for failure in verify-failure restore-required inactive-service runner-new-error runner-unchanged-error; do
   fixture "$failure"
   if deploy; then echo "expected verification rollback: $failure"; exit 1; fi
   [[ "$(readlink -f "$FIXTURE/releases/current")" == "$FIXTURE/releases/$old" ]]
@@ -291,6 +324,20 @@ for failure in verify-failure restore-required inactive-service; do
   cmp -s "$FIXTURE/initial-env" "$FIXTURE/stack.env"
   [[ -f "$FIXTURE/logs/$new.failed" && -f "$FIXTURE/releases/.deploy-$new/rolled-back" ]]
   grep -q 'deploy step=rollback status=ok' "$FIXTURE/logs/$new.log"
+  if [[ "$failure" == runner-new-error || "$failure" == runner-unchanged-error ]]; then
+    grep -q 'deploy step=verify status=fail' "$FIXTURE/logs/$new.log"
+    grep -q '^log failures count=1$' "$FIXTURE/logs/$new.log"
+    if [[ "$failure" == runner-unchanged-error ]]; then
+      [[ ! -f "$FIXTURE/releases/.deploy-$new/runner-changed" ]]
+      [[ ! -f "$FIXTURE/zoe-runner-restart-epoch" ]]
+      grep -q '^journalctl -u zoe-runner --since @1700000000 --no-pager$' "$FIXTURE/calls"
+      if grep -q '^systemctl restart zoe-runner$' "$FIXTURE/calls"; then exit 1; fi
+    else
+      [[ -f "$FIXTURE/releases/.deploy-$new/runner-changed" ]]
+      runner_epoch="$(cat "$FIXTURE/zoe-runner-restart-epoch")"
+      grep -q "^journalctl -u zoe-runner --since @$runner_epoch --no-pager$" "$FIXTURE/calls"
+    fi
+  fi
   if [[ "$failure" == inactive-service ]]; then
     grep -q 'deploy step=verify status=fail' "$FIXTURE/logs/$new.log"
     grep -q '^systemctl is-active --quiet zoe-opencode$' "$FIXTURE/calls"

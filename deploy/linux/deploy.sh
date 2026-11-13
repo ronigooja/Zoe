@@ -276,10 +276,16 @@ state_op idle "$db"
 # systemd v219 accepts @epoch; Docker accepts bare seconds, not @epoch.
 restart_epoch="$(date +%s)"
 [[ "$restart_epoch" =~ ^[0-9]+$ ]]
+runner_restart_epoch="$restart_epoch"
 touch "$state/restart-attempted"
 systemctl restart zoe-compose >/dev/null 2>&1
 wait_health
-if [[ -f "$state/runner-changed" ]]; then systemctl restart zoe-runner >/dev/null 2>&1; fi
+if [[ -f "$state/runner-changed" ]]; then
+  systemctl restart zoe-runner >/dev/null 2>&1
+  # The old process has exited; @epoch includes new startup logs in this second.
+  runner_restart_epoch="$(date +%s)"
+  [[ "$runner_restart_epoch" =~ ^[0-9]+$ ]]
+fi
 ok
 step=verify
 services_active
@@ -289,7 +295,7 @@ container="$(docker compose --env-file "$env_file" -f "$releases/current/deploy-
 [[ -n "$container" && "$container" != *$'\n'* ]]
 state_op container-verify "$releases/$sha" "$env_file" "$container" "$script_dir/expected-env.txt"
 state_op db-verify "$state/before.json" "$db"
-journalctl -u zoe-runner --since "@$restart_epoch" --no-pager > "$scratch/runner.log" 2>/dev/null
+journalctl -u zoe-runner --since "@$runner_restart_epoch" --no-pager > "$scratch/runner.log" 2>/dev/null
 state_op logs "$scratch/runner.log" runner
 docker logs --since "$restart_epoch" "$container" > "$scratch/server.log" 2>&1
 state_op logs "$scratch/server.log" server
