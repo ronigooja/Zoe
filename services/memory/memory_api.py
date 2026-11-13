@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import queue
-import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .person_memory import MemoryAPIError, PersonMemory, check_deadline
+from .responses_llm import unaccounted_sync_call
 
 LOG = logging.getLogger("zoe.memory.api")
 MAX_BODY_BYTES = 64 * 1024
@@ -116,14 +116,8 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
                 raise MemoryAPIError(400, "request_invalid")
             sentence = _required_text(body, "sentence")
             restatement = _required_text(body, "restatement")
-            job = None
-            job_id = self.headers.get("X-Zoe-Memory-Job-ID")
-            attempt = self.headers.get("X-Zoe-Memory-Job-Attempt")
-            if job_id is not None or attempt is not None:
-                if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", job_id or "") or not re.fullmatch(r"[1-9][0-9]{0,8}", attempt or ""):
-                    raise MemoryAPIError(400, "request_invalid")
-                job = {"id": job_id, "attempt": int(attempt)}
-            return self.server.backend.write(user, sentence, restatement, self.deadline, job)
+            with unaccounted_sync_call():
+                return self.server.backend.write(user, sentence, restatement, self.deadline)
         if set(body) != {"user"}:
             raise MemoryAPIError(400, "request_invalid")
         return self.server.backend.delete_all(user, self.deadline)
@@ -187,6 +181,6 @@ def start_memory_api(controlled: Any) -> MemoryAPIServer | None:
     timeout = float(os.environ.get("ZOE_MEMORY_API_TIMEOUT_SECONDS", "60"))
     if not 0 < timeout <= 120:
         raise ValueError("memory API timeout must be positive and at most 120 seconds")
-    server = MemoryAPIServer((host, int(port)), PersonMemory(controlled.memory, controlled._control_api), token, timeout)
+    server = MemoryAPIServer((host, int(port)), PersonMemory(controlled.memory), token, timeout)
     threading.Thread(target=server.serve_forever, name="memory-api", daemon=True).start()
     return server

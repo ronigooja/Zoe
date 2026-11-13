@@ -76,9 +76,8 @@ def validate_operations(raw: Any) -> list[dict[str, str]]:
 
 
 class PersonMemory:
-    def __init__(self, memory: Any, control_api: Any = None):
+    def __init__(self, memory: Any):
         self.memory = memory
-        self.control_api = control_api
         self._lock = threading.Lock()
         # History has no user column in Mem0 2.2.1. Keep IDs, not content, so
         # even deleted vectors' history remains safely attributable on retry.
@@ -140,16 +139,11 @@ class PersonMemory:
         with self._serialized(deadline):
             return {"items": self._search(user, query, top_k, deadline)}
 
-    def write(self, user: str, sentence: str, restatement: str, deadline: float,
-              accounting_job: dict[str, Any] | None = None) -> dict[str, Any]:
+    def write(self, user: str, sentence: str, restatement: str, deadline: float) -> dict[str, Any]:
         from .responses_llm import (
-            ResponsesLLM, reset_model_call_context, reset_request_timeout,
-            set_model_call_context, set_request_timeout,
+            reset_request_timeout, set_request_timeout,
         )
 
-        # Do not silently bypass the existing mandatory job-scoped accounting.
-        if isinstance(self.memory.llm, ResponsesLLM) and (not accounting_job or self.control_api is None):
-            raise MemoryAPIError(503, "accounting_unavailable")
         with self._serialized(deadline):
             existing = self._search(user, restatement, 5, deadline)
             messages = [
@@ -161,13 +155,18 @@ class PersonMemory:
             ]
             LOG.debug("memory_api write model_input=%r", messages)
             timeout_token = set_request_timeout(check_deadline(deadline))
-            call_token = set_model_call_context(self.control_api, accounting_job) if accounting_job else None
+            started = time.monotonic()
+            status, error_kind = "error", "backend_unavailable"
             try:
                 raw = self.memory.llm.generate_response(messages, response_format={"type": "json_object"})
+                status, error_kind = "ok", "none"
+            except TimeoutError:
+                error_kind = "deadline_exceeded"
+                raise
             finally:
-                if call_token is not None:
-                    reset_model_call_context(call_token)
                 reset_request_timeout(timeout_token)
+                LOG.info("memory_api llm_call component=memory_write status=%s error_kind=%s elapsed_ms=%d",
+                         status, error_kind, (time.monotonic() - started) * 1000)
             LOG.debug("memory_api write model_output=%r", raw)
             operations = validate_operations(raw)  # Validate the ENTIRE output before any write.
             resolved = []

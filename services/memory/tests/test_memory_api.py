@@ -12,8 +12,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from services.memory.memory_api import MemoryAPIServer, start_memory_api
-from services.memory.person_memory import PersonMemory, person_user_id
+from services.memory.person_memory import PersonMemory, WRITE_INSTRUCTIONS, person_user_id
 from services.memory.worker import configure_logging
+from services.memory.test_model_call_accounting import _ResponsesClient, _adapter
 
 
 class FakeMemory:
@@ -153,31 +154,36 @@ class MemoryAPITests(unittest.TestCase):
         self.assertEqual(self.memory.add_calls, [])
         self.assertEqual(self.memory.update_calls, [])
 
-    def test_production_adapter_requires_accounting_context(self):
-        from services.memory.responses_llm import ResponsesLLM
-        self.memory.llm = object.__new__(ResponsesLLM)
-        with patch.object(ResponsesLLM, "generate_response") as generate:
+    def test_production_adapter_sync_write_needs_no_job_headers(self):
+        client = _ResponsesClient(SimpleNamespace(output_text='{"operations":[{"op":"add","text":"private-fact"}]}'))
+        self.memory.llm = _adapter(client)
+        self.assertEqual(self.request("/v1/memory/write", {"user": "u", "sentence": "s", "restatement": "r"}),
+                         (200, {"operations": [{"op": "add", "text": "private-fact", "id": "m1"}]}))
+        self.assertEqual(client.calls, 1)
+        self.assertEqual(client.retry_values, [0])
+        self.assertGreater(client.last_request["timeout"], 0)
+        # Even legacy headers must not establish job accounting for this API.
+        client.response.output_text = '{"operations":[]}'
+        self.assertEqual(self.request("/v1/memory/write", {"user": "u", "sentence": "s", "restatement": "r"},
+                                      headers={"X-Zoe-Memory-Job-ID": "ignored", "X-Zoe-Memory-Job-Attempt": "invalid"}),
+                         (200, {"operations": []}))
+        with self.assertRaisesRegex(RuntimeError, "unaccounted dispatch"):
+            self.memory.llm.generate_response([])
+        self.assertEqual(client.calls, 2)
+
+    def test_production_adapter_failure_logs_only_fixed_metadata(self):
+        client = _ResponsesClient(error=RuntimeError("private-error secret-marker workspace/owner"))
+        self.memory.llm = _adapter(client)
+        with self.assertLogs("zoe.memory.api", level="INFO") as logs:
             self.assertEqual(self.request("/v1/memory/write", {"user": "u", "sentence": "s", "restatement": "r"}),
-                             (503, {"error_kind": "accounting_unavailable"}))
-            generate.assert_not_called()
-
-    def test_production_adapter_reuses_job_accounting_context(self):
-        from services.memory.responses_llm import ResponsesLLM, _model_call_context, _request_timeout_seconds
-        self.memory.llm = object.__new__(ResponsesLLM)
-        self.backend.control_api = Mock()
-
-        def generate(*args, **kwargs):
-            context = _model_call_context.get()
-            self.assertEqual((context.job_id, context.attempt), ("existing-job", 2))
-            self.assertIs(context.api, self.backend.control_api)
-            self.assertGreater(_request_timeout_seconds.get(), 0)
-            return '{"operations":[]}'
-
-        with patch.object(ResponsesLLM, "generate_response", side_effect=generate) as model:
-            self.assertEqual(self.request("/v1/memory/write", {"user": "u", "sentence": "s", "restatement": "r"},
-                                          headers={"X-Zoe-Memory-Job-ID": "existing-job", "X-Zoe-Memory-Job-Attempt": "2"}),
-                             (200, {"operations": []}))
-            self.assertEqual(model.call_count, 1)
+                             (502, {"error_kind": "backend_unavailable"}))
+        output = "\n".join(logs.output)
+        self.assertIn("llm_call component=memory_write status=error error_kind=backend_unavailable elapsed_ms=", output)
+        for private in ("private-error", "secret-marker", "workspace/owner"):
+            self.assertNotIn(private, output)
+        with self.assertRaisesRegex(RuntimeError, "unaccounted dispatch"):
+            self.memory.llm.generate_response([])
+        self.assertEqual(client.calls, 1)
 
     def test_delete_all_purges_only_person_history_messages(self):
         for user in ("a", "b"):
@@ -191,6 +197,8 @@ class MemoryAPITests(unittest.TestCase):
         self.assertEqual(self.request("/v1/memory/delete-all", {"user": "a"})[0], 200)
 
     def test_content_debug_only_and_never_token(self):
+        client = _ResponsesClient(SimpleNamespace(output_text='{"operations":[{"op":"add","text":"private-fact"}]}'))
+        self.memory.llm = _adapter(client)
         root = logging.getLogger()
         previous_level = root.level
         stream = io.StringIO()
@@ -202,7 +210,8 @@ class MemoryAPITests(unittest.TestCase):
                 stream.truncate()
                 with patch.dict("os.environ", {"ZOE_LOG_LEVEL": level}):
                     configure_logging()
-                self.write([{"op": "add", "text": "private-fact"}])
+                self.assertEqual(self.request("/v1/memory/write", {"user": "workspace/owner", "sentence": "private-sentence",
+                                                                        "restatement": "private-query"})[0], 200)
                 logging.getLogger("mem0.memory.main").info("private-mem0")
                 self.request("/healthz", token="wrong-token", method="GET")
                 output = stream.getvalue()
@@ -210,6 +219,11 @@ class MemoryAPITests(unittest.TestCase):
                     self.assertEqual(content in output, level == "debug", output)
                 self.assertNotIn("secret-marker", output)
                 self.assertNotIn("wrong-token", output)
+                self.assertNotIn("workspace/owner", output)
+                self.assertEqual("model_input=" in output, level == "debug")
+                self.assertEqual("model_output=" in output, level == "debug")
+                self.assertEqual(WRITE_INSTRUCTIONS in output, level == "debug")
+                self.assertIn("memory_api llm_call component=memory_write status=ok error_kind=none elapsed_ms=", output)
                 self.assertIn("memory_api request kind=write status=200 elapsed_ms=", output)
         finally:
             root.removeHandler(handler)
