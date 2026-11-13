@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +13,7 @@ from mem0.llms.openai import OpenAILLM
 
 _request_timeout_seconds: ContextVar[float | None] = ContextVar("zoe_memory_llm_timeout", default=None)
 _model_call_context: ContextVar[ModelCallContext | None] = ContextVar("zoe_memory_model_call_context", default=None)
+_unaccounted_sync_call: ContextVar[bool] = ContextVar("zoe_memory_unaccounted_sync_call", default=False)
 _safe_provider_request_id = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
 
 
@@ -41,6 +43,16 @@ def set_model_call_context(api: Any, job: dict[str, Any]) -> Token[ModelCallCont
 
 def reset_model_call_context(token: Token[ModelCallContext | None]) -> None:
     _model_call_context.reset(token)
+
+
+@contextmanager
+def unaccounted_sync_call():
+    """Only the synchronous HTTP write handler may opt out of job accounting."""
+    token = _unaccounted_sync_call.set(True)
+    try:
+        yield
+    finally:
+        _unaccounted_sync_call.reset(token)
 
 
 class ResponsesLLM(OpenAILLM):
@@ -116,8 +128,27 @@ class ResponsesLLM(OpenAILLM):
         if reasoning_model:
             request["reasoning"] = {"effort": reasoning_effort or "medium"}
         context = _model_call_context.get()
-        if context is None:
+        if context is None and not _unaccounted_sync_call.get():
             raise RuntimeError("memory model-call accounting context is required; refusing unaccounted dispatch")
+        if context is None:
+            response = self.client.with_options(max_retries=0).responses.create(**request)
+        else:
+            response = self._accounted_response(request, context)
+        if not tools:
+            return response.output_text or ""
+        calls: list[dict[str, Any]] = []
+        for item in response.output:
+            if getattr(item, "type", "") != "function_call":
+                continue
+            arguments = getattr(item, "arguments", "{}")
+            try:
+                parsed = json.loads(arguments)
+            except (TypeError, ValueError):
+                parsed = {}
+            calls.append({"name": item.name, "arguments": parsed})
+        return {"content": response.output_text or "", "tool_calls": calls}
+
+    def _accounted_response(self, request: dict[str, Any], context: ModelCallContext) -> Any:
         reservation: dict[str, Any] | None = None
         # UTF-8 bytes are a deliberately conservative proxy for multilingual
         # input, with framing allowance. This is not provider usage or a
@@ -172,19 +203,7 @@ class ResponsesLLM(OpenAILLM):
                 "unknown",
                 provider_request_id=request_id,
             )
-        if not tools:
-            return response.output_text or ""
-        calls: list[dict[str, Any]] = []
-        for item in response.output:
-            if getattr(item, "type", "") != "function_call":
-                continue
-            arguments = getattr(item, "arguments", "{}")
-            try:
-                parsed = json.loads(arguments)
-            except (TypeError, ValueError):
-                parsed = {}
-            calls.append({"name": item.name, "arguments": parsed})
-        return {"content": response.output_text or "", "tool_calls": calls}
+        return response
 
 
 def register_responses_provider() -> None:

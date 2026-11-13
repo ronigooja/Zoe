@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from typing import Any
 
-from .responses_llm import ResponsesLLM, reset_model_call_context, set_model_call_context
+from .responses_llm import ResponsesLLM, reset_model_call_context, set_model_call_context, unaccounted_sync_call
 
 
 class _ControlAPI:
@@ -71,6 +71,34 @@ class ModelCallAccountingTests(unittest.TestCase):
                 reset_model_call_context(token)
             request = getattr(client, "last_request", None)
             self.assertEqual(request["reasoning"]["effort"], expected)
+
+    def test_sync_opt_out_resets_after_success_and_exception(self) -> None:
+        client = _ResponsesClient(SimpleNamespace(output_text="synthetic"))
+        adapter = _adapter(client)
+        with unaccounted_sync_call():
+            self.assertEqual(adapter.generate_response([]), "synthetic")
+        with self.assertRaisesRegex(RuntimeError, "unaccounted dispatch"):
+            adapter.generate_response([])
+        with self.assertRaisesRegex(ValueError, "synthetic"):
+            with unaccounted_sync_call():
+                raise ValueError("synthetic")
+        with self.assertRaisesRegex(RuntimeError, "unaccounted dispatch"):
+            adapter.generate_response([])
+        self.assertEqual(client.calls, 1)
+
+    def test_sync_opt_out_does_not_override_existing_job_budget_gate(self) -> None:
+        api = _ControlAPI(dispatch_allowed=False)
+        client = _ResponsesClient()
+        adapter = _adapter(client)
+        token = set_model_call_context(api, {"id": "job-1", "attempt": 1})
+        try:
+            with unaccounted_sync_call():
+                with self.assertRaisesRegex(RuntimeError, "refusing duplicate dispatch"):
+                    adapter.generate_response([])
+        finally:
+            reset_model_call_context(token)
+        self.assertEqual(client.calls, 0)
+        self.assertEqual([event[0] for event in api.events], ["reserve"])
 
     def test_reserves_before_one_physical_call_and_records_provider_usage(self) -> None:
         api = _ControlAPI()
