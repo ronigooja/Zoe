@@ -104,7 +104,7 @@ VALUES('cleanup','default','handoff-session',1,'cleanup',2,'provider','keep verb
 			t.Fatalf("surviving data changed: before=%v after=%v", before, after)
 		}
 		var version int
-		if err := db.QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 225 {
+		if err := db.QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 226 {
 			t.Fatalf("latest version=%d err=%v", version, err)
 		}
 		if i == 0 {
