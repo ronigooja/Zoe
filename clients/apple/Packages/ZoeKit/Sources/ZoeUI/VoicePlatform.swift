@@ -232,48 +232,6 @@ public enum VoiceAudioLifecycleEvent: Sendable {
     case routeUnavailable
 }
 
-#if os(iOS)
-public final class AppleMobileAudioSessionAdapter: VoiceAudioSessionAdapter {
-    private let session = AVAudioSession.sharedInstance()
-    public var onLifecycleEvent: (@Sendable (VoiceAudioLifecycleEvent) -> Void)?
-    private var observers: [NSObjectProtocol] = []
-
-    public init() {}
-
-    public func activate() throws {
-        observeLifecycleEvents()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
-        try session.setActive(true)
-    }
-
-    public func deactivate() throws {
-        removeLifecycleObservers()
-        try session.setActive(false, options: .notifyOthersOnDeactivation)
-    }
-
-    private func observeLifecycleEvents() {
-        guard observers.isEmpty else { return }
-        let center = NotificationCenter.default
-        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: session, queue: .main) { [weak self] notification in
-            guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
-            self?.onLifecycleEvent?(.interrupted)
-        })
-        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { [weak self] notification in
-            guard let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
-                  AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable else { return }
-            self?.onLifecycleEvent?(.routeUnavailable)
-        })
-    }
-
-    private func removeLifecycleObservers() {
-        for observer in observers { NotificationCenter.default.removeObserver(observer) }
-        observers.removeAll()
-    }
-
-    deinit { removeLifecycleObservers() }
-}
-#elseif os(macOS)
 public final class AppleDesktopAudioSessionAdapter: VoiceAudioSessionAdapter {
     public var onLifecycleEvent: (@Sendable (VoiceAudioLifecycleEvent) -> Void)?
     public init() {}
@@ -282,7 +240,7 @@ public final class AppleDesktopAudioSessionAdapter: VoiceAudioSessionAdapter {
 
     public func deactivate() throws {}
 }
-#endif
+
 
 public enum VoiceIntegrationStatus: Equatable, Sendable {
     case unavailable(reason: String)

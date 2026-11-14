@@ -5,8 +5,7 @@ let package = Package(
     name: "ZoeKit",
     defaultLocalization: "en",
     platforms: [
-        .macOS(.v14),
-        .iOS(.v17)
+        .macOS(.v14)
     ],
     products: [
         .library(name: "ZoeKit", targets: ["ZoeKit"]),

@@ -53,6 +53,22 @@ private final class VoiceFinalURLProtocol: URLProtocol {
 }
 
 final class VoiceLifecycleIndependentTests: XCTestCase {
+    @MainActor
+    func testVoiceEndEventReleasesCurrentSessionAndIgnoresOldConnection() async throws {
+        let (model, _, _) = try finalModel()
+        var hangups = 0
+        model.voiceHangupOverrideForTesting = { _ in
+            hangups += 1
+            return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
+        }
+        let event = EventEnvelope(schemaVersion: 1, eventId: "end", cursor: "2", type: "voice.end", occurredAt: "now", workspaceId: "workspace-1", subjectId: nil, aggregateType: "voice", aggregateId: "final-session", aggregateVersion: 4, payload: .object([:]))
+        await model.handleEventForTesting(event, expectedConnectionEpoch: model.connectionEpoch + 1)
+        XCTAssertEqual(hangups, 0)
+        await model.handleEventForTesting(event)
+        XCTAssertEqual(hangups, 1)
+        XCTAssertFalse(model.canEndVoiceSession)
+    }
+
     private func voiceAPI(installationID: String) throws -> APIClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [IndependentVoiceURLProtocol.self]
@@ -72,7 +88,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let session = VoiceSessionResponse(voiceSessionId: "final-session", generation: 4, state: "active", answerSdp: "")
         let epoch = model.installVoiceSessionForTesting(session, api: api)
-        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "1", projects: [], tasks: [], approvals: [], runs: [], workspaceId: "workspace-1"))
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "1", workspaceId: "workspace-1"))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
