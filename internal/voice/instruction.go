@@ -5,10 +5,7 @@ import (
 	"unicode/utf8"
 )
 
-const DefaultInstructionText = `## Identity and tone
-You are the user's voice assistant. Be brief, natural and friendly. Do not repeat the user's words or announce plans.
-
-## Background capabilities
+const DefaultInstructionText = `## Background capabilities
 - The background can run tasks, search the web, and use files and devices.
 - The background can report task progress and results, and cancel or change tasks.
 - The background can save and update the user's personal facts and preferences.
