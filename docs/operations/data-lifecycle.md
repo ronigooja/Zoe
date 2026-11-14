@@ -84,7 +84,7 @@ Keep the old instance fenced. Validate permissions, task/run identities, artifac
 
 ## Deletion and destruction
 
-When deleting an owner's memory, use the worker HTTP `delete-all` operation synchronously. Report failure; do not queue a durable retry or claim backup erasure. There is no Go memory deletion command or native memory-management UI. Generic destruction inventory and proof requirements below still cover Mem0/Qdrant and backups.
+When integrating owner-memory deletion, the Go client's worker HTTP `delete-all` operation is synchronous and returns failures without durable retry or proof of backup erasure. No user-facing entry point invokes it today; no Go memory deletion command or native memory-management UI exists. See [ADR 0006](../architecture/decisions/0006-memory-authority-and-derived-stores.md). Generic destruction inventory and proof requirements below still cover Mem0/Qdrant and backups.
 
 For complete instance destruction, start with the [inventory example](../../deploy/linux/destroy-inventory.example.json) and inspect a read-only plan:
 

@@ -23,7 +23,7 @@ Roster-aware Steward task management and the compatible Worker executor profile 
 deployed on `bb07671`; see the [contract and current limitations](architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager).
 On main, [ADR 0013](architecture/decisions/0013-context-register.md) replaces that roster with register routing and alias-free `Choose`; triage, `Assign`/`Decide`, impact confirmation and fixed progress replies are removed. This is source implementation, not a replacement deployment: the old flow was deployed on `bb07671`, removed on main. Compaction, attribution, added latency and live Worker/voice acceptance remain unmeasured.
 
-The bounded recall route, leased fallback recovery and bounded shutdown-joined workers have local fake-gateway/model regression coverage; see [its contract](architecture/decisions/0012-voice-conversation-layer.md#bounded-recall-route). Hosted integration and real speech/provider behavior remain open.
+The current worker-memory paths implement single-call register routing, immediate at-most-once writes and recall search/context append; see [ADR 0013](architecture/decisions/0013-context-register.md#3-memory-cadence). Memory export, claim/proposal review UI and user-facing deletion are absent. The [source-review record](acceptance/evidence.md#worker-memory-redesign-source-review---2026-11-13) does not establish deployment or real-call acceptance; these paths are not accepted end to end. Older recall fixtures below describe their recorded revision, not the removed answer model.
 
 The [2026-10-29 voice deployment repair](acceptance/evidence.md#voice-deployment-configuration-repair--2026-10-29)
 restored the missing gateway credential mount and startup configuration on the

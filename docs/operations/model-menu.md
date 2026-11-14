@@ -9,13 +9,15 @@ models by purpose; Configure and Test are paired:
 | 8 / 9 | Register: routes every sentence | `ZOE_REGISTER_*` |
 | 10 / 11 | Compact: hourly conversation compaction | `ZOE_COMPACT_*` |
 | 12 / 13 | Steward: task routing and replies | `ZOE_STEWARD_*` |
-| 14 / 15 | Memory extraction: 24-hour batch and memory worker | `ZOE_MEM0_LLM_*` |
+| 14 / 15 | Memory extraction: worker ingestion and explicit write decisions | `ZOE_MEM0_LLM_*` |
 
 When using Register or Compact, each group independently requires `BASE_URL`,
 `MODEL`, and `API_KEY_FILE`. Optional suffixes are `REASONING_EFFORT`, `THINKING`,
 and `TIMEOUT_MS`. Neither group falls back to another group's configuration.
-Missing required variables fail Test with the variable name and a reminder that
-the server will not start without it. The server requires both groups.
+Missing required variables fail Test with the variable name; its current error
+also says the server will not start, which is not the server's startup behavior. Server startup
+permits incomplete groups but disables the register; enabling it requires both
+complete groups. See [routing configuration](deployment.md#register-routing-configuration).
 
 When configuring these menu-only groups, Enter keeps the current value, hidden
 key input rotates only the selected credential, and empty key input retains it.
@@ -31,8 +33,8 @@ The probe uses `/responses` relative to the configured base URL; a failed route
 fails the probe rather than issuing a second request. No Register, Compact, or
 Steward CLI subcommands or flags are provided.
 
-When using the current menu, triage and call-summary Configure/Test entries and
-their CLI commands are unavailable. Recall uses the register restatement to search
+When using the current menu, triage, call-summary and answer-model Configure/Test
+entries are unavailable. Recall uses the register restatement to search
 the memory worker and appends retrieved text to the upstream voice model; see
 [deployment configuration](deployment.md#register-routing-configuration).
 

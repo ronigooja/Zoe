@@ -63,15 +63,15 @@ partial, startup succeeds with the register disabled and one
 `register status=disabled reason=not_configured missing=<comma-separated variable names>`
 log line. Every delegated sentence then creates no task and holds the fixed
 processing-error speech; there is no Steward or other fallback. No register
-compaction runs or register opening context is included; recall uses memory alone.
+compaction runs or register opening context is included; no new delegated recall is routed.
 Configure both groups using the `zoe` menu items **Register model** and
 **Compact model**, then redeploy or restart. A complete group's unreadable or
 empty key file still fails startup, naming the variable without exposing its
 content, even if the other group is incomplete. Compose accepts missing host
 variables and uses `/dev/null` for unset independent secret files. Effort and
 thinking default to empty. Routing timeout defaults to 30000 ms (500-60000);
-compaction timeout defaults to 600000 ms (5000-600000). Both routing calls share
-the existing 35-second classification budget.
+compaction timeout defaults to 600000 ms (5000-600000). The single register call
+and any subsequent Steward call share the existing 35-second classification budget.
 
 When tuning compaction, `ZOE_COMPACT_MAX_CHARACTERS` defaults to 8000 (500-100000),
 `ZOE_COMPACT_INTERVAL_MINUTES` defaults to 60 (1-1440), and
@@ -242,7 +242,7 @@ API-style negotiation (default 30000 ms, range 200-60000). Both models share the
 total budget, not additive guarantees. Steward's operator probe invokes `Choose`.
 Register or Steward failure creates no task and sends fixed processing-error speech.
 
-When configuring the answer client's thinking and reasoning effort, use the wire
+When configuring Go model clients' thinking and reasoning effort, use the wire
 settings below. Effort accepts `none`, `low`, `medium`, `high`, `max`, or empty;
 `minimal` is rejected by the configured OpenAI-style gateway. Values are sent
 unchanged, not mapped locally.
@@ -264,10 +264,12 @@ the register restatement and appends retrieved text to the upstream voice model.
 No separate model endpoint or credential is required for recall. Memory extraction
 continues to use `ZOE_MEM0_LLM_*`; see the [stack example](../../deploy/linux/zoe-stack.env.example).
 
-When the register routes recall, the answer client receives owner-scoped memory items
-and bounded register conversation context (compact plus raw recent turns) in one model
-call. Without a register it uses memory alone. The call-summary pipeline and its
-Configure/Test commands are removed.
+When the register routes recall, retrieved texts use the task-result `/context`
+append path in sequential UTF-8-safe chunks of at most 8000 bytes. Empty results
+append nothing. No answer model, spoken holding reply or fixed not-found speech
+is used. Worker failures speak `Processing error.` and create no task. The
+call-summary pipeline and its Configure/Test commands are removed; see
+[ADR 0013](../architecture/decisions/0013-context-register.md#3-memory-cadence).
 Synthetic probes do not establish live-provider quality, latency, deployment, or
 end-to-end acceptance.
 
@@ -359,8 +361,10 @@ Optional settings:
 - `ZOE_DEFAULT_PROFILE_ID`: the server-selected profile for new tasks.
 - `ZOE_RUNTIME_PROFILES`: JSON object keyed by profile ID. Install writes a working single `worker` profile by default and never overwrites an existing non-empty value. Each profile sets `id`, `runtime_route_id`, `model_route_id`, `role`, `isolation_policy`, `capability_ids`, and `scopes`. Client requests cannot override these execution routes or grants.
 - `ZOE_RUNNER_TOKEN`: deployment-provisioned 32-byte base64url runner credential. When set, `ZOE_RUNNER_ID`, `ZOE_RUNNER_WORKSPACES`, and `ZOE_RUNNER_SCOPES` default to `configured-runner`, `default`, and `runner:claim,runner:observe,runner:control:read`.
-- Memory-worker deployment also requires the shared `ZOE_MEMORY_API_TOKEN_FILE`, `ZOE_MEM0_LLM_MODEL`, `ZOE_MEM0_LLM_BASE_URL`, and `ZOE_MEM0_LLM_API_KEY` from deployment-managed secret references. Configure the three Mem0 values with `zoe memory configure`; its secret path must remain distinct from the task-model credential. The memory model key is a separate credential issued by the model gateway and entered through `zoe`, never created by Zoe. `ZOE_MEM0_LLM_PROVIDER` must use the accounted `openai` path; `ollama` is rejected until it supports the same accounting boundary; `ZOE_MEM0_HISTORY_DB` and the model cache belong on the private persistent memory volume. Qdrant URL, optional API-key reference, collection/codec, and worker HTTP settings are deployment configuration. The pinned multilingual embedding revision and dimensions are defined in [worker configuration](../../services/memory/config.py); changing them requires a separate collection and rebuild.
-- For local execution, start the worker from the repository root with `python -m services.memory.worker`, or deploy reviewed CI-built worker images with the settings above. The Compose Qdrant service is loopback-bound and disposable; it is not a production persistence configuration. These commands describe source setup and do not establish production installation or recovery.
+- For server-to-worker HTTP, configure `ZOE_MEMORY_API_URL` and shared `ZOE_MEMORY_API_TOKEN_FILE`; Compose sets the URL to `http://zoe-memory-worker:8788` and mounts the token at `/run/secrets/memory_api_token` in both services. The worker's `ZOE_MEMORY_API_ADDR` defaults to `0.0.0.0:8788`. Neither worker nor Qdrant publishes a host port in [Compose](../../deploy/linux/docker-compose.yml); keep access on the internal Compose network. `ZOE_MEMORY_BATCH_INTERVAL_HOURS` controls scheduled ingestion (1..168, default 24). The worker serves HTTP only, not Go job polling.
+- During a release deployment, [deploy.sh](../../deploy/linux/deploy.sh) and [deploy-state.py](../../deploy/linux/deploy-state.py) provision the shared memory API token when absent, defaulting to `/etc/zoe/secrets/memory-api-token` beside the runner token. Mode is `0600`, ownership `65532:65532`; existing tokens are validated and preserved. The deployment appends `ZOE_MEMORY_API_TOKEN_FILE` to `/etc/zoe/zoe-stack.env` when missing. This generated internal-service token is distinct from the externally issued model key.
+- Memory-worker model deployment requires `ZOE_MEM0_LLM_MODEL`, `ZOE_MEM0_LLM_BASE_URL`, and `ZOE_MEM0_LLM_API_KEY` from deployment-managed secret references. Configure them with `zoe memory configure` (menu **Memory extraction**, Configure/Test 14/15); its secret path must remain distinct from the task-model credential. The model key is issued by the model gateway and entered through `zoe`, never created by Zoe. `ZOE_MEM0_LLM_PROVIDER` uses the accounted `openai` path; `ollama` is rejected. `ZOE_MEM0_HISTORY_DB` and `ZOE_MEMORY_MODEL_CACHE` belong on the private persistent memory volume. The pinned local multilingual embedding revision and dimensions are defined in [worker configuration](../../services/memory/config.py); changing them requires a separate collection and rebuild.
+- For local execution, start the worker from the repository root with `python -m services.memory.worker`, or deploy reviewed CI-built worker images. Compose persists Qdrant at the durable bind mount `${ZOE_MEMORY_DATA_ROOT}/qdrant` to `/qdrant/storage`; worker history and model cache use the memory data root. These commands describe source setup and do not establish production installation or recovery.
 - `ZOE_INSTANCE_SCOPES`: comma-separated fixed-owner grants. An explicit value replaces the defaults exactly; it never adds a wildcard or restores omitted grants. Device approval/revocation scopes are not part of the client model. Memory scopes are not part of the Go client/runner authorization surface.
 
 ## Fresh-instance operator commands

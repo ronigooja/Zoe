@@ -54,7 +54,7 @@ The system follows these principles:
 
 10. **The product is not limited to personal use; its design leaves room to expand to teams and other scenarios.**
 
-When recalling prior voice conversations, use only owner/workspace-scoped stored evidence, deliver a short holding sentence followed by a speakable answer, and create no task. Missing evidence produces an honest not-found response; failures and deadlines instead report that records could not be checked, never inventing content or claiming there is no record. The [bounded recall contract](architecture/decisions/0012-voice-conversation-layer.md#bounded-recall-route) defines the evidence and delivery limits.
+When recalling prior voice conversations, use only owner/workspace-scoped worker memory and create no task. Search with the register restatement and append retrieved texts unmodified to the upstream voice model; empty results append nothing. There is no separate answer model, spoken holding requirement or fixed not-found response. Failures use `Processing error.` without inventing content. [ADR 0013](architecture/decisions/0013-context-register.md#3-memory-cadence) defines the current contract.
 
 <a id="cy-01-03"></a>
 
@@ -815,7 +815,7 @@ The system should avoid duplicate notifications and frequent, meaningless remind
 
 ## 10. Long-Term Memory Requirements
 
-For current deployments, memory lives only in Mem0/Qdrant behind the Python worker; the Go claim authority and native memory-management surfaces are removed. Voice recall and explicit writes use that HTTP API. Logical exports exclude memory and say so explicitly. Owner-memory deletion is synchronous and reports worker failure without durable retry. Only fresh databases are supported; old-database migration and old-backup restore are not supported. The detailed scope requirements below describe product goals, not restored claim APIs.
+For the current implementation, memory lives only in Mem0/Qdrant behind the Python HTTP worker; [ADR 0006](architecture/decisions/0006-memory-authority-and-derived-stores.md) defines authority. Voice recall and explicit writes follow [ADR 0013](architecture/decisions/0013-context-register.md#3-memory-cadence). Memory export, claim/proposal review UI and a user-facing deletion entry are not provided. The Go client has worker `delete-all` support, but no user-facing path invokes it. Only fresh databases are supported; old-database migration and old-backup restore are not supported. The detailed scope, accuracy and traceability requirements below remain product goals, not proof that the worker implements them or restores removed APIs.
 
 <a id="cy-10-01"></a>
 
