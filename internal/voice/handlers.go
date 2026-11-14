@@ -478,6 +478,9 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 					}
 				}
 				r, events, err := server.AppendTaskTx(ctx, tx, cmd, stewardTaskID, content)
+				if err == nil && exits.Has("ui") {
+					err = s.recordTaskUITx(ctx, tx, cmd.Principal, stewardTaskID, p.SessionID, p.Generation, p.TurnID, p.Revision, cmd.AcceptedAt)
+				}
 				if err == nil {
 					_, err = tx.ExecContext(ctx, `UPDATE voice_turns SET resumed_task_id=?,handoff_handled=1 WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, stewardTaskID, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
 				}
@@ -493,6 +496,9 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 						}
 					}
 					r, events, err := server.AppendTaskTx(ctx, tx, cmd, stewardTaskID, content)
+					if err == nil && exits.Has("ui") {
+						err = s.recordTaskUITx(ctx, tx, cmd.Principal, stewardTaskID, p.SessionID, p.Generation, p.TurnID, p.Revision, cmd.AcceptedAt)
+					}
 					if err == nil {
 						_, err = tx.ExecContext(ctx, `UPDATE voice_turns SET resumed_task_id=?,handoff_handled=1 WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, stewardTaskID, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
 					}
@@ -636,7 +642,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 	if route.Has("recall") || route.Has("memory_write") {
 		choice.Reply = route.Restatement
 	}
-	result, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET exits=?,steward_action=?,steward_task_id=?,report_text=? WHERE id=? AND exits IS NULL`, route.Exits(), string(choice.Action), taskID, choice.Reply, id)
+	result, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET exits=?,steward_action=?,steward_task_id=?,report_text=?,restatement=? WHERE id=? AND exits IS NULL`, route.Exits(), string(choice.Action), taskID, choice.Reply, route.Restatement, id)
 	if writeErr == nil {
 		var affected int64
 		affected, writeErr = result.RowsAffected()
@@ -833,6 +839,9 @@ func (s *Service) admitVoiceTask(ctx context.Context, tx *sql.Tx, principal cont
 		request.InitialMessage = goal
 	}
 	if (RouteResult{Routes: strings.Split(storedExits.String, ",")}).Has("ui") {
+		if err := s.recordTaskUITx(ctx, tx, principal, taskID, ref.SessionID, ref.Generation, ref.TurnID, ref.Revision, acceptedAt); err != nil {
+			return nil, err
+		}
 		request.Goal += "\n\n" + TaskUIDisplayInstruction
 		request.InitialMessage += "\n\n" + TaskUIDisplayInstruction
 		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET ui_display=1 WHERE workspace_id=? AND id=?`, principal.WorkspaceID, taskID); err != nil {

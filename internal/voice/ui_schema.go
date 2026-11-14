@@ -49,7 +49,7 @@ func registerUIMigrations(store *storage.Store) error {
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 225, Name: "ui_display_storage", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 225, Name: "ui_display_storage", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS ui_surfaces (
 workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
 surface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('statusItem','popover','window')),
@@ -71,5 +71,8 @@ status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','f
 attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), next_attempt_at TEXT, last_error TEXT,
 created_at TEXT NOT NULL, updated_at TEXT NOT NULL);`)
 		return err
-	}})
+	}}); err != nil {
+		return err
+	}
+	return registerUIJobMigration(store)
 }

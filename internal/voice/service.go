@@ -70,6 +70,7 @@ type Service struct {
 	resultDeliveryInterval time.Duration
 	steward                TaskSteward
 	uiController           *modelclient.Client
+	uiEventServer          *control.Server
 	register               *ContextRegister
 	classifying            sync.Map // Voice-turn row IDs currently being classified.
 	recall                 Config
@@ -225,6 +226,27 @@ func (s *Service) buildAVASOpeningContext(ctx context.Context, p contracts.Princ
 			appendItem(text)
 		}
 	}
+	feedbackRows, feedbackErr := s.db.QueryContext(ctx, `SELECT text FROM ui_feedback_deliveries WHERE workspace_id=? AND owner_subject_id=? AND status='delivered' ORDER BY updated_at DESC,request_id DESC LIMIT 128`, p.WorkspaceID, p.SubjectID)
+	if feedbackErr == nil {
+		var selected []string
+		remaining := s.openingBudget - used
+		for feedbackRows.Next() {
+			var text string
+			if feedbackRows.Scan(&text) != nil {
+				continue
+			}
+			cost := len([]rune(text))
+			if cost > remaining || len(c.Items)+len(selected) >= 128 {
+				break
+			}
+			selected = append(selected, text)
+			remaining -= cost
+		}
+		feedbackRows.Close()
+		for i := len(selected) - 1; i >= 0; i-- {
+			appendItem(selected[i])
+		}
+	}
 	// Running or queued tasks are always listed; waiting tasks only when updated
 	// within the last 30 minutes, so abandoned tasks do not read as current work.
 	recent := s.now().Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
@@ -309,6 +331,7 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 		return err
 	}
 	svc := newService(store.DB(), cfg)
+	svc.uiEventServer = server
 	if cfg.RegisterConfig != nil {
 		var err error
 		svc.register, err = NewRegister(store.DB(), *cfg.RegisterConfig)
@@ -319,6 +342,12 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 	server.RegisterShutdownHook(svc.Stop)
 	svc.Start()
 	if err := server.RegisterCommand("voice.turn.commit", svc.commandCommitTurn); err != nil {
+		return err
+	}
+	if err := server.RegisterCommand("ui.rendered", svc.commandUIRendered); err != nil {
+		return err
+	}
+	if err := server.RegisterCommand("ui.action", svc.commandUIAction); err != nil {
 		return err
 	}
 	if err := server.RegisterCommand("voice.task.link", svc.commandLinkTask); err != nil {

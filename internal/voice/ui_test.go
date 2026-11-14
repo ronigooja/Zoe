@@ -83,7 +83,11 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 			} else if withUI {
 				wantExits = "task,ui"
 			}
-			if exits != wantExits || uiHandled != 0 {
+			wantHandled := 0
+			if withUI {
+				wantHandled = 1
+			}
+			if exits != wantExits || uiHandled != wantHandled {
 				t.Fatalf("exits=%q ui_handled=%d", exits, uiHandled)
 			}
 			if name == "ui" {
@@ -95,6 +99,20 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 					t.Fatalf("UI-only tasks=%d replies=%d handled=%d receipt=%+v", tasks, replies, handled, r)
 				}
 				return
+			}
+			if withUI {
+				var requestTask, utterance, restatement string
+				if err := store.DB().QueryRow(`SELECT task_id,utterance,restatement FROM ui_requests WHERE voice_turn_id=(SELECT id FROM voice_turns WHERE turn_id='display')`).Scan(&requestTask, &utterance, &restatement); err != nil {
+					t.Fatal(err)
+				}
+				if requestTask != r.ResourceID || utterance != "show the lunar mission information" || restatement != "none" {
+					t.Fatalf("request task=%s utterance=%q restatement=%q", requestTask, utterance, restatement)
+				}
+				var jobs int
+				_ = store.DB().QueryRow(`SELECT count(*) FROM ui_jobs`).Scan(&jobs)
+				if jobs != 0 {
+					t.Fatalf("task+ui called controller at register time: jobs=%d", jobs)
+				}
 			}
 			var flag int
 			var goal string
@@ -178,7 +196,7 @@ INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updat
 func TestUIMigrationsUpgradeAndReplay(t *testing.T) {
 	_, store, _ := handoffHTTPServer(t)
 	db := store.DB()
-	if _, err := db.Exec(`DROP TABLE ui_feedback_deliveries; DROP TABLE ui_requests; DROP TABLE ui_surfaces;
+	if _, err := db.Exec(`DROP TABLE ui_jobs; DROP TABLE ui_task_cursor; DROP TABLE ui_feedback_deliveries; DROP TABLE ui_requests; DROP TABLE ui_surfaces;
 ALTER TABLE tasks DROP COLUMN ui_display;
 ALTER TABLE voice_turns DROP COLUMN exits;
 ALTER TABLE voice_turns DROP COLUMN ui_handled;

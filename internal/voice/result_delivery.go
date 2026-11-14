@@ -54,6 +54,10 @@ func (s *Service) resultDispatcher() {
 		select {
 		case <-t.C:
 			s.classifyCommittedTurns(s.recallCtx)
+			s.createRegisterUIJobs(s.recallCtx)
+			s.consumeUITaskEvents(s.recallCtx)
+			s.dispatchUIJobs(s.recallCtx)
+			s.dispatchUIFeedback(s.recallCtx)
 			s.consumeResultEvents(s.recallCtx)
 			s.dispatchResults(s.recallCtx)
 			s.dispatchFastReplies(s.recallCtx)

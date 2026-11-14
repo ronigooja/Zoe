@@ -115,6 +115,9 @@ func (c *Client) SetHTTPClient(client *http.Client) {
 	}
 }
 
+// Configured reports whether a client can make model calls.
+func (c *Client) Configured() bool { return c != nil && c.http != nil && c.base != "" && c.model != "" }
+
 func (c *Client) Complete(ctx context.Context, instructions, input string) (string, error) {
 	if c == nil || c.http == nil {
 		return "", errors.New("model client is not configured")
