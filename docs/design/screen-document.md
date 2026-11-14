@@ -1,63 +1,45 @@
-# Screen-document contract
+# A2UI screen contract
 
-Status: Go contract implemented in [`contracts/screen.go`](../../contracts/screen.go); Swift renderer pending. The Go contracts are the implemented authority. Rationale: [ADR 0008](../architecture/decisions/0008-ambient-screen-client.md).
+Status: design accepted 2026-11-14; implementation pending. The Go contract and Swift renderer have not yet changed. Rationale: [ADR 0008](../architecture/decisions/0008-ambient-screen-client.md); delivery: [master plan](../master-plan.md).
+
+## Protocol and renderer
+
+Zoe uses [A2UI](https://github.com/a2ui-project/a2ui) v0.9.1 with the community [a2ui-swift renderer](https://github.com/BBC6BAE9/a2ui-swift), pinned to revision `16476ba2cb3fcb4c4bcb141dfa4c2804adbdedb0`. That renderer decodes only `v0.9` and `v0.9.1`. The specification repository marks v1.0 as current, but the renderer does not support it; upgrading depends on renderer support.
+
+Only the A2UI basic catalog is used: `Text`, `Image`, `Icon`, `Video`, `AudioPlayer`, `Row`, `Column`, `List`, `Card`, `Tabs`, `Modal`, `Divider`, `Button`, `TextField`, `CheckBox`, `Slider`, `ChoicePicker`, `DateTimeInput`. Zoe defines no custom components; add them only when needed.
+
+The Zoe-specific document format is removed without backward compatibility. Node fields `emphasis`, `tone`, `ttlSeconds`, `transition`, and `bind`, binding to client data sources, and patching by old node ID are removed.
 
 ## Surfaces
 
-A surface is a display area the AI creates, updates, and closes. Each has its own screen document. Main window, floating panel, menu-bar item, menu-bar popover, Dock badge, and additional windows are all surfaces; the client has no fixed regions. With no surface open, only the menu-bar item exists.
+A surface is a display area the AI creates, updates, and closes. Main window, floating panel, menu-bar item, menu-bar popover, Dock badge, and additional windows are all surfaces; the client has no fixed regions. With no surface open, only the menu-bar item exists.
 
-`SurfaceSpec` is `{id, kind, document, window}`. `kind` is `window | panel | statusItem | popover | dockBadge`. `window` is optional and holds flat fields: `visible`, `width`, `height`, `x`, `y`, `display`, `floating`, `opacity`, `clickThrough`, `takesFocus`, `fullscreen`, `showInDock`, `showInMenuBar`, `material`. Sizes and positions are clamped to the visible area of the chosen display. A user's direct window action (close, drag, resize) wins over an AI window change that arrives immediately after it.
+A2UI has no window, panel, menu-bar item, popover, or Dock concept. Zoe retains an outer `SurfaceSpec` with `{id, kind, window}` and an inner document containing a list of A2UI messages. `kind` is `window | panel | statusItem | popover | dockBadge`. `window` is optional and holds flat fields: `visible`, `width`, `height`, `x`, `y`, `display`, `floating`, `opacity`, `clickThrough`, `takesFocus`, `fullscreen`, `showInDock`, `showInMenuBar`, `material`. Sizes and positions are clamped to the visible area of the chosen display. A user's direct window action (close, drag, resize) wins over an AI window change that arrives immediately after it.
 
-Surface tools: `surface.open(spec)`, `surface.update(id, patch)`, `surface.close(id)`, `surface.list()`.
+Surface tools: `surface.open(spec)`, `surface.update(id, patch)`, `surface.close(id)`, `surface.list()`. `surface.update` replaces or updates A2UI components/data of a surface instead of patching old node IDs.
 
-## Document shape
+## A2UI messages and actions
 
-`ScreenDocument` is `{version, revision, root, data}`. `version` identifies the component-library contract; `revision` is the server ordering token; `root` is a `ScreenNode`; `data` is optional named data sources.
+- `createSurface{surfaceId, catalogId, theme?, sendDataModel}`
+- `updateComponents{surfaceId, components[]}`
+- `updateDataModel{surfaceId, path?, value?}`
+- `deleteSurface{surfaceId}`
 
-`ScreenNode` is `{id, type, props, children, emphasis, tone, ttlSeconds, transition, action, bind}`. `children` is an ordered list. `emphasis` is `low | normal | high`; `tone` is `neutral | info | attention | success | critical`; `ttlSeconds` and `transition` are optional. `action`, when present, is `{intent, args}` submitted opaquely to the server. `bind` names a data source (a `data` entry, or a client-provided source such as `tasks`, `notifications`, `voice`) so the node refreshes when that data changes without a new document. IDs are stable within a document. Patching by node ID is allowed.
+Components form a flat list with an `id` and component name; the root component has ID `root`.
 
-The AI chooses semantic `emphasis` and `tone`; the client chooses colors, typography, and motion. Theme-level settings (accent color, density, type style) are separate settings with metadata, not node props.
+User actions return as `A2uiClientAction{name, surfaceId, sourceComponentId, timestamp, context}`. Zoe maps `name` to the opaque intent and `context` to `args`. The server still validates authority, scope, expected version, and expiry. Clients and documents never decide business outcomes.
 
-## Primitives
+Voice requests are accepted by the server under the impact levels in [ADR 0009](../architecture/decisions/0009-voice-steward-impact-policy.md); voice never confirms high-impact work.
 
-- Layout: `stack` (`axis`, `spacing`, `alignment`), `grid` (`columns`), `split` (`orientation`, `ratio`), `group` (`label`), `spacer` (`minLength`), `canvas` (children placed by `anchor` or `x`/`y`), `layer` (children stacked), `scroll` (`axis`), `frame` (`minWidth`, `maxWidth`, `minHeight`, `maxHeight`), `background` (`material`, `opacity`, `gradient`).
-- Content: `title` (`text`, `level`), `text` (`text`), `richText` (`markdown`), `list` (`items`), `table` (`columns`, `rows`), `progress` (`value`, `label`), `statusDot` (`state`, `label`), `image` (`url`, `alt`), `icon` (`name`), `link` (`label`, `url`), `countdown` (`until`, `label`), `divider`.
-- Interactive: `button` (`label`, `style`), `choice` (`options`, `selected`), `input` (`label`, `value`, `placeholder`, `inputType`), `toggle` (`label`, `value`). `choice`, `input`, and `toggle` include their current value in `action.args` when submitted.
+## Local composition and delivery
 
-## Standard components
+The server no longer produces UI documents: delete `/v1/screen` and the `internal/screen` builder. No client ever called that endpoint. The client builds A2UI messages locally from authoritative tasks, approvals, and notifications, without ranking or invented content. Delivery remains `/v1/events` (SSE), `/v1/snapshot`, and `/v1/notifications`.
 
-Standard components are named by the shape of the information, never by a business concept. They are built from primitives and have no special privileges. Each declares `purpose`, a props schema, and a `fallback` primitive rendering used when the client does not know it. Components adapt detail to the surface size (for example `metric` is a number in a status item, a trend card in a popover, a chart panel in a large window).
+Default screen, replacing the current client default (not yet implemented): one `List` mixing tasks, approvals, and notifications, newest first (ties by ID). Each entry is a `Card` holding a `Text` title (task title, approval prompt, or notification title) and a `Text` status (task status label, approval status, or notification kind). With no entries the list is empty.
 
-| Component | Information shape | Props |
-|---|---|---|
-| `metric` | A value with trend | `value`, `unit`, `delta`, `baseline`, `label` |
-| `timeline` | Time-ordered events | `events[{time, title, state, detail}]` |
-| `steps` | Staged progress | `steps[{label, state}]`, `current`, `fraction` |
-| `decision` | A choice needing an answer | `question`, `options[{label, intent, args, consequence}]` |
-| `compare` | Several objects by dimension | `items`, `dimensions`, `values` |
-| `collection` | Same-kind items | `items`, `groupBy`, `sortBy`, `layout` (`list|grid|cards`) |
-| `article` | Long text | `title`, `body`, `sections`, `sources` |
-| `chart` | Numeric series | `kind`, `series`, `axes` |
-| `place` | Location | `coordinate`, `name`, `annotations` |
-| `media` | Image, audio, video | `kind`, `url`, `caption` |
-| `notice` | One-off alert | `text`, `tone`, `action` |
-| `facts` | Key-value detail | `pairs`, `groups` |
-| `status` | Live state | `state`, `description`, `updatedAt` |
-| `form` | User-filled fields | `fields[{key, type, label, validation}]`, `submit` |
-| `quote` | Cited or quoted text | `text`, `source` |
-| `code` | Short literal text such as a command or value, not a source browser | `text`, `language` |
-| `gauge` | A value within a range | `value`, `min`, `max`, `zones` |
-| `calendar` | Dates and events | `range`, `events` |
-| `map` | Several places or a route | `points`, `route` |
-| `gallery` | Many images | `items`, `layout` |
-| `ranking` | Ordered scored items | `items[{label, score}]` |
-| `checklist` | Items with done state | `items[{label, done}]` |
+The removed server builder also produced a status line, notices, completed-result windows, and pending-decision panels. The client never displayed them, and this contract does not carry them over.
 
-`decision` only shows options and submits an intent; authorization stays on the server. An approval is just a `decision`. When unsure, use `collection` or `facts`.
-
-`components.describe()` returns the catalog the running client supports (type, `purpose`, props schema, example, library version) so the AI selects by information shape and knows what older clients lack.
-
-Unknown types degrade to their `fallback`, or to readable text from `props` and children. A client must not infer a business concept from any type.
+Not-decided future option: AI-driven server-pushed UI could use a new event type carrying A2UI messages. This is not the current delivery decision.
 
 ## Settings
 
@@ -65,10 +47,12 @@ Setting metadata is `{key, type, range, description, aiMutable, userOnlyReason}`
 
 ## Client tools
 
-`surface.open`, `surface.update`, `surface.close`, `surface.list`, `components.describe`, `settings.list`, `settings.read(key)`, `settings.write(key, value)`, `settings.undo(recordId)`, `voice.start()`, `voice.end()`, `voice.setSilenceTimeout(seconds)`, `textInput.show()`, `textInput.hide()`.
+`surface.open`, `surface.update`, `surface.close`, `surface.list`, `settings.list`, `settings.read(key)`, `settings.write(key, value)`, `settings.undo(recordId)`, `voice.start()`, `voice.end()`, `voice.setSilenceTimeout(seconds)`, `textInput.show()`, `textInput.hide()`.
 
 Presence floors that hold regardless of tools: the menu-bar item always exists, so a hidden app can be found again; and while the microphone is in use the menu-bar item shows that state.
 
-## Authority rule
+## Open items
 
-Tool calls and node actions never decide business outcomes. They submit authenticated opaque intents plus `args`; the server validates authority, scope, expected version, and expiry, then returns authoritative state or a new document. Voice requests are accepted by the server under the impact levels in [ADR 0009](../architecture/decisions/0009-voice-steward-impact-policy.md); voice never confirms high-impact work. With no server document yet, the client shows a plain chronological list of authoritative tasks, approvals, and notifications through the same renderer, without ranking or invented content.
+- Check in macOS CI whether a2ui-swift's `swift-json-schema` dependency resolves alongside ZoeKit's WebRTC dependency.
+- Determine how the surface `catalogId` is registered so `createSurface` passes.
+- Confirm licensing before shipping: the renderer's `LICENSE` file says MIT, while source headers say Apache 2.0, Google LLC.

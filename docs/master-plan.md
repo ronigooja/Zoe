@@ -17,6 +17,8 @@ Milestones sequence delivery without reducing product scope. The [acceptance mat
 
 ## Current status and blockers
 
+The [A2UI screen design](design/screen-document.md) was accepted 2026-11-14, replacing the Zoe-specific format and component library. Implementation is pending: the Go contract and Swift renderer have not yet changed. Renderer dependency compatibility in macOS CI, catalog registration, and licensing remain [open items](design/screen-document.md#open-items); existing Apple evidence does not verify this replacement.
+
 Scheduled memory ingestion now sends transcript/task text to the Python worker, replacing Go extraction and staged writes; see the [current contract](architecture.md#memory-retrieval-and-context). Local non-SQLite scheduler, HTTP client, and migration checks exist; SQLite scheduler integration, Linux full-suite, and real Mem0/Qdrant acceptance remain open. The claim subsystem and its migrations are removed; only fresh databases are supported. Exports explicitly exclude worker memory. Call-summary generation is not the current ingestion path.
 
 Roster-aware Steward task management and the compatible Worker executor profile are

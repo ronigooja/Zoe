@@ -5,7 +5,7 @@ Status: maintainer-endorsed direction, not an implementation or acceptance claim
 ## Principles
 
 1. **Speaking is instructing.** A spoken request is the instruction. Low-impact work needs no extra confirmation step.
-2. **One authority.** The Zoe control plane alone owns commands, tasks, runs, memory, policy, and screen content. Nothing else creates business effects.
+2. **One authority.** The Zoe control plane alone owns commands, tasks, runs, memory, policy, and authoritative content. Nothing else creates business effects.
 3. **Agents think; programs coordinate.** Thinking is done by OpenCode agents. Roles are profiles (system prompt, tools, model route, capabilities, child policy), not separate programs. A new role is a new profile.
 4. **Voice is the front desk.** It listens, speaks, and hands the user's words to Zoe. It holds no authority and does not do the work.
 5. **Context outlives the call.** Every call starts with context assembled by Zoe; every call ends by writing back to memory. A new call never starts from nothing.
@@ -17,13 +17,13 @@ Status: maintainer-endorsed direction, not an implementation or acceptance claim
 |---|---|---|
 | Voice (upstream) | Listen, speak, hand off | Hold authority; execute; confirm high-impact work |
 | Gateway | Call transport, account pool, media relay, normalized events to Zoe | Business logic |
-| Zoe control plane | Commands, tasks, runs, receipts, events, memory versions, policy, screen documents, audit | Execute tasks |
+| Zoe control plane | Commands, tasks, runs, receipts, events, memory versions, policy, authoritative content, audit | Execute tasks |
 | Steward (warm OpenCode agent) | Short system prompt, small context. Reads each handoff, consults memory and active tasks, then answers directly, adds to a task, or starts a task | Touch workspaces; heavy work |
 | Worker (OpenCode agent) | Think and act inside a workspace: research, edit, write files; may use internal sub-agents | Grant itself authority |
 | Super (OpenCode agent) | Plan and decompose complex goals; on demand | Run permanently |
 | Runner | Create and supervise runtimes per admission; report evidence | Decide what runs |
 | Memory (Mem0, Qdrant) | Derived retrieval over the Zoe memory authority | Be a source of truth |
-| Client | Render server-authored screens; capture audio | Fabricate content; decide outcomes |
+| Client | Compose and render authoritative content through the [A2UI screen contract](screen-document.md); capture audio | Fabricate content; decide outcomes |
 
 ## Flow
 
@@ -79,5 +79,5 @@ Impact is set by server policy from a profile's declared capabilities and scopes
 - New role: add a profile.
 - New trigger (schedule, event): same admission path; program first, Worker for semantic judgment, Super for complex coordination.
 - New voice transport: only the gateway changes; Zoe sees normalized events and a small API.
-- New client: consumes the screen document and event stream.
+- New client: consumes authoritative events, snapshots, and notifications; composes its own presentation.
 - Run ceiling: operator setting, default in [ADR 0011](../architecture/decisions/0011-profiles-permissions-and-context-hygiene.md).
