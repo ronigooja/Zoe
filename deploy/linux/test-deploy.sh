@@ -410,7 +410,7 @@ for unit in ['zoe-compose', 'zoe-runner', 'zoe-opencode']:
 db = sqlite3.connect(p/'db.sqlite')
 db.executescript('create table voice_sessions(state text); create table voice_turns(id integer); '
                  'create table tasks(status text); create table schema_migrations(namespace text,version integer); '
-                 "insert into schema_migrations values('voice',1); insert into voice_turns values(1); insert into tasks values('done');")
+                 "insert into schema_migrations values('core',1); insert into voice_turns values(1); insert into tasks values('done');")
 if case == 'active': db.execute("insert into voice_sessions values('active')")
 db.commit(); db.close()
 (p/'initial-env').write_bytes((p/'stack.env').read_bytes())
@@ -470,7 +470,7 @@ elif cmd == 'systemctl':
         if args[:2] == ['restart','zoe-compose'] and current == new and not (p/'restarted').exists():
             (p/'restarted').touch()
             with sqlite3.connect(p/'db.sqlite') as db:
-                db.executescript("insert into schema_migrations values('voice',2); insert into voice_turns values(2); insert into tasks values('done');")
+                db.executescript("insert into schema_migrations values('voice',200); insert into voice_turns values(2); insert into tasks values('done');")
 elif cmd == 'curl': print('200' if healthy() else '503',end='')
 elif cmd == 'journalctl':
     value=since_value()

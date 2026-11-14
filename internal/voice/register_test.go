@@ -421,44 +421,6 @@ func TestRegisterRejectsOversizedCompact(t *testing.T) {
 	}
 }
 
-func TestRegisterMigration219PreservesOldRowsAndReplays(t *testing.T) {
-	f := newRegisterFixture(t)
-	f.turn("handoff-session", 0, "assistant", "old transcript", f.now.Add(-2*time.Hour))
-	// Recreate pre-219 shape while preserving real transcript and register rows.
-	f.exec(`ALTER TABLE voice_context_registers DROP COLUMN source_memory_boundary;
-CREATE TABLE voice_register_memory_boundaries(workspace_id TEXT,owner_subject_id TEXT,boundary_at TEXT);
-INSERT INTO voice_register_memory_boundaries VALUES('default','owner','2026-11-12T09:00:00Z');
-INSERT INTO voice_context_registers(workspace_id,owner_subject_id,compact,version) VALUES('default','owner','keep compact',7);
-DELETE FROM schema_migrations WHERE namespace='voice' AND version>=219`)
-	if err := f.store.Migrate(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	var text, owner string
-	if err := f.db.QueryRow(`SELECT t.text,v.owner_id FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id WHERE t.seq=0`).Scan(&text, &owner); err != nil || text != "old transcript" || owner != "owner" {
-		t.Fatalf("old rows lost: %q %q %v", text, owner, err)
-	}
-	var compact, boundary string
-	var version int
-	if err := f.db.QueryRow(`SELECT compact,version,source_memory_boundary FROM voice_context_registers`).Scan(&compact, &version, &boundary); err != nil || compact != "keep compact" || version != 7 || boundary != "" {
-		t.Fatal("migration lost old register", err)
-	}
-	var count int
-	if err := f.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='voice_register_memory_boundaries'`).Scan(&count); err != nil || count != 0 {
-		t.Fatal("voice M survived", err)
-	}
-	// Replaying both receipts must tolerate retained tables/columns and drop the recreated M.
-	f.exec(`UPDATE voice_context_registers SET source_memory_boundary='2026-11-12T09:00:00Z'; DELETE FROM schema_migrations WHERE namespace='voice' AND version>=218`)
-	if err := f.store.Migrate(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.db.QueryRow(`SELECT compact,version,source_memory_boundary FROM voice_context_registers`).Scan(&compact, &version, &boundary); err != nil || compact != "keep compact" || version != 7 || boundary != "2026-11-12T09:00:00Z" {
-		t.Fatalf("migration replay lost register state: compact=%q version=%d boundary=%q err=%v", compact, version, boundary, err)
-	}
-	if err := f.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='voice_register_memory_boundaries'`).Scan(&count); err != nil || count != 0 {
-		t.Fatal("replayed voice M survived", err)
-	}
-}
-
 func TestRegisterRouteSingleCall(t *testing.T) {
 	for _, tc := range []struct {
 		name, output string

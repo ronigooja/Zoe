@@ -192,34 +192,3 @@ INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updat
 		t.Fatal("duplicate workspace/voice turn request accepted")
 	}
 }
-
-func TestUIMigrationsUpgradeAndReplay(t *testing.T) {
-	_, store, _ := handoffHTTPServer(t)
-	db := store.DB()
-	if _, err := db.Exec(`DROP TABLE ui_jobs; DROP TABLE ui_task_cursor; DROP TABLE ui_feedback_deliveries; DROP TABLE ui_requests; DROP TABLE ui_surfaces;
-ALTER TABLE tasks DROP COLUMN ui_display;
-ALTER TABLE voice_turns DROP COLUMN exits;
-ALTER TABLE voice_turns DROP COLUMN ui_handled;
-ALTER TABLE voice_turns ADD COLUMN triage_category TEXT;
-INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,triage_category) VALUES('ui-upgrade','default','handoff-session',1,'ui-upgrade',1,'retained sentence',X'01','now','upgrade','task');
-DELETE FROM schema_migrations WHERE namespace='voice' AND version>=223;`); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 2; i++ {
-		if err := store.Migrate(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		var text string
-		var exits any
-		var handled int
-		if err := db.QueryRow(`SELECT content,exits,ui_handled FROM voice_turns WHERE id='ui-upgrade'`).Scan(&text, &exits, &handled); err != nil || text != "retained sentence" || exits != nil || handled != 0 {
-			t.Fatalf("upgrade content=%q exits=%v handled=%d err=%v", text, exits, handled, err)
-		}
-		if _, err := db.Exec(`DELETE FROM schema_migrations WHERE namespace='voice' AND version>=223`); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := store.Migrate(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}

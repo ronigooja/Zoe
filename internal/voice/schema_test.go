@@ -1,0 +1,431 @@
+package voice
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/ronigooja/Zoe/internal/storage"
+)
+
+// TestVoiceBaselineSchemaMatchesReference applies to fresh databases only. Its
+// literal reference was captured from sqlite_master after the retired chain ran,
+// diffed against a store with all core dependency migrations already applied.
+func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
+	var reference struct {
+		Objects map[string][]string `json:"objects"`
+		Columns map[string][][]any  `json:"columns"`
+	}
+	if err := json.Unmarshal([]byte(voiceBaselineReference), &reference); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	store, err := storage.Open(ctx, storage.Config{Path: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = storage.RegisterCoreMigrations(store); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() map[string][]string {
+		t.Helper()
+		rows, err := store.DB().Query(`SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY name`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		objects := map[string][]string{}
+		for rows.Next() {
+			var kind, name, table string
+			var statement sql.NullString
+			if err = rows.Scan(&kind, &name, &table, &statement); err != nil {
+				t.Fatal(err)
+			}
+			objects[name] = []string{kind, name, table, strings.Join(strings.Fields(statement.String), " ")}
+		}
+		if err = rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return objects
+	}
+	before := snapshot()
+	if err = RegisterMigrations(store); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after := snapshot()
+	owned := map[string][]string{}
+	for name, obj := range after {
+		if !reflect.DeepEqual(before[name], obj) {
+			owned[name] = obj
+		}
+	}
+	for _, obj := range reference.Objects {
+		obj[3] = strings.Join(strings.Fields(obj[3]), " ")
+	}
+	if !reflect.DeepEqual(owned, reference.Objects) {
+		t.Fatalf("voice-owned schema differs from reference: got=%v want=%v", owned, reference.Objects)
+	}
+	for table, want := range reference.Columns {
+		rows, err := store.DB().Query(`SELECT name,type,"notnull",dflt_value,pk FROM pragma_table_info(?) ORDER BY cid`, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got [][]any
+		for rows.Next() {
+			var name, kind string
+			var notnull, pk int
+			var def sql.NullString
+			if err = rows.Scan(&name, &kind, &notnull, &def, &pk); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			var defaultValue any
+			if def.Valid {
+				defaultValue = def.String
+			}
+			got = append(got, []any{name, kind, float64(notnull), defaultValue, float64(pk)})
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s columns: got=%v want=%v", table, got, want)
+		}
+	}
+	var version, count int
+	var name string
+	if err = store.DB().QueryRow(`SELECT max(version),count(*),max(name) FROM schema_migrations WHERE namespace='voice'`).Scan(&version, &count, &name); err != nil || version != 200 || count != 1 || name != "voice_baseline" {
+		t.Fatalf("voice receipt=%d/%d/%s err=%v", version, count, name, err)
+	}
+	var changesBefore, changesAfter int
+	if err = store.DB().QueryRow(`SELECT total_changes()`).Scan(&changesBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.DB().QueryRow(`SELECT total_changes()`).Scan(&changesAfter); err != nil {
+		t.Fatal(err)
+	}
+	if changesBefore != changesAfter || !reflect.DeepEqual(after, snapshot()) {
+		t.Fatal("second migrate changed database")
+	}
+}
+
+const voiceBaselineReference = `{
+  "objects": {
+    "sqlite_autoindex_ui_feedback_deliveries_1": ["index", "sqlite_autoindex_ui_feedback_deliveries_1", "ui_feedback_deliveries", ""],
+    "sqlite_autoindex_ui_jobs_1": ["index", "sqlite_autoindex_ui_jobs_1", "ui_jobs", ""],
+    "sqlite_autoindex_ui_jobs_2": ["index", "sqlite_autoindex_ui_jobs_2", "ui_jobs", ""],
+    "sqlite_autoindex_ui_requests_1": ["index", "sqlite_autoindex_ui_requests_1", "ui_requests", ""],
+    "sqlite_autoindex_ui_surfaces_1": ["index", "sqlite_autoindex_ui_surfaces_1", "ui_surfaces", ""],
+    "sqlite_autoindex_ui_task_cursor_1": ["index", "sqlite_autoindex_ui_task_cursor_1", "ui_task_cursor", ""],
+    "sqlite_autoindex_voice_account_terminations_1": ["index", "sqlite_autoindex_voice_account_terminations_1", "voice_account_terminations", ""],
+    "sqlite_autoindex_voice_context_registers_1": ["index", "sqlite_autoindex_voice_context_registers_1", "voice_context_registers", ""],
+    "sqlite_autoindex_voice_fast_replies_1": ["index", "sqlite_autoindex_voice_fast_replies_1", "voice_fast_replies", ""],
+    "sqlite_autoindex_voice_fast_replies_2": ["index", "sqlite_autoindex_voice_fast_replies_2", "voice_fast_replies", ""],
+    "sqlite_autoindex_voice_pool_reconciliations_1": ["index", "sqlite_autoindex_voice_pool_reconciliations_1", "voice_pool_reconciliations", ""],
+    "sqlite_autoindex_voice_recall_jobs_1": ["index", "sqlite_autoindex_voice_recall_jobs_1", "voice_recall_jobs", ""],
+    "sqlite_autoindex_voice_recall_jobs_2": ["index", "sqlite_autoindex_voice_recall_jobs_2", "voice_recall_jobs", ""],
+    "sqlite_autoindex_voice_result_deliveries_1": ["index", "sqlite_autoindex_voice_result_deliveries_1", "voice_result_deliveries", ""],
+    "sqlite_autoindex_voice_sessions_1": ["index", "sqlite_autoindex_voice_sessions_1", "voice_sessions", ""],
+    "sqlite_autoindex_voice_sessions_2": ["index", "sqlite_autoindex_voice_sessions_2", "voice_sessions", ""],
+    "sqlite_autoindex_voice_task_links_1": ["index", "sqlite_autoindex_voice_task_links_1", "voice_task_links", ""],
+    "sqlite_autoindex_voice_task_links_2": ["index", "sqlite_autoindex_voice_task_links_2", "voice_task_links", ""],
+    "sqlite_autoindex_voice_transcript_turns_1": ["index", "sqlite_autoindex_voice_transcript_turns_1", "voice_transcript_turns", ""],
+    "sqlite_autoindex_voice_turns_1": ["index", "sqlite_autoindex_voice_turns_1", "voice_turns", ""],
+    "sqlite_autoindex_voice_turns_2": ["index", "sqlite_autoindex_voice_turns_2", "voice_turns", ""],
+    "tasks": ["table", "tasks", "tasks", "CREATE TABLE tasks (\n  id TEXT PRIMARY KEY,\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id),\n  project_id TEXT,\n  title TEXT NOT NULL,\n  goal TEXT NOT NULL,\n  source TEXT NOT NULL,\n  profile_id TEXT NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('queued','active','waiting','awaiting_user','paused','complete','failed','canceled')),\n  version INTEGER NOT NULL,\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL,\n  accepted_at TEXT,\n  started_at TEXT,\n  finished_at TEXT,\n  result TEXT NOT NULL DEFAULT '',\n  error TEXT NOT NULL DEFAULT '',\n  created_by_device_id TEXT NOT NULL REFERENCES actors(id),\n  command_id TEXT NOT NULL, owner_subject_id TEXT NOT NULL DEFAULT '', lineage_root_task_id TEXT REFERENCES tasks(id), lineage_parent_task_id TEXT REFERENCES tasks(id), lineage_depth INTEGER NOT NULL DEFAULT 0, child_policy_json BLOB NOT NULL DEFAULT '', root_child_limit INTEGER NOT NULL DEFAULT 0, pregrant_capabilities_json BLOB NOT NULL DEFAULT '[]', harness TEXT NOT NULL DEFAULT 'codex', interaction_state TEXT NOT NULL DEFAULT 'none' CHECK(interaction_state IN ('none','awaiting_message','explicit_confirmation','approval_required')), interaction_scope TEXT NOT NULL DEFAULT '', interaction_run_id TEXT NOT NULL DEFAULT '', interaction_action_digest TEXT NOT NULL DEFAULT '', interaction_expires_at TEXT, interaction_expected_version INTEGER NOT NULL DEFAULT 0, interaction_question TEXT NOT NULL DEFAULT '', interaction_expired_kind TEXT NOT NULL DEFAULT '', ui_display INTEGER NOT NULL DEFAULT 0 CHECK(ui_display IN (0,1)),\n  FOREIGN KEY(workspace_id,project_id) REFERENCES projects(workspace_id,id)\n)"],
+    "ui_feedback_deliveries": ["table", "ui_feedback_deliveries", "ui_feedback_deliveries", "CREATE TABLE ui_feedback_deliveries (\nrequest_id TEXT PRIMARY KEY REFERENCES ui_requests(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),\nowner_subject_id TEXT NOT NULL, text TEXT NOT NULL,\nstatus TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')),\nattempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), next_attempt_at TEXT, last_error TEXT,\ncreated_at TEXT NOT NULL, updated_at TEXT NOT NULL)"],
+    "ui_feedback_due": ["index", "ui_feedback_due", "ui_feedback_deliveries", "CREATE INDEX ui_feedback_due ON ui_feedback_deliveries(status,next_attempt_at)"],
+    "ui_jobs": ["table", "ui_jobs", "ui_jobs", "CREATE TABLE ui_jobs (\nid TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nkind TEXT NOT NULL CHECK(kind IN ('register','task_entry')), dedupe_key TEXT NOT NULL UNIQUE,\nui_request_id TEXT NOT NULL REFERENCES ui_requests(id), status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','failed')),\nattempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0), next_attempt_at TEXT NOT NULL, last_error TEXT,\ncreated_at TEXT NOT NULL, updated_at TEXT NOT NULL)"],
+    "ui_jobs_due": ["index", "ui_jobs_due", "ui_jobs", "CREATE INDEX ui_jobs_due ON ui_jobs(status,next_attempt_at)"],
+    "ui_requests": ["table", "ui_requests", "ui_requests", "CREATE TABLE ui_requests (\nid TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nsource TEXT NOT NULL CHECK(source IN ('register','task')), voice_turn_id TEXT REFERENCES voice_turns(id),\ntask_id TEXT REFERENCES tasks(id), surface_id TEXT,\nawaiting_input INTEGER NOT NULL DEFAULT 0 CHECK(awaiting_input IN (0,1)), input_note TEXT,\nstatus TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','rendered','input_received','feedback_delivered','failed')),\ncreated_at TEXT NOT NULL, updated_at TEXT NOT NULL, restatement TEXT, utterance TEXT)"],
+    "ui_requests_voice_turn": ["index", "ui_requests_voice_turn", "ui_requests", "CREATE UNIQUE INDEX ui_requests_voice_turn ON ui_requests(workspace_id,voice_turn_id) WHERE voice_turn_id IS NOT NULL"],
+    "ui_surfaces": ["table", "ui_surfaces", "ui_surfaces", "CREATE TABLE ui_surfaces (\nworkspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nsurface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('statusItem','popover','window')),\nstate_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),\nversion INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,\nPRIMARY KEY(workspace_id,owner_subject_id,surface_id))"],
+    "ui_task_cursor": ["table", "ui_task_cursor", "ui_task_cursor", "CREATE TABLE ui_task_cursor(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),last_cursor INTEGER NOT NULL DEFAULT 0)"],
+    "voice_account_terminations": ["table", "voice_account_terminations", "voice_account_terminations", "CREATE TABLE voice_account_terminations (\n  id TEXT PRIMARY KEY,\n  session_id TEXT NOT NULL REFERENCES voice_sessions(id),\n  generation INTEGER NOT NULL,\n  account_id_hash BLOB NOT NULL,\n  lease_id_hash BLOB NOT NULL,\n  evidence_id TEXT NOT NULL,\n  observed_at TEXT NOT NULL,\n  adapter_kind TEXT NOT NULL\n)"],
+    "voice_context_registers": ["table", "voice_context_registers", "voice_context_registers", "CREATE TABLE voice_context_registers (\nworkspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\ncompact TEXT NOT NULL DEFAULT '', compact_through TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',\nbuilt_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', version INTEGER NOT NULL DEFAULT 0,\nsource_hash TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, source_memory_boundary TEXT NOT NULL DEFAULT '',\nPRIMARY KEY(workspace_id,owner_subject_id))"],
+    "voice_fast_replies": ["table", "voice_fast_replies", "voice_fast_replies", "CREATE TABLE voice_fast_replies (\n  id TEXT PRIMARY KEY,\n  workspace_id TEXT NOT NULL,\n  session_id TEXT NOT NULL,\n  generation INTEGER NOT NULL,\n  turn_id TEXT NOT NULL,\n  text TEXT NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('pending','delivered','failed','skipped')),\n  attempts INTEGER NOT NULL DEFAULT 0,\n  next_attempt_at TEXT NOT NULL,\n  last_error_code TEXT NOT NULL DEFAULT '',\n  voice_session_id TEXT NOT NULL DEFAULT '',\n  voice_generation INTEGER NOT NULL DEFAULT 0,\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL, intent_kind TEXT NOT NULL DEFAULT 'progress',\n  UNIQUE(session_id,generation,turn_id)\n)"],
+    "voice_fast_replies_due": ["index", "voice_fast_replies_due", "voice_fast_replies", "CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at,created_at)"],
+    "voice_pool_reconciliations": ["table", "voice_pool_reconciliations", "voice_pool_reconciliations", "CREATE TABLE voice_pool_reconciliations (\n  id TEXT PRIMARY KEY,\n  actor_id TEXT NOT NULL,\n  source_session_id TEXT NOT NULL,\n  generation INTEGER NOT NULL,\n  reason TEXT NOT NULL,\n  method TEXT NOT NULL,\n  created_at TEXT NOT NULL\n)"],
+    "voice_pool_state": ["table", "voice_pool_state", "voice_pool_state", "CREATE TABLE voice_pool_state (\n  id INTEGER PRIMARY KEY CHECK(id=1),\n  blocked INTEGER NOT NULL CHECK(blocked IN (0,1)),\n  reason_code TEXT NOT NULL DEFAULT '',\n  source_session_id TEXT NOT NULL DEFAULT '',\n  updated_at TEXT NOT NULL,\n  updated_by TEXT NOT NULL DEFAULT ''\n)"],
+    "voice_recall_jobs": ["table", "voice_recall_jobs", "voice_recall_jobs", "CREATE TABLE voice_recall_jobs (\nid TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, owner_id TEXT NOT NULL,\nsession_id TEXT NOT NULL, generation INTEGER NOT NULL, turn_id TEXT NOT NULL,\nquestion TEXT NOT NULL, holding_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',\nUNIQUE(session_id,generation,turn_id))"],
+    "voice_result_cursor": ["table", "voice_result_cursor", "voice_result_cursor", "CREATE TABLE voice_result_cursor (id INTEGER PRIMARY KEY CHECK(id=1), last_cursor INTEGER NOT NULL)"],
+    "voice_result_deliveries": ["table", "voice_result_deliveries", "voice_result_deliveries", "CREATE TABLE voice_result_deliveries (\n  entry_id TEXT PRIMARY KEY,\n  workspace_id TEXT NOT NULL,\n  task_id TEXT NOT NULL,\n  run_id TEXT NOT NULL,\n  subject_id TEXT NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('pending','delivered','failed','skipped_no_call','skipped_stale')),\n  attempts INTEGER NOT NULL DEFAULT 0,\n  next_attempt_at TEXT NOT NULL,\n  last_error_code TEXT NOT NULL DEFAULT '',\n  voice_session_id TEXT NOT NULL DEFAULT '',\n  generation INTEGER NOT NULL DEFAULT 0,\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL\n)"],
+    "voice_result_deliveries_due": ["index", "voice_result_deliveries_due", "voice_result_deliveries", "CREATE INDEX voice_result_deliveries_due ON voice_result_deliveries(status,next_attempt_at,created_at)"],
+    "voice_sessions": ["table", "voice_sessions", "voice_sessions", "CREATE TABLE voice_sessions (\n  id TEXT PRIMARY KEY,\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id),\n  owner_id TEXT NOT NULL,\n  device_id TEXT NOT NULL,\n  request_id TEXT NOT NULL,\n  request_hash BLOB NOT NULL,\n  gateway_session_id TEXT NOT NULL DEFAULT '',\n  generation INTEGER NOT NULL CHECK(generation > 0),\n  state TEXT NOT NULL CHECK(state IN ('allocating','active','ending','ended','failed','quarantined')),\n  offer_answer BLOB NOT NULL DEFAULT '',\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL,\n  heartbeat_at TEXT,\n  ended_at TEXT,\n  last_error_code TEXT NOT NULL DEFAULT '', account_lease_id TEXT NOT NULL DEFAULT '', account_lease_generation INTEGER NOT NULL DEFAULT 0, account_id_hash BLOB NOT NULL DEFAULT '', gateway_unbound INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbound IN (0,1)), gateway_unbind_unknown INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbind_unknown IN (0,1)), gateway_media_generation INTEGER NOT NULL DEFAULT 0, opening_context_delivery TEXT NOT NULL DEFAULT 'unsupported' CHECK(opening_context_delivery IN ('delivered','unverified','unsupported')), opening_context_version INTEGER NOT NULL DEFAULT 0, opening_context_chars INTEGER NOT NULL DEFAULT 0, opening_context_manifest BLOB NOT NULL DEFAULT '', gateway_context_chars INTEGER NOT NULL DEFAULT 0, gateway_request_id TEXT NOT NULL DEFAULT '',\n  UNIQUE(workspace_id,owner_id,request_id)\n)"],
+    "voice_sessions_device": ["index", "voice_sessions_device", "voice_sessions", "CREATE INDEX voice_sessions_device ON voice_sessions(workspace_id,device_id,state)"],
+    "voice_sessions_owner_lease": ["index", "voice_sessions_owner_lease", "voice_sessions", "CREATE UNIQUE INDEX voice_sessions_owner_lease ON voice_sessions(workspace_id,owner_id)\n  WHERE state IN ('allocating','active','ending')"],
+    "voice_task_links": ["table", "voice_task_links", "voice_task_links", "CREATE TABLE voice_task_links (\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id),\n  session_id TEXT NOT NULL REFERENCES voice_sessions(id),\n  generation INTEGER NOT NULL,\n  turn_id TEXT NOT NULL,\n  turn_revision INTEGER NOT NULL,\n  task_id TEXT NOT NULL REFERENCES tasks(id),\n  linked_by_device_id TEXT NOT NULL,\n  command_id TEXT NOT NULL,\n  linked_at TEXT NOT NULL,\n  PRIMARY KEY(session_id,generation,turn_id,turn_revision),\n  UNIQUE(workspace_id,task_id)\n)"],
+    "voice_task_links_stable_turn": ["index", "voice_task_links_stable_turn", "voice_task_links", "CREATE UNIQUE INDEX voice_task_links_stable_turn ON voice_task_links(session_id,generation,turn_id)"],
+    "voice_task_links_task": ["index", "voice_task_links_task", "voice_task_links", "CREATE INDEX voice_task_links_task ON voice_task_links(workspace_id,task_id)"],
+    "voice_transcript_turns": ["table", "voice_transcript_turns", "voice_transcript_turns", "CREATE TABLE voice_transcript_turns (\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id),\n  session_id TEXT NOT NULL REFERENCES voice_sessions(id),\n  seq INTEGER NOT NULL CHECK(seq >= 0),\n  role TEXT NOT NULL CHECK(role IN ('user','assistant')),\n  text TEXT NOT NULL,\n  at TEXT NOT NULL,\n  received_at TEXT NOT NULL,\n  PRIMARY KEY(session_id,seq)\n)"],
+    "voice_transcript_turns_workspace": ["index", "voice_transcript_turns_workspace", "voice_transcript_turns", "CREATE INDEX voice_transcript_turns_workspace ON voice_transcript_turns(workspace_id,session_id,seq)"],
+    "voice_turns": ["table", "voice_turns", "voice_turns", "CREATE TABLE voice_turns (\n  id TEXT PRIMARY KEY,\n  workspace_id TEXT NOT NULL,\n  session_id TEXT NOT NULL REFERENCES voice_sessions(id),\n  generation INTEGER NOT NULL,\n  turn_id TEXT NOT NULL,\n  revision INTEGER NOT NULL CHECK(revision > 0),\n  provider_message_id TEXT NOT NULL DEFAULT '',\n  content TEXT NOT NULL,\n  content_hash BLOB NOT NULL,\n  confirmed_at TEXT NOT NULL,\n  command_id TEXT NOT NULL, resumed_task_id TEXT NOT NULL DEFAULT '', handoff_handled INTEGER NOT NULL DEFAULT 0, steward_action TEXT NOT NULL DEFAULT '', steward_task_id TEXT NOT NULL DEFAULT '', report_text TEXT NOT NULL DEFAULT '', exits TEXT, ui_handled INTEGER NOT NULL DEFAULT 0 CHECK(ui_handled IN (0,1)), restatement TEXT,\n  UNIQUE(session_id,generation,turn_id,revision)\n)"],
+    "voice_turns_session": ["index", "voice_turns_session", "voice_turns", "CREATE INDEX voice_turns_session ON voice_turns(session_id,generation,confirmed_at)"]
+  },
+  "columns": {
+    "tasks": [
+      ["id", "TEXT", 0, null, 1],
+      ["workspace_id", "TEXT", 1, null, 0],
+      ["project_id", "TEXT", 0, null, 0],
+      ["title", "TEXT", 1, null, 0],
+      ["goal", "TEXT", 1, null, 0],
+      ["source", "TEXT", 1, null, 0],
+      ["profile_id", "TEXT", 1, null, 0],
+      ["status", "TEXT", 1, null, 0],
+      ["version", "INTEGER", 1, null, 0],
+      ["created_at", "TEXT", 1, null, 0],
+      ["updated_at", "TEXT", 1, null, 0],
+      ["accepted_at", "TEXT", 0, null, 0],
+      ["started_at", "TEXT", 0, null, 0],
+      ["finished_at", "TEXT", 0, null, 0],
+      ["result", "TEXT", 1, "''", 0],
+      ["error", "TEXT", 1, "''", 0],
+      ["created_by_device_id", "TEXT", 1, null, 0],
+      ["command_id", "TEXT", 1, null, 0],
+      ["owner_subject_id", "TEXT", 1, "''", 0],
+      ["lineage_root_task_id", "TEXT", 0, null, 0],
+      ["lineage_parent_task_id", "TEXT", 0, null, 0],
+      ["lineage_depth", "INTEGER", 1, "0", 0],
+      ["child_policy_json", "BLOB", 1, "''", 0],
+      ["root_child_limit", "INTEGER", 1, "0", 0],
+      ["pregrant_capabilities_json", "BLOB", 1, "'[]'", 0],
+      ["harness", "TEXT", 1, "'codex'", 0],
+      ["interaction_state", "TEXT", 1, "'none'", 0],
+      ["interaction_scope", "TEXT", 1, "''", 0],
+      ["interaction_run_id", "TEXT", 1, "''", 0],
+      ["interaction_action_digest", "TEXT", 1, "''", 0],
+      ["interaction_expires_at", "TEXT", 0, null, 0],
+      ["interaction_expected_version", "INTEGER", 1, "0", 0],
+      ["interaction_question", "TEXT", 1, "''", 0],
+      ["interaction_expired_kind", "TEXT", 1, "''", 0],
+      ["ui_display", "INTEGER", 1, "0", 0]
+    ],
+    "ui_feedback_deliveries": [
+      ["request_id", "TEXT", 0, null, 1],
+      ["workspace_id", "TEXT", 1, null, 0],
+      ["owner_subject_id", "TEXT", 1, null, 0],
+      ["text", "TEXT", 1, null, 0],
+      ["status", "TEXT", 1, "'pending'", 0],
+      ["attempts", "INTEGER", 1, "0", 0],
+      ["next_attempt_at", "TEXT", 0, null, 0],
+      ["last_error", "TEXT", 0, null, 0],
+      ["created_at", "TEXT", 1, null, 0],
+      ["updated_at", "TEXT", 1, null, 0]
+    ],
+    "ui_jobs": [
+      ["id", "TEXT", 0, null, 1],
+      ["workspace_id", "TEXT", 1, null, 0],
+      ["owner_subject_id", "TEXT", 1, null, 0],
+      ["kind", "TEXT", 1, null, 0],
+      ["dedupe_key", "TEXT", 1, null, 0],
+      ["ui_request_id", "TEXT", 1, null, 0],
+      ["status", "TEXT", 1, "'pending'", 0],
+      ["attempts", "INTEGER", 1, "0", 0],
+      ["next_attempt_at", "TEXT", 1, null, 0],
+      ["last_error", "TEXT", 0, null, 0],
+      ["created_at", "TEXT", 1, null, 0],
+      ["updated_at", "TEXT", 1, null, 0]
+    ],
+    "ui_requests": [
+      ["id", "TEXT", 0, null, 1],
+      ["workspace_id", "TEXT", 1, null, 0],
+      ["owner_subject_id", "TEXT", 1, null, 0],
+      ["source", "TEXT", 1, null, 0],
+      ["voice_turn_id", "TEXT", 0, null, 0],
+      ["task_id", "TEXT", 0, null, 0],
+      ["surface_id", "TEXT", 0, null, 0],
+      ["awaiting_input", "INTEGER", 1, "0", 0],
+      ["input_note", "TEXT", 0, null, 0],
+      ["status", "TEXT", 1, "'generated'", 0],
+      ["created_at", "TEXT", 1, null, 0],
+      ["updated_at", "TEXT", 1, null, 0],
+      ["restatement", "TEXT", 0, null, 0],
+      ["utterance", "TEXT", 0, null, 0]
+    ],
+    "ui_surfaces": [
+      ["workspace_id", "TEXT", 1, null, 1],
+      ["owner_subject_id", "TEXT", 1, null, 2],
+      ["surface_id", "TEXT", 1, null, 3],
+      ["container", "TEXT", 1, null, 0],
+      ["state_json", "TEXT", 1, null, 0],
+      ["version", "INTEGER", 1, null, 0],
+      ["created_at", "TEXT", 1, null, 0],
+      ["updated_at", "TEXT", 1, null, 0]
+    ],
+    "ui_task_cursor": [
+      ["workspace_id", "TEXT", 0, null, 1],
+      ["last_cursor", "INTEGER", 1, "0", 0]
+    ],
+    "voice_account_terminations": [
+      ["id", "TEXT", 0, null, 1],
+      ["session_id", "TEXT", 1, null, 0],
+      ["generation", "INTEGER", 1, null, 0],
+      ["account_id_hash", "BLOB", 1, null, 0],
+      ["lease_id_hash", "BLOB", 1, null, 0],
+      ["evidence_id", "TEXT", 1, null, 0],
+      ["observed_at", "TEXT", 1, null, 0],
+      ["adapter_kind", "TEXT", 1, null, 0]
+    ],
+    "voice_context_registers": [
+      ["workspace_id", "TEXT", 1, null, 1],
+      ["owner_subject_id", "TEXT", 1, null, 2],
+      ["compact", "TEXT", 1, "''", 0],
+      ["compact_through", "TEXT", 1, "'1970-01-01T00:00:00Z'", 0],
+      ["built_at", "TEXT", 1, "'1970-01-01T00:00:00Z'", 0],
+      ["version", "INTEGER", 1, "0", 0],
+      ["source_hash", "TEXT", 1, "''", 0],
+      ["claim_token", "TEXT", 1, "''", 0],
+      ["lease_until_ms", "INTEGER", 1, "0", 0],
+      ["source_memory_boundary", "TEXT", 1, "''", 0]
+    ],
+    "voice_fast_replies": [
+      ["id", "TEXT", 0, null, 1],
+      ["workspace_id", "TEXT", 1, null, 0],
+      ["session_id", "TEXT", 1, null, 0],
+      ["generation", "INTEGER", 1, null, 0],
+      ["turn_id", "TEXT", 1, null, 0],
+      ["text", "TEXT", 1, null, 0],
+      ["status", "TEXT", 1, null, 0],
+      ["attempts", "INTEGER", 1, "0", 0],
+      ["next_attempt_at", "TEXT", 1, null, 0],
+      ["last_error_code", "TEXT", 1, "''", 0],
+      ["voice_session_id", "TEXT", 1, "''", 0],
+      ["voice_generation", "INTEGER", 1, "0", 0],
+      ["created_at", "TEXT", 1, null, 0],
+      ["updated_at", "TEXT", 1, null, 0],
+      ["intent_kind", "TEXT", 1, "'progress'", 0]
+    ],
+    "voice_pool_reconciliations": [
+      ["id", "TEXT", 0, null, 1],
+      ["actor_id", "TEXT", 1, null, 0],
+      ["source_session_id", "TEXT", 1, null, 0],
+      ["generation", "INTEGER", 1, null, 0],
+      ["reason", "TEXT", 1, null, 0],
+      ["method", "TEXT", 1, null, 0],
+      ["created_at", "TEXT", 1, null, 0]
+    ],
+    "voice_pool_state": [
+      ["id", "INTEGER", 0, null, 1],
+      ["blocked", "INTEGER", 1, null, 0],
+      ["reason_code", "TEXT", 1, "''", 0],
+      ["source_session_id", "TEXT", 1, "''", 0],
+      ["updated_at", "TEXT", 1, null, 0],
+      ["updated_by", "TEXT", 1, "''", 0]
+    ],
+    "voice_recall_jobs": [
+      ["id", "TEXT", 0, null, 1],
+      ["workspace_id", "TEXT", 1, null, 0],
+      ["owner_id", "TEXT", 1, null, 0],
+      ["session_id", "TEXT", 1, null, 0],
+      ["generation", "INTEGER", 1, null, 0],
+      ["turn_id", "TEXT", 1, null, 0],
+      ["question", "TEXT", 1, null, 0],
+      ["holding_id", "TEXT", 1, null, 0],
+      ["status", "TEXT", 1, "'pending'", 0]
+    ],
+    "voice_result_cursor": [
+      ["id", "INTEGER", 0, null, 1],
+      ["last_cursor", "INTEGER", 1, null, 0]
+    ],
+    "voice_result_deliveries": [
+      ["entry_id", "TEXT", 0, null, 1],
+      ["workspace_id", "TEXT", 1, null, 0],
+      ["task_id", "TEXT", 1, null, 0],
+      ["run_id", "TEXT", 1, null, 0],
+      ["subject_id", "TEXT", 1, null, 0],
+      ["status", "TEXT", 1, null, 0],
+      ["attempts", "INTEGER", 1, "0", 0],
+      ["next_attempt_at", "TEXT", 1, null, 0],
+      ["last_error_code", "TEXT", 1, "''", 0],
+      ["voice_session_id", "TEXT", 1, "''", 0],
+      ["generation", "INTEGER", 1, "0", 0],
+      ["created_at", "TEXT", 1, null, 0],
+      ["updated_at", "TEXT", 1, null, 0]
+    ],
+    "voice_sessions": [
+      ["id", "TEXT", 0, null, 1],
+      ["workspace_id", "TEXT", 1, null, 0],
+      ["owner_id", "TEXT", 1, null, 0],
+      ["device_id", "TEXT", 1, null, 0],
+      ["request_id", "TEXT", 1, null, 0],
+      ["request_hash", "BLOB", 1, null, 0],
+      ["gateway_session_id", "TEXT", 1, "''", 0],
+      ["generation", "INTEGER", 1, null, 0],
+      ["state", "TEXT", 1, null, 0],
+      ["offer_answer", "BLOB", 1, "''", 0],
+      ["created_at", "TEXT", 1, null, 0],
+      ["updated_at", "TEXT", 1, null, 0],
+      ["heartbeat_at", "TEXT", 0, null, 0],
+      ["ended_at", "TEXT", 0, null, 0],
+      ["last_error_code", "TEXT", 1, "''", 0],
+      ["account_lease_id", "TEXT", 1, "''", 0],
+      ["account_lease_generation", "INTEGER", 1, "0", 0],
+      ["account_id_hash", "BLOB", 1, "''", 0],
+      ["gateway_unbound", "INTEGER", 1, "0", 0],
+      ["gateway_unbind_unknown", "INTEGER", 1, "0", 0],
+      ["gateway_media_generation", "INTEGER", 1, "0", 0],
+      ["opening_context_delivery", "TEXT", 1, "'unsupported'", 0],
+      ["opening_context_version", "INTEGER", 1, "0", 0],
+      ["opening_context_chars", "INTEGER", 1, "0", 0],
+      ["opening_context_manifest", "BLOB", 1, "''", 0],
+      ["gateway_context_chars", "INTEGER", 1, "0", 0],
+      ["gateway_request_id", "TEXT", 1, "''", 0]
+    ],
+    "voice_task_links": [
+      ["workspace_id", "TEXT", 1, null, 0],
+      ["session_id", "TEXT", 1, null, 1],
+      ["generation", "INTEGER", 1, null, 2],
+      ["turn_id", "TEXT", 1, null, 3],
+      ["turn_revision", "INTEGER", 1, null, 4],
+      ["task_id", "TEXT", 1, null, 0],
+      ["linked_by_device_id", "TEXT", 1, null, 0],
+      ["command_id", "TEXT", 1, null, 0],
+      ["linked_at", "TEXT", 1, null, 0]
+    ],
+    "voice_transcript_turns": [
+      ["workspace_id", "TEXT", 1, null, 0],
+      ["session_id", "TEXT", 1, null, 1],
+      ["seq", "INTEGER", 1, null, 2],
+      ["role", "TEXT", 1, null, 0],
+      ["text", "TEXT", 1, null, 0],
+      ["at", "TEXT", 1, null, 0],
+      ["received_at", "TEXT", 1, null, 0]
+    ],
+    "voice_turns": [
+      ["id", "TEXT", 0, null, 1],
+      ["workspace_id", "TEXT", 1, null, 0],
+      ["session_id", "TEXT", 1, null, 0],
+      ["generation", "INTEGER", 1, null, 0],
+      ["turn_id", "TEXT", 1, null, 0],
+      ["revision", "INTEGER", 1, null, 0],
+      ["provider_message_id", "TEXT", 1, "''", 0],
+      ["content", "TEXT", 1, null, 0],
+      ["content_hash", "BLOB", 1, null, 0],
+      ["confirmed_at", "TEXT", 1, null, 0],
+      ["command_id", "TEXT", 1, null, 0],
+      ["resumed_task_id", "TEXT", 1, "''", 0],
+      ["handoff_handled", "INTEGER", 1, "0", 0],
+      ["steward_action", "TEXT", 1, "''", 0],
+      ["steward_task_id", "TEXT", 1, "''", 0],
+      ["report_text", "TEXT", 1, "''", 0],
+      ["exits", "TEXT", 0, null, 0],
+      ["ui_handled", "INTEGER", 1, "0", 0],
+      ["restatement", "TEXT", 0, null, 0]
+    ]
+  }
+}`

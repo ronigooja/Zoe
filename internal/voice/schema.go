@@ -8,7 +8,17 @@ import (
 )
 
 func RegisterMigrations(store *storage.Store) error {
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 200, Name: "voice_sessions_and_turns_v1", Up: func(ctx context.Context, tx *sql.Tx) error {
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 200, Name: "voice_baseline", Up: func(ctx context.Context, tx *sql.Tx) error {
+		// Core creates tasks before this baseline; voice owns its display flag.
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name='ui_display')`).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN ui_display INTEGER NOT NULL DEFAULT 0 CHECK(ui_display IN (0,1))`); err != nil {
+				return err
+			}
+		}
 		_, err := tx.ExecContext(ctx, `
 CREATE TABLE voice_sessions (
   id TEXT PRIMARY KEY,
@@ -25,7 +35,7 @@ CREATE TABLE voice_sessions (
   updated_at TEXT NOT NULL,
   heartbeat_at TEXT,
   ended_at TEXT,
-  last_error_code TEXT NOT NULL DEFAULT '',
+  last_error_code TEXT NOT NULL DEFAULT '', account_lease_id TEXT NOT NULL DEFAULT '', account_lease_generation INTEGER NOT NULL DEFAULT 0, account_id_hash BLOB NOT NULL DEFAULT '', gateway_unbound INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbound IN (0,1)), gateway_unbind_unknown INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbind_unknown IN (0,1)), gateway_media_generation INTEGER NOT NULL DEFAULT 0, opening_context_delivery TEXT NOT NULL DEFAULT 'unsupported' CHECK(opening_context_delivery IN ('delivered','unverified','unsupported')), opening_context_version INTEGER NOT NULL DEFAULT 0, opening_context_chars INTEGER NOT NULL DEFAULT 0, opening_context_manifest BLOB NOT NULL DEFAULT '', gateway_context_chars INTEGER NOT NULL DEFAULT 0, gateway_request_id TEXT NOT NULL DEFAULT '',
   UNIQUE(workspace_id,owner_id,request_id)
 );
 CREATE UNIQUE INDEX voice_sessions_owner_lease ON voice_sessions(workspace_id,owner_id)
@@ -42,7 +52,7 @@ CREATE TABLE voice_turns (
   content TEXT NOT NULL,
   content_hash BLOB NOT NULL,
   confirmed_at TEXT NOT NULL,
-  command_id TEXT NOT NULL,
+  command_id TEXT NOT NULL, resumed_task_id TEXT NOT NULL DEFAULT '', handoff_handled INTEGER NOT NULL DEFAULT 0, steward_action TEXT NOT NULL DEFAULT '', steward_task_id TEXT NOT NULL DEFAULT '', report_text TEXT NOT NULL DEFAULT '', exits TEXT, ui_handled INTEGER NOT NULL DEFAULT 0 CHECK(ui_handled IN (0,1)), restatement TEXT,
   UNIQUE(session_id,generation,turn_id,revision)
 );
 CREATE INDEX voice_turns_session ON voice_turns(session_id,generation,confirmed_at);
@@ -60,6 +70,7 @@ CREATE TABLE voice_task_links (
   UNIQUE(workspace_id,task_id)
 );
 CREATE INDEX voice_task_links_task ON voice_task_links(workspace_id,task_id);
+CREATE UNIQUE INDEX voice_task_links_stable_turn ON voice_task_links(session_id,generation,turn_id);
 CREATE TABLE voice_pool_state (
   id INTEGER PRIMARY KEY CHECK(id=1),
   blocked INTEGER NOT NULL CHECK(blocked IN (0,1)),
@@ -88,56 +99,7 @@ CREATE TABLE voice_account_terminations (
   observed_at TEXT NOT NULL,
   adapter_kind TEXT NOT NULL
 );
-`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 201, Name: "voice_stable_turn_task_binding", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX voice_task_links_stable_turn ON voice_task_links(session_id,generation,turn_id)`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 202, Name: "voice_account_lease_identity", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN account_lease_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE voice_sessions ADD COLUMN account_lease_generation INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE voice_sessions ADD COLUMN account_id_hash BLOB NOT NULL DEFAULT '';`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 203, Name: "voice_gateway_unbind_receipt", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN gateway_unbound INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbound IN (0,1))`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 204, Name: "voice_gateway_unbind_unknown_fence", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN gateway_unbind_unknown INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbind_unknown IN (0,1));
-UPDATE voice_sessions SET gateway_unbind_unknown=1 WHERE state='quarantined' AND last_error_code IN ('gateway_release_unknown','gateway_release_failed')`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 205, Name: "voice_gateway_media_generation", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN gateway_media_generation INTEGER NOT NULL DEFAULT 0`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 206, Name: "voice_opening_context_delivery", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN opening_context_delivery TEXT NOT NULL DEFAULT 'unsupported' CHECK(opening_context_delivery IN ('delivered','unverified','unsupported'));
-ALTER TABLE voice_sessions ADD COLUMN opening_context_version INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE voice_sessions ADD COLUMN opening_context_chars INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE voice_sessions ADD COLUMN opening_context_manifest BLOB NOT NULL DEFAULT '';
-ALTER TABLE voice_sessions ADD COLUMN gateway_context_chars INTEGER NOT NULL DEFAULT 0`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 207, Name: "voice_result_deliveries", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_result_deliveries (
+CREATE TABLE voice_result_deliveries (
   entry_id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
   task_id TEXT NOT NULL,
@@ -152,22 +114,9 @@ ALTER TABLE voice_sessions ADD COLUMN gateway_context_chars INTEGER NOT NULL DEF
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-
- CREATE INDEX voice_result_deliveries_due ON voice_result_deliveries(status,next_attempt_at,created_at);
- CREATE TABLE voice_result_cursor (id INTEGER PRIMARY KEY CHECK(id=1), last_cursor INTEGER NOT NULL);
- INSERT INTO voice_result_cursor(id,last_cursor) VALUES(1,0);`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 208, Name: "voice_gateway_request_id", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN gateway_request_id TEXT NOT NULL DEFAULT ''`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 209, Name: "voice_triage_fast_replies", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN triage_category TEXT;
+CREATE INDEX voice_result_deliveries_due ON voice_result_deliveries(status,next_attempt_at,created_at);
+CREATE TABLE voice_result_cursor (id INTEGER PRIMARY KEY CHECK(id=1), last_cursor INTEGER NOT NULL);
+INSERT INTO voice_result_cursor(id,last_cursor) VALUES(1,0);
 CREATE TABLE voice_fast_replies (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
@@ -182,22 +131,11 @@ CREATE TABLE voice_fast_replies (
   voice_session_id TEXT NOT NULL DEFAULT '',
   voice_generation INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL, intent_kind TEXT NOT NULL DEFAULT 'progress',
   UNIQUE(session_id,generation,turn_id)
 );
-CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at,created_at);`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 210, Name: "voice_fast_reply_intent", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_fast_replies ADD COLUMN intent_kind TEXT NOT NULL DEFAULT 'progress'`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 211, Name: "voice_transcripts_and_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_transcript_turns (
+CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at,created_at);
+CREATE TABLE voice_transcript_turns (
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   session_id TEXT NOT NULL REFERENCES voice_sessions(id),
   seq INTEGER NOT NULL CHECK(seq >= 0),
@@ -208,195 +146,47 @@ CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at
   PRIMARY KEY(session_id,seq)
 );
 CREATE INDEX voice_transcript_turns_workspace ON voice_transcript_turns(workspace_id,session_id,seq);
-CREATE TABLE voice_call_summaries (
-  id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-  session_id TEXT NOT NULL REFERENCES voice_sessions(id),
-  topic TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  ended_at TEXT NOT NULL,
-  first_seq INTEGER NOT NULL,
-  last_seq INTEGER NOT NULL,
-  summary TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  model_call_id TEXT
-);
-CREATE INDEX voice_call_summaries_workspace_started ON voice_call_summaries(workspace_id,started_at);`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 212, Name: "voice_summary_jobs", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_summary_jobs (
-  session_id TEXT NOT NULL REFERENCES voice_sessions(id),
-  generation INTEGER NOT NULL,
-  workspace_id TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','done','failed')),
-  reason TEXT NOT NULL DEFAULT '',
-  attempts INTEGER NOT NULL DEFAULT 0,
-  revision INTEGER NOT NULL DEFAULT 0 CHECK(revision IN (0,1)),
-  next_attempt_ms INTEGER NOT NULL DEFAULT 0,
-  settled_from TEXT NOT NULL,
-  PRIMARY KEY(session_id,generation)
-);
-CREATE INDEX voice_summary_jobs_due ON voice_summary_jobs(status,next_attempt_ms);
-CREATE TRIGGER voice_summary_enqueue AFTER UPDATE OF state ON voice_sessions
-WHEN NEW.state='ended'
-BEGIN
-  INSERT OR IGNORE INTO voice_summary_jobs(session_id,generation,workspace_id,settled_from)
-    VALUES(NEW.id,NEW.generation,NEW.workspace_id,COALESCE(NEW.ended_at,NEW.updated_at));
-END;
-CREATE TRIGGER voice_summary_late_turn AFTER INSERT ON voice_transcript_turns
-BEGIN
-  UPDATE voice_summary_jobs SET revision=1,status='pending',reason='',attempts=0,
-    next_attempt_ms=0,settled_from=NEW.received_at
-    WHERE session_id=NEW.session_id AND status='done' AND revision=0;
-END;`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 213, Name: "voice_recall_jobs", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_recall_jobs (
+CREATE TABLE voice_recall_jobs (
 id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, owner_id TEXT NOT NULL,
 session_id TEXT NOT NULL, generation INTEGER NOT NULL, turn_id TEXT NOT NULL,
 question TEXT NOT NULL, holding_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
-UNIQUE(session_id,generation,turn_id));`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 214, Name: "voice_steward_decision", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN steward_decision TEXT NOT NULL DEFAULT '';
-ALTER TABLE voice_turns ADD COLUMN resumed_task_id TEXT NOT NULL DEFAULT ''`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 215, Name: "voice_instruction_delivery", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `CREATE TABLE voice_instruction_deliveries (
-session_id TEXT NOT NULL REFERENCES voice_sessions(id), media_generation INTEGER NOT NULL,
-instruction_version TEXT NOT NULL, instruction_delivery TEXT NOT NULL, attempts INTEGER NOT NULL,
-PRIMARY KEY(session_id,media_generation,instruction_version));`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 216, Name: "voice_pending_confirmation_binding", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN pending_task_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE voice_turns ADD COLUMN pending_task_version INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE voice_turns ADD COLUMN pending_question TEXT NOT NULL DEFAULT '';
-ALTER TABLE voice_turns ADD COLUMN handoff_handled INTEGER NOT NULL DEFAULT 0`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 217, Name: "voice_steward_assignment", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN steward_action TEXT NOT NULL DEFAULT '';
-ALTER TABLE voice_turns ADD COLUMN steward_task_id TEXT NOT NULL DEFAULT ''`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 218, Name: "voice_context_register", Up: func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS voice_register_memory_boundaries (
-workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
-boundary_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
-PRIMARY KEY(workspace_id,owner_subject_id));
-CREATE TABLE IF NOT EXISTS voice_context_registers (
+UNIQUE(session_id,generation,turn_id));
+CREATE TABLE voice_context_registers (
 workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
 compact TEXT NOT NULL DEFAULT '', compact_through TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
 built_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', version INTEGER NOT NULL DEFAULT 0,
-source_hash TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0,
-PRIMARY KEY(workspace_id,owner_subject_id));`)
+source_hash TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, source_memory_boundary TEXT NOT NULL DEFAULT '',
+PRIMARY KEY(workspace_id,owner_subject_id));
+CREATE TABLE ui_surfaces (
+workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
+surface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('statusItem','popover','window')),
+state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),
+version INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+PRIMARY KEY(workspace_id,owner_subject_id,surface_id));
+CREATE TABLE ui_requests (
+id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
+source TEXT NOT NULL CHECK(source IN ('register','task')), voice_turn_id TEXT REFERENCES voice_turns(id),
+task_id TEXT REFERENCES tasks(id), surface_id TEXT,
+awaiting_input INTEGER NOT NULL DEFAULT 0 CHECK(awaiting_input IN (0,1)), input_note TEXT,
+status TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','rendered','input_received','feedback_delivered','failed')),
+created_at TEXT NOT NULL, updated_at TEXT NOT NULL, restatement TEXT, utterance TEXT);
+CREATE UNIQUE INDEX ui_requests_voice_turn ON ui_requests(workspace_id,voice_turn_id) WHERE voice_turn_id IS NOT NULL;
+CREATE TABLE ui_feedback_deliveries (
+request_id TEXT PRIMARY KEY REFERENCES ui_requests(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+owner_subject_id TEXT NOT NULL, text TEXT NOT NULL,
+status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')),
+attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), next_attempt_at TEXT, last_error TEXT,
+created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE ui_jobs (
+id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
+kind TEXT NOT NULL CHECK(kind IN ('register','task_entry')), dedupe_key TEXT NOT NULL UNIQUE,
+ui_request_id TEXT NOT NULL REFERENCES ui_requests(id), status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','failed')),
+attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0), next_attempt_at TEXT NOT NULL, last_error TEXT,
+created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX ui_jobs_due ON ui_jobs(status,next_attempt_at);
+CREATE TABLE ui_task_cursor(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),last_cursor INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX ui_feedback_due ON ui_feedback_deliveries(status,next_attempt_at);
+`)
 		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 219, Name: "voice_register_memory_provenance", Up: func(ctx context.Context, tx *sql.Tx) error {
-		// Upgrade fixtures can replay this migration while retaining the register.
-		rows, err := tx.QueryContext(ctx, `PRAGMA table_info(voice_context_registers)`)
-		if err != nil {
-			return err
-		}
-		found := false
-		for rows.Next() {
-			var cid, notnull, pk int
-			var name, kind string
-			var defaultValue sql.NullString
-			if err = rows.Scan(&cid, &name, &kind, &notnull, &defaultValue, &pk); err != nil {
-				rows.Close()
-				return err
-			}
-			found = found || name == "source_memory_boundary"
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		if !found {
-			if _, err = tx.ExecContext(ctx, `ALTER TABLE voice_context_registers ADD COLUMN source_memory_boundary TEXT NOT NULL DEFAULT ''`); err != nil {
-				return err
-			}
-		}
-		_, err = tx.ExecContext(ctx, `DROP TABLE IF EXISTS voice_register_memory_boundaries`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 220, Name: "voice_remove_call_summaries", Up: func(ctx context.Context, tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS voice_summary_enqueue;
-DROP TRIGGER IF EXISTS voice_summary_late_turn;
-DROP TABLE IF EXISTS voice_summary_jobs;
-DROP TABLE IF EXISTS voice_call_summaries;`); err != nil {
-			return err
-		}
-		// Upgrade fixtures replay migrations while retaining existing voice turns.
-		rows, err := tx.QueryContext(ctx, `PRAGMA table_info(voice_turns)`)
-		if err != nil {
-			return err
-		}
-		found := false
-		for rows.Next() {
-			var cid, notnull, pk int
-			var name, kind string
-			var value sql.NullString
-			if err := rows.Scan(&cid, &name, &kind, &notnull, &value, &pk); err != nil {
-				rows.Close()
-				return err
-			}
-			found = found || name == "report_text"
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		if !found {
-			_, err = tx.ExecContext(ctx, `ALTER TABLE voice_turns ADD COLUMN report_text TEXT NOT NULL DEFAULT ''`)
-		}
-		return err
-	}}); err != nil {
-		return err
-	}
-	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 221, Name: "voice_remove_unused_legacy_state", Up: func(ctx context.Context, tx *sql.Tx) error {
-		// Upgrade fixtures can roll back receipts while retaining the latest schema.
-		for _, column := range []string{"steward_decision", "pending_task_id", "pending_task_version", "pending_question"} {
-			var exists bool
-			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pragma_table_info('voice_turns') WHERE name=?)`, column).Scan(&exists); err != nil {
-				return err
-			}
-			if exists {
-				if _, err := tx.ExecContext(ctx, `ALTER TABLE voice_turns DROP COLUMN `+column); err != nil {
-					return err
-				}
-			}
-		}
-		_, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS voice_instruction_deliveries`)
-		return err
-	}}); err != nil {
-		return err
-	}
-	return registerUIMigrations(store)
+	}})
 }
