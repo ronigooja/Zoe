@@ -260,11 +260,11 @@ public final class ZoeAppModel: ObservableObject {
             _ = try await candidateAPI.snapshot()
             let store = try keyStore(url: candidate.serverURL)
             let previousKey = try store.load()
-            // Keychain replacement is atomic. A denied write leaves the old workspace intact.
+            // Local credential replacement is atomic. A failed write leaves the old workspace intact.
             try store.replace(candidate.key)
             do {
                 guard try store.load() == candidate.key else {
-                    throw ZoeError.persistence("The instance key could not be saved in Keychain.")
+                    throw ZoeError.persistence("The instance key could not be saved in local storage.")
                 }
                 await endVoiceSession()
                 // Cleanup must use the old credential scope without deleting the newly saved key.
@@ -274,7 +274,7 @@ public final class ZoeAppModel: ObservableObject {
                     if let previousKey { try store.replace(previousKey) }
                     else { try store.reset() }
                 } catch {
-                    throw ZoeError.persistence("The previous instance key could not be restored in Keychain. Reconnect with your server key.")
+                    throw ZoeError.persistence("The previous instance key could not be restored in local storage. Reconnect with your server key.")
                 }
                 throw error
             }

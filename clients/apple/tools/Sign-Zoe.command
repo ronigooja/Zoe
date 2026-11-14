@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Re-sign the unsigned Zoe macOS app with a code-signing identity from this Mac's Keychain.
 # Run it from the mounted disk image (double-click) or: Sign-Zoe.command [path/to/ZoeMac.app] [--no-install]
-# The private key never leaves this Mac. A stable identity keeps Keychain approvals across builds.
+# The signing private key never leaves this Mac. Use a stable identity across builds.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

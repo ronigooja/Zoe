@@ -29,6 +29,9 @@ struct ZoeMacApp {
         let settings = NSMenuItem(title: "Settings", action: #selector(showSettings), keyEquivalent: "")
         settings.target = self
         menu.addItem(settings)
+        let quit = NSMenuItem(title: "Quit", action: #selector(quitApplication), keyEquivalent: "")
+        quit.target = self
+        menu.addItem(quit)
         item.menu = menu
         statusItem = item
         model.$continuousVoiceEnabled.sink { enabled in voice.state = enabled ? .on : .off }.store(in: &subscriptions)
@@ -48,6 +51,8 @@ struct ZoeMacApp {
     }
 
     @objc private func toggleVoice() { model.setContinuousVoiceEnabled(!model.continuousVoiceEnabled) }
+
+    @objc private func quitApplication() { NSApp.terminate(nil) }
 
     @objc private func showSettings() {
         if settingsWindow == nil {

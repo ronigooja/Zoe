@@ -117,7 +117,6 @@ public struct APIFailureBody: Codable, Sendable {
 public enum ZoeError: Error, LocalizedError, Sendable {
     case invalidServerURL
     case missingCredential
-    case credentialAccessDenied(String)
     case http(status: Int, code: String, message: String, details: [String: JSONValue]?)
     case invalidResponse
     case persistence(String)
@@ -127,7 +126,6 @@ public enum ZoeError: Error, LocalizedError, Sendable {
         switch self {
         case .invalidServerURL: "Enter a valid Zoe server URL."
         case .missingCredential: "Enter your server address and instance key to connect."
-        case let .credentialAccessDenied(storage): "Allow Zoe to access \(storage), then try again."
         case let .http(_, _, message, _): message
         case .invalidResponse: "The server returned a response the app could not read."
         case let .persistence(message): message

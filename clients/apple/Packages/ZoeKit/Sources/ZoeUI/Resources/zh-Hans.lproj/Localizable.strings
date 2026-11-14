@@ -10,7 +10,6 @@
 "Zoe" = "Zoe";
 "Enter a valid Zoe server URL." = "请输入有效的 Zoe 服务器地址。";
 "Failed" = "失败";
-"Keychain" = "钥匙串";
 "Local media is closed, but server hangup is unconfirmed; the session remains fenced. %@%@" = "本地媒体已关闭，但服务器挂断尚未确认；会话仍受隔离。%@%@";
 "Local media is closed. Upstream termination is unverified; the account pool remains quarantined. Retry server hangup to repeat the idempotent lease release." = "本地媒体已关闭。上游终止尚未验证，账户池仍被隔离。请重试服务器挂断，以重复执行同一租约释放操作。";
 "Local voice media is closed. Server hangup is unconfirmed or the account pool remains quarantined; no new session can start until the pool is cleared. %@" = "本地语音媒体已关闭。服务器挂断尚未确认或账户池仍被隔离；清除隔离前无法启动新会话。%@";
@@ -34,6 +33,6 @@
 "Enter the 43-character instance key from your server." = "请输入服务器提供的 43 字符实例密钥。";
 "No installation QR code was found in this image." = "此图片中未找到安装二维码。";
 "Choose an image containing one installation QR code." = "请选择只包含一个安装二维码的图片。";
-"The instance key could not be saved in Keychain." = "实例密钥无法保存到钥匙串。";
-"The previous instance key could not be restored in Keychain. Reconnect with your server key." = "无法在钥匙串中恢复先前的实例密钥。请使用服务器密钥重新连接。";
+"The instance key could not be saved in local storage." = "实例密钥无法保存到本地存储。";
+"The previous instance key could not be restored in local storage. Reconnect with your server key." = "无法在本地存储中恢复先前的实例密钥。请使用服务器密钥重新连接。";
 "Something went wrong. Try again." = "出现问题，请重试。";

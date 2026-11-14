@@ -1,7 +1,7 @@
 # Apple client
 
 The macOS menu-bar app has a Voice toggle and a standalone Settings window with one Connection tab.
-Connection validation uses the authenticated snapshot endpoint; instance keys are stored per server in Keychain.
+Connection validation uses the authenticated snapshot endpoint; instance keys are stored per server in an encrypted local file.
 
 ## Verification
 

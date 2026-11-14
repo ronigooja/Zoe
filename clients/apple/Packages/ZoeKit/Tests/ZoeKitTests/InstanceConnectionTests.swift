@@ -36,7 +36,7 @@ private final class MemoryInstanceKeyStore: InstanceKeyStoring, @unchecked Senda
         return key
     }
     func replace(_ key: InstanceKey) throws {
-        if failWrites { throw ZoeError.persistence("Simulated Keychain denial") }
+        if failWrites { throw ZoeError.persistence("Simulated local storage failure") }
         self.key = key
         if failNextWriteReadback {
             failNextWriteReadback = false
@@ -267,7 +267,7 @@ final class InstanceConnectionTests: XCTestCase {
     }
 
     @MainActor
-    func testKeychainReplacementFailurePreservesKeyDraftSnapshotAndQueuedCommands() async throws {
+    func testLocalStorageReplacementFailurePreservesKeyDraftSnapshotAndQueuedCommands() async throws {
         for failReadback in [false, true] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -338,7 +338,7 @@ final class InstanceConnectionTests: XCTestCase {
     }
 
     @MainActor
-    func testDifferentServerRequiresExplicitClearAndKeychainFailureStaysDisconnected() async throws {
+    func testDifferentServerRequiresExplicitClearAndLocalStorageFailureStaysDisconnected() async throws {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         model.serverAddress = "https://zoe.example"
         model.setAuthenticationForTesting(.connected)
