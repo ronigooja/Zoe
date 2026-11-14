@@ -20,7 +20,6 @@ jobs:
     outputs:
       tests: ${{ steps.scope.outputs.tests }}
       macos: ${{ steps.scope.outputs.macos }}
-      ios: ${{ steps.scope.outputs.ios }}
       go: ${{ steps.scope.outputs.go }}
       race: ${{ steps.scope.outputs.race }}
       scripts: ${{ steps.scope.outputs.scripts }}
@@ -66,12 +65,11 @@ jobs:
 
   apple:
     needs: scope
-    if: needs.scope.outputs.tests == 'true' || needs.scope.outputs.macos == 'true' || needs.scope.outputs.ios == 'true'
+    if: needs.scope.outputs.tests == 'true' || needs.scope.outputs.macos == 'true'
     uses: ./.github/workflows/apple.yml
     with:
       tests: ${{ needs.scope.outputs.tests == 'true' }}
       macos: ${{ needs.scope.outputs.macos == 'true' }}
-      ios: ${{ needs.scope.outputs.ios == 'true' }}
 
   linux:
     needs: scope
@@ -104,7 +102,7 @@ jobs:
           jobs = json.loads(os.environ['NEEDS_JSON'])
           assert jobs['scope']['result'] == 'success', 'Scope selection failed'
           outputs = jobs['scope']['outputs']
-          groups = {'apple': ('tests', 'macos', 'ios'), 'linux': ('go', 'race', 'scripts'), 'docs': ('docs',)}
+          groups = {'apple': ('tests', 'macos'), 'linux': ('go', 'race', 'scripts'), 'docs': ('docs',)}
           for job, keys in groups.items():
               expected = 'success' if any(outputs.get(key) == 'true' for key in keys) else 'skipped'
               actual = jobs[job]['result']

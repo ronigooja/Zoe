@@ -5,7 +5,7 @@ import Foundation
 import CryptoKit
 import WebRTC
 
-private final class ExportURLProtocol: URLProtocol {
+private final class ContractURLProtocol: URLProtocol {
     static var responseHandler: ((URLRequest) -> (Int, [String: String], Data))?
     static var failureHandler: ((URLRequest) -> Error?)?
     static var capturedRequest: URLRequest?
@@ -27,7 +27,7 @@ private final class ExportURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-private struct StaticExportCredential: BearerTokenProviding {
+private struct StaticCredential: BearerTokenProviding {
     func bearerToken() throws -> String { UUID().uuidString }
 }
 
@@ -57,388 +57,11 @@ private actor AsyncTestGate {
 }
 
 final class ClientContractTests: XCTestCase {
-    private func exportSession() -> URLSession {
-        ExportURLProtocol.failureHandler = nil
+    private func session() -> URLSession {
+        ContractURLProtocol.failureHandler = nil
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [ExportURLProtocol.self]
+        configuration.protocolClasses = [ContractURLProtocol.self]
         return URLSession(configuration: configuration)
-    }
-
-    private func exportPackage(scope: String = "personal", schemaVersion: Int = 2, contents: Data? = nil, snapshotCursor: String = "17", validatedCursor: String = "18", auditCursor: String = "18", auditID: String = "export-1", auditType: String = "data.export.prepared") -> (Data, [String: String]) {
-        let contents = contents ?? Data(#"{"projects":[],"tasks":[],"task_dependencies":[],"task_entries":[],"approvals":[],"runs":[],"evidence":[]}"#.utf8)
-        let manifest: [String: Any] = [
-            "format": "zoe.authority-export", "schema_version": schemaVersion,
-            "memory": ["included": false, "reason": "Memory is stored in Mem0 and is not included; the worker has no export endpoint."],
-            "export_id": "export-1", "created_at": "2026-10-21T12:00:00Z",
-            "workspace_id": "workspace-1", "subject_id": "device-1", "scope": scope,
-            "authority": ["instance_lineage_id": "lineage-1", "generation": 3, "deletion_sequence": "4", "snapshot_event_cursor": snapshotCursor, "validated_through_cursor": validatedCursor, "export_audit_event_cursor": auditCursor, "export_audit_event_id": auditID, "export_audit_event_type": auditType, "source": "sqlite_authority"],
-            "integrity": ["data_bytes": contents.count, "data_sha256": Self.sha256(contents)],
-            "coverage": [:]
-        ]
-        let manifestBytes = try! JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
-        let archive = Self.storedZip(entries: [("manifest.json", manifestBytes), ("data.json", contents)])
-        return (archive, [
-            "Content-Type": "application/vnd.zoe.export+zip",
-            "Content-Disposition": "attachment; filename=\"zoe-export-exp-1.zip\"",
-            "X-Zoe-Archive-SHA256": Self.sha256(archive),
-            "X-Zoe-Manifest-SHA256": Self.sha256(manifestBytes)
-        ])
-    }
-
-    private static func sha256(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func storedZip(entries: [(String, Data)]) -> Data {
-        func u16(_ value: UInt16) -> Data { Data([UInt8(value & 0xff), UInt8((value >> 8) & 0xff)]) }
-        func u32(_ value: UInt32) -> Data { Data([UInt8(value & 0xff), UInt8((value >> 8) & 0xff), UInt8((value >> 16) & 0xff), UInt8((value >> 24) & 0xff)]) }
-        func crc(_ data: Data) -> UInt32 {
-            let table = (0..<256).map { value -> UInt32 in
-                var entry = UInt32(value)
-                for _ in 0..<8 { entry = entry & 1 == 1 ? (entry >> 1) ^ 0xedb8_8320 : entry >> 1 }
-                return entry
-            }
-            var value: UInt32 = 0xffff_ffff
-            for byte in data {
-                let index = Int((value ^ UInt32(byte)) & 0xff)
-                value = table[index] ^ (value >> 8)
-            }
-            return ~value
-        }
-        var result = Data()
-        var central = Data()
-        for (name, bytes) in entries {
-            let nameBytes = Data(name.utf8)
-            let checksum = crc(bytes)
-            let localOffset = UInt32(result.count)
-            result.append(u32(0x04034b50)); result.append(u16(20)); result.append(u16(8)); result.append(u16(0))
-            result.append(u16(0)); result.append(u16(0)); result.append(u32(0)); result.append(u32(0))
-            result.append(u32(0)); result.append(u16(UInt16(nameBytes.count))); result.append(u16(0)); result.append(nameBytes); result.append(bytes)
-            result.append(u32(0x08074b50)); result.append(u32(checksum)); result.append(u32(UInt32(bytes.count))); result.append(u32(UInt32(bytes.count)))
-            central.append(u32(0x02014b50)); central.append(u16(20)); central.append(u16(20)); central.append(u16(8)); central.append(u16(0))
-            central.append(u16(0)); central.append(u16(0)); central.append(u32(checksum)); central.append(u32(UInt32(bytes.count)))
-            central.append(u32(UInt32(bytes.count))); central.append(u16(UInt16(nameBytes.count))); central.append(u16(0)); central.append(u16(0))
-            central.append(u16(0)); central.append(u16(0)); central.append(u32(0)); central.append(u32(localOffset)); central.append(nameBytes)
-        }
-        let directoryOffset = UInt32(result.count)
-        result.append(central)
-        result.append(u32(0x06054b50)); result.append(u16(0)); result.append(u16(0)); result.append(u16(UInt16(entries.count)))
-        result.append(u16(UInt16(entries.count))); result.append(u32(UInt32(central.count))); result.append(u32(directoryOffset)); result.append(u16(0))
-        return result
-    }
-
-    func testScopedExportUsesAuthenticatedScopedRequestAndPrivateTemporaryFile() async throws {
-        ExportURLProtocol.capturedRequest = nil
-        let (package, headers) = exportPackage()
-        ExportURLProtocol.responseHandler = { _ in (200, headers, package) }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let client = try APIClient(serverURL: URL(string: "https://zoe.example/base")!, credentials: StaticExportCredential(), session: exportSession())
-
-        let artifact = try await client.downloadExport(scope: "personal", temporaryDirectory: directory)
-
-        let request = try XCTUnwrap(ExportURLProtocol.capturedRequest)
-        XCTAssertEqual(request.httpMethod, "GET")
-        XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.path, "/base/v1/export")
-        XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems, [URLQueryItem(name: "scope", value: "personal")])
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/vnd.zoe.export+zip")
-        XCTAssertTrue(try XCTUnwrap(request.value(forHTTPHeaderField: "Authorization")).hasPrefix("Bearer "))
-        XCTAssertEqual(artifact.scope, "personal")
-        XCTAssertEqual(artifact.filename, "zoe-export-exp-1.zip")
-        XCTAssertEqual(artifact.snapshotCursor, "17")
-        XCTAssertEqual(artifact.validatedThroughCursor, "18")
-        XCTAssertEqual(artifact.exportAuditEventCursor, "18")
-        XCTAssertEqual(artifact.exportAuditEventID, "export-1")
-        XCTAssertEqual(artifact.exportAuditEventType, "data.export.prepared")
-        XCTAssertEqual(artifact.instanceLineageID, "lineage-1")
-        XCTAssertEqual(artifact.generation, 3)
-        XCTAssertEqual(artifact.deletionSequence, "4")
-        XCTAssertEqual(try Data(contentsOf: artifact.fileURL), package)
-        let attributes = try FileManager.default.attributesOfItem(atPath: artifact.fileURL.path)
-        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
-        try FileManager.default.removeItem(at: artifact.fileURL)
-    }
-
-    @MainActor
-    func testExportDownloadRefreshAndSaveAcceptPreparedAuditCursorThenRejectChangedAuthority() async throws {
-        let (package, headers) = exportPackage()
-        ExportURLProtocol.responseHandler = { request in
-            request.url?.path == "/v1/export" ? (200, headers, package) : (500, [:], Data())
-        }
-        let client = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        defer { model.cancelExport() }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        var latest = Snapshot(serverVersion: "srv-1", eventCursor: "18", projects: [], tasks: [], approvals: [], runs: [], workspaceId: "workspace-1", authority: SnapshotAuthority(instanceLineageId: "lineage-1", generation: 3, deletionSequence: "4"))
-        model.snapshotFetchOverrideForTesting = { latest }
-        await model.recoverPendingCommandsForTesting(api: client, journal: journal)
-
-        await model.prepareExport(scope: "personal", expectedConnectionEpoch: model.connectionEpoch)
-
-        let artifact = try XCTUnwrap(model.exportArtifact)
-        XCTAssertEqual(artifact.snapshotCursor, "17", "the data image cursor remains distinct from the audit cursor")
-        XCTAssertEqual(artifact.validatedThroughCursor, "18")
-        let stillAuthorized = await model.validateExportForSave(expectedConnectionEpoch: model.connectionEpoch)
-        XCTAssertTrue(stillAuthorized, "the matching prepared audit event is the sole allowed cursor advance")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: artifact.fileURL.path))
-
-        latest = Snapshot(serverVersion: "srv-2", eventCursor: "18", projects: [], tasks: [], approvals: [], runs: [], workspaceId: "workspace-1", authority: SnapshotAuthority(instanceLineageId: "lineage-1", generation: 3, deletionSequence: "5"))
-        let revoked = await model.validateExportForSave(expectedConnectionEpoch: model.connectionEpoch)
-        XCTAssertFalse(revoked, "changed deletion authority must invalidate the copy")
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: artifact.fileURL.path))
-    }
-
-    func testScopedExportRejectsInvalidScopeSchemaFilenameAndDeclaredOversize() async throws {
-        let client = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        do { _ = try await client.downloadExport(scope: "all"); XCTFail("invalid scope accepted") } catch { if case ZoeError.invalidResponse = error {} else { XCTFail("unexpected error: \(error)") } }
-
-        let (wrongVersion, wrongVersionHeaders) = exportPackage(schemaVersion: 3)
-        let (wrongScope, wrongScopeHeaders) = exportPackage(scope: "workspace")
-        let (wrongAuditCursor, wrongAuditCursorHeaders) = exportPackage(validatedCursor: "19")
-        let (validPackage, validHeaders) = exportPackage()
-        var invalidFilenameHeaders = validHeaders
-        invalidFilenameHeaders["Content-Disposition"] = "attachment; filename=\"../zoe-export-x.zip\""
-        for (headers, body) in [
-            (wrongVersionHeaders, wrongVersion),
-            (wrongAuditCursorHeaders, wrongAuditCursor),
-            (invalidFilenameHeaders, validPackage),
-            (wrongScopeHeaders, wrongScope)
-        ] {
-            ExportURLProtocol.responseHandler = { _ in (200, headers, body) }
-            do { _ = try await client.downloadExport(scope: "personal"); XCTFail("invalid export accepted") }
-            catch { if case ZoeError.invalidResponse = error {} else { XCTFail("unexpected error: \(error)") } }
-        }
-
-        ExportURLProtocol.responseHandler = { _ in
-            (200, ["Content-Type": "application/vnd.zoe.export+zip", "Content-Disposition": "attachment; filename=\"zoe-export-x.zip\"", "Content-Length": String(1024 * 1024 * 1024 + 1)], Data())
-        }
-        do { _ = try await client.downloadExport(scope: "personal"); XCTFail("oversized export accepted") }
-        catch { if case ZoeError.exportTooLarge = error {} else { XCTFail("unexpected error: \(error)") } }
-    }
-
-    func testBoundedDownloadCancelsWhenTransferExceedsConfiguredLimit() async throws {
-        let body = Data(repeating: 0x61, count: 128 * 1024)
-        ExportURLProtocol.responseHandler = { request in
-            (200, ["Content-Length": String(body.count)], body)
-        }
-        let request = URLRequest(url: URL(string: "https://zoe.example/oversize")!)
-        do {
-            _ = try await downloadBounded(request, using: exportSession(), maximumBytes: 1024)
-            XCTFail("over-limit transfer was accepted")
-        } catch {
-            if case ZoeError.exportTooLarge = error { }
-            else { XCTFail("unexpected error: \(error)") }
-        }
-    }
-
-    func testAbandonedDownloadCleanupPreservesActiveFileLock() throws {
-        let directory = BoundedDownloadDelegate.temporaryDirectory
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let stem = "zoe-download-test-\(UUID().uuidString.lowercased())"
-        let lockURL = directory.appendingPathComponent(stem + ".lock")
-        let temporaryURL = directory.appendingPathComponent(stem + ".tmp")
-        try Data("private archive bytes".utf8).write(to: temporaryURL)
-        let activeLock = try DownloadFileLock(fileURL: lockURL, create: true)
-
-        APIClient.cleanupAbandonedExportDownloads()
-        XCTAssertTrue(FileManager.default.fileExists(atPath: temporaryURL.path), "cleanup must skip another active download lock")
-
-        activeLock.release(removeFile: false)
-        APIClient.cleanupAbandonedExportDownloads()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: temporaryURL.path), "cleanup must remove a crash-left archive after its lock is released")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: lockURL.path))
-    }
-
-    func testScopedExportStreamsArchivesLargerThan64MiB() async throws {
-        let contents = Data(repeating: 0x61, count: 65 * 1024 * 1024)
-        let (package, headers) = exportPackage(contents: contents)
-        ExportURLProtocol.responseHandler = { _ in (200, headers, package) }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let client = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-
-        let artifact = try await client.downloadExport(scope: "personal", temporaryDirectory: directory)
-
-        let size = (try FileManager.default.attributesOfItem(atPath: artifact.fileURL.path)[.size] as? NSNumber)?.uint64Value
-        XCTAssertGreaterThan(size ?? 0, 64 * 1024 * 1024)
-        try FileManager.default.removeItem(at: artifact.fileURL)
-    }
-
-    @MainActor
-    func testSnapshotFailureRemovesDownloadedExportTemporaryFile() async throws {
-        let temporaryDirectory = FileManager.default.temporaryDirectory
-        let existing = Set((try FileManager.default.contentsOfDirectory(at: temporaryDirectory, includingPropertiesForKeys: nil))
-            .filter { $0.lastPathComponent.hasPrefix("zoe-export-") && $0.pathExtension == "zip" })
-        let (package, headers) = exportPackage()
-        ExportURLProtocol.responseHandler = { request in
-            if request.url?.path == "/v1/export" { return (200, headers, package) }
-            return (503, ["Content-Type": "application/json"], Data())
-        }
-        let client = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let directory = temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        model.snapshotFetchOverrideForTesting = { throw ZoeError.invalidResponse }
-        await model.recoverPendingCommandsForTesting(api: client, journal: journal)
-
-        await model.prepareExport(scope: "personal", expectedConnectionEpoch: model.connectionEpoch)
-
-        XCTAssertNil(model.exportArtifact)
-        let after = Set((try FileManager.default.contentsOfDirectory(at: temporaryDirectory, includingPropertiesForKeys: nil))
-            .filter { $0.lastPathComponent.hasPrefix("zoe-export-") && $0.pathExtension == "zip" })
-        XCTAssertEqual(after, existing, "an export downloaded before a failed snapshot refresh must be removed")
-    }
-
-    @MainActor
-    func testExportResultFromOldConnectionIsDeletedAndNotPresented() async throws {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
-        let model = ZoeAppModel(defaults: defaults)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let gate = AsyncTestGate()
-        var producedURL: URL?
-        var shouldPause = true
-        model.exportDownloadOverrideForTesting = { scope in
-            XCTAssertEqual(scope, "personal")
-            if shouldPause {
-                shouldPause = false
-                await gate.pause()
-            }
-            let url = directory.appendingPathComponent("late.json")
-            try Data("{}".utf8).write(to: url)
-            producedURL = url
-            return ScopedExportArtifact(fileURL: url, filename: "zoe-export-late.json", scope: scope, snapshotCursor: "1")
-        }
-        let epoch = model.connectionEpoch
-        let task = Task { await model.prepareExport(scope: "personal", expectedConnectionEpoch: epoch) }
-        await gate.waitUntilStarted()
-        model.serverAddress = ""
-        await model.clearCredential()
-        await gate.resume()
-        await task.value
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertNil(model.exportStatus, "switching connections should clear the stale Preparing status")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(producedURL).path))
-
-        await model.prepareExport(scope: "personal", expectedConnectionEpoch: model.connectionEpoch)
-        XCTAssertEqual(model.exportArtifact?.filename, "zoe-export-late.json", "a later request on the new epoch should be allowed")
-        model.cancelExport()
-    }
-
-    @MainActor
-    func testExportSaveAndCancelRemovePreparedTemporaryFile() throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try Data("{}".utf8).write(to: fileURL)
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: fileURL, filename: "zoe-export-one.json", scope: "personal", snapshotCursor: "1"))
-
-        model.exportSaveFinished(saved: false)
-
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
-        XCTAssertEqual(model.exportStatus, uiText("Saving was canceled. The prepared temporary file was removed."))
-
-        let secondURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try Data("{}".utf8).write(to: secondURL)
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: secondURL, filename: "zoe-export-two.json", scope: "workspace", snapshotCursor: "2"))
-        model.cancelExport()
-
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: secondURL.path))
-    }
-
-    @MainActor
-    func testCanceledPrepareTaskCleansLateFileAndCanBeRetried() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let gate = AsyncTestGate()
-        var shouldPause = true
-        var producedURL: URL?
-        model.exportDownloadOverrideForTesting = { scope in
-            if shouldPause {
-                shouldPause = false
-                await gate.pause()
-            }
-            let url = directory.appendingPathComponent("task-cancelled.json")
-            try Data("{}".utf8).write(to: url)
-            producedURL = url
-            return ScopedExportArtifact(fileURL: url, filename: "zoe-export-task-cancelled.json", scope: scope, snapshotCursor: "1")
-        }
-
-        let task = Task { await model.prepareExport(scope: "personal", expectedConnectionEpoch: model.connectionEpoch) }
-        await gate.waitUntilStarted()
-        task.cancel()
-        await gate.resume()
-        await task.value
-
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertNotEqual(model.exportStatus, uiText("Preparing the authorized export…"))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(producedURL).path))
-        await model.prepareExport(scope: "personal", expectedConnectionEpoch: model.connectionEpoch)
-        XCTAssertEqual(model.exportArtifact?.filename, "zoe-export-task-cancelled.json")
-        model.cancelExport()
-    }
-
-    @MainActor
-    func testDeletionSequenceChangeInvalidatesPreparedExportAndPrivateFile() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("zoe-export-authority.zip")
-        try Data("archive".utf8).write(to: fileURL)
-        let originalAuthority = SnapshotAuthority(instanceLineageId: "lineage-1", generation: 5, deletionSequence: "8")
-        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "17", projects: [], tasks: [], approvals: [], runs: [], workspaceId: "workspace-1", authority: originalAuthority))
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: fileURL, filename: "zoe-export-authority.zip", scope: "personal", snapshotCursor: "17", instanceLineageID: "lineage-1", generation: 5, deletionSequence: "8"))
-        model.snapshotFetchOverrideForTesting = {
-            Snapshot(serverVersion: "1", eventCursor: "18", projects: [], tasks: [], approvals: [], runs: [], workspaceId: "workspace-1", authority: SnapshotAuthority(instanceLineageId: "lineage-1", generation: 5, deletionSequence: "9"))
-        }
-
-        try await model.refreshSnapshotForTesting()
-
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
-        XCTAssertEqual(model.exportStatus, uiText("Server authority changed; the prepared export was cleared."))
-    }
-
-    @MainActor
-    func testPreparedExportAuditEventDoesNotInvalidateItsOwnArtifact() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try Data("prepared export".utf8).write(to: fileURL)
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: fileURL, filename: "zoe-export-one.json", scope: "personal", snapshotCursor: "5", exportID: "export-one", validatedThroughCursor: "6", exportAuditEventCursor: "6", exportAuditEventID: "export-one", exportAuditEventType: "data.export.prepared"))
-        model.snapshotFetchOverrideForTesting = {
-            Snapshot(serverVersion: "srv-1", eventCursor: "6", projects: [], tasks: [], approvals: [], runs: [], workspaceId: "workspace-1", authority: SnapshotAuthority(instanceLineageId: "", generation: 0, deletionSequence: "0"))
-        }
-
-        await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "export-one", cursor: "6", type: "data.export.prepared", occurredAt: "2026-10-21T12:00:00Z", workspaceId: "workspace-1", subjectId: "subject-1", aggregateType: "data_export", aggregateId: "export-one", aggregateVersion: 1, payload: .object([:])))
-
-        XCTAssertNotNil(model.exportArtifact)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
-        model.cancelExport()
-    }
-
-    @MainActor
-    func testPermissionChangeRemovesPreparedExportEvenWhenSnapshotRefreshFails() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try Data("prepared export".utf8).write(to: fileURL)
-        model.setExportArtifactForTesting(ScopedExportArtifact(fileURL: fileURL, filename: "zoe-export-one.json", scope: "personal", snapshotCursor: "5"))
-        model.snapshotFetchOverrideForTesting = { throw ZoeError.invalidResponse }
-
-        await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "event-revoked", cursor: "6", type: "instance.key.rotated", occurredAt: "2026-10-21T12:00:00Z", workspaceId: "workspace-1", subjectId: "owner", aggregateType: "instance", aggregateId: "default", aggregateVersion: 2, payload: .object([:])))
-
-        XCTAssertNil(model.exportArtifact)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
     func testConnectionGenerationRejectsResponsesAfterOriginOrCredentialSwitch() throws {
@@ -455,183 +78,6 @@ final class ClientContractTests: XCTestCase {
         let reauthenticatedRequest = generation.value
         generation.advance() // Same server, new device identity.
         XCTAssertFalse(generation.accepts(reauthenticatedRequest, from: serverB))
-    }
-
-    func testExecutionCapacityAndQueueReasonDecodeWithoutRequiringNewFieldsOnOlderServers() throws {
-        let task: [String: Any] = ["id": "queued", "title": "Work", "goal": "Work", "source": "user", "status": "queued", "version": 1, "created_at": "now", "updated_at": "now", "evidence": [], "can_accept_result": false]
-        var body: [String: Any] = ["server_version": "1", "event_cursor": "1", "workspace_id": "default", "subject_id": "owner", "projects": [], "tasks": [task], "approvals": [], "runs": []]
-        let legacy = try ZoeJSON.decoder.decode(Snapshot.self, from: JSONSerialization.data(withJSONObject: body))
-        XCTAssertNil(legacy.executionCapacity)
-        XCTAssertNil(legacy.tasks.first?.queueReason)
-        var queued = task
-        queued["queue_reason"] = "execution_reconciliation_required"
-        body["tasks"] = [queued]
-        body["execution_capacity"] = ["active_runs": 1, "uncertain_runs": 3, "max_runs": 4, "available_slots": 0, "dispatch_blocked": true, "reason_code": "execution_reconciliation_required"]
-        let blocked = try ZoeJSON.decoder.decode(Snapshot.self, from: JSONSerialization.data(withJSONObject: body))
-        XCTAssertEqual(blocked.executionCapacity?.occupiedSlots, 4)
-        XCTAssertEqual(blocked.executionCapacity?.availableSlots, 0)
-        XCTAssertEqual(blocked.tasks.first?.status, .queued)
-        XCTAssertEqual(blocked.tasks.first?.queueReason, "execution_reconciliation_required")
-    }
-
-    func testSnapshotDecodesAuthoritativeApprovalsAndRuns() throws {
-        let data = Data(#"{"server_version":"srv-3","event_cursor":"19","projects":[],"tasks":[{"id":"task-1","title":"Review","goal":"Review changes","source":"user","status":"awaiting_user","version":4,"created_at":"2026-10-20T12:00:00Z","updated_at":"2026-10-20T12:01:00Z","evidence":[],"can_accept_result":true}],"approvals":[{"id":"approval-1","task_id":"task-1","status":"pending","prompt":"Approve deployment?","version":2,"created_at":"2026-10-20T12:00:00Z","requested_action_digest":"sha256:example"}],"workspace_id":"default","subject_id":"owner","runs":[{"id":"run-1","task_id":"task-1","attempt_id":"attempt-1","status":"verification_pending","desired_control":"stop","control_version":1,"started_at":"2026-10-20T12:00:00Z","evidence":[],"termination_confirmed":true}]}"#.utf8)
-        let snapshot = try ZoeJSON.decoder.decode(Snapshot.self, from: data)
-        XCTAssertEqual(snapshot.eventCursor, "19")
-        XCTAssertEqual(snapshot.tasks.first?.status, .awaitingUser)
-        XCTAssertEqual(snapshot.approvals.first?.id, "approval-1")
-        XCTAssertEqual(snapshot.runs.first?.desiredControl, "stop")
-        XCTAssertEqual(snapshot.tasks.first?.canAcceptResult, true)
-        XCTAssertEqual(snapshot.runs.first?.terminationConfirmed, true)
-    }
-
-    func testCapabilityInventoryKeepsDesiredAndObservedDeploymentStatesSeparate() throws {
-        let data = Data(#"{"items":[{"deployment_id":"deploy-1","workspace_id":"workspace-1","service_id":"service-1","release_digest":"sha256:release","requested_operation":"start","desired_state":"running","observed_state":"pending","grant_id":"grant-1","config_ref":"","config_sha256":"","version":2,"created_by":"device-1","created_at":"2026-10-21T12:00:00Z","updated_at":"2026-10-21T12:01:00Z","latest_attempt_id":"attempt-1","latest_fence":3,"last_error_code":""}]}"#.utf8)
-        let inventory = try ZoeJSON.decoder.decode(CapabilityDeploymentList.self, from: data)
-        XCTAssertEqual(inventory.items.first?.desiredState, "running")
-        XCTAssertEqual(inventory.items.first?.observedState, "pending")
-        XCTAssertEqual(inventory.items.first?.latestFence, 3)
-    }
-
-    func testCapabilityRevocationKeepsRunnerCleanupOutcomeSeparate() throws {
-        func deployment(revokedAt: Any, revokedBy: Any, cleanup: Any = NSNull(), desired: String, observed: String) throws -> CapabilityDeployment {
-            let item: [String: Any] = [
-                "deployment_id": "deploy-1",
-                "workspace_id": "workspace-1",
-                "service_id": "service-1",
-                "release_digest": "sha256:release",
-                "requested_operation": "start",
-                "desired_state": desired,
-                "observed_state": observed,
-                "grant_id": "grant-1",
-                "config_ref": "",
-                "config_sha256": "",
-                "version": 8,
-                "created_by": "owner-1",
-                "created_at": "2026-10-21T12:00:00Z",
-                "updated_at": "2026-10-21T12:01:00Z",
-                "latest_attempt_id": "attempt-1",
-                "latest_fence": 4,
-                "last_error_code": "",
-                "revoked_at": revokedAt,
-                "revoked_by": revokedBy,
-                "revocation_cleanup_state": cleanup
-            ]
-            let data = try JSONSerialization.data(withJSONObject: ["items": [item]])
-            return try XCTUnwrap(ZoeJSON.decoder.decode(CapabilityDeploymentList.self, from: data).items.first)
-        }
-
-        let active = try deployment(revokedAt: NSNull(), revokedBy: NSNull(), desired: "running", observed: "running")
-        XCTAssertNil(active.revokedAt)
-        XCTAssertNil(active.revokedBy)
-        XCTAssertNil(active.revocationCleanupStatus)
-
-        let cleanupPending = try deployment(revokedAt: "2026-10-21T12:02:00Z", revokedBy: "owner-1", cleanup: "pending", desired: "stopped", observed: "running")
-        XCTAssertEqual(cleanupPending.revokedAt, "2026-10-21T12:02:00Z")
-        XCTAssertEqual(cleanupPending.revokedBy, "owner-1")
-        XCTAssertEqual(cleanupPending.revocationCleanupStatus, .pending(observedState: "running"))
-
-        let cleanupUncertain = try deployment(revokedAt: "2026-10-21T12:02:00Z", revokedBy: "owner-1", cleanup: "uncertain", desired: "stopped", observed: "uncertain")
-        XCTAssertEqual(cleanupUncertain.revocationCleanupStatus, .uncertain)
-
-        let cleanupUnknown = try deployment(revokedAt: "2026-10-21T12:02:00Z", revokedBy: "owner-1", desired: "stopped", observed: "unknown")
-        XCTAssertEqual(cleanupUnknown.revocationCleanupStatus, .unknown(observedState: "unknown"))
-        let futureCleanupState = try deployment(revokedAt: "2026-10-21T12:02:00Z", revokedBy: "owner-1", cleanup: "future_state", desired: "stopped", observed: "stopped")
-        XCTAssertEqual(futureCleanupState.revocationCleanupStatus, .unknown(observedState: "stopped"))
-
-        let previouslyStopped = try deployment(revokedAt: "2026-10-21T12:02:00Z", revokedBy: "owner-1", desired: "stopped", observed: "stopped")
-        XCTAssertEqual(previouslyStopped.revocationCleanupStatus, .unknown(observedState: "stopped"), "A stopped observation without cleanup proof may predate revocation.")
-
-        let cleanupConfirmed = try deployment(revokedAt: "2026-10-21T12:02:00Z", revokedBy: "owner-1", cleanup: "confirmed", desired: "stopped", observed: "stopped")
-        XCTAssertEqual(cleanupConfirmed.revocationCleanupStatus, .confirmed)
-    }
-
-    @MainActor
-    func testRevocationReturnsFalseWhenConnectionChangesWhileCommandIsSuspended() async throws {
-        let deployment = try makeRevocationDeployment(observed: "stopped")
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        model.setCapabilityDeploymentsForTesting([deployment])
-        let submitGate = AsyncTestGate()
-        var didRefresh = false
-        model.capabilityRevocationSubmitOverrideForTesting = { version, payload in
-            XCTAssertEqual(version, 8)
-            XCTAssertEqual(payload, .object(["deployment_id": .string("deploy-1")]))
-            await submitGate.pause()
-            return true
-        }
-        model.capabilityRevocationRefreshOverrideForTesting = { didRefresh = true }
-
-        let epoch = model.connectionEpoch
-        let task = Task { await model.revokeCapabilityDeployment(deployment, expectedConnectionEpoch: epoch) }
-        await submitGate.waitUntilStarted()
-        model.serverAddress = ""
-        await model.clearCredential()
-        await submitGate.resume()
-
-        let result = await task.value
-        XCTAssertFalse(result)
-        XCTAssertNotEqual(model.notice, uiText("Authorization revoked. Stop cleanup status is shown in the capability inventory."))
-        XCTAssertFalse(didRefresh)
-    }
-
-    @MainActor
-    func testRevocationReturnsFalseWhenConnectionChangesDuringInventoryRefresh() async throws {
-        let deployment = try makeRevocationDeployment(observed: "stopped")
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        model.setCapabilityDeploymentsForTesting([deployment])
-        model.capabilityRevocationSubmitOverrideForTesting = { version, _ in
-            XCTAssertEqual(version, 8)
-            return true
-        }
-        let refreshGate = AsyncTestGate()
-        model.capabilityRevocationRefreshOverrideForTesting = { await refreshGate.pause() }
-
-        let epoch = model.connectionEpoch
-        let task = Task { await model.revokeCapabilityDeployment(deployment, expectedConnectionEpoch: epoch) }
-        await refreshGate.waitUntilStarted()
-        model.serverAddress = ""
-        await model.clearCredential()
-        await refreshGate.resume()
-
-        let result = await task.value
-        XCTAssertFalse(result)
-        XCTAssertNotEqual(model.notice, uiText("Authorization revoked. Stop cleanup status is shown in the capability inventory."))
-    }
-
-    @MainActor
-    func testRevocationVersionConflictRefreshesInventoryAndDoesNotReportSuccess() async throws {
-        let deployment = try makeRevocationDeployment(observed: "running")
-        let refreshedDeployment = try makeRevocationDeployment(observed: "running", version: 9)
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        model.setCapabilityDeploymentsForTesting([deployment])
-        model.capabilityRevocationSubmitOverrideForTesting = { version, payload in
-            XCTAssertEqual(version, 8)
-            XCTAssertEqual(payload, .object(["deployment_id": .string("deploy-1")]))
-            return false
-        }
-        model.capabilityRevocationRefreshOverrideForTesting = {
-            model.setCapabilityDeploymentsForTesting([refreshedDeployment])
-        }
-
-        let result = await model.revokeCapabilityDeployment(deployment, expectedConnectionEpoch: model.connectionEpoch)
-
-        XCTAssertFalse(result)
-        XCTAssertEqual(model.capabilityDeployments.first?.version, 9)
-        XCTAssertEqual(model.notice, uiText("The deployment version changed. The latest capability inventory has been loaded; review it before trying again."))
-    }
-
-    @MainActor
-    private func makeRevocationDeployment(observed: String, version: Int64 = 8) throws -> CapabilityDeployment {
-        let data = Data(#"{"items":[{"deployment_id":"deploy-1","workspace_id":"workspace-1","service_id":"service-1","release_digest":"sha256:release","requested_operation":"start","desired_state":"stopped","observed_state":"\#(observed)","grant_id":"grant-1","config_ref":"","config_sha256":"","version":\#(version),"created_by":"owner-1","created_at":"2026-10-21T12:00:00Z","updated_at":"2026-10-21T12:01:00Z","latest_attempt_id":"attempt-1","latest_fence":4,"last_error_code":"","revoked_at":null,"revoked_by":null,"revocation_cleanup_state":null}]}"#.utf8)
-        return try XCTUnwrap(ZoeJSON.decoder.decode(CapabilityDeploymentList.self, from: data).items.first)
-    }
-
-    func testCapabilityRequestBindsExistingServiceToCurrentDeploymentVersion() throws {
-        let data = Data(#"{"items":[{"deployment_id":"deploy-1","workspace_id":"workspace-1","service_id":"service-1","release_digest":"sha256:release","requested_operation":"start","desired_state":"running","observed_state":"pending","grant_id":"grant-1","config_ref":"","config_sha256":"","version":7,"created_by":"device-1","created_at":"2026-10-21T12:00:00Z","updated_at":"2026-10-21T12:01:00Z","latest_attempt_id":"attempt-1","latest_fence":3,"last_error_code":""}]}"#.utf8)
-        let deployments = try ZoeJSON.decoder.decode(CapabilityDeploymentList.self, from: data).items
-
-        XCTAssertEqual(deployments.version(forServiceID: "service-1"), 7)
-        XCTAssertNil(deployments.version(forServiceID: "new-service"))
     }
 
     func testSSEParserCombinesDataLinesAndPreservesDecimalCursor() throws {
@@ -651,11 +97,10 @@ final class ClientContractTests: XCTestCase {
         var parser = SSEParser()
         XCTAssertNil(try parser.consume(line: "event: snapshot_required"))
         XCTAssertNil(try parser.consume(line: #"data: {"reason":"cursor_expired","authority":{"instance_lineage_id":"lineage-2","generation":6,"deletion_sequence":"9"}}"#))
-        guard case let .snapshotRequired(reason, authority)? = try parser.consume(line: "") else {
+        guard case let .snapshotRequired(reason)? = try parser.consume(line: "") else {
             return XCTFail("Expected snapshot repair request")
         }
         XCTAssertEqual(reason, "cursor_expired")
-        XCTAssertEqual(authority, SnapshotAuthority(instanceLineageId: "lineage-2", generation: 6, deletionSequence: "9"))
     }
 
     func testSSEParserDropsUnterminatedRecordAtEOF() throws {
@@ -668,7 +113,7 @@ final class ClientContractTests: XCTestCase {
     }
 
     func testCommandReceiptDecodesOmittedResourceMetadata() throws {
-        let data = Data(#"{"command_id":"cmd-1","idempotency_key":"key-1","workspace_id":"ws-1","kind":"task.append","status":"accepted","accepted_at":"2026-10-20T12:00:00Z","event_cursor":"21"}"#.utf8)
+        let data = Data(#"{"command_id":"cmd-1","idempotency_key":"key-1","workspace_id":"ws-1","kind":"voice.turn.handoff","status":"accepted","accepted_at":"2026-10-20T12:00:00Z","event_cursor":"21"}"#.utf8)
         let receipt = try ZoeJSON.decoder.decode(CommandReceipt.self, from: data)
         XCTAssertEqual(receipt.idempotencyKey, "key-1")
         XCTAssertNil(receipt.resourceType)
@@ -681,8 +126,8 @@ final class ClientContractTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent("\(UUID().uuidString).json")
         let journal = try CommandJournal(fileURL: file)
-        let first = PendingCommand(idempotencyKey: "stable-key", kind: "task.append", expectedVersion: 2, payload: .object(["content": .string("first")]), createdAt: "now", workspaceID: "ws", expectedResourceType: "task", expectedResourceID: "t1")
-        let changed = PendingCommand(idempotencyKey: "stable-key", kind: "task.append", expectedVersion: 2, payload: .object(["content": .string("second")]), createdAt: "later", workspaceID: "ws", expectedResourceType: "task", expectedResourceID: "t1")
+        let first = PendingCommand(idempotencyKey: "stable-key", kind: "voice.turn.handoff", expectedVersion: 2, payload: .object(["content": .string("first")]), createdAt: "now", workspaceID: "ws", expectedResourceType: nil, expectedResourceID: nil)
+        let changed = PendingCommand(idempotencyKey: "stable-key", kind: "voice.turn.handoff", expectedVersion: 2, payload: .object(["content": .string("second")]), createdAt: "later", workspaceID: "ws", expectedResourceType: nil, expectedResourceID: nil)
         try await journal.append(first)
         do {
             try await journal.append(changed)
@@ -700,20 +145,20 @@ final class ClientContractTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let coordinator = CommandCoordinator(api: api, journal: journal)
         let key = "stable-retry-\(UUID().uuidString.lowercased())"
         var postCount = 0
         var receiptCount = 0
         var acceptedReceipt = Data()
-        ExportURLProtocol.failureHandler = { request in
+        ContractURLProtocol.failureHandler = { request in
             guard request.url?.path == "/v1/commands", request.httpMethod == "POST" else { return nil }
             postCount += 1
             let submittedKey = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
-            acceptedReceipt = Self.commandReceipt(key: submittedKey, kind: "task.create", workspaceID: "workspace-1", resourceID: "task-created")
+            acceptedReceipt = Self.commandReceipt(key: submittedKey, kind: "voice.turn.commit", workspaceID: "workspace-1", resourceID: "task-created")
             return URLError(.timedOut)
         }
-        ExportURLProtocol.responseHandler = { request in
+        ContractURLProtocol.responseHandler = { request in
             if request.url?.path == "/v1/commands", request.httpMethod == "GET" {
                 receiptCount += 1
                 return (200, ["Content-Type": "application/json"], acceptedReceipt)
@@ -722,7 +167,7 @@ final class ClientContractTests: XCTestCase {
         }
 
         do {
-            _ = try await coordinator.submit(kind: "task.create", payload: .object(["title": .string("Work")]), workspaceID: "workspace-1", idempotencyKey: key)
+            _ = try await coordinator.submit(kind: "voice.turn.commit", payload: .object(["title": .string("Work")]), workspaceID: "workspace-1", idempotencyKey: key)
             XCTFail("The first response should be lost after the server accepts the command")
         } catch { }
         let pendingAfterTimeout = try await journal.all()
@@ -745,14 +190,14 @@ final class ClientContractTests: XCTestCase {
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
         let key = "definitive-404-\(UUID().uuidString.lowercased())"
         let payload: JSONValue = .object(["title": .string("Original title"), "goal": .string("Original payload")])
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "task.create", expectedVersion: nil, payload: payload, createdAt: "2026-10-22T12:00:00Z", workspaceID: "workspace-1", expectedResourceType: "task", expectedResourceID: nil))
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
+        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.turn.commit", expectedVersion: nil, payload: payload, createdAt: "2026-10-22T12:00:00Z", workspaceID: "workspace-1", expectedResourceType: nil, expectedResourceID: nil))
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let coordinator = CommandCoordinator(api: api, journal: journal)
         var receiptCount = 0
         var postCount = 0
         var postKey: String?
         var postBody: Data?
-        ExportURLProtocol.responseHandler = { request in
+        ContractURLProtocol.responseHandler = { request in
             if request.url?.path == "/v1/commands", request.httpMethod == "GET" {
                 receiptCount += 1
                 return (404, ["Content-Type": "application/json"], Data())
@@ -761,7 +206,7 @@ final class ClientContractTests: XCTestCase {
                 postCount += 1
                 postKey = request.value(forHTTPHeaderField: "Idempotency-Key")
                 postBody = Self.requestBody(request)
-                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: "task.create", workspaceID: "workspace-1", resourceID: "task-created"))
+                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: "voice.turn.commit", workspaceID: "workspace-1", resourceID: "task-created"))
             }
             return (503, ["Content-Type": "application/json"], Data())
         }
@@ -772,7 +217,7 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(postCount, 1)
         XCTAssertEqual(postKey, key)
         let postedEnvelope = try XCTUnwrap(postBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
-        XCTAssertEqual(postedEnvelope["kind"] as? String, "task.create")
+        XCTAssertEqual(postedEnvelope["kind"] as? String, "voice.turn.commit")
         XCTAssertEqual(postedEnvelope["payload"] as? [String: String], ["title": "Original title", "goal": "Original payload"])
         XCTAssertEqual(outcome.receipt.idempotencyKey, key)
         let remaining = try await journal.all()
@@ -785,10 +230,10 @@ final class ClientContractTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
         let key = "workspace-guard-\(UUID().uuidString.lowercased())"
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "task.create", expectedVersion: nil, payload: .object([:]), createdAt: "now", workspaceID: "old-workspace", expectedResourceType: "task", expectedResourceID: nil))
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
+        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.turn.commit", expectedVersion: nil, payload: .object([:]), createdAt: "now", workspaceID: "old-workspace", expectedResourceType: nil, expectedResourceID: nil))
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let coordinator = CommandCoordinator(api: api, journal: journal)
-        ExportURLProtocol.responseHandler = { _ in XCTFail("workspace mismatch must not make a network request"); return (500, [:], Data()) }
+        ContractURLProtocol.responseHandler = { _ in XCTFail("workspace mismatch must not make a network request"); return (500, [:], Data()) }
 
         do {
             _ = try await coordinator.retryPending(idempotencyKey: key, currentWorkspaceID: "new-workspace")
@@ -800,50 +245,22 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(remaining.map(\.idempotencyKey), [key])
     }
 
-    @MainActor
-    func testUnknownWorkspaceNeverPostsLegacyPendingCommand() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        let key = "legacy-unbound-\(UUID().uuidString.lowercased())"
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "task.create", expectedVersion: nil, payload: .object(["title": .string("Unbound")]), createdAt: "now", workspaceID: nil, expectedResourceType: "task", expectedResourceID: nil))
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        var requestCount = 0
-        ExportURLProtocol.responseHandler = { _ in requestCount += 1; return (404, [:], Data()) }
-        let coordinator = CommandCoordinator(api: api, journal: journal)
-        do {
-            _ = try await coordinator.retryPending(idempotencyKey: key, currentWorkspaceID: nil)
-            XCTFail("An unknown workspace cannot authorize a pending command")
-        } catch let error as ZoeError {
-            guard case .pendingCommandWorkspaceMismatch = error else { return XCTFail("Unexpected error: \(error)") }
-        }
-
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        await model.recoverPendingCommandsForTesting(api: api, journal: journal, workspaceID: nil)
-
-        XCTAssertEqual(requestCount, 0)
-        let remaining = try await journal.all()
-        XCTAssertEqual(remaining.map(\.idempotencyKey), [key])
-        XCTAssertEqual(model.pendingCommandSummaries.first?.state, .workspaceUnavailable)
-    }
-
     func testPendingReceiptLookupNetworkFailureDoesNotResubmitOrDropJournalRow() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
         let key = "receipt-timeout-\(UUID().uuidString.lowercased())"
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "task.create", expectedVersion: nil, payload: .object(["title": .string("Work")]), createdAt: "now", workspaceID: "workspace-1", expectedResourceType: "task", expectedResourceID: nil))
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
+        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.turn.commit", expectedVersion: nil, payload: .object(["title": .string("Work")]), createdAt: "now", workspaceID: "workspace-1", expectedResourceType: nil, expectedResourceID: nil))
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let coordinator = CommandCoordinator(api: api, journal: journal)
         var postCount = 0
-        ExportURLProtocol.failureHandler = { request in
+        ContractURLProtocol.failureHandler = { request in
             if request.url?.path == "/v1/commands", request.httpMethod == "GET" { return URLError(.timedOut) }
             if request.url?.path == "/v1/commands", request.httpMethod == "POST" { postCount += 1 }
             return nil
         }
-        ExportURLProtocol.responseHandler = { _ in XCTFail("a failed receipt lookup must not fall through to POST"); return (500, [:], Data()) }
+        ContractURLProtocol.responseHandler = { _ in XCTFail("a failed receipt lookup must not fall through to POST"); return (500, [:], Data()) }
 
         do {
             _ = try await coordinator.retryPending(idempotencyKey: key, currentWorkspaceID: "workspace-1")
@@ -856,96 +273,6 @@ final class ClientContractTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionConflictMarksPendingActionForReviewAndRefreshesWithoutRewritingIt() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        let key = "version-conflict-\(UUID().uuidString.lowercased())"
-        let payload: JSONValue = .object(["task_id": .string("task-1"), "content": .string("original content")])
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "task.append", expectedVersion: 4, payload: payload, createdAt: "now", workspaceID: "workspace-1", expectedResourceType: "task", expectedResourceID: "task-1"))
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        var postedVersion: Int64?
-        var postedEnvelope: [String: Any]?
-        var snapshotRefreshes = 0
-        ExportURLProtocol.responseHandler = { request in
-            if request.httpMethod == "GET" {
-                return (404, ["Content-Type": "application/json"], Data())
-            }
-            if request.httpMethod == "POST" {
-                if let body = Self.requestBody(request), let envelope = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
-                    postedEnvelope = envelope
-                    postedVersion = (envelope["expected_version"] as? NSNumber)?.int64Value
-                }
-                return (409, ["Content-Type": "application/json"], Data(#"{"code":"version_conflict","message":"version changed","details":{"current_version":5}}"#.utf8))
-            }
-            return (500, [:], Data())
-        }
-        let oldSnapshot = Snapshot(serverVersion: "1", eventCursor: "1", projects: [], tasks: [], approvals: [], runs: [], workspaceId: "workspace-1")
-        let freshSnapshot = Snapshot(serverVersion: "2", eventCursor: "2", projects: [], tasks: [], approvals: [], runs: [], workspaceId: oldSnapshot.workspaceId)
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        await model.preparePendingCheckForTesting(api: api, journal: journal, snapshot: oldSnapshot)
-        model.snapshotFetchOverrideForTesting = { snapshotRefreshes += 1; return freshSnapshot }
-        let summary = try XCTUnwrap(model.pendingCommandSummaries.first)
-
-        await model.checkPendingCommand(summary)
-
-        XCTAssertEqual(postedVersion, 4)
-        XCTAssertEqual(postedEnvelope?["payload"] as? [String: String], ["task_id": "task-1", "content": "original content"])
-        XCTAssertEqual(snapshotRefreshes, 1)
-        XCTAssertEqual(model.snapshot?.serverVersion, "2")
-        XCTAssertEqual(model.pendingCommandSummaries.first?.state, .needsReview)
-        let remaining = try await journal.all()
-        XCTAssertTrue(remaining.isEmpty, "a conflict is final for the original immutable command")
-    }
-
-    @MainActor
-    func testDelayedOldJournalReadCannotReplaceSummariesAfterConnectionChanges() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let oldJournal = try CommandJournal(fileURL: directory.appendingPathComponent("old-commands.json"))
-        let newJournal = try CommandJournal(fileURL: directory.appendingPathComponent("new-commands.json"))
-        let oldCommand = PendingCommand(idempotencyKey: "old-connection", kind: "task.create", expectedVersion: nil, payload: .object(["title": .string("Old task")]), createdAt: "now", workspaceID: "workspace-1", expectedResourceType: "task", expectedResourceID: nil)
-        try await oldJournal.append(oldCommand)
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        await model.preparePendingCheckForTesting(api: api, journal: oldJournal, snapshot: Snapshot(serverVersion: "1", eventCursor: "1", projects: [], tasks: [], approvals: [], runs: [], workspaceId: "workspace-1"))
-        let readStarted = expectation(description: "old journal read started")
-        var resumeRead: CheckedContinuation<[PendingCommand], Never>!
-        model.pendingCommandReadOverrideForTesting = {
-            await withCheckedContinuation { continuation in
-                resumeRead = continuation
-                readStarted.fulfill()
-            }
-        }
-
-        let staleReload = Task { await model.reloadPendingCommandSummariesForTesting() }
-        await fulfillment(of: [readStarted], timeout: 2)
-        model.replacePendingCheckConnectionForTesting(api: api, journal: newJournal)
-        resumeRead.resume(returning: [oldCommand])
-        await staleReload.value
-
-        XCTAssertTrue(model.pendingCommandSummaries.isEmpty)
-    }
-
-    @MainActor
-    func testAppendForTaskMissingFromLatestSnapshotDoesNotCreateAnotherTask() async throws {
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        let task = TaskRecord(id: "task-removed", projectId: nil, title: "Existing task", goal: "Existing goal", source: "user", profileId: nil, status: .active, version: 2, createdAt: "now", updatedAt: "now", acceptedAt: nil, startedAt: nil, finishedAt: nil, result: nil, error: nil, evidence: [], canAcceptResult: false)
-        let snapshot = Snapshot(serverVersion: "1", eventCursor: "1", projects: [], tasks: [task], approvals: [], runs: [], workspaceId: "workspace-1")
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        await model.preparePendingCheckForTesting(api: api, journal: try CommandJournal(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)), snapshot: snapshot)
-        model.setSnapshotForTesting(Snapshot(serverVersion: "2", eventCursor: "2", projects: [], tasks: [], approvals: [], runs: [], workspaceId: "workspace-1"))
-        var requestCount = 0
-        ExportURLProtocol.responseHandler = { _ in requestCount += 1; return (500, [:], Data()) }
-
-        await model.append(to: task, content: "Continue the existing task")
-
-        XCTAssertEqual(requestCount, 0)
-        XCTAssertEqual(model.notice, uiText("This task is unavailable in the latest snapshot. Refresh it or choose New task before sending."))
-    }
-
     func testVoiceMediaEpochFenceRejectsDelayedAndDuplicateLossEvents() throws {
         var fence = VoiceMediaEpochFence()
         let first = fence.beginAttempt()
@@ -983,11 +310,9 @@ final class ClientContractTests: XCTestCase {
     @MainActor
     func testVoiceMediaLossStopsHeartbeatAndPreservesTaskWhileHangupQuarantinesPool() async throws {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let task = TaskRecord(id: "task-live", projectId: nil, title: "Keep this task", goal: "Task state survives voice media loss", source: "user", profileId: nil, status: .active, version: 3, createdAt: "now", updatedAt: "now", acceptedAt: nil, startedAt: nil, finishedAt: nil, result: nil, error: nil, evidence: [], canAcceptResult: false)
-        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "5", projects: [], tasks: [task], approvals: [], runs: [], workspaceId: "workspace-1"))
         var hangupCount = 0
         var localStopCount = 0
-        ExportURLProtocol.responseHandler = { request in
+        ContractURLProtocol.responseHandler = { request in
             if request.url?.path == "/v1/voice/sessions/session-1/hangup" {
                 hangupCount += 1
                 XCTAssertEqual(localStopCount, 1, "the hangup receipt is sent only after local media teardown")
@@ -1006,7 +331,7 @@ final class ClientContractTests: XCTestCase {
             }
             return (404, [:], Data())
         }
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let session = VoiceSessionResponse(voiceSessionId: "session-1", generation: 4, state: "active", answerSdp: "", accountLeaseId: "opaque-lease-1", accountLeaseGeneration: 11)
         let epoch = model.installVoiceSessionForTesting(session, api: api)
         let heartbeatStarted = expectation(description: "heartbeat task starts")
@@ -1029,7 +354,6 @@ final class ClientContractTests: XCTestCase {
         XCTAssertFalse(model.voiceHeartbeatActiveForTesting)
         XCTAssertEqual(localStopCount, 1, "local media teardown is claimed once")
         XCTAssertEqual(hangupCount, 1, "duplicate terminal signals issue at most one hangup")
-        XCTAssertEqual(model.tasks.map(\.id), ["task-live"], "media loss does not cancel or rewrite the authoritative task")
         guard case let .interrupted(reason) = model.voiceStatus else { return XCTFail("expected an interrupted voice status") }
         XCTAssertEqual(reason, uiFormat("%@ Local media is closed. Upstream termination is unverified; the account pool remains quarantined. Retry server hangup to repeat the idempotent lease release.", uiText("The WebRTC connection was lost.")))
         XCTAssertTrue(model.voicePoolStatus?.blocked == true)
@@ -1044,7 +368,7 @@ final class ClientContractTests: XCTestCase {
     @MainActor
     func testDelayedOldHeartbeatFailureCannotTearDownNewVoiceSession() async throws {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let old = VoiceSessionResponse(voiceSessionId: "session-old", generation: 2, state: "active", answerSdp: "")
         let oldEpoch = model.installVoiceSessionForTesting(old, api: api)
         let current = VoiceSessionResponse(voiceSessionId: "session-current", generation: 3, state: "active", answerSdp: "")
@@ -1065,7 +389,7 @@ final class ClientContractTests: XCTestCase {
     @MainActor
     func testConcurrentRetryCannotSendSecondVoiceHangup() async throws {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let session = VoiceSessionResponse(voiceSessionId: "session-retry", generation: 5, state: "active", answerSdp: "")
         _ = model.installVoiceSessionForTesting(session, api: api)
         let gate = AsyncTestGate()
@@ -1103,248 +427,5 @@ final class ClientContractTests: XCTestCase {
             data.append(buffer, count: count)
         }
         return data.isEmpty ? nil : data
-    }
-    private func conversationTask(_ id: String, updatedAt: String = "2026-10-24T12:00:00Z", status: TaskStatus = .active) -> TaskRecord {
-        TaskRecord(id: id, projectId: nil, title: id, goal: id, source: "user", profileId: nil, status: status, version: 2, createdAt: "2026-10-24T11:00:00Z", updatedAt: updatedAt, acceptedAt: nil, startedAt: nil, finishedAt: nil, result: nil, error: nil, evidence: [], canAcceptResult: false)
-    }
-
-    private func conversationSnapshot(_ tasks: [TaskRecord]) -> Snapshot {
-        Snapshot(serverVersion: "1", eventCursor: "1", projects: [], tasks: tasks, approvals: [], runs: [], workspaceId: "workspace-1")
-    }
-
-    func testTaskEntriesAPIUsesPagedWireContractAndRejectsOversizedPage() async throws {
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        var count = 0
-        ExportURLProtocol.responseHandler = { request in
-            count += 1
-            XCTAssertEqual(request.url?.path, "/v1/tasks/task-a/entries")
-            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
-            XCTAssertEqual(query?.first(where: { $0.name == "cursor" })?.value, "opaque+cursor")
-            XCTAssertEqual(query?.first(where: { $0.name == "limit" })?.value, "50")
-            XCTAssertNotNil(request.value(forHTTPHeaderField: "Authorization"))
-            return (200, [:], Data(#"{"messages":[{"id":"entry-1","task_id":"task-a","kind":"user","content":"Continue","created_at":"2026-10-24T12:00:00Z"}],"next_cursor":"next"}"#.utf8))
-        }
-        let page = try await api.taskEntries(taskID: "task-a", cursor: "opaque+cursor", limit: 50)
-        XCTAssertEqual(page.messages.first?.taskId, "task-a")
-        XCTAssertEqual(page.nextCursor, "next")
-        do {
-            _ = try await api.taskEntries(taskID: "task-a", limit: 101)
-            XCTFail("oversized pages must fail before a request")
-        } catch { XCTAssertEqual(count, 1) }
-    }
-
-    @MainActor
-    func testTaskHistoryPreservesServerOrderAndDeduplicatesOverlappingPages() async throws {
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        await model.preparePendingCheckForTesting(api: api, journal: try CommandJournal(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)), snapshot: conversationSnapshot([conversationTask("a")]))
-        let first = TaskEntry(id: "first", taskId: "a", kind: "user", content: "First", createdAt: "2026-10-24T12:00:00Z")
-        let second = TaskEntry(id: "second", taskId: "a", kind: "user", content: "Second", createdAt: "2026-10-24T12:00:00.1Z")
-        model.taskEntriesFetchOverrideForTesting = { taskID, cursor in
-            XCTAssertEqual(taskID, "a")
-            if cursor == nil { return TaskEntriesPage(messages: [first], nextCursor: "next") }
-            XCTAssertEqual(cursor, "next")
-            return TaskEntriesPage(messages: [first, second], nextCursor: nil)
-        }
-        await model.selectTask("a")
-        XCTAssertTrue(model.hasMoreTaskEntries)
-        await model.loadMoreTaskEntries()
-        XCTAssertEqual(model.taskEntries.map(\.id), ["first", "second"])
-        XCTAssertFalse(model.hasMoreTaskEntries)
-        model.taskEntriesFetchOverrideForTesting = { _, _ in throw URLError(.notConnectedToInternet) }
-        await model.selectTask("a")
-        XCTAssertTrue(model.taskEntries.isEmpty)
-        XCTAssertNotNil(model.taskEntriesError)
-    }
-
-    @MainActor
-    func testDelayedTaskHistoryCannotReplaceNewSelectionAndDraftsStaySeparate() async throws {
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        await model.preparePendingCheckForTesting(api: api, journal: try CommandJournal(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)), snapshot: conversationSnapshot([conversationTask("a"), conversationTask("b")]))
-        let gate = AsyncTestGate()
-        model.taskEntriesFetchOverrideForTesting = { taskID, _ in
-            if taskID == "a" { await gate.pause() }
-            return TaskEntriesPage(messages: [TaskEntry(id: taskID, taskId: taskID, kind: "user", content: taskID, createdAt: "now")], nextCursor: nil)
-        }
-        model.updateTaskDraft("new draft")
-        model.updateTaskDraft("draft a", for: "a")
-        let oldRead = Task { await model.selectTask("a") }
-        await gate.waitUntilStarted()
-        await model.selectTask("b")
-        XCTAssertEqual(model.selectedTaskDraft, "", "an empty existing task never inherits the new task draft")
-        model.updateTaskDraft("draft b", for: "b")
-        await gate.resume()
-        await oldRead.value
-        XCTAssertEqual(model.selectedTaskID, "b")
-        XCTAssertEqual(model.taskEntries.map(\.id), ["b"])
-        XCTAssertEqual(model.taskDrafts["a"], "draft a")
-        XCTAssertEqual(model.selectedTaskDraft, "draft b")
-        XCTAssertEqual(model.newTaskDraft, "new draft")
-        XCTAssertFalse(model.isLoadingTaskEntries)
-    }
-
-    @MainActor
-    func testUnknownTaskSendRetainsDraftAndReusesReceiptWithoutSecondPost() async throws {
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        await model.preparePendingCheckForTesting(api: api, journal: journal, snapshot: conversationSnapshot([]))
-        model.updateTaskDraft("Please investigate")
-        var postCount = 0
-        var savedKey = ""
-        ExportURLProtocol.responseHandler = { request in
-            if request.httpMethod == "POST" {
-                postCount += 1
-                savedKey = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
-                return (503, [:], Data())
-            }
-            XCTAssertEqual(request.httpMethod, "GET")
-            let key = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "key" })?.value
-            XCTAssertEqual(key, savedKey)
-            return (200, [:], Self.commandReceipt(key: savedKey, kind: "task.create", workspaceID: "workspace-1", resourceID: "created"))
-        }
-        let firstResult = await model.sendTaskDraft(for: nil)
-        guard case let .unknown(key, _) = firstResult else { return XCTFail("ambiguous HTTP failure must preserve a retryable intent") }
-        XCTAssertEqual(key, savedKey)
-        XCTAssertEqual(model.newTaskDraft, "Please investigate")
-        let pending = try await journal.all()
-        XCTAssertEqual(pending.map(\.idempotencyKey), [savedKey])
-        let retryResult = await model.sendTaskDraft(for: nil)
-        guard case .accepted = retryResult else { return XCTFail("retry must resolve the original receipt") }
-        XCTAssertEqual(postCount, 1)
-        XCTAssertEqual(model.newTaskDraft, "")
-        let remaining = try await journal.all()
-        XCTAssertTrue(remaining.isEmpty)
-    }
-
-    @MainActor
-    func testRejectedTaskSendRetainsDraftAndAcceptedSendPreservesNewerEdit() async throws {
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let snapshot = conversationSnapshot([])
-        await model.preparePendingCheckForTesting(api: api, journal: journal, snapshot: snapshot)
-        model.updateTaskDraft("Original")
-        ExportURLProtocol.responseHandler = { _ in
-            (409, [:], Data(#"{"error":{"code":"version_conflict","message":"Changed"}}"#.utf8))
-        }
-        let rejected = await model.sendTaskDraft(for: nil)
-        guard case .failed = rejected else { return XCTFail("conflict must be a known failure") }
-        XCTAssertEqual(model.newTaskDraft, "Original")
-        let remaining = try await journal.all()
-        XCTAssertTrue(remaining.isEmpty)
-        let gate = AsyncTestGate()
-        model.snapshotFetchOverrideForTesting = { await gate.pause(); return snapshot }
-        ExportURLProtocol.responseHandler = { request in
-            let key = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
-            return (200, [:], Self.commandReceipt(key: key, kind: "task.create", workspaceID: "workspace-1", resourceID: "created"))
-        }
-        let sending = Task { await model.sendTaskDraft(for: nil) }
-        await gate.waitUntilStarted()
-        model.updateTaskDraft("A newer edit")
-        await gate.resume()
-        let accepted = await sending.value
-        guard case .accepted = accepted else { return XCTFail("receipt remains accepted") }
-        XCTAssertEqual(model.newTaskDraft, "A newer edit")
-    }
-
-    @MainActor
-    func testTaskOrderingParsesFractionalSecondsAndClearingCredentialClearsDraftContext() async throws {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
-        defaults.set("https://zoe.example", forKey: "zoe.instance.serverAddress")
-        let model = ZoeAppModel(defaults: defaults)
-        model.setSnapshotForTesting(conversationSnapshot([conversationTask("older"), conversationTask("newer", updatedAt: "2026-10-24T05:00:00.1-07:00")]))
-        XCTAssertEqual(model.tasks.map(\.id), ["newer", "older"])
-        model.updateTaskDraft("private draft")
-        model.updateTaskDraft("private task draft", for: "a")
-        await model.clearCredential()
-        XCTAssertEqual(model.newTaskDraft, "")
-        XCTAssertTrue(model.taskDrafts.isEmpty)
-        XCTAssertTrue(model.taskEntries.isEmpty)
-        XCTAssertNil(model.selectedTaskID)
-    }
-
-    @MainActor
-    func testExplicitTaskSendKeepsTargetWhenAnotherTaskIsSelected() async throws {
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        await model.preparePendingCheckForTesting(api: api, journal: try CommandJournal(fileURL: directory.appendingPathComponent("commands.json")), snapshot: conversationSnapshot([conversationTask("a"), conversationTask("b")]))
-        let gate = AsyncTestGate()
-        model.taskEntriesFetchOverrideForTesting = { taskID, _ in
-            if taskID == "a" { await gate.pause() }
-            return TaskEntriesPage(messages: [], nextCursor: nil)
-        }
-        model.updateTaskDraft("Message for a", for: "a")
-        model.updateTaskDraft("Message for b", for: "b")
-        let selecting = Task { await model.selectTask("a") }
-        await gate.waitUntilStarted()
-        await model.selectTask("b")
-        var postedTaskID: String?
-        ExportURLProtocol.responseHandler = { request in
-            let body = Self.requestBody(request) ?? Data()
-            let command = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
-            postedTaskID = (command?["payload"] as? [String: Any])?["task_id"] as? String
-            let key = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
-            return (200, [:], Self.commandReceipt(key: key, kind: "task.append", workspaceID: "workspace-1", resourceID: "a"))
-        }
-        let result = await model.sendTaskDraft(for: "a")
-        guard case .accepted = result else { return XCTFail("explicit task send should be accepted") }
-        await gate.resume()
-        await selecting.value
-        XCTAssertEqual(postedTaskID, "a")
-        XCTAssertEqual(model.selectedTaskID, "b")
-        XCTAssertEqual(model.taskDrafts["a"], "")
-        XCTAssertEqual(model.taskDrafts["b"], "Message for b")
-    }
-
-    @MainActor
-    func testUnknownReceiptRetryPreservesEditedDraftAndDoesNotPostIt() async throws {
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticExportCredential(), session: exportSession())
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        await model.preparePendingCheckForTesting(api: api, journal: journal, snapshot: conversationSnapshot([]))
-        var postCount = 0
-        var key = ""
-        ExportURLProtocol.responseHandler = { request in
-            if request.httpMethod == "POST" {
-                postCount += 1
-                key = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
-                return (503, [:], Data())
-            }
-            return (200, [:], Self.commandReceipt(key: key, kind: "task.create", workspaceID: "workspace-1", resourceID: "created"))
-        }
-        model.updateTaskDraft("Original task")
-        let unknown = await model.sendTaskDraft(for: nil)
-        guard case .unknown = unknown else { return XCTFail("send must remain unconfirmed") }
-        model.updateTaskDraft("A different draft")
-        let resolved = await model.retryTaskSubmission(idempotencyKey: key)
-        guard case .accepted = resolved else { return XCTFail("retry must check original receipt") }
-        XCTAssertEqual(postCount, 1)
-        XCTAssertEqual(model.newTaskDraft, "A different draft")
-    }
-
-    @MainActor
-    func testMemoryDeletionSequenceDoesNotEraseTaskDrafts() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        var before = conversationSnapshot([])
-        before.authority = SnapshotAuthority(instanceLineageId: "lineage", generation: 1, deletionSequence: "0")
-        model.setSnapshotForTesting(before)
-        model.updateTaskDraft("Keep this draft")
-        var after = before
-        after.eventCursor = "2"
-        after.authority = SnapshotAuthority(instanceLineageId: "lineage", generation: 1, deletionSequence: "1")
-        model.snapshotFetchOverrideForTesting = { after }
-        try await model.refreshSnapshotForTesting()
-        XCTAssertEqual(model.newTaskDraft, "Keep this draft")
-    }
-
+}
 }

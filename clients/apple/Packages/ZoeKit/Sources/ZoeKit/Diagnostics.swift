@@ -105,8 +105,6 @@ public struct RedactedDiagnostic: Equatable, Sendable {
                 httpStatus = 0; errorType = "ZoeError"; errorSummary = "missing_credential"
             case .invalidServerURL:
                 httpStatus = 0; errorType = "ZoeError"; errorSummary = "invalid_server_url"
-            case .exportTooLarge:
-                httpStatus = 0; errorType = "ZoeError"; errorSummary = "export_too_large"
             case .pendingCommandWorkspaceMismatch:
                 httpStatus = 0; errorType = "ZoeError"; errorSummary = "pending_command_workspace_mismatch"
             }

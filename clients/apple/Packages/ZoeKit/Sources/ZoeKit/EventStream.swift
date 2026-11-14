@@ -2,7 +2,7 @@ import Foundation
 
 public enum ServerPush: Sendable {
     case event(EventEnvelope)
-    case snapshotRequired(reason: String, authority: SnapshotAuthority?)
+    case snapshotRequired(reason: String)
 }
 
 /// Small, testable parser for the SSE subset used by Zoe (`id`, `event`, and `data`).
@@ -45,7 +45,7 @@ public struct SSEParser {
         let data = Data(dataLines.joined(separator: "\n").utf8)
         if type == "snapshot_required" {
             let failure = (try? decoder.decode(SnapshotRequiredBody.self, from: data))
-            return .snapshotRequired(reason: failure?.reason ?? "The event cursor is no longer available.", authority: failure?.authority)
+            return .snapshotRequired(reason: failure?.reason ?? "The event cursor is no longer available.")
         }
         let envelope = try decoder.decode(EventEnvelope.self, from: data)
         if let id, !id.isEmpty, envelope.cursor != id {
@@ -60,7 +60,6 @@ public struct SSEParser {
 
 private struct SnapshotRequiredBody: Decodable {
     var reason: String
-    var authority: SnapshotAuthority?
 }
 
 public enum ZoeJSON {

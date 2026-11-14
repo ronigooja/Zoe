@@ -168,7 +168,6 @@ final class InstanceConnectionTests: XCTestCase {
         model.keyStoreOverrideForTesting = { _ in store }
         model.serverAddress = "https://zoe.example"
         model.setAuthenticationForTesting(.connected)
-        model.updateTaskDraft("Keep local work")
         model.connectionAPIOverrideForTesting = { _, _, _ in
             XCTFail("Different-server QR imports must be rejected before network access")
             throw ZoeError.invalidServerURL
@@ -185,7 +184,6 @@ final class InstanceConnectionTests: XCTestCase {
         XCTAssertEqual(model.serverAddress, "https://zoe.example")
         XCTAssertEqual(model.authentication, .connected)
         XCTAssertEqual(try store.load(), try InstanceKey(key()))
-        XCTAssertEqual(model.newTaskDraft, "Keep local work")
     }
 
     func testSnapshotWithoutDevicesUsesBearerAndIndependentInstallationHeader() async throws {
@@ -256,7 +254,6 @@ final class InstanceConnectionTests: XCTestCase {
         model.keyStoreOverrideForTesting = { _ in store }
         model.serverAddress = "https://zoe.example"
         model.setAuthenticationForTesting(.connected)
-        model.updateTaskDraft("Keep this draft")
         model.connectionAPIOverrideForTesting = { url, key, installation in
             try APIClient(serverURL: url, credentials: key, session: self.session(), installationID: installation)
         }
@@ -264,7 +261,6 @@ final class InstanceConnectionTests: XCTestCase {
         let accepted = await model.connect(serverAddress: model.serverAddress, key: key(2))
         XCTAssertFalse(accepted)
         XCTAssertEqual(model.authentication, .connected)
-        XCTAssertEqual(model.newTaskDraft, "Keep this draft")
         XCTAssertEqual(try store.load(), oldKey)
         XCTAssertFalse(model.isBusy)
         XCTAssertFalse(model.notice?.contains(key(2)) ?? true)
@@ -276,9 +272,9 @@ final class InstanceConnectionTests: XCTestCase {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
             let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-            let queued = PendingCommand(idempotencyKey: UUID().uuidString, kind: "task.create", expectedVersion: nil,
+            let queued = PendingCommand(idempotencyKey: UUID().uuidString, kind: "voice.turn.commit", expectedVersion: nil,
                                         payload: .object(["title": .string("Queued work")]), createdAt: "now",
-                                        workspaceID: "default", expectedResourceType: "task", expectedResourceID: nil)
+                                        workspaceID: "default", expectedResourceType: nil, expectedResourceID: nil)
             try await journal.append(queued)
             let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
             let store = MemoryInstanceKeyStore()
@@ -293,10 +289,10 @@ final class InstanceConnectionTests: XCTestCase {
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             let snapshot = try decoder.decode(Snapshot.self, from: snapshotData)
-            await model.preparePendingCheckForTesting(api: api, journal: journal, snapshot: snapshot)
+            model.configureVoiceCoordinatorForTesting(api: api, journal: journal)
+            model.setSnapshotForTesting(snapshot)
             model.serverAddress = url.absoluteString
             model.setAuthenticationForTesting(.connected)
-            model.updateTaskDraft("Keep this draft")
             let epoch = model.connectionEpoch
             store.failWrites = !failReadback
             store.failNextWriteReadback = failReadback
@@ -308,8 +304,6 @@ final class InstanceConnectionTests: XCTestCase {
             XCTAssertEqual(try store.load(), oldKey)
             XCTAssertEqual(model.serverAddress, url.absoluteString)
             XCTAssertEqual(model.authentication, .connected)
-            XCTAssertEqual(model.newTaskDraft, "Keep this draft")
-            XCTAssertNotNil(model.snapshot)
             XCTAssertEqual(model.connectionEpoch, epoch)
             let remaining = try await journal.all()
             XCTAssertEqual(remaining, [queued])
@@ -329,14 +323,12 @@ final class InstanceConnectionTests: XCTestCase {
         model.suppressConnectionFollowupsForTesting = true
         model.serverAddress = "https://zoe.example"
         model.setAuthenticationForTesting(.connected)
-        model.updateTaskDraft("Discard this draft")
         let body = snapshotData
         InstanceURLProtocol.handle = { _ in (200, body) }
         let accepted = await model.connect(serverAddress: model.serverAddress, key: key(2))
         XCTAssertTrue(accepted)
         XCTAssertEqual(model.authentication, .connected)
         XCTAssertEqual(try store.load(), try InstanceKey(key(2)))
-        XCTAssertEqual(model.newTaskDraft, "")
         let before = model.connectionEpoch
         await model.clearCredential()
         XCTAssertNil(try store.load())

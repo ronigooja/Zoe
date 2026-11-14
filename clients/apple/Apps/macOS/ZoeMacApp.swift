@@ -1,27 +1,64 @@
-import ZoeUI
-import ZoeKit
+import AppKit
+import Combine
 import SwiftUI
+import ZoeUI
 
 @main
-struct ZoeMacApp: App {
-    @StateObject private var model: ZoeAppModel
-    @StateObject private var coordinator: ScreenCoordinator
-    @NSApplicationDelegateAdaptor(ZoePushNotificationAppDelegate.self) private var pushDelegate
+struct ZoeMacApp {
+    @MainActor static func main() {
+        let application = NSApplication.shared
+        let delegate = ZoeAppDelegate()
+        application.delegate = delegate
+        withExtendedLifetime(delegate) { application.run() }
+    }
+}
 
-    init() {
-        let model = ZoeAppModel()
-        _model = StateObject(wrappedValue: model)
-        _coordinator = StateObject(wrappedValue: ScreenCoordinator(model: model))
+@MainActor final class ZoeAppDelegate: NSObject, NSApplicationDelegate {
+    private let model = ZoeAppModel()
+    private var statusItem: NSStatusItem?
+    private var settingsWindow: NSWindow?
+    private var subscriptions = Set<AnyCancellable>()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = NSImage(systemSymbolName: "mic", accessibilityDescription: "Zoe")
+        let menu = NSMenu()
+        let voice = NSMenuItem(title: "Voice", action: #selector(toggleVoice), keyEquivalent: "")
+        voice.target = self
+        menu.addItem(voice)
+        let settings = NSMenuItem(title: "Settings", action: #selector(showSettings), keyEquivalent: "")
+        settings.target = self
+        menu.addItem(settings)
+        item.menu = menu
+        statusItem = item
+        model.$continuousVoiceEnabled.sink { enabled in voice.state = enabled ? .on : .off }.store(in: &subscriptions)
+        model.$voiceStatus.sink { status in
+            let active: Bool
+            if case .active = status { active = true } else { active = false }
+            item.button?.image = NSImage(systemSymbolName: active ? "mic.fill" : "mic", accessibilityDescription: active ? "Microphone in use" : "Zoe")
+        }.store(in: &subscriptions)
+        Task { await model.start() }
     }
 
-    var body: some Scene {
-        WindowGroup {
-            MacSurfaceRoot(model: model, coordinator: coordinator)
-                .onOpenURL { model.receiveInstallationLink($0) }
-                .task { await model.start() }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls { model.receiveInstallationLink(url) }
+        showSettings()
+    }
+
+    @objc private func toggleVoice() { model.setContinuousVoiceEnabled(!model.continuousVoiceEnabled) }
+
+    @objc private func showSettings() {
+        if settingsWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 360), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Settings"
+            window.isReleasedWhenClosed = false
+            window.contentViewController = NSHostingController(rootView: MacSettingsView(model: model))
+            window.center()
+            settingsWindow = window
         }
-        .windowResizability(.contentSize)
-        .defaultSize(width: 460, height: 380)
-        Settings { MacSettingsView(model: model, coordinator: coordinator) }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 }

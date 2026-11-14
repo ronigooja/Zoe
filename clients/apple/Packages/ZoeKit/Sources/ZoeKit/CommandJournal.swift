@@ -74,12 +74,10 @@ public actor CommandJournal {
             let data = try encoder.encode(commands)
             try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: fileURL, options: .atomic)
-            #if os(iOS)
-            try fileManager.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: fileURL.path)
-            #else
+
             try fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: fileURL.path)
             try fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o700)], ofItemAtPath: fileURL.deletingLastPathComponent().path)
-            #endif
+
         } catch {
             throw ZoeError.persistence("Could not persist pending command: \(error.localizedDescription)")
         }
@@ -90,28 +88,6 @@ public struct CommandOutcome: Sendable {
     public let receipt: CommandReceipt
     public let recovered: Bool
     public let command: PendingCommand
-}
-
-public struct PendingCommandSummary: Identifiable, Equatable, Sendable {
-    public enum State: Equatable, Sendable {
-        case waitingForConfirmation
-        case checkingStatus
-        case acceptedAwaitingSnapshot
-        case needsReview
-        case differentWorkspace
-        case workspaceUnavailable
-    }
-
-    /// Local row identity only; the UI must not render this value as user-facing text.
-    public let id: String
-    public let title: String
-    public let state: State
-
-    public init(id: String, title: String, state: State) {
-        self.id = id
-        self.title = title
-        self.state = state
-    }
 }
 
 public actor CommandCoordinator {
@@ -125,7 +101,6 @@ public actor CommandCoordinator {
 
     /// A command is journaled before POST. A retry first checks the durable receipt by key.
     public func submit(kind: String, expectedVersion: Int64? = nil, payload: JSONValue, workspaceID: String? = nil, idempotencyKey: String? = nil) async throws -> CommandOutcome {
-        let expectedResource = Self.resourceExpectation(kind: kind, payload: payload)
         let command = PendingCommand(
             idempotencyKey: idempotencyKey ?? UUID().uuidString.lowercased(),
             kind: kind,
@@ -133,8 +108,8 @@ public actor CommandCoordinator {
             payload: payload,
             createdAt: ISO8601DateFormatter().string(from: Date()),
             workspaceID: workspaceID,
-            expectedResourceType: expectedResource.type,
-            expectedResourceID: expectedResource.id
+            expectedResourceType: nil,
+            expectedResourceID: nil
         )
         try await journal.append(command)
         return try await deliver(command, checkReceiptFirst: false)
@@ -159,7 +134,7 @@ public actor CommandCoordinator {
     ) async throws -> [CommandOutcome] {
         let commands = try await journal.all()
         var outcomes: [CommandOutcome] = []
-        for command in commands {
+        for command in commands where command.kind == "voice.turn.commit" || command.kind == "voice.turn.handoff" {
             guard !enforceWorkspace || (command.workspaceID != nil && currentWorkspaceID != nil && command.workspaceID == currentWorkspaceID) else {
                 await onWorkspaceMismatch(command)
                 continue
@@ -223,16 +198,4 @@ public actor CommandCoordinator {
         guard receipt.eventCursor.allSatisfy(\.isNumber) else { throw ZoeError.invalidResponse }
     }
 
-    private static func resourceExpectation(kind: String, payload: JSONValue) -> (type: String?, id: String?) {
-        let object: [String: JSONValue]
-        if case let .object(value) = payload { object = value } else { object = [:] }
-        func string(_ key: String) -> String? { if case let .string(value)? = object[key] { return value }; return nil }
-        switch kind {
-        case "project.create": return ("project", nil)
-        case "task.create": return ("task", nil)
-        case "task.append", "task.stop", "task.approve", "task.accept_result": return ("task", string("task_id"))
-        case "notification.mark_read": return ("notification", string("notification_id"))
-        default: return (nil, nil)
-        }
-    }
 }

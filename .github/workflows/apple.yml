@@ -9,9 +9,6 @@ on:
       macos:
         type: boolean
         required: true
-      ios:
-        type: boolean
-        required: true
   workflow_dispatch:
     inputs:
       release:
@@ -23,7 +20,7 @@ on:
         type: choice
         required: true
         default: macos
-        options: [macos, ios, all]
+        options: [macos]
 
 permissions:
   contents: read
@@ -82,7 +79,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    if: github.event_name != 'workflow_dispatch' || inputs.macos || inputs.platform == 'macos' || inputs.platform == 'all'
+    if: github.event_name != 'workflow_dispatch' || inputs.macos || inputs.platform == 'macos'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -158,100 +155,23 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  ios:
-    if: github.event_name != 'workflow_dispatch' || inputs.ios || inputs.platform == 'ios' || inputs.platform == 'all'
-    runs-on: macos-15
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Prepare build environment
-        shell: bash
-        run: |
-          set -euo pipefail
-          CI_OUTPUT="$RUNNER_TEMP/zoe-apple/ios"
-          echo "CI_OUTPUT=$CI_OUTPUT" >> "$GITHUB_ENV"
-          mkdir -p "$CI_OUTPUT/logs" "$HOME/environment/zoe-apple"
-          echo "ZOE_BUILD_ROOT=$CI_OUTPUT/test-data" >> "$GITHUB_ENV"
-          {
-            git rev-parse HEAD
-            sw_vers
-            uname -m
-            xcode-select -p
-            xcodebuild -version
-            swift --version
-          } > "$CI_OUTPUT/logs/environment.txt" 2>&1
-
-      - name: Build unsigned iOS app
-        shell: bash
-        run: |
-          set -euo pipefail
-          xcodebuild -project clients/apple/Zoe.xcodeproj \
-            -scheme ZoeMobile -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$CI_OUTPUT/ios-derived" \
-            -clonedSourcePackagesDirPath "$HOME/environment/zoe-apple/xcode-packages" \
-            -packageCachePath "$HOME/environment/zoe-apple/package-cache" \
-            CODE_SIGNING_ALLOWED=NO build \
-            ZOE_SOURCE_REVISION="${GITHUB_SHA:0:12}" \
-            > "$CI_OUTPUT/logs/ios-build.log" 2>&1 || {
-              status=$?
-              tail -n 80 "$CI_OUTPUT/logs/ios-build.log"
-              exit "$status"
-            }
-
-      # Preserve permissions and symlinks when transporting the release build.
-      - name: Stage iOS build for release
-        if: github.event_name == 'workflow_dispatch' && inputs.release
-        shell: bash
-        run: |
-          set -euo pipefail
-          tar -cf "$CI_OUTPUT/ios-build.tar" \
-            -C "$CI_OUTPUT/ios-derived/Build/Products/Release-iphoneos" ZoeMobile.app \
-            > "$CI_OUTPUT/logs/ios-stage.log" 2>&1 || {
-              status=$?
-              tail -n 80 "$CI_OUTPUT/logs/ios-stage.log"
-              exit "$status"
-            }
-
-      - name: Upload intermediate iOS build
-        if: github.event_name == 'workflow_dispatch' && inputs.release
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: apple-ios-build-${{ github.sha }}
-          path: ${{ env.CI_OUTPUT }}/ios-build.tar
-          retention-days: 1
-          if-no-files-found: error
-          compression-level: 0
-
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: apple-ios-logs-${{ github.sha }}
-          path: ${{ env.CI_OUTPUT }}/logs
-          retention-days: 7
-          if-no-files-found: error
-
   apple-checks:
     name: Apple checks
     if: always()
-    needs: [tests, macos, ios]
+    needs: [tests, macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require every selected check to succeed
         env:
           TESTS_SELECTED: ${{ github.event_name == 'workflow_dispatch' || inputs.tests }}
-          MACOS_SELECTED: ${{ github.event_name != 'workflow_dispatch' || inputs.macos || inputs.platform == 'macos' || inputs.platform == 'all' }}
-          IOS_SELECTED: ${{ github.event_name != 'workflow_dispatch' || inputs.ios || inputs.platform == 'ios' || inputs.platform == 'all' }}
+          MACOS_SELECTED: ${{ github.event_name != 'workflow_dispatch' || inputs.macos || inputs.platform == 'macos' }}
           TESTS_RESULT: ${{ needs.tests.result }}
           MACOS_RESULT: ${{ needs.macos.result }}
-          IOS_RESULT: ${{ needs.ios.result }}
         shell: bash
         run: |
           set -euo pipefail
-          for check in TESTS MACOS IOS; do
+          for check in TESTS MACOS; do
             selected_var="${check}_SELECTED"
             result_var="${check}_RESULT"
             expected=skipped
@@ -263,7 +183,7 @@ jobs:
           done
 
   release:
-    if: always() && needs.apple-checks.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.release && (inputs.platform == 'all' || inputs.platform == 'macos' || inputs.platform == 'ios')
+    if: always() && needs.apple-checks.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.release && inputs.platform == 'macos'
     needs: [apple-checks]
     runs-on: macos-15
     timeout-minutes: 30
@@ -288,18 +208,11 @@ jobs:
           } > "$CI_OUTPUT/logs/environment.txt" 2>&1
 
       - name: Download successful macOS build
-        if: inputs.platform == 'all' || inputs.platform == 'macos'
+        if: inputs.platform == 'macos'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: apple-macos-build-${{ github.sha }}
           path: ${{ env.CI_OUTPUT }}/artifacts
-
-      - name: Download successful iOS build
-        if: inputs.platform == 'all' || inputs.platform == 'ios'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: apple-ios-build-${{ github.sha }}
-          path: ${{ env.CI_OUTPUT }}/ios-build
 
       - name: Package unsigned artifacts
         shell: bash
@@ -308,20 +221,8 @@ jobs:
           trap 'status=$?; tail -n 80 "$CI_OUTPUT/logs/package.log" >&2; exit "$status"' ERR
           (
             mkdir -p "$CI_OUTPUT/artifacts"
-            platform="${{ inputs.platform }}"
-            if [[ "$platform" == all || "$platform" == ios ]]; then
-              tar -xf "$CI_OUTPUT/ios-build/ios-build.tar" -C "$CI_OUTPUT/ios-build"
-              ditto -c -k --sequesterRsrc --keepParent \
-                "$CI_OUTPUT/ios-build/ZoeMobile.app" "$CI_OUTPUT/artifacts/ZoeMobile-unsigned.app.zip"
-            fi
             cd "$CI_OUTPUT/artifacts"
-            : > SHA256SUMS
-            if [[ "$platform" == all || "$platform" == macos ]]; then
-              shasum -a 256 *.dmg >> SHA256SUMS
-            fi
-            if [[ "$platform" == all || "$platform" == ios ]]; then
-              shasum -a 256 *.zip >> SHA256SUMS
-            fi
+            shasum -a 256 *.dmg > SHA256SUMS
           ) > "$CI_OUTPUT/logs/package.log" 2>&1
 
       - name: Upload logs
