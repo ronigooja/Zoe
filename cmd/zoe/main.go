@@ -137,6 +137,8 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		fmt.Fprintln(out, "  11) Test Compact model")
 		fmt.Fprintln(out, "  12) Configure Steward model (task routing and replies)")
 		fmt.Fprintln(out, "  13) Test Steward model")
+		fmt.Fprintln(out, "  24) Configure UI_Controller model (Mac screen content and input)")
+		fmt.Fprintln(out, "  25) Test UI_Controller model")
 		fmt.Fprintln(out, "  14) Configure Memory extraction model (24-hour batch and memory worker)")
 		fmt.Fprintln(out, "  15) Test Memory extraction model")
 		fmt.Fprintln(out, "Voice:")
@@ -171,22 +173,22 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		}
 		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "15": "memory test", "16": "voice configure", "17": "voice test", "18": "voice status", "20": "key init", "21": "key rotate", "22": "client-policy show", "23": "client-policy set"}[choice]
 		if !ok {
-			if choice == "8" || choice == "10" || choice == "12" || choice == "14" {
-				kind := map[string]string{"8": "Register", "10": "Compact", "12": "Steward", "14": "Memory"}[choice]
+			if choice == "8" || choice == "10" || choice == "12" || choice == "14" || choice == "24" {
+				kind := map[string]string{"8": "Register", "10": "Compact", "12": "Steward", "14": "Memory", "24": "UI_Controller"}[choice]
 				err := menuModel(configureMenuIO(root, in, out, errOut), kind)
 				if err != nil && !errors.Is(err, io.EOF) {
 					fmt.Fprintln(errOut, "Error:", err)
 				}
 				continue
 			}
-			if choice == "9" || choice == "11" || choice == "13" {
-				kind := map[string]string{"9": "Register", "11": "Compact", "13": "Steward"}[choice]
+			if choice == "9" || choice == "11" || choice == "13" || choice == "25" {
+				kind := map[string]string{"9": "Register", "11": "Compact", "13": "Steward", "25": "UI_Controller"}[choice]
 				if err := menuTestModel(root, out, kind); err != nil {
 					fmt.Fprintln(errOut, "Error:", err)
 				}
 				continue
 			}
-			fmt.Fprintln(errOut, "Please choose a number from 0 to 23.")
+			fmt.Fprintln(errOut, "Please choose a number from 0 to 25.")
 			continue
 		}
 		if err := operations[name](nil, in, out, errOut); err != nil {

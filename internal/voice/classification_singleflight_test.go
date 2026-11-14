@@ -35,7 +35,7 @@ func newClassificationRig(t *testing.T, routeHook func()) *classificationRig {
 		if routeHook != nil {
 			routeHook()
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"route":"task","restatement":"none"}`})
+		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"routes":["task"],"restatement":"none"}`})
 	}))
 	t.Cleanup(model.Close)
 	register, err := NewRegister(r.store.DB(), RegisterConfig{
@@ -64,7 +64,7 @@ func (r *classificationRig) seedTurn(t *testing.T, id string) {
 func (r *classificationRig) assertResult(t *testing.T, id, route, action string) {
 	t.Helper()
 	var gotRoute, gotAction string
-	if err := r.store.DB().QueryRow(`SELECT triage_category,steward_action FROM voice_turns WHERE id=?`, id).Scan(&gotRoute, &gotAction); err != nil {
+	if err := r.store.DB().QueryRow(`SELECT exits,steward_action FROM voice_turns WHERE id=?`, id).Scan(&gotRoute, &gotAction); err != nil {
 		t.Fatal(err)
 	}
 	if gotRoute != route || gotAction != action {
@@ -198,7 +198,7 @@ func TestClassificationSingleFlightDiscardedLogs(t *testing.T) {
 	r.seedTurn(t, "discard-row")
 	r.svc.steward = classificationStewardFunc(func(context.Context, string, string, string, []steward.Candidate) (steward.Choice, error) {
 		// Simulate another process persisting after our SELECT but before UPDATE.
-		r.exec(t, `UPDATE voice_turns SET triage_category='chat',steward_action='' WHERE id='discard-row'`)
+		r.exec(t, `UPDATE voice_turns SET exits='chat',steward_action='' WHERE id='discard-row'`)
 		return steward.Choice{Action: "new"}, nil
 	})
 	r.svc.classifyCommittedTurn("discard-row")

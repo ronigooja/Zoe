@@ -40,7 +40,7 @@ func (s *Service) prepareHandoff(ctx context.Context, p contracts.Principal, req
 	var id string
 	for {
 		var category, existing string
-		err := s.db.QueryRowContext(waitCtx, `SELECT v.id,coalesce(v.triage_category,''),coalesce(l.task_id,nullif(v.resumed_task_id,''),'') FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND s.owner_id=? AND s.device_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, p.WorkspaceID, p.SubjectID, p.DeviceID, payload.SessionID, payload.Generation, payload.TurnID, payload.Revision).Scan(&id, &category, &existing)
+		err := s.db.QueryRowContext(waitCtx, `SELECT v.id,coalesce(v.exits,''),coalesce(l.task_id,nullif(v.resumed_task_id,''),'') FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND s.owner_id=? AND s.device_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, p.WorkspaceID, p.SubjectID, p.DeviceID, payload.SessionID, payload.Generation, payload.TurnID, payload.Revision).Scan(&id, &category, &existing)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}

@@ -22,7 +22,7 @@ func memoryWriteJobFixture(t *testing.T) (*storage.Store, *Service, func()) {
 	t.Helper()
 	store, svc := recallRecoveryFixture(t, Config{}, 0)
 	hash := sha256.Sum256([]byte(writeSentence))
-	_, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,triage_category,report_text) VALUES('write-turn','default','handoff-session',1,'write-turn',1,?,?,?,'write-command','memory_write',?)`, writeSentence, hash[:], svc.now().Format(time.RFC3339Nano), writeRestatement)
+	_, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,report_text) VALUES('write-turn','default','handoff-session',1,'write-turn',1,?,?,?,'write-command','memory_write',?)`, writeSentence, hash[:], svc.now().Format(time.RFC3339Nano), writeRestatement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 			}
 			// Later handled transcript revisions must not replace the original
 			// sentence paired with the first durable job's restatement.
-			if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,triage_category,report_text,handoff_handled) SELECT 'later-revision',workspace_id,session_id,generation,turn_id,2,'different sentence',content_hash,confirmed_at,command_id,triage_category,'different restatement',1 FROM voice_turns WHERE id='write-turn'`); err != nil {
+			if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,report_text,handoff_handled) SELECT 'later-revision',workspace_id,session_id,generation,turn_id,2,'different sentence',content_hash,confirmed_at,command_id,exits,'different restatement',1 FROM voice_turns WHERE id='write-turn'`); err != nil {
 				t.Fatal(err)
 			}
 			svc.dispatchRecall(context.Background())

@@ -380,7 +380,7 @@ DROP TABLE IF EXISTS voice_call_summaries;`); err != nil {
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 221, Name: "voice_remove_unused_legacy_state", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 221, Name: "voice_remove_unused_legacy_state", Up: func(ctx context.Context, tx *sql.Tx) error {
 		// Upgrade fixtures can roll back receipts while retaining the latest schema.
 		for _, column := range []string{"steward_decision", "pending_task_id", "pending_task_version", "pending_question"} {
 			var exists bool
@@ -395,5 +395,8 @@ DROP TABLE IF EXISTS voice_call_summaries;`); err != nil {
 		}
 		_, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS voice_instruction_deliveries`)
 		return err
-	}})
+	}}); err != nil {
+		return err
+	}
+	return registerUIMigrations(store)
 }

@@ -10,7 +10,9 @@ func TestInstructionDefaultExact(t *testing.T) {
 - The background can run tasks, search the web, and use files and devices.
 - The background can report task progress and results, and cancel or change tasks.
 - The background can save and update the user's personal facts and preferences.
-- The background can look up the user's saved personal records and earlier conversations.`
+- The background can look up the user's saved personal records and earlier conversations.
+- The background can show content to the user on their Mac screen.
+- The background can ask the user for input through their Mac screen.`
 	if DefaultInstructionText != expected {
 		t.Fatal("default instruction differs from the approved system prompt")
 	}

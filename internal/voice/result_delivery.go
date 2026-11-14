@@ -67,7 +67,7 @@ func (s *Service) classifyCommittedTurns(ctx context.Context) {
 	if s.register == nil {
 		return
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,content FROM voice_turns WHERE triage_category IS NULL ORDER BY confirmed_at LIMIT 25`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,content FROM voice_turns WHERE exits IS NULL ORDER BY confirmed_at LIMIT 25`)
 	if err != nil {
 		return
 	}
@@ -89,7 +89,7 @@ func (s *Service) ensureClassified(ctx context.Context, workspace, session strin
 	deadline := time.Now().Add(1500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		var category string
-		if err := s.db.QueryRowContext(ctx, `SELECT coalesce(triage_category,'') FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, workspace, session, generation, turn, revision).Scan(&category); err == nil && category != "" {
+		if err := s.db.QueryRowContext(ctx, `SELECT coalesce(exits,'') FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, workspace, session, generation, turn, revision).Scan(&category); err == nil && category != "" {
 			return category
 		}
 		select {

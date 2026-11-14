@@ -357,13 +357,17 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	}
 	var taskID, content, storedCategory, stewardAction, stewardTaskID string
 	var storedHash []byte
-	if err := tx.QueryRowContext(ctx, `SELECT coalesce(l.task_id,nullif(v.resumed_task_id,''),''),v.content,v.content_hash,coalesce(v.triage_category,''),v.steward_action,v.steward_task_id FROM voice_turns v LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&taskID, &content, &storedHash, &storedCategory, &stewardAction, &stewardTaskID); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(l.task_id,nullif(v.resumed_task_id,''),''),v.content,v.content_hash,coalesce(v.exits,''),v.steward_action,v.steward_task_id FROM voice_turns v LEFT JOIN voice_task_links l ON l.session_id=v.session_id AND l.generation=v.generation AND l.turn_id=v.turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&taskID, &content, &storedHash, &storedCategory, &stewardAction, &stewardTaskID); errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(http.StatusNotFound, "voice_turn_not_found", "confirmed voice turn revision was not found", nil)
 	} else if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	if storedCategory != "" {
 		category = storedCategory
+	}
+	exits := RouteResult{Routes: strings.Split(storedCategory, ",")}
+	if exits.Has("task") {
+		category = "task"
 	}
 	providedHash, err := hex.DecodeString(p.ContentHash)
 	if err != nil || !bytes.Equal(storedHash, providedHash) {
@@ -380,6 +384,10 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, nil
 	}
 	content = strings.TrimSpace(content)
+	if category == "ui" {
+		// The UI exit has no consumer until 2b; do not mark it handled.
+		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, nil
+	}
 	if category != "task" && category != "memory_write" && category != "recall" && category != "chat" {
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech)
 	}
@@ -463,6 +471,12 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 				return contracts.CommandResult{}, nil, err
 			}
 			if err == nil && stewardAction == string(steward.ActionAnswer) && (status == "waiting" || status == "awaiting_user") && interaction == "awaiting_message" && strings.TrimSpace(question) != "" {
+				if exits.Has("ui") {
+					content += "\n\n" + TaskUIDisplayInstruction
+					if _, err := tx.ExecContext(ctx, `UPDATE tasks SET ui_display=1 WHERE workspace_id=? AND id=?`, cmd.Principal.WorkspaceID, stewardTaskID); err != nil {
+						return contracts.CommandResult{}, nil, err
+					}
+				}
 				r, events, err := server.AppendTaskTx(ctx, tx, cmd, stewardTaskID, content)
 				if err == nil {
 					_, err = tx.ExecContext(ctx, `UPDATE voice_turns SET resumed_task_id=?,handoff_handled=1 WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, stewardTaskID, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
@@ -472,6 +486,12 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 			if err == nil && stewardAction == string(steward.ActionAttach) {
 				switch status {
 				case "queued", "active", "waiting", "awaiting_user":
+					if exits.Has("ui") {
+						content += "\n\n" + TaskUIDisplayInstruction
+						if _, err := tx.ExecContext(ctx, `UPDATE tasks SET ui_display=1 WHERE workspace_id=? AND id=?`, cmd.Principal.WorkspaceID, stewardTaskID); err != nil {
+							return contracts.CommandResult{}, nil, err
+						}
+					}
 					r, events, err := server.AppendTaskTx(ctx, tx, cmd, stewardTaskID, content)
 					if err == nil {
 						_, err = tx.ExecContext(ctx, `UPDATE voice_turns SET resumed_task_id=?,handoff_handled=1 WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, stewardTaskID, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
@@ -556,10 +576,10 @@ func (s *Service) classifyCommittedTurn(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.classificationTimeout())
 	defer cancel()
 	var content, workspace, owner string
-	if err := s.db.QueryRowContext(ctx, `SELECT v.content,v.workspace_id,s.owner_id FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id WHERE v.id=? AND v.triage_category IS NULL`, id).Scan(&content, &workspace, &owner); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT v.content,v.workspace_id,s.owner_id FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id WHERE v.id=? AND v.exits IS NULL`, id).Scan(&content, &workspace, &owner); err != nil {
 		return
 	}
-	route := RouteResult{Route: "task"}
+	route := RouteResult{Routes: []string{"task"}}
 	var err error
 	if s.register == nil {
 		err = errors.New("context register is disabled")
@@ -568,7 +588,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 	}
 	var choice steward.Choice
 	var taskID string
-	if err == nil && route.Route == "task" {
+	if err == nil && route.Has("task") {
 		query := route.Restatement
 		if query == "" || query == "none" {
 			query = content
@@ -607,19 +627,16 @@ func (s *Service) classifyCommittedTurn(id string) {
 	}
 	if err != nil {
 		// Internal failure sentinel, never a model route: fail closed on replay.
-		route.Route = "error"
+		route.Routes = []string{"error"}
 		choice = steward.Choice{}
 		taskID = ""
 	}
-	if route.Route == "" {
-		route.Route = "task"
-	}
 	writeCtx, stop := context.WithTimeout(context.Background(), time.Second)
 	defer stop()
-	if route.Route == "recall" || route.Route == "memory_write" {
+	if route.Has("recall") || route.Has("memory_write") {
 		choice.Reply = route.Restatement
 	}
-	result, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET triage_category=?,steward_action=?,steward_task_id=?,report_text=? WHERE id=? AND triage_category IS NULL`, route.Route, string(choice.Action), taskID, choice.Reply, id)
+	result, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET exits=?,steward_action=?,steward_task_id=?,report_text=? WHERE id=? AND exits IS NULL`, route.Exits(), string(choice.Action), taskID, choice.Reply, id)
 	if writeErr == nil {
 		var affected int64
 		affected, writeErr = result.RowsAffected()
@@ -752,6 +769,9 @@ type voiceTaskSourceReference struct {
 // same transaction, never to caller-supplied task source fields.
 type voiceAdmissionGoalKey struct{}
 
+// TaskUIDisplayInstruction applies only to tasks selected for Mac screen display.
+const TaskUIDisplayInstruction = "The task result will be rendered on the user's Mac screen by a separate UI controller. The final message of the task should be content suitable for display, structured with titles, items and links where applicable."
+
 // admitVoiceTask binds a confirmed stable turn to the task inside the same
 // transaction as task.create. Revision is provenance; it is deliberately not
 // part of the uniqueness key, so a later transcript revision cannot dispatch
@@ -780,8 +800,9 @@ func (s *Service) admitVoiceTask(ctx context.Context, tx *sql.Tx, principal cont
 		return nil, apiError(http.StatusConflict, "voice_generation_stale", "voice turn is not from the active media generation", nil)
 	}
 	var content string
+	var storedExits sql.NullString
 	var contentHash []byte
-	err = tx.QueryRowContext(ctx, `SELECT content,content_hash FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, principal.WorkspaceID, ref.SessionID, ref.Generation, ref.TurnID, ref.Revision).Scan(&content, &contentHash)
+	err = tx.QueryRowContext(ctx, `SELECT content,content_hash,exits FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, principal.WorkspaceID, ref.SessionID, ref.Generation, ref.TurnID, ref.Revision).Scan(&content, &contentHash, &storedExits)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, apiError(http.StatusNotFound, "voice_turn_not_found", "confirmed voice turn revision was not found", nil)
 	}
@@ -810,6 +831,13 @@ func (s *Service) admitVoiceTask(ctx context.Context, tx *sql.Tx, principal cont
 	if goal, ok := ctx.Value(voiceAdmissionGoalKey{}).(string); ok {
 		request.Goal = goal
 		request.InitialMessage = goal
+	}
+	if (RouteResult{Routes: strings.Split(storedExits.String, ",")}).Has("ui") {
+		request.Goal += "\n\n" + TaskUIDisplayInstruction
+		request.InitialMessage += "\n\n" + TaskUIDisplayInstruction
+		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET ui_display=1 WHERE workspace_id=? AND id=?`, principal.WorkspaceID, taskID); err != nil {
+			return nil, err
+		}
 	}
 	eventPayload, _ := json.Marshal(map[string]any{"task_id": taskID, "voice_session_id": ref.SessionID, "generation": ref.Generation, "turn_id": ref.TurnID, "turn_revision": ref.Revision, "content_hash": hex.EncodeToString(contentHash), "status": "task_created"})
 	event := contracts.Event{Type: "voice.task.created", AggregateType: "voice_session", AggregateID: ref.SessionID, AggregateVersion: ref.Generation, Payload: eventPayload, OccurredAt: acceptedAt}

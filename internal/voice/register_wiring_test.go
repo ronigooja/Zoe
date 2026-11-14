@@ -95,7 +95,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 					} else if route != "task" {
 						restatement = ""
 					}
-					output = fmt.Sprintf(`{"route":%q,"restatement":%q}`, route, restatement)
+					output = fmt.Sprintf(`{"routes":[%q],"restatement":%q}`, route, restatement)
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"output_text": output, "choices": []any{map[string]any{"message": map[string]string{"content": output}}}})
 			}))
@@ -237,7 +237,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 					t.Fatal(raw)
 				}
 				deadline := time.Now().Add(time.Second)
-				for count(`SELECT count(*) FROM voice_turns WHERE turn_id='current' AND triage_category IS NOT NULL`) == 0 && time.Now().Before(deadline) {
+				for count(`SELECT count(*) FROM voice_turns WHERE turn_id='current' AND exits IS NOT NULL`) == 0 && time.Now().Before(deadline) {
 					time.Sleep(time.Millisecond)
 				}
 				storedAction := "attach"
@@ -268,7 +268,7 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 				if r.ResourceType != "voice_turn" || r.ResourceID != "current" || r.ResourceVersion != 1 {
 					t.Fatalf("chat result=%+v", r)
 				}
-				if count(`SELECT count(*) FROM voice_turns WHERE turn_id='current' AND triage_category='chat' AND steward_action='' AND handoff_handled=1`) != 1 {
+				if count(`SELECT count(*) FROM voice_turns WHERE turn_id='current' AND exits='chat' AND steward_action='' AND handoff_handled=1`) != 1 {
 					t.Fatal("chat was not stored and silently handled; candidate retrieval may have run")
 				}
 				if count(`SELECT count(*) FROM tasks`) != 0 || count(`SELECT count(*) FROM voice_fast_replies`) != 0 {

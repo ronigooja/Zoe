@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -153,7 +154,7 @@ func TestRegisterCrossCallStableOrderingAndOwnerIsolation(t *testing.T) {
 	if strings.Index(input, "user: first") > strings.Index(input, "assistant: second") || strings.Index(input, "assistant: second") > strings.Index(input, "assistant: third") || strings.Contains(input, "SECRET_") {
 		t.Fatal("source order/isolation violated")
 	}
-	f.output = `{"route":"task","restatement":"It refers to first."}`
+	f.output = `{"routes":["task"],"restatement":"It refers to first."}`
 	if _, err := f.r.Route(context.Background(), f.owner, "that", f.now); err != nil {
 		t.Fatal(err)
 	}
@@ -221,33 +222,60 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 		out   string
 		valid bool
 	}{
-		{`{"route":"task","restatement":"none"}`, true},
-		{`{"route":"task","restatement":"It refers to the user's trip."}`, true},
-		{`{"route":"memory_write","restatement":"Save the user's travel preference."}`, true},
-		{`{"route":"recall","restatement":"Retrieve the user's travel preference."}`, true},
-		{`{"route":"memory_write","restatement":""}`, false},
-		{`{"route":"recall","restatement":""}`, false},
-		{`{"route":"chat","restatement":""}`, true},
-		{`{"route":"chat","restatement":"none"}`, false},
-		{`{"route":"chat","restatement":" "}`, false},
-		{`{"route":"chat"}`, false},
+		{`{"routes":["task"],"restatement":"none"}`, true},
+		{`{"routes":["task"],"restatement":"It refers to the user's trip."}`, true},
+		{`{"routes":["memory_write"],"restatement":"Save the user's travel preference."}`, true},
+		{`{"routes":["recall"],"restatement":"Retrieve the user's travel preference."}`, true},
+		{`{"routes":["memory_write"],"restatement":""}`, false},
+		{`{"routes":["recall"],"restatement":""}`, false},
+		{`{"routes":["chat"],"restatement":""}`, true},
+		{`{"routes":["chat"],"restatement":"none"}`, false},
+		{`{"routes":["chat"],"restatement":" "}`, false},
+		{`{"routes":["chat"]}`, false},
+		{`{"routes":["ui"],"restatement":"none"}`, true},
+		{`{"routes":["task","ui"],"restatement":"none"}`, true},
+		{`{"routes":["ui","task"],"restatement":"none"}`, true},
+		{`{"routes":[],"restatement":"none"}`, false},
+		{`{"routes":null,"restatement":"none"}`, false},
+		{`{"routes":"task","restatement":"none"}`, false},
+		{`{"routes":[1],"restatement":"none"}`, false},
+		{`{"routes":[null],"restatement":"none"}`, false},
+		{`{"routes":["ui","ui"],"restatement":"none"}`, false},
+		{`{"routes":["task","task"],"restatement":"none"}`, false},
+		{`{"routes":["chat","ui"],"restatement":""}`, false},
+		{`{"routes":["chat","task"],"restatement":""}`, false},
+		{`{"routes":["memory_write","ui"],"restatement":"Store it."}`, false},
+		{`{"routes":["recall","ui"],"restatement":"Retrieve it."}`, false},
+		{`{"routes":["memory_write","task"],"restatement":"Store it."}`, false},
+		{`{"routes":["recall","task"],"restatement":"Retrieve it."}`, false},
+		{`{"routes":["memory_write","recall"],"restatement":"Store it."}`, false},
+		{`{"routes":["ui"],"restatement":""}`, false},
+		{`{"routes":["task","ui"],"restatement":""}`, false},
+		{`{"routes":["unknown"],"restatement":"none"}`, false},
+		{`{"routes":["task"],"restatement":null}`, false},
+		{`{"routes":["task"],"restatement":1}`, false},
+		{`{"routes":["task"],"restatement":"none","extra":"x"}`, false},
+		{`{"routes":["task"],"routes":["ui"],"restatement":"none"}`, false},
+		{`{"routes":["task"],"restatement":"none","restatement":"none"}`, false},
+		{`{"routes":["task"],"restatement":"none"} {}`, false},
+		{`{"routes":["task"],"restatement":"none"} extra`, false},
 		{`{"memory_key":"trip"}`, false},
-		{`{"route":"confirm","restatement":"none"}`, false},
-		{`{"route":"decline","restatement":"none"}`, false},
-		{`{"route":"cancel","restatement":"none"}`, false},
-		{`{"route":"progress","restatement":"none"}`, false},
-		{`{"route":"task","restatement":""}`, false},
-		{`{"route":"task"}`, false},
-		{`{"route":"recall"}`, false},
-		{`{"route":"memory_write","restatement":"none"}`, false},
-		{`{"route":"recall","restatement":"none"}`, false},
-		{`{"route":"task","restatement":null}`, false},
-		{`{"route":"task","restatement":1}`, false},
-		{`{"route":"task","restatement":" none"}`, false},
-		{`{"route":"task","restatement":"one\ntwo"}`, false},
-		{`{"route":"task","restatement":"- none"}`, false},
-		{`{"route":"task","restatement":"none","extra":"x"}`, false},
-		{`{"route":"task","route":"recall","restatement":""}`, false},
+		{`{"routes":["confirm"],"restatement":"none"}`, false},
+		{`{"routes":["decline"],"restatement":"none"}`, false},
+		{`{"routes":["cancel"],"restatement":"none"}`, false},
+		{`{"routes":["progress"],"restatement":"none"}`, false},
+		{`{"routes":["task"],"restatement":""}`, false},
+		{`{"routes":["task"]}`, false},
+		{`{"routes":["recall"]}`, false},
+		{`{"routes":["memory_write"],"restatement":"none"}`, false},
+		{`{"routes":["recall"],"restatement":"none"}`, false},
+		{`{"routes":["task"],"restatement":null}`, false},
+		{`{"routes":["task"],"restatement":1}`, false},
+		{`{"routes":["task"],"restatement":" none"}`, false},
+		{`{"routes":["task"],"restatement":"one\ntwo"}`, false},
+		{`{"routes":["task"],"restatement":"- none"}`, false},
+		{`{"routes":["task"],"restatement":"none","extra":"x"}`, false},
+		{`{"route":"task","restatement":"none"}`, false},
 		{`{"memory_key":"absent"}`, false},
 		{`{"memory_key":"travel"}`, false},
 		{`{"memory_key":""}`, false},
@@ -267,7 +295,7 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 			if tc.valid {
 				f.output = tc.out
 				result, err := f.r.Route(context.Background(), f.owner, "that", f.now)
-				if err != nil || result != got {
+				if err != nil || !reflect.DeepEqual(result, got) {
 					t.Fatalf("route=%+v err=%v", result, err)
 				}
 			}
@@ -277,12 +305,13 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 
 func TestRegisterAttributionInstructionChat(t *testing.T) {
 	for _, required := range []string{
-		"Route chat means the sentence is conversation addressed to the assistant that asks for no work and no memory operation: greetings, small talk, thanks, acknowledgements.",
-		"Route task means everything else: requests for work, changes or cancellation of work, questions about the state of work.",
+		"Route chat means the sentence is conversation addressed to the assistant that asks for no work, no memory operation, and no screen interaction:",
+		"Route task means requests for work, changes or cancellation of work, or questions about the state of work.",
+		"Route ui means the sentence asks to show content to the user on their Mac screen, or asks the user to provide input through their Mac screen.",
 		"For chat, restatement is empty.",
-		"For task, memory_write and recall, restatement is required and non-empty:",
+		"For every non-chat result, restatement is required and non-empty:",
 		"For memory_write and recall, restatement is never the literal none.",
-		`{"route":"memory_write|recall|task|chat","restatement":"<text>"}`,
+		`{"routes":["<exit>"],"restatement":"<text>"}`,
 	} {
 		if !strings.Contains(RegisterAttributionInstruction, required) {
 			t.Errorf("missing instruction: %s", required)
@@ -291,7 +320,7 @@ func TestRegisterAttributionInstructionChat(t *testing.T) {
 	if strings.Contains(RegisterAttributionInstruction, "and conversation addressed to the assistant") {
 		t.Error("task still includes conversation")
 	}
-	for _, forbidden := range []string{"memory_key", "memory keys", "Memory keys", "memory content"} {
+	for _, forbidden := range []string{"memory_key", "memory keys", "Memory keys", "memory content", "For example", "e.g.", "Example:"} {
 		if strings.Contains(RegisterAttributionInstruction, forbidden) {
 			t.Errorf("obsolete instruction: %s", forbidden)
 		}
@@ -304,9 +333,9 @@ func TestRegisterAttributionInstructionChat(t *testing.T) {
 }
 
 func TestRegisterRestatementTextValidation(t *testing.T) {
-	for _, route := range []string{"task", "memory_write", "recall"} {
+	for _, route := range []string{"task", "memory_write", "recall", "ui"} {
 		for _, text := range []string{"", " leading", "trailing ", "one\ntwo", "one\ttwo", "{text}", "[text]", "`text`", `"quoted"`, "- text", "#text"} {
-			output, err := json.Marshal(map[string]string{"route": route, "restatement": text})
+			output, err := json.Marshal(map[string]any{"routes": []string{route}, "restatement": text})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -435,13 +464,13 @@ func TestRegisterRouteSingleCall(t *testing.T) {
 		name, output string
 		valid        bool
 	}{
-		{"task", `{"route":"task","restatement":"none"}`, true},
-		{"memory_write", `{"route":"memory_write","restatement":"Save the user's travel preference."}`, true},
-		{"recall", `{"route":"recall","restatement":"Retrieve the user's travel preference."}`, true},
-		{"chat", `{"route":"chat","restatement":""}`, true},
-		{"empty_memory_write", `{"route":"memory_write","restatement":""}`, false},
-		{"empty_recall", `{"route":"recall","restatement":""}`, false},
-		{"nonempty_chat", `{"route":"chat","restatement":"Hello."}`, false},
+		{"task", `{"routes":["task"],"restatement":"none"}`, true},
+		{"memory_write", `{"routes":["memory_write"],"restatement":"Save the user's travel preference."}`, true},
+		{"recall", `{"routes":["recall"],"restatement":"Retrieve the user's travel preference."}`, true},
+		{"chat", `{"routes":["chat"],"restatement":""}`, true},
+		{"empty_memory_write", `{"routes":["memory_write"],"restatement":""}`, false},
+		{"empty_recall", `{"routes":["recall"],"restatement":""}`, false},
+		{"nonempty_chat", `{"routes":["chat"],"restatement":"Hello."}`, false},
 		{"old_memory_key", `{"memory_key":"x"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -449,7 +478,7 @@ func TestRegisterRouteSingleCall(t *testing.T) {
 			f.output = tc.output
 			logs := captureRegisterLogs(t)
 			got, err := f.r.Route(context.Background(), f.owner, "that", f.now)
-			if (err == nil) != tc.valid || (!tc.valid && got != (RouteResult{})) {
+			if (err == nil) != tc.valid || (!tc.valid && !reflect.DeepEqual(got, RouteResult{})) {
 				t.Fatalf("got=%+v err=%v", got, err)
 			}
 			if f.calls != 1 {

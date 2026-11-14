@@ -14,10 +14,10 @@ import (
 
 func menuModelPrefix(kind string) (string, error) {
 	switch kind {
-	case "Register", "Compact", "Steward":
+	case "Register", "Compact", "Steward", "UI_Controller":
 		return "ZOE_" + strings.ToUpper(kind), nil
 	default:
-		return "", errors.New("model kind must be Register, Compact, or Steward")
+		return "", errors.New("model kind must be Register, Compact, Steward, or UI_Controller")
 	}
 }
 
@@ -27,6 +27,9 @@ func menuModelTimeout(kind string, c ModelConfig) (time.Duration, error) {
 		return 0, err
 	}
 	def, min, max := 30000, 500, 60000
+	if kind == "UI_Controller" {
+		def, min, max = 60000, 500, 120000
+	}
 	if kind == "Compact" {
 		def, min, max = 120000, 5000, 600000
 	}
@@ -47,6 +50,9 @@ func TestMenuModel(ctx context.Context, c ModelConfig, kind string, h *http.Clie
 	}
 	for _, item := range []struct{ suffix, value string }{{"BASE_URL", c.BaseURL}, {"MODEL", c.Model}, {"API_KEY_FILE", c.SecretPath}} {
 		if strings.TrimSpace(item.value) == "" {
+			if kind == "UI_Controller" {
+				return ModelProbeResult{}, fmt.Errorf("%s_%s is required to test the UI controller", prefix, item.suffix)
+			}
 			return ModelProbeResult{}, fmt.Errorf("%s_%s is required; the server will not start without it", prefix, item.suffix)
 		}
 	}
@@ -55,6 +61,9 @@ func TestMenuModel(ctx context.Context, c ModelConfig, kind string, h *http.Clie
 	}
 	env := map[string]string{prefix + "_BASE_URL": c.BaseURL, prefix + "_MODEL": c.Model, prefix + "_API_KEY_FILE": c.SecretPath, prefix + "_REASONING_EFFORT": c.ReasoningEffort, prefix + "_THINKING": c.Thinking, prefix + "_TIMEOUT_MS": c.TimeoutMS}
 	def, min, max := 30000, 500, 60000
+	if kind == "UI_Controller" {
+		def, min, max = 60000, 500, 120000
+	}
 	if kind == "Compact" {
 		def, min, max = 120000, 5000, 600000
 	}

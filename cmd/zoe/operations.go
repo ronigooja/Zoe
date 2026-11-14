@@ -931,7 +931,7 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 		memoryHost = u.Hostname()
 	}
 	fmt.Fprintf(out, "Memory: host=%s model=%s effort=%s secret-file=%s mode-0600=%t last-check=%s\n", safeLabel(memoryHost), safeLabel(status.Memory.Model), safeLabel(status.Memory.ReasoningEffort), safeLabel(status.Memory.Secret.Path), status.Memory.Secret.Exists && status.Memory.Secret.Mode == "0600", safeLabel(status.Memory.LastCheck))
-	for _, kind := range []string{"Register", "Compact", "Steward"} {
+	for _, kind := range []string{"Register", "Compact", "Steward", "UI_Controller"} {
 		c, err := d.MenuModelConfig(kind)
 		if err != nil {
 			return err

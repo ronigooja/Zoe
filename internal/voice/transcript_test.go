@@ -413,7 +413,7 @@ INSERT INTO voice_call_summaries(id,workspace_id,session_id,topic,started_at,end
 	if err := store.DB().QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('voice_call_summaries','voice_summary_jobs','voice_summary_enqueue','voice_summary_late_turn')`).Scan(&retired); err != nil || retired != 0 {
 		t.Fatalf("retired objects=%d err=%v", retired, err)
 	}
-	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 221 {
+	if err := store.DB().QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 225 {
 		t.Fatalf("post-upgrade version=%d err=%v", version, err)
 	}
 }

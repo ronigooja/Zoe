@@ -17,7 +17,7 @@ CREATE TABLE voice_instruction_deliveries (
 session_id TEXT NOT NULL REFERENCES voice_sessions(id), media_generation INTEGER NOT NULL,
 instruction_version TEXT NOT NULL, instruction_delivery TEXT NOT NULL, attempts INTEGER NOT NULL,
 PRIMARY KEY(session_id,media_generation,instruction_version));
-DELETE FROM schema_migrations WHERE namespace='voice' AND version=221;`
+DELETE FROM schema_migrations WHERE namespace='voice' AND version>=221;`
 
 func assertVoiceLegacyStateRemoved(t *testing.T, db *sql.DB) {
 	t.Helper()
@@ -35,7 +35,7 @@ func TestMigration221RemovesLegacyStateAndReplaysWithoutDataLoss(t *testing.T) {
 	db := store.DB()
 	if _, err := db.Exec(rollbackVoiceLegacyCleanup + `
 INSERT INTO voice_instruction_deliveries VALUES('handoff-session',1,'legacy','delivered',1);
-INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,provider_message_id,content,content_hash,confirmed_at,command_id,triage_category,resumed_task_id,handoff_handled,steward_action,steward_task_id,report_text,steward_decision,pending_task_id,pending_task_version,pending_question)
+INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,provider_message_id,content,content_hash,confirmed_at,command_id,exits,resumed_task_id,handoff_handled,steward_action,steward_task_id,report_text,steward_decision,pending_task_id,pending_task_version,pending_question)
 VALUES('cleanup','default','handoff-session',1,'cleanup',2,'provider','keep verbatim',X'0123','2026-11-12T00:00:00Z','command','task','resumed',1,'attach','assigned','keep report','ask','obsolete',3,'obsolete question');`); err != nil {
 		t.Fatal(err)
 	}
@@ -104,17 +104,17 @@ VALUES('cleanup','default','handoff-session',1,'cleanup',2,'provider','keep verb
 			t.Fatalf("surviving data changed: before=%v after=%v", before, after)
 		}
 		var version int
-		if err := db.QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 221 {
+		if err := db.QueryRow(`SELECT max(version) FROM schema_migrations WHERE namespace='voice'`).Scan(&version); err != nil || version != 225 {
 			t.Fatalf("latest version=%d err=%v", version, err)
 		}
 		if i == 0 {
 			// Replay with all removed objects absent.
-			if _, err := db.Exec(`DELETE FROM schema_migrations WHERE namespace='voice' AND version=221`); err != nil {
+			if _, err := db.Exec(`DELETE FROM schema_migrations WHERE namespace='voice' AND version>=221`); err != nil {
 				t.Fatal(err)
 			}
 		} else if i == 1 {
 			// Replay a partially reconstructed schema: guard each column separately.
-			if _, err := db.Exec(`ALTER TABLE voice_turns ADD COLUMN pending_question TEXT NOT NULL DEFAULT ''; DELETE FROM schema_migrations WHERE namespace='voice' AND version=221`); err != nil {
+			if _, err := db.Exec(`ALTER TABLE voice_turns ADD COLUMN pending_question TEXT NOT NULL DEFAULT ''; DELETE FROM schema_migrations WHERE namespace='voice' AND version>=221`); err != nil {
 				t.Fatal(err)
 			}
 		}

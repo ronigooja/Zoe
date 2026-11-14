@@ -297,7 +297,7 @@ env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
        'ZOE_RUNNER_TOKEN_FILE': str(p/'secrets/runner-token'),
        'ZOE_MEMORY_WORKER_IMAGE': 'ghcr.io/test/zoe-memory-worker@sha256:'+'3'*64,
        'ZOE_RUNNER_IMAGE': 'ghcr.io/test/zoe-runner@sha256:'+'4'*64,
-       'ZOE_VOICE_UPSTREAM_ROUTE': 'avas', 'ZOE_STEWARD_TIMEOUT_MS': '30000',
+       'ZOE_VOICE_UPSTREAM_ROUTE': 'avas', 'ZOE_STEWARD_TIMEOUT_MS': '30000', 'ZOE_UI_CONTROLLER_TIMEOUT_MS': '60000',
        'ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS': '35000', 'ZOE_REGISTER_TIMEOUT_MS': '30000',
        'ZOE_MEMORY_BATCH_INTERVAL_HOURS': '24',
        'ZOE_MEMORY_API_URL': 'http://zoe-memory-worker:8788',
@@ -307,9 +307,11 @@ env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
        'ZOE_COMPACT_BASE_URL': 'https://compact.invalid', 'ZOE_COMPACT_MODEL': 'compact',
        'ZOE_COMPACT_API_KEY_FILE': '/run/secrets/compact_api_key',
        'ZOE_COMPACT_TIMEOUT_MS': '600000', 'ZOE_COMPACT_MAX_CHARACTERS': '8000',
-       'ZOE_COMPACT_INTERVAL_MINUTES': '60', 'ZOE_REGISTER_RAW_WINDOW_MINUTES': '60'}
+        'ZOE_COMPACT_INTERVAL_MINUTES': '60', 'ZOE_REGISTER_RAW_WINDOW_MINUTES': '60',
+        'ZOE_UI_CONTROLLER_BASE_URL': 'https://ui.invalid', 'ZOE_UI_CONTROLLER_MODEL': 'ui',
+        'ZOE_UI_CONTROLLER_API_KEY_FILE': '/run/secrets/ui_controller_api_key'}
 if os.environ['CASE'] == 'happy':
-    for prefix in ['ZOE_REGISTER', 'ZOE_COMPACT']:
+    for prefix in ['ZOE_REGISTER', 'ZOE_COMPACT', 'ZOE_UI_CONTROLLER']:
         for suffix in ['BASE_URL', 'MODEL', 'API_KEY_FILE']:
             env.pop(prefix+'_'+suffix)
 if os.environ['CASE'] in ['token-create', 'token-dry-run', 'token-rollback']:
@@ -349,12 +351,12 @@ for revision in [old, new]:
         shutil.copy(repo/'deploy/linux'/f'{unit}.service', root/'deploy-linux')
     shutil.copy(repo/'deploy/linux/install-cli.sh', root/'deploy-linux')
     compose = 'services:\n  zoe-server:\n    image: ${ZOE_SERVER_IMAGE}\n    environment:\n'
-    optional_names = {prefix+'_'+suffix for prefix in ['ZOE_REGISTER', 'ZOE_COMPACT']
+    optional_names = {prefix+'_'+suffix for prefix in ['ZOE_REGISTER', 'ZOE_COMPACT', 'ZOE_UI_CONTROLLER']
                       for suffix in ['BASE_URL', 'MODEL', 'API_KEY_FILE']}
     for name, value in server_env.items():
         if name not in optional_names:
             compose += '      '+name+': '+json.dumps(value)+'\n'
-    for prefix, secret in [('ZOE_REGISTER', 'register_api_key'), ('ZOE_COMPACT', 'compact_api_key')]:
+    for prefix, secret in [('ZOE_REGISTER', 'register_api_key'), ('ZOE_COMPACT', 'compact_api_key'), ('ZOE_UI_CONTROLLER', 'ui_controller_api_key')]:
         for suffix in ['BASE_URL', 'MODEL']:
             name = prefix+'_'+suffix
             compose += '      '+name+': ${'+name+':-}\n'
@@ -367,7 +369,8 @@ for revision in [old, new]:
                 '    secrets:\n      - source: memory_api_token\n    volumes:\n'
                 '      - type: bind\n        source: '+str(p/'data')+'\n        target: /var/lib/zoe/memory\n')
     compose += ('secrets:\n  register_api_key:\n    file: ${ZOE_REGISTER_API_KEY_FILE:-/dev/null}\n'
-                '  compact_api_key:\n    file: ${ZOE_COMPACT_API_KEY_FILE:-/dev/null}\n'
+                 '  compact_api_key:\n    file: ${ZOE_COMPACT_API_KEY_FILE:-/dev/null}\n'
+                 '  ui_controller_api_key:\n    file: ${ZOE_UI_CONTROLLER_API_KEY_FILE:-/dev/null}\n'
                 '  memory_api_token:\n    file: ${ZOE_MEMORY_API_TOKEN_FILE:?set memory API token file}\n')
     (root/'deploy-linux/docker-compose.yml').write_text(compose)
 root = p/'source'
@@ -375,7 +378,7 @@ case = os.environ['CASE']
 if case == 'runner-unchanged-error':
     shutil.copy(p/'releases'/old/'bin/zoe-runner', root/'bin/zoe-runner')
 if case == 'happy':
-    config['secrets'].update({'register_api_key': {'file': '/dev/null'}, 'compact_api_key': {'file': '/dev/null'}})
+    config['secrets'].update({'register_api_key': {'file': '/dev/null'}, 'compact_api_key': {'file': '/dev/null'}, 'ui_controller_api_key': {'file': '/dev/null'}})
     (p/'config.json').write_text(json.dumps(config))
 if case == 'missing-unit-path':
     (root/'bin/zoe-runner').unlink()

@@ -20,6 +20,7 @@ import (
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/memoryapi"
+	"github.com/ronigooja/Zoe/internal/modelclient"
 	"github.com/ronigooja/Zoe/internal/steward"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -44,6 +45,7 @@ type Config struct {
 	RegisterConfig         *RegisterConfig
 	ClassificationTimeout  time.Duration
 	Steward                TaskSteward
+	UIController           *modelclient.Client
 	RecallTimeout          time.Duration
 	RecallLease            time.Duration
 }
@@ -67,6 +69,7 @@ type Service struct {
 	resultDeliveryEnabled  bool
 	resultDeliveryInterval time.Duration
 	steward                TaskSteward
+	uiController           *modelclient.Client
 	register               *ContextRegister
 	classifying            sync.Map // Voice-turn row IDs currently being classified.
 	recall                 Config
@@ -398,7 +401,7 @@ func newService(db *sql.DB, cfg Config) *Service {
 		interval = time.Second
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func (s *Service) rotateIfOverBudget(ctx context.Context, p contracts.Principal) error {

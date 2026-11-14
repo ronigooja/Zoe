@@ -38,6 +38,8 @@ Models:
   11) Test Compact model
   12) Configure Steward model (task routing and replies)
   13) Test Steward model
+  24) Configure UI_Controller model (Mac screen content and input)
+  25) Test UI_Controller model
   14) Configure Memory extraction model (24-hour batch and memory worker)
   15) Test Memory extraction model
 Voice:
@@ -65,7 +67,7 @@ func TestRemovedTriageCommands(t *testing.T) {
 			t.Fatalf("unexpected usage: %v", err)
 		}
 	}
-	for _, kind := range []string{"register", "compact", "steward"} {
+	for _, kind := range []string{"register", "compact", "steward", "ui_controller"} {
 		if err := run([]string{kind, "configure"}, strings.NewReader(""), io.Discard, io.Discard); err == nil {
 			t.Fatalf("%s must be menu-only", kind)
 		}
@@ -73,7 +75,7 @@ func TestRemovedTriageCommands(t *testing.T) {
 }
 
 func TestIndependentMenuModelsConfigureAndProbe(t *testing.T) {
-	for _, tc := range []struct{ kind, configure, test, other string }{{"Register", "8", "9", "COMPACT"}, {"Compact", "10", "11", "REGISTER"}} {
+	for _, tc := range []struct{ kind, configure, test, other string }{{"Register", "8", "9", "COMPACT"}, {"Compact", "10", "11", "REGISTER"}, {"UI_Controller", "24", "25", "STEWARD"}} {
 		t.Run(tc.kind, func(t *testing.T) {
 			menuManager(t)
 			containerKeyFixture(t)
@@ -141,7 +143,7 @@ func TestIndependentMenuModelsConfigureAndProbe(t *testing.T) {
 }
 
 func TestIndependentMenuModelsMissingKeysNeverFallback(t *testing.T) {
-	for _, kind := range []string{"Register", "Compact"} {
+	for _, kind := range []string{"Register", "Compact", "UI_Controller"} {
 		for _, missing := range []string{"BASE_URL", "MODEL", "API_KEY_FILE"} {
 			t.Run(kind+missing, func(t *testing.T) {
 				menuManager(t)
@@ -160,11 +162,18 @@ func TestIndependentMenuModelsMissingKeysNeverFallback(t *testing.T) {
 				if kind == "Compact" {
 					choice = "11"
 				}
+				if kind == "UI_Controller" {
+					choice = "25"
+				}
 				var out, errOut bytes.Buffer
 				if err := menuWithRoot(strings.NewReader(choice+"\n0\n"), &out, &errOut, root); err != nil {
 					t.Fatal(err)
 				}
-				if !strings.Contains(errOut.String(), prefix+"_"+missing) || !strings.Contains(errOut.String(), "server will not start without it") || strings.Contains(out.String(), "PASS style=") {
+				message := "server will not start without it"
+				if kind == "UI_Controller" {
+					message = "required to test the UI controller"
+				}
+				if !strings.Contains(errOut.String(), prefix+"_"+missing) || !strings.Contains(errOut.String(), message) || strings.Contains(out.String(), "PASS style=") {
 					t.Fatalf("missing required-key error: %s", errOut.String())
 				}
 			})
@@ -173,7 +182,7 @@ func TestIndependentMenuModelsMissingKeysNeverFallback(t *testing.T) {
 }
 
 func TestIndependentMenuModelsProbeFailureMakesOneCall(t *testing.T) {
-	for _, kind := range []string{"Register", "Compact"} {
+	for _, kind := range []string{"Register", "Compact", "UI_Controller"} {
 		for _, status := range []int{401, 404, 500} {
 			t.Run(fmt.Sprintf("%s%d", kind, status), func(t *testing.T) {
 				menuManager(t)
@@ -195,6 +204,9 @@ func TestIndependentMenuModelsProbeFailureMakesOneCall(t *testing.T) {
 				choice := "9"
 				if kind == "Compact" {
 					choice = "11"
+				}
+				if kind == "UI_Controller" {
+					choice = "25"
 				}
 				if err := menuWithRoot(strings.NewReader(choice+"\n0\n"), &out, &errOut, root); err != nil {
 					t.Fatal(err)

@@ -31,7 +31,7 @@ func TestRegisterSeparateModelsAndRawWindow(t *testing.T) {
 		t.Cleanup(s.Close)
 		return s
 	}
-	route := server("routing-only", `{"route":"chat","restatement":""}`, &routeCalls)
+	route := server("routing-only", `{"routes":["chat"],"restatement":""}`, &routeCalls)
 	compact := server("compaction-only", "compact", &compactCalls)
 	var err error
 	f.r, err = NewRegister(f.db, RegisterConfig{

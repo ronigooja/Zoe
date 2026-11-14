@@ -66,6 +66,12 @@ services:
       ZOE_STEWARD_THINKING: ${ZOE_STEWARD_THINKING:-}
       ZOE_STEWARD_TIMEOUT_MS: ${ZOE_STEWARD_TIMEOUT_MS:-30000}
       ZOE_STEWARD_API_KEY_FILE: /run/secrets/steward_api_key
+      ZOE_UI_CONTROLLER_BASE_URL: ${ZOE_UI_CONTROLLER_BASE_URL:-}
+      ZOE_UI_CONTROLLER_MODEL: ${ZOE_UI_CONTROLLER_MODEL:-}
+      ZOE_UI_CONTROLLER_REASONING_EFFORT: ${ZOE_UI_CONTROLLER_REASONING_EFFORT:-}
+      ZOE_UI_CONTROLLER_THINKING: ${ZOE_UI_CONTROLLER_THINKING:-}
+      ZOE_UI_CONTROLLER_TIMEOUT_MS: ${ZOE_UI_CONTROLLER_TIMEOUT_MS:-60000}
+      ZOE_UI_CONTROLLER_API_KEY_FILE: ${ZOE_UI_CONTROLLER_API_KEY_FILE:+/run/secrets/ui_controller_api_key}
       ZOE_RECALL_HOLDING_TEXT: ${ZOE_RECALL_HOLDING_TEXT:-}
       ZOE_SECRET_FILE_MAP: ZOE_RUNNER_TOKEN=/run/secrets/runner_token${ZOE_VOICE_SECRET_MAP:-}
     entrypoint: ["/usr/local/bin/zoe-secret-entrypoint"]
@@ -91,6 +97,8 @@ services:
         target: compact_api_key
       - source: steward_api_key
         target: steward_api_key
+      - source: ui_controller_api_key
+        target: ui_controller_api_key
     networks:
       - default
 
@@ -165,6 +173,8 @@ secrets:
     file: ${ZOE_MEMORY_API_TOKEN_FILE:?set a shared memory API token file path}
   steward_api_key:
     file: ${ZOE_STEWARD_API_KEY_FILE:-/dev/null}
+  ui_controller_api_key:
+    file: ${ZOE_UI_CONTROLLER_API_KEY_FILE:-/dev/null}
   runner_token:
     file: ${ZOE_RUNNER_TOKEN_FILE:?set a private runner token file path}
   mem0_llm_api_key:

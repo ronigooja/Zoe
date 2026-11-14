@@ -347,7 +347,7 @@ func handoffHTTPServerWithConfig(t *testing.T, voiceCfg Config) (*httptest.Serve
 			if route != "task" {
 				restatement = ""
 			}
-			out, _ := json.Marshal(map[string]string{"route": route, "restatement": restatement})
+			out, _ := json.Marshal(map[string]any{"routes": []string{route}, "restatement": restatement})
 			_ = json.NewEncoder(w).Encode(map[string]string{"output_text": string(out)})
 		}))
 		t.Cleanup(model.Close)
@@ -524,7 +524,7 @@ func TestHandoffUsesPersistedCategoryWhenCacheEntryIsMissing(t *testing.T) {
 	store, svc := newVoiceTestService(t, Config{})
 	at := time.Now().UTC().Format(time.RFC3339Nano)
 	_, _ = store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('persisted-session','default','owner','device','persisted-request',X'01',1,'active',?,?)`, at, at)
-	_, _ = store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,triage_category) VALUES('persisted-turn','default','persisted-session',1,'persisted-category',1,'is it done',X'01',?,'cmd','task')`, at)
+	_, _ = store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits) VALUES('persisted-turn','default','persisted-session',1,'persisted-category',1,'is it done',X'01',?,'cmd','task')`, at)
 	if got := svc.ensureClassified(context.Background(), "default", "persisted-session", 1, "persisted-category", 1); got != "task" {
 		t.Fatalf("persisted category=%q", got)
 	}
