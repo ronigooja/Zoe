@@ -57,8 +57,6 @@ private actor AsyncTestGate {
 }
 
 final class ClientContractTests: XCTestCase {
-
-    @MainActor
     private func exportSession() -> URLSession {
         ExportURLProtocol.failureHandler = nil
         let configuration = URLSessionConfiguration.ephemeral
@@ -128,7 +126,6 @@ final class ClientContractTests: XCTestCase {
         result.append(u16(UInt16(entries.count))); result.append(u32(UInt32(central.count))); result.append(u32(directoryOffset)); result.append(u16(0))
         return result
     }
-
 
     func testScopedExportUsesAuthenticatedScopedRequestAndPrivateTemporaryFile() async throws {
         ExportURLProtocol.capturedRequest = nil
@@ -444,7 +441,6 @@ final class ClientContractTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
-    @MainActor
     func testConnectionGenerationRejectsResponsesAfterOriginOrCredentialSwitch() throws {
         let serverA = try XCTUnwrap(URL(string: "https://server-a.example"))
         let serverB = try XCTUnwrap(URL(string: "https://server-b.example"))
@@ -949,8 +945,6 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(requestCount, 0)
         XCTAssertEqual(model.notice, uiText("This task is unavailable in the latest snapshot. Refresh it or choose New task before sending."))
     }
-
-    @MainActor
 
     func testVoiceMediaEpochFenceRejectsDelayedAndDuplicateLossEvents() throws {
         var fence = VoiceMediaEpochFence()

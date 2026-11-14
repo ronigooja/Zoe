@@ -95,7 +95,6 @@ public final class ZoeAppModel: ObservableObject {
         exportArtifactConnectionEpoch = artifact == nil ? nil : connectionGeneration.value
     }
 
-
     func handleEventForTesting(_ envelope: EventEnvelope, expectedConnectionEpoch: UInt64? = nil) async {
         await handle(.event(envelope), expectedGeneration: expectedConnectionEpoch ?? connectionGeneration.value, sourceAPI: nil)
     }
@@ -542,8 +541,6 @@ public final class ZoeAppModel: ObservableObject {
         return await send(kind: "project.create", payload: .object(payload))
     }
 
-
-
     public func markNotificationRead(_ notification: NotificationRecord) async {
         guard notification.readAt == nil else { return }
         await send(kind: "notification.mark_read", payload: .object(["notification_id": .string(notification.id)]))
@@ -622,7 +619,6 @@ public final class ZoeAppModel: ObservableObject {
             notice = uiText("The notification inbox could not be refreshed.")
         }
     }
-
 
     public func refreshCapabilities() async {
         guard let api else { return }
@@ -1787,7 +1783,6 @@ public final class ZoeAppModel: ObservableObject {
                 setStale(uiText("The action was accepted, but the latest snapshot could not be loaded."))
             }
             if let taskID = selectedTaskID, outcome.receipt.kind.hasPrefix("task.") { await loadTaskEntries(taskID: taskID) }
-
         } catch {
             guard isCurrentConnection(generation, sourceAPI: api) else { return }
             if isNeedsReview(error) {
@@ -2387,7 +2382,6 @@ public final class ZoeAppModel: ObservableObject {
         generation == connectionGeneration.value && (sourceAPI == nil || sourceAPI === api)
     }
 
-
     private func recoverPendingCommands(expectedGeneration: UInt64, sourceAPI: APIClient, coordinator: CommandCoordinator, workspaceID: String?) async {
         guard !isBusy else { return }
         isBusy = true
@@ -2491,7 +2485,6 @@ public final class ZoeAppModel: ObservableObject {
         return status == 409
     }
 
-
     private func clearPreparedExport(status: String) {
         cancelExport(status: status)
     }
@@ -2537,7 +2530,6 @@ public final class ZoeAppModel: ObservableObject {
             try? FileManager.default.removeItem(at: entry)
         }
     }
-
 
     private static func isAccessDenied(_ error: Error) -> Bool {
         guard let failure = error as? ZoeError,

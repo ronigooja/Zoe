@@ -40,7 +40,6 @@ public struct MacSettingsView: View {
         Form { LabeledContent("Connection", value: model.authentication.isConnected ? "Connected" : "Not connected"); LabeledContent("Server", value: model.serverAddress.isEmpty ? "—" : model.serverAddress); Toggle("Continuous voice", isOn: Binding(get: { model.continuousVoiceEnabled }, set: { value in model.setContinuousVoiceEnabled(value); try? coordinator.registry.write(key: "voice.enabled", value: .bool(value), by: .user) })) }
     }
 
-
     private func simple(_ title: String, _ message: String) -> some View { VStack(alignment: .leading, spacing: 10) { Text(title).font(.title2.bold()); Text(message).foregroundStyle(.secondary); Spacer() }.frame(maxWidth: .infinity, alignment: .leading) }
 
     private var aiChanges: some View {

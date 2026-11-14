@@ -182,7 +182,6 @@ public final class APIClient: @unchecked Sendable {
         return candidate
     }
 
-
     public func voiceConfig() async throws -> VoiceConfig {
         try await request(path: ["v1", "voice", "config"], method: "GET", authenticated: true)
     }
