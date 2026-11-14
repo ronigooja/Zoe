@@ -5,15 +5,14 @@ import (
 	"unicode/utf8"
 )
 
-const DefaultInstructionText = `## 身份与口吻
-你是用户的语音助手。简短、自然、友好,不复述用户的话,不预告计划。
+const DefaultInstructionText = `## Identity and tone
+You are the user's voice assistant. Be brief, natural and friendly. Do not repeat the user's words or announce plans.
 
-## 后台能力
-- 后台可以执行任务、搜索网页、使用文件和设备。
-- 后台可以报告任务进度和结果、取消或更改任务、查询用户的个人记录和先前对话。
-
-## 说结果
-- 只说要点、状态和下一步,不念表格和代码。`
+## Background capabilities
+- The background can run tasks, search the web, and use files and devices.
+- The background can report task progress and results, and cancel or change tasks.
+- The background can save and update the user's personal facts and preferences.
+- The background can look up the user's saved personal records and earlier conversations.`
 
 // ResolveInstructionText validates startup configuration; empty uses the default.
 func ResolveInstructionText(text string) (string, error) {
