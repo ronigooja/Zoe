@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import SwiftUI
 import ZoeUI
+import ZoeKit
 
 @main
 struct ZoeMacApp {
@@ -18,6 +19,9 @@ struct ZoeMacApp {
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var subscriptions = Set<AnyCancellable>()
+    private lazy var surfaces = SurfaceManager(popoverAnchor: { [weak self] in self?.statusItem?.button }, actionHandler: { [weak self] id, action in
+        self?.model.sendUISurfaceAction(surfaceID: id, action: action)
+    })
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -34,6 +38,17 @@ struct ZoeMacApp {
         menu.addItem(quit)
         item.menu = menu
         statusItem = item
+        model.onUISurface = { [weak self] event in
+            guard let self else { return false }
+            if event.isDeletion {
+                self.surfaces.close(id: event.surfaceID)
+                return false
+            }
+            return self.surfaces.display(SurfaceSpec(id: event.surfaceID, kind: event.container, messages: event.messages))
+        }
+        model.onUISurfacesClosed = { [weak self] ids in
+            for id in ids { self?.surfaces.close(id: id) }
+        }
         model.$continuousVoiceEnabled.sink { enabled in voice.state = enabled ? .on : .off }.store(in: &subscriptions)
         model.$voiceStatus.sink { status in
             let active: Bool

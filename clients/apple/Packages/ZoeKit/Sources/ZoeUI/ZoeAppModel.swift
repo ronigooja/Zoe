@@ -3,12 +3,17 @@ import CryptoKit
 import ZoeKit
 import Foundation
 import WebRTC
+import A2UISwiftCore
 #if os(macOS)
 import AppKit
 #endif
 
 @MainActor
 public final class ZoeAppModel: ObservableObject {
+    /// Returns true only once the native host has displayed the replacement surface.
+    public var onUISurface: ((UISurfaceEvent) -> Bool)?
+    public var onUISurfacesClosed: (([String]) -> Void)?
+    private var uiSurfaceRequests = UISurfaceRequests()
     @Published public internal(set) var serverAddress: String
     @Published public private(set) var isConnecting = false
     @Published public private(set) var notice: String?
@@ -322,6 +327,7 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     private func lockWorkspace(clearDrafts: Bool) {
+        closeUISurfaces()
         connectionGeneration.advance()
         connectionEpoch = connectionGeneration.value
         eventTask?.cancel()
@@ -1066,9 +1072,11 @@ public final class ZoeAppModel: ObservableObject {
                     await self?.handle(push, expectedGeneration: generation, sourceAPI: api)
                 }
                 if Task.isCancelled || !isCurrentConnection(generation, sourceAPI: api) { return }
+                closeUISurfaces()
                 streamBackoff = 1
             } catch {
                 if Task.isCancelled || !isCurrentConnection(generation, sourceAPI: api) { return }
+                closeUISurfaces()
                 if Self.isAccessDenied(error) {
                     lockWorkspace(clearDrafts: false)
                     authentication = .disconnected
@@ -1088,6 +1096,19 @@ public final class ZoeAppModel: ObservableObject {
         switch push {
         case let .event(envelope):
             eventCursor = envelope.cursor
+            if envelope.type == "ui.surface", authentication.isConnected {
+                guard let event = UISurfaceEvent.decode(envelope.payload),
+                      envelope.aggregateType == "ui_surface", envelope.aggregateId == event.surfaceID else {
+                    api?.recordDiagnostic(phase: "ui_surface", requestPath: "/v1/events", errorType: "contract_rejected", errorSummary: "invalid_ui_surface", level: .warn)
+                    return
+                }
+                uiSurfaceRequests.apply(event)
+                let displayed = onUISurface?(event) ?? false
+                if displayed, !event.isDeletion {
+                    await submitUICommand(kind: "ui.rendered", payload: event.renderedPayload,
+                                          key: event.renderedIdempotencyKey(cursor: envelope.cursor, version: envelope.aggregateVersion))
+                }
+            }
             if envelope.type == "voice.end" { await endVoiceSession() }
         case .snapshotRequired:
             do { try await validateConnection() }
@@ -1097,6 +1118,40 @@ public final class ZoeAppModel: ObservableObject {
 
     private func isCurrentConnection(_ generation: UInt64, sourceAPI: APIClient?) -> Bool {
         generation == connectionGeneration.value && (sourceAPI == nil || sourceAPI === api)
+    }
+
+    private func closeUISurfaces() {
+        let ids = Array(uiSurfaceRequests.requestIDs.keys)
+        uiSurfaceRequests.removeAll()
+        onUISurfacesClosed?(ids)
+    }
+
+    public func sendUISurfaceAction(surfaceID: String, action: ResolvedAction) {
+        guard authentication.isConnected, let requestID = uiSurfaceRequests.requestIDs[surfaceID] else { return }
+        do {
+            let payload = try uiActionPayload(requestID: requestID, surfaceID: surfaceID, action: action)
+            let generation = connectionGeneration.value
+            let sourceAPI = api
+            Task { @MainActor [weak self] in
+                guard let self, self.isCurrentConnection(generation, sourceAPI: sourceAPI),
+                      self.uiSurfaceRequests.requestIDs[surfaceID] == requestID else { return }
+                await self.submitUICommand(kind: "ui.action", payload: payload, key: UUID().uuidString.lowercased())
+            }
+        } catch {
+            api?.recordDiagnostic(phase: "ui_action", requestPath: "/v1/commands", errorType: "encoding_error", errorSummary: "invalid_action_context", level: .warn)
+        }
+    }
+
+    private func submitUICommand(kind: String, payload: JSONValue, key: String) async {
+        guard authentication.isConnected, let api else { return }
+        do {
+            // UI commands are transient: submit once, never journal/retry failed actions.
+            _ = try await api.submit(kind: kind, payload: payload, idempotencyKey: key)
+        } catch {
+            let diagnostic = RedactedDiagnostic(error)
+            api.recordDiagnostic(phase: "ui_command", requestPath: "/v1/commands", httpStatus: diagnostic.httpStatus,
+                                 errorType: diagnostic.errorType, errorSummary: diagnostic.errorSummary, level: .warn)
+        }
     }
 
     private static func isAccessDenied(_ error: Error) -> Bool {

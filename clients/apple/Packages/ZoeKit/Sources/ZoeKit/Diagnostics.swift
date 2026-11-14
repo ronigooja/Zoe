@@ -2,14 +2,14 @@ import Foundation
 import CryptoKit
 
 public enum DiagnosticLevel: String, Codable, CaseIterable, Sendable {
-    case error, info, debug
+    case error, warn, info, debug
 
     public static func parse(_ value: String?) -> DiagnosticLevel {
         guard let value, let level = DiagnosticLevel(rawValue: value.lowercased()) else { return .error }
         return level
     }
 
-    fileprivate var rank: Int { self == .error ? 0 : (self == .info ? 1 : 2) }
+    fileprivate var rank: Int { self == .error || self == .warn ? 0 : (self == .info ? 1 : 2) }
     fileprivate func isAllowed(by policy: DiagnosticLevel) -> Bool { rank <= policy.rank }
 }
 

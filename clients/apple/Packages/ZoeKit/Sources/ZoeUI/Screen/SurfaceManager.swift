@@ -16,10 +16,10 @@ import A2UISwiftUI
 
     private var store = SurfaceStore()
     private var entries: [String: Entry] = [:]
-    private let actionHandler: (ResolvedAction) -> Void
+    private let actionHandler: (String, ResolvedAction) -> Void
     private let popoverAnchor: () -> NSView?
 
-    public init(popoverAnchor: @escaping () -> NSView?, actionHandler: @escaping (ResolvedAction) -> Void = { _ in }) {
+    public init(popoverAnchor: @escaping () -> NSView?, actionHandler: @escaping (String, ResolvedAction) -> Void = { _, _ in }) {
         self.popoverAnchor = popoverAnchor
         self.actionHandler = actionHandler
         super.init()
@@ -30,7 +30,7 @@ import A2UISwiftUI
         store.open(spec)
         let model = SurfaceViewModel(catalog: basicCatalog)
         model.processMessages(store.surfaces[spec.id]!.messages)
-        let controller = hostingController(model)
+        let controller = hostingController(model, id: spec.id)
         var entry = Entry(viewModel: model)
         switch spec.kind {
         case .window:
@@ -40,6 +40,7 @@ import A2UISwiftUI
             window.delegate = self
             window.contentViewController = controller
             window.center()
+            NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             entry.window = window
         case .statusItem, .popover:
@@ -71,8 +72,32 @@ import A2UISwiftUI
             model.processMessages([message])
         }
         entries[id] = Entry(viewModel: model, window: entry.window, popover: entry.popover, statusItem: entry.statusItem)
-        entry.window?.contentViewController = hostingController(model)
-        entry.popover?.contentViewController = hostingController(model)
+        entry.window?.contentViewController = hostingController(model, id: id)
+        entry.popover?.contentViewController = hostingController(model, id: id)
+    }
+
+    /// A dismissed popover keeps its renderer; every new server state presents it again.
+    @discardableResult public func display(_ spec: SurfaceSpec) -> Bool {
+        if entries[spec.id] != nil, store.surfaces[spec.id]?.kind == spec.kind {
+            update(id: spec.id, messages: spec.messages)
+        } else {
+            open(spec)
+        }
+        guard let entry = entries[spec.id] else { return false }
+        switch spec.kind {
+        case .window:
+            NSApp.activate(ignoringOtherApps: true)
+            entry.window?.makeKeyAndOrderFront(nil)
+            return entry.window?.isVisible == true
+        case .popover:
+            guard let anchor = popoverAnchor() else { return false }
+            if entry.popover?.isShown != true {
+                entry.popover?.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+            }
+            return entry.popover?.isShown == true
+        case .statusItem:
+            return entry.statusItem?.isVisible == true
+        }
     }
 
     public func close(id: String) {
@@ -94,9 +119,9 @@ import A2UISwiftUI
         else { popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY) }
     }
 
-    private func hostingController(_ model: SurfaceViewModel) -> NSViewController {
+    private func hostingController(_ model: SurfaceViewModel, id: String) -> NSViewController {
         NSHostingController(rootView: A2UISurfaceView(viewModel: model, onAction: { [weak self] action in
-            Task { @MainActor [weak self] in self?.actionHandler(action) }
+            Task { @MainActor [weak self] in self?.actionHandler(id, action) }
         }))
     }
 }
