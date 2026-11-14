@@ -1,5 +1,7 @@
 import Foundation
-import Security
+import CryptoKit
+import Darwin
+import IOKit
 
 /// A canonical 256-bit instance credential. Never include this value in diagnostics.
 public struct InstanceKey: Equatable, Sendable, BearerTokenProviding {
@@ -79,7 +81,7 @@ public struct InstallationConnection: Equatable, Sendable {
     }
 }
 
-/// One Keychain item per normalized server address; no file-backed credential alternative.
+/// One encrypted local credential per normalized server address.
 public protocol InstanceKeyStoring: BearerTokenProviding {
     func load() throws -> InstanceKey?
     /// Atomically replace the credential; a thrown write must preserve the previous value.
@@ -88,63 +90,100 @@ public protocol InstanceKeyStoring: BearerTokenProviding {
 }
 
 public final class InstanceKeyStore: InstanceKeyStoring, @unchecked Sendable {
+    /// The bundle-and-server scope used for the filename and encryption context.
     let service: String
-    public init(serverURL: URL, bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.zoe.client") throws {
+    let fileURL: URL
+    private let directory: URL
+    private let hardwareIDProvider: () throws -> String
+    private static let magic = Data([0x5a, 0x4f, 0x45, 0x01])
+    var writeFile: (Data, URL) throws -> Void = InstanceKeyStore.atomicWrite
+
+    public init(serverURL: URL, bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.zoe.client", directory: URL? = nil, hardwareIDProvider: (() throws -> String)? = nil) throws {
         let serverURL = try ServerAddress.normalize(serverURL.absoluteString)
         service = "\(bundleIdentifier).instance-key.\(serverURL.absoluteString)"
+        self.directory = try directory ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false).appendingPathComponent("Zoe", isDirectory: true)
+        let filename = SHA256.hash(data: Data(service.utf8)).map { String(format: "%02x", $0) }.joined() + ".key"
+        fileURL = self.directory.appendingPathComponent(filename)
+        self.hardwareIDProvider = hardwareIDProvider ?? Self.hardwareUUID
     }
-    private var query: [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "instance-key"]
-    }
-    /// Process-wide read cache so repeated requests do not hit Keychain (and its prompts) each time.
+    /// Process-wide decrypted-value cache, scoped by server and validated against file and hardware.
     private static let cache = KeyCache()
+    private struct CachedKey {
+        let fingerprint: Data
+        let key: InstanceKey
+    }
     private final class KeyCache: @unchecked Sendable {
         private let lock = NSLock()
-        private var values: [String: InstanceKey] = [:]
-        func get(_ service: String) -> InstanceKey? { lock.lock(); defer { lock.unlock() }; return values[service] }
-        func set(_ service: String, _ key: InstanceKey?) { lock.lock(); defer { lock.unlock() }; values[service] = key }
+        private var values: [String: CachedKey] = [:]
+        func get(_ service: String) -> CachedKey? { lock.lock(); defer { lock.unlock() }; return values[service] }
+        func set(_ service: String, _ key: CachedKey?) { lock.lock(); defer { lock.unlock() }; values[service] = key }
     }
 
     public func load() throws -> InstanceKey? {
-        if let cached = Self.cache.get(service) { return cached }
-        let loaded = try loadFromKeychain()
-        if let loaded { Self.cache.set(service, loaded) }
-        return loaded
-    }
-    private func loadFromKeychain() throws -> InstanceKey? {
-        var request = query
-        request[kSecReturnData as String] = true
-        request[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(request as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        try check(status)
-        guard let data = result as? Data, let text = String(data: data, encoding: .utf8) else { throw ZoeError.persistence("The saved instance key cannot be read.") }
-        return try InstanceKey(text)
+        let data: Data
+        do { data = try Data(contentsOf: fileURL) }
+        catch CocoaError.fileReadNoSuchFile { Self.cache.set(service, nil); return nil }
+        catch { throw ZoeError.persistence("The saved instance key cannot be read.") }
+        let hardwareID = try hardwareIDProvider()
+        guard !hardwareID.isEmpty else { throw ZoeError.persistence("The hardware identifier cannot be read.") }
+        do {
+            guard data.count >= Self.magic.count + 32 + 28, data.starts(with: Self.magic) else { throw CocoaError(.fileReadCorruptFile) }
+            let salt = data.subdata(in: Self.magic.count..<(Self.magic.count + 32))
+            let key = encryptionKey(hardwareID: hardwareID, salt: salt)
+            let fingerprint = Data(SHA256.hash(data: data + key.withUnsafeBytes { Data($0) }))
+            if let cached = Self.cache.get(service), cached.fingerprint == fingerprint { return cached.key }
+            let box = try AES.GCM.SealedBox(combined: data.dropFirst(Self.magic.count + 32))
+            let plaintext = try AES.GCM.open(box, using: key)
+            guard let text = String(data: plaintext, encoding: .utf8) else { throw CocoaError(.fileReadCorruptFile) }
+            let loaded = try InstanceKey(text)
+            Self.cache.set(service, CachedKey(fingerprint: fingerprint, key: loaded))
+            return loaded
+        } catch { throw ZoeError.persistence("The saved instance key cannot be read.") }
     }
     public func replace(_ key: InstanceKey) throws {
-        let data = Data(try key.bearerToken().utf8)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var request = query
-            request[kSecValueData as String] = data
-            request[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            try check(SecItemAdd(request as CFDictionary, nil))
-        } else { try check(status) }
-        Self.cache.set(service, key)
+        let hardwareID = try hardwareIDProvider()
+        guard !hardwareID.isEmpty else { throw ZoeError.persistence("The hardware identifier cannot be read.") }
+        do {
+            let salt = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
+            let sealed = try AES.GCM.seal(Data(try key.bearerToken().utf8), using: encryptionKey(hardwareID: hardwareID, salt: salt))
+            guard let combined = sealed.combined else { throw CocoaError(.fileWriteUnknown) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            try writeFile(Self.magic + salt + combined, fileURL)
+            Self.cache.set(service, nil)
+        } catch { throw ZoeError.persistence("The instance key could not be saved in local storage.") }
     }
     public func reset() throws {
-        let status = SecItemDelete(query as CFDictionary)
-        if status != errSecItemNotFound { try check(status) }
+        do { try FileManager.default.removeItem(at: fileURL) }
+        catch CocoaError.fileNoSuchFile {}
+        catch { throw ZoeError.persistence("The saved instance key could not be removed.") }
         Self.cache.set(service, nil)
     }
     public func bearerToken() throws -> String {
         guard let key = try load() else { throw ZoeError.missingCredential }
         return try key.bearerToken()
     }
-    private func check(_ status: OSStatus) throws {
-        guard status != errSecSuccess else { return }
-        if [errSecAuthFailed, errSecInteractionNotAllowed, errSecUserCanceled].contains(status) { throw ZoeError.credentialAccessDenied("Keychain") }
-        throw ZoeError.persistence("The instance key could not be accessed in Keychain.")
+    private func encryptionKey(hardwareID: String, salt: Data) -> SymmetricKey {
+        HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: Data(hardwareID.utf8)), salt: salt, info: Data("Zoe.instance-key.v1.\(service)".utf8), outputByteCount: 32)
+    }
+
+    private static func atomicWrite(_ data: Data, to destination: URL) throws {
+        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".\(UUID().uuidString).tmp")
+        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+        close(descriptor)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try data.write(to: temporary)
+        guard rename(temporary.path, destination.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
+    }
+
+    private static func hardwareUUID() throws -> String {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
+        guard service != 0 else { throw ZoeError.persistence("The hardware identifier cannot be read.") }
+        defer { IOObjectRelease(service) }
+        guard let value = IORegistryEntryCreateCFProperty(service, "IOPlatformUUID" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? String, !value.isEmpty else {
+            throw ZoeError.persistence("The hardware identifier cannot be read.")
+        }
+        return value
     }
 }

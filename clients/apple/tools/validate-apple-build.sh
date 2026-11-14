@@ -13,7 +13,7 @@ Create a clean source snapshot and run Apple checks with all generated files
 under --output-root. Both --output-root and --package-cache-seed must be below
 --approved-root. The seed must contain SwiftPM artifacts, checkouts, and
 repositories for the pinned WebRTC dependency. The seed is read only; its
-contents are copied into the new output directory. No Keychain access is
+contents are copied into the new output directory. No credential access is
 needed when the seed contains the pinned artifact.
 
 The checks run Swift package tests and an unsigned macOS Xcode app build.

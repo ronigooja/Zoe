@@ -99,8 +99,6 @@ public struct RedactedDiagnostic: Equatable, Sendable {
                 httpStatus = 0; errorType = "ZoeError"; errorSummary = "invalid_response"
             case .persistence:
                 httpStatus = 0; errorType = "ZoeError"; errorSummary = "persistence"
-            case .credentialAccessDenied:
-                httpStatus = 0; errorType = "ZoeError"; errorSummary = "credential_access_denied"
             case .missingCredential:
                 httpStatus = 0; errorType = "ZoeError"; errorSummary = "missing_credential"
             case .invalidServerURL:
