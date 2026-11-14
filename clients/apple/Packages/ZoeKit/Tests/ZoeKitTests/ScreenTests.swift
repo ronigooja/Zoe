@@ -1,4 +1,5 @@
 import XCTest
+import A2UISwiftCore
 @testable import ZoeKit
 
 private final class TestClock: SilenceClock {
@@ -9,58 +10,18 @@ private final class TestClock: SilenceClock {
 
 @MainActor private final class TestSurfaceHost: SurfaceHost {
     var opened: [SurfaceSpec] = []
-    var updated: [(String, ScreenDocument?, SurfaceWindowSpec?)] = []
+    var updated: [(String, [A2uiMessage]?, SurfaceWindowSpec?)] = []
     var closed: [String] = []
     var ids: [String] = []
 
     func open(_ spec: SurfaceSpec) { opened.append(spec); ids.append(spec.id) }
-    func update(id: String, document: ScreenDocument?, window: SurfaceWindowSpec?) { updated.append((id, document, window)) }
+    func update(id: String, messages: [A2uiMessage]?, window: SurfaceWindowSpec?) { updated.append((id, messages, window)) }
     func close(id: String) { closed.append(id); ids.removeAll { $0 == id } }
     func openSurfaceIDs() -> [String] { ids }
 }
 
 @MainActor
 final class ScreenTests: XCTestCase {
-    func testCatalogIncludesEveryPrimitiveAndStandardComponent() {
-        let types = Set(ComponentCatalog.descriptors.map(\.type))
-        let expected = ["stack", "grid", "split", "group", "spacer", "canvas", "layer", "scroll", "frame", "background",
-                        "title", "text", "richText", "list", "table", "progress", "statusDot", "image", "icon", "link", "countdown", "divider",
-                        "button", "choice", "input", "toggle", "metric", "timeline", "steps", "decision", "compare", "collection", "article", "chart",
-                        "place", "media", "notice", "facts", "status", "form", "quote", "code", "gauge", "calendar", "map", "gallery", "ranking", "checklist"]
-        XCTAssertEqual(types, Set(expected))
-        XCTAssertTrue(ComponentCatalog.descriptors.allSatisfy { !$0.purpose.isEmpty && !($0.fallback.isEmpty) })
-    }
-
-    func testUnknownComponentFallsBackToReadableTextAndResolvesChildren() {
-        let node = ScreenNode(id: "mystery", type: "businessConcept", props: ["title": .string("Hello")], children: [
-            ScreenNode(id: "known", type: "text", props: ["text": .string("Child")]),
-            ScreenNode(id: "unknownChild", type: "notKnown", props: ["value": .number(2)])
-        ])
-        let result = ComponentCatalog.resolve(node)
-        XCTAssertEqual(result.type, "stack")
-        XCTAssertEqual(result.children.count, 4)
-        XCTAssertTrue(result.children.allSatisfy { $0.type == "text" })
-        XCTAssertTrue(result.children.contains { $0.props["text"] == .string("title: Hello") })
-    }
-
-    func testDocumentPatchAppliesInOrderAndRejectsStaleRevision() {
-        let root = ScreenNode(id: "root", type: "stack", children: [
-            ScreenNode(id: "one", type: "text", props: ["text": .string("old")]),
-            ScreenNode(id: "two", type: "text", props: ["text": .string("keep")])
-        ])
-        let document = ScreenDocument(version: 1, revision: 4, root: root)
-        let patch = ScreenDocumentPatch(revision: 5, operations: [
-            .update(ScreenNodePatch(id: "one", props: ["text": .string("updated")])),
-            .replace(id: "two", node: ScreenNode(id: "two", type: "statusDot", props: ["state": .string("done")])),
-            .remove(id: "one")
-        ])
-        let result = document.applying(patch)
-        XCTAssertEqual(result?.revision, 5)
-        XCTAssertEqual(result?.root.children.map(\.id), ["two"])
-        XCTAssertEqual(result?.root.children.first?.type, "statusDot")
-        XCTAssertNil(document.applying(ScreenDocumentPatch(revision: 4)))
-    }
-
     func testSettingsUserOnlyAuditUndoAndPersistence() throws {
         let store = InMemorySettingsStore()
         let registry = SettingsRegistry(store: store)
@@ -99,7 +60,7 @@ final class ScreenTests: XCTestCase {
         XCTAssertEqual(controller.tick(), .none)
     }
 
-    func testDefaultScreenIsChronologicalWithoutRankingOrInventedContent() {
+    func testDefaultScreenIsChronologicalWithoutRankingOrInventedContent() throws {
         let task = TaskRecord(id: "t", projectId: nil, title: "Real task", goal: "real goal", source: "user", profileId: nil,
                               status: .active, version: 1, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-02T00:00:00Z",
                               acceptedAt: nil, startedAt: nil, finishedAt: nil, result: nil, error: nil, evidence: [], canAcceptResult: false)
@@ -107,11 +68,31 @@ final class ScreenTests: XCTestCase {
                                 createdAt: "2026-01-03T00:00:00Z", expiresAt: nil, requestedAction: nil, requestedActionDigest: nil)
         let notification = NotificationRecord(id: "n", kind: "info", title: "Real notice", body: "Real body", aggregateType: "task",
                                               aggregateId: "t", sourceEventId: "event", createdAt: "2026-01-04T00:00:00Z", readAt: nil)
-        let document = DefaultScreenBuilder.build(tasks: [task], approvals: [approval], notifications: [notification], revision: 9)
-        XCTAssertEqual(document.root.children.map(\.id), ["notification.n", "approval.a", "task.t"])
-        XCTAssertFalse(document.root.children.contains { $0.type == "ranking" })
-        XCTAssertTrue(document.root.children.flatMap(\.children).contains { $0.props["text"] == .string("Real task") })
-        XCTAssertEqual(DefaultScreenBuilder.build(tasks: [], approvals: [], notifications: [], revision: 1).root.children, [])
+        let messages = DefaultScreenBuilder.build(tasks: [task], approvals: [approval], notifications: [notification])
+        guard case let .createSurface(create) = messages[0], case let .updateComponents(update) = messages[1] else { return XCTFail("missing messages") }
+        XCTAssertEqual(create.surfaceId, "main")
+        XCTAssertEqual(create.catalogId, basicCatalogId)
+        XCTAssertFalse(create.sendDataModel)
+        XCTAssertEqual(update.components[0].properties["children"], .array([.string("notification.n"), .string("approval.a"), .string("task.t")]))
+        XCTAssertEqual(Set(update.components.map(\.id)).count, 13)
+        XCTAssertEqual(update.components.first { $0.id == "task.t.title" }?.properties["text"], .string("Real task"))
+        let one = DefaultScreenBuilder.build(tasks: [task], approvals: [], notifications: [])
+        let json = try JSONDecoder().decode([JSONValue].self, from: JSONEncoder().encode(one))
+        guard case let .object(envelope) = json[1], case let .object(payload)? = envelope["updateComponents"],
+              case let .array(components)? = payload["components"] else { return XCTFail("invalid encoded components") }
+        XCTAssertEqual(components, [
+            .object(["id": .string("root"), "component": .string("List"), "children": .array([.string("task.t")])]),
+            .object(["id": .string("task.t"), "component": .string("Card"), "child": .string("task.t.content")]),
+            .object(["id": .string("task.t.content"), "component": .string("Column"), "children": .array([.string("task.t.title"), .string("task.t.status")])]),
+            .object(["id": .string("task.t.title"), "component": .string("Text"), "text": .string("Real task")]),
+            .object(["id": .string("task.t.status"), "component": .string("Text"), "text": .string(task.status.label)])
+        ])
+        var tied = notification
+        tied.createdAt = approval.createdAt
+        guard case let .updateComponents(tieUpdate) = DefaultScreenBuilder.build(tasks: [], approvals: [approval], notifications: [tied])[1] else { return XCTFail("missing tie update") }
+        XCTAssertEqual(tieUpdate.components[0].properties["children"], .array([.string("approval.a"), .string("notification.n")]))
+        guard case let .updateComponents(empty) = DefaultScreenBuilder.build(tasks: [], approvals: [], notifications: [])[1] else { return XCTFail("missing empty update") }
+        XCTAssertEqual(empty.components, [RawComponent(id: "root", component: "List", properties: ["children": .array([])])])
     }
 
     func testRouterHandlesToolsAndShortErrors() async {
@@ -131,29 +112,55 @@ final class ScreenTests: XCTestCase {
         XCTAssertEqual(starts, 1)
     }
 
-    func testRouterDecodesFlatWindowContractIncludingMenuBarAndDescribesCatalogShape() async throws {
+    func testRouterDecodesFlatWindowContractIncludingMenuBar() async throws {
         let host = TestSurfaceHost()
         let router = ScreenToolRouter(host: host, settings: SettingsRegistry(), startVoice: {}, endVoice: {}, setSilenceTimeout: { _ in }, showTextInput: {}, hideTextInput: {})
-        let document: JSONValue = .object(["version": .integer(1), "revision": .integer(9), "root": .object(["id": .string("root"), "type": .string("text"), "props": .object(["text": .string("hello")])])])
-        let result = await router.handle(tool: "surface.open", args: ["id": .string("surface"), "kind": .string("window"), "document": document,
+        let messages = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(DefaultScreenBuilder.build(tasks: [], approvals: [], notifications: [])))
+        let result = await router.handle(tool: "surface.open", args: ["id": .string("surface"), "kind": .string("window"), "messages": messages,
                                                                         "window": .object(["width": .number(400), "height": .number(200), "x": .number(10), "y": .number(20), "floating": .bool(true), "showInMenuBar": .bool(true)])])
         XCTAssertEqual(result, .object(["ok": .bool(true)]))
         XCTAssertEqual(host.opened.first?.window.width, 400)
         XCTAssertEqual(host.opened.first?.window.x, 10)
         XCTAssertEqual(host.opened.first?.window.showInMenuBar, true)
 
-        let described = await router.handle(tool: "components.describe", args: [:])
-        guard case let .object(fields) = described, case let .array(components)? = fields["components"],
-              case let .object(stack)? = components.first(where: { if case let .object(value) = $0 { return value["type"] == .string("stack") }; return false }) else { return XCTFail("missing stack descriptor") }
-        XCTAssertNotNil(stack["propsSchema"])
-        XCTAssertNotNil(stack["example"])
-        XCTAssertEqual(stack["libraryVersion"], .number(1))
+        XCTAssertEqual(host.opened.first?.messages.count, 2)
+        let invalid = await router.handle(tool: "surface.open", args: ["id": .string("bad"), "kind": .string("window"), "messages": .array([.object([:])])])
+        XCTAssertEqual(invalid, .object(["error": .string("invalid surface messages")]))
+        XCTAssertEqual(host.opened.count, 1)
+        let updated = await router.handle(tool: "surface.update", args: ["id": .string("surface"), "patch": .object(["messages": messages])])
+        XCTAssertEqual(updated, .object(["ok": .bool(true)]))
+        XCTAssertEqual(host.updated.first?.1?.count, 2)
+        let invalidUpdate = await router.handle(tool: "surface.update", args: ["id": .string("surface"), "messages": .string("invalid")])
+        XCTAssertEqual(invalidUpdate, .object(["error": .string("invalid surface messages")]))
     }
 
-    func testComponentDescriptorsCarryContractMetadata() {
-        let descriptor = try! XCTUnwrap(ComponentCatalog.descriptors.first(where: { $0.type == "decision" }))
-        XCTAssertEqual(descriptor.libraryVersion, ComponentCatalog.version)
-        XCTAssertEqual(descriptor.example.type, "decision")
-        XCTAssertNotNil(descriptor.propsSchema["question"])
+    func testResolvedActionPreservesJSONValues() {
+        let action = ScreenAction(ResolvedAction(name: "surface.open", sourceComponentId: "button", context: [
+            "null": .null, "bool": .bool(true), "integer": .number(42), "fraction": .number(1.5),
+            "large": .number(1e30), "string": .string("hello"),
+            "array": .array([.null, .dictionary(["nested": .bool(false)])])
+        ]))
+        XCTAssertEqual(action, ScreenAction(intent: "surface.open", args: [
+            "null": .null, "bool": .bool(true), "integer": .integer(42), "fraction": .number(1.5),
+            "large": .number(1e30), "string": .string("hello"),
+            "array": .array([.null, .object(["nested": .bool(false)])])
+        ]))
+    }
+
+    func testFirstTextLabelUsesMessageOrderAndUpdates() {
+        func update(_ components: [RawComponent]) -> A2uiMessage {
+            .updateComponents(UpdateComponentsPayload(surfaceId: "main", components: components))
+        }
+        let initial = update([
+            RawComponent(id: "root", component: "List"),
+            RawComponent(id: "first", component: "Text", properties: ["text": .string("First")]),
+            RawComponent(id: "second", component: "Text", properties: ["text": .string("Second")])
+        ])
+        XCTAssertNil(firstTextLabel(in: []))
+        XCTAssertEqual(firstTextLabel(in: [initial]), "First")
+        XCTAssertEqual(firstTextLabel(in: [initial, update([RawComponent(id: "first", component: "Text", properties: ["text": .string("Changed")])])]), "Changed")
+        XCTAssertEqual(firstTextLabel(in: [initial, update([RawComponent(id: "first", component: "", properties: ["text": .string("Partial")])])]), "Partial")
+        XCTAssertNil(firstTextLabel(in: [initial, .deleteSurface(DeleteSurfacePayload(surfaceId: "main"))]))
+        XCTAssertNil(firstTextLabel(in: [update([RawComponent(id: "dynamic", component: "Text", properties: ["text": .dictionary(["path": .string("/label")])])])]))
     }
 }

@@ -2,6 +2,8 @@
 import AppKit
 import SwiftUI
 import ZoeKit
+import A2UISwiftCore
+import A2UISwiftUI
 
 final class ZoePanel: NSPanel {
     var permitsKey = true
@@ -15,7 +17,7 @@ public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate {
         var window: NSWindow?
         var popover: NSPopover?
         var statusItem: NSStatusItem?
-        var store: ScreenDataStore
+        var viewModel: SurfaceViewModel
         var lastUserWindowAction: Date?
     }
 
@@ -33,8 +35,12 @@ public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate {
     func setActionHandler(_ handler: @escaping (ScreenAction) -> Void) { actionHandler = handler }
 
     public func open(_ spec: SurfaceSpec) {
-        if entries[spec.id] != nil { update(id: spec.id, document: spec.document, window: spec.window); return }
-        let entry = Entry(spec: spec, window: nil, popover: nil, statusItem: nil, store: ScreenDataStore(document: spec.document), lastUserWindowAction: nil)
+        if entries[spec.id] != nil { update(id: spec.id, messages: spec.messages, window: spec.window); return }
+        let viewModel = SurfaceViewModel(catalog: basicCatalog)
+        // Ignore lifecycle teardown before the first create on a newly opened native surface.
+        let initialMessages = spec.messages.drop(while: { if case .deleteSurface = $0 { return true }; return false })
+        viewModel.processMessages(Array(initialMessages))
+        let entry = Entry(spec: spec, window: nil, popover: nil, statusItem: nil, viewModel: viewModel, lastUserWindowAction: nil)
         entries[spec.id] = entry
         switch spec.kind {
         case .window, .panel: openWindow(spec)
@@ -44,18 +50,32 @@ public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate {
         }
     }
 
-    public func update(id: String, document: ScreenDocument?, window: SurfaceWindowSpec?) {
+    public func update(id: String, messages: [A2uiMessage]?, window: SurfaceWindowSpec?) {
         guard var entry = entries[id] else { return }
-        if let document { entry.spec.document = document; entry.store.replace(document: document) }
+        if let messages {
+            // A new create starts a fresh renderer, including its data model and subscriptions.
+            // The native window survives so user positioning and the action-wins guard survive too.
+            if messages.contains(where: { if case .createSurface = $0 { return true }; return false }) {
+                entry.spec.messages = messages
+            } else {
+                entry.spec.messages += messages
+            }
+            for message in messages {
+                if case .createSurface = message { entry.viewModel = SurfaceViewModel(catalog: basicCatalog) }
+                entry.viewModel.processMessages([message])
+            }
+        }
         if let window {
             let recentUserAction = entry.lastUserWindowAction.map { Date().timeIntervalSince($0) < 2 } ?? false
             if !recentUserAction { entry.spec.window = window }
         }
         entries[id] = entry
         switch entry.spec.kind {
-        case .window, .panel: applyWindow(entry.spec, to: entry.window)
+        case .window, .panel:
+            entry.window?.contentViewController = hostingController(for: entry.spec, viewModel: entry.viewModel)
+            applyWindow(entry.spec, to: entry.window)
         case .statusItem: updateStatusItem(entry.spec, item: entry.statusItem)
-        case .popover: entry.popover?.contentViewController = hostingController(for: entry.spec, store: entry.store)
+        case .popover: entry.popover?.contentViewController = hostingController(for: entry.spec, viewModel: entry.viewModel)
         case .dockBadge: renderDockBadge(entry.spec)
         }
     }
@@ -70,8 +90,8 @@ public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate {
 
     public func openSurfaceIDs() -> [String] { Array(entries.keys) }
 
-    public func showMain(document: ScreenDocument, perform: ((ScreenAction) -> Void)? = nil) {
-        let spec = SurfaceSpec(id: "main", kind: .window, document: document)
+    public func showMain(messages: [A2uiMessage], perform: ((ScreenAction) -> Void)? = nil) {
+        let spec = SurfaceSpec(id: "main", kind: .window, messages: messages)
         open(spec)
         if let perform { _ = perform }
     }
@@ -107,7 +127,7 @@ public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate {
         else { panel = NSWindow(contentRect: .zero, styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false) }
         panel.delegate = self
         panel.identifier = NSUserInterfaceItemIdentifier(spec.id)
-        panel.contentViewController = hostingController(for: spec, store: entries[spec.id]!.store)
+        panel.contentViewController = hostingController(for: spec, viewModel: entries[spec.id]!.viewModel)
         entries[spec.id]?.window = panel
         applyWindow(spec, to: panel)
     }
@@ -144,7 +164,7 @@ public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate {
     private func updateStatusItem(_ spec: SurfaceSpec, item: NSStatusItem?) {
         guard let button = item?.button else { return }
         button.image = statusImage(for: spec)
-        button.title = spec.document.root.props["label"]?.stringValue ?? ""
+        button.title = firstTextLabel(in: spec.messages) ?? ""
         button.toolTip = spec.id
         button.target = self
         button.action = #selector(statusItemClicked(_:))
@@ -158,7 +178,7 @@ public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate {
     private func openPopover(_ spec: SurfaceSpec) {
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = hostingController(for: spec, store: entries[spec.id]!.store)
+        popover.contentViewController = hostingController(for: spec, viewModel: entries[spec.id]!.viewModel)
         entries[spec.id]?.popover = popover
         if let button = floorStatusItem.button { popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) }
     }
@@ -168,18 +188,19 @@ public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate {
             NSColor.controlAccentColor.setFill(); NSBezierPath(roundedRect: rect.insetBy(dx: 8, dy: 8), xRadius: 20, yRadius: 20).fill(); return true
         }
         NSApp.dockTile.contentView = NSImageView(image: image)
-        NSApp.dockTile.badgeLabel = spec.document.root.props["label"]?.stringValue
+        NSApp.dockTile.badgeLabel = firstTextLabel(in: spec.messages)
         NSApp.dockTile.display()
     }
 
-    private func hostingController(for spec: SurfaceSpec, store: ScreenDataStore) -> NSViewController {
-        let base = ScreenRenderer(document: spec.document, store: store, perform: actionHandler)
+    private func hostingController(for spec: SurfaceSpec, viewModel: SurfaceViewModel) -> NSViewController {
+        let base = surfaceView(viewModel)
         let view = Group { if let material = spec.window.material { base.background(MaterialView(material: material, opacity: spec.window.opacity ?? 1)) } else { base } }
         return NSHostingController(rootView: view)
     }
 
     private func statusImage(for spec: SurfaceSpec) -> NSImage {
-        let hosting = NSHostingView(rootView: ScreenRenderer(document: spec.document, store: ScreenDataStore(document: spec.document), perform: actionHandler).frame(width: 20, height: 20))
+        guard let viewModel = entries[spec.id]?.viewModel else { return NSImage(size: .zero) }
+        let hosting = NSHostingView(rootView: surfaceView(viewModel).frame(width: 20, height: 20))
         hosting.frame = CGRect(x: 0, y: 0, width: 20, height: 20)
         hosting.layoutSubtreeIfNeeded()
         let image = NSImage(size: hosting.bounds.size)
@@ -187,6 +208,13 @@ public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate {
         hosting.cacheDisplay(in: hosting.bounds, to: representation)
         image.addRepresentation(representation)
         return image
+    }
+
+    private func surfaceView(_ viewModel: SurfaceViewModel) -> some View {
+        A2UISurfaceView(viewModel: viewModel, onAction: { [weak self] action in
+            let screenAction = ScreenAction(action)
+            Task { @MainActor [weak self] in self?.actionHandler(screenAction) }
+        })
     }
 
     public func windowWillClose(_ notification: Notification) {
@@ -201,10 +229,6 @@ public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate {
 
 private extension Array {
     subscript(safe index: Index) -> Element? { indices.contains(index) ? self[index] : nil }
-}
-
-private extension JSONValue {
-    var stringValue: String? { if case let .string(value) = self { return value }; return nil }
 }
 
 public extension Notification.Name { static let zoeWakeVoice = Notification.Name("ZoeWakeVoice") }

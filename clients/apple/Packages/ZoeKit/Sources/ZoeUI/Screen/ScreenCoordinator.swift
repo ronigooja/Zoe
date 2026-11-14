@@ -2,6 +2,7 @@
 import AppKit
 import SwiftUI
 import ZoeKit
+import A2UISwiftCore
 
 @MainActor
 public final class ScreenCoordinator: ObservableObject {
@@ -12,7 +13,7 @@ public final class ScreenCoordinator: ObservableObject {
     private var ticker: Task<Void, Never>?
     private var voiceWakeObserver: NSObjectProtocol?
     private var shortcutMonitor: Any?
-    private var document: ScreenDocument?
+    private var messages: [A2uiMessage]?
     @Published public var textInputVisible = false
     @Published public var sendState: String?
     @Published public var aiChange: SettingAuditRecord?
@@ -56,10 +57,11 @@ public final class ScreenCoordinator: ObservableObject {
     }
 
     public func openDefault() {
-        let revision = Int64(model.snapshot?.eventCursor ?? "") ?? 0
-        let document = DefaultScreenBuilder.build(tasks: model.tasks, approvals: model.approvals, notifications: model.notifications, revision: revision)
-        self.document = document
-        surfaces.open(SurfaceSpec(id: "main", kind: .window, document: document))
+        let built = DefaultScreenBuilder.build(tasks: model.tasks, approvals: model.approvals, notifications: model.notifications)
+        // Explicitly delete before recreating the fixed A2UI ID on refresh.
+        let messages: [A2uiMessage] = self.messages == nil ? built : [.deleteSurface(DeleteSurfacePayload(surfaceId: "main"))] + built
+        self.messages = built
+        surfaces.open(SurfaceSpec(id: "main", kind: .window, messages: messages))
     }
 
     public func refreshDefault() { openDefault() }
