@@ -170,7 +170,7 @@ func (s *Service) handleHangup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if gatewayID == "" {
-		if err := s.markSession(r.Context(), r.PathValue("session_id"), "quarantined", "gateway_session_unbound", nil, ""); err != nil {
+		if err := s.markSession(r.Context(), r.PathValue("session_id"), generation, state, "quarantined", "gateway_session_unbound", nil, ""); err != nil {
 			control.WriteError(w, safeSessionError(err))
 			return
 		}
@@ -198,14 +198,14 @@ func (s *Service) releaseSession(ctx context.Context, p contracts.Principal, ses
 	if gatewayUnbound == 0 && gatewayUnbindUnknown == 0 {
 		response, requestID, callErr := s.callGateway(ctx, http.MethodDelete, "/v1/voice/sessions/"+url.PathEscape(gatewayID), nil)
 		if callErr != nil {
-			if persistErr := s.markSession(ctx, sessionID, "quarantined", "gateway_release_unknown", nil, ""); persistErr != nil {
+			if persistErr := s.markSession(ctx, sessionID, generation, "ending", "quarantined", "gateway_release_unknown", nil, ""); persistErr != nil {
 				return 0, "", true, persistErr
 			}
 			return http.StatusServiceUnavailable, "", true, apiError(http.StatusServiceUnavailable, "voice_outcome_unknown", "gateway release result is unknown; media lease quarantined", map[string]any{"request_id": requestID})
 		}
 		defer response.Body.Close()
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			if persistErr := s.markSession(ctx, sessionID, "quarantined", "gateway_release_failed", nil, ""); persistErr != nil {
+			if persistErr := s.markSession(ctx, sessionID, generation, "ending", "quarantined", "gateway_release_failed", nil, ""); persistErr != nil {
 				return 0, "", true, persistErr
 			}
 			return http.StatusServiceUnavailable, "", true, apiError(http.StatusServiceUnavailable, "voice_outcome_unknown", "gateway did not confirm session unbinding; media lease quarantined", map[string]any{"request_id": requestID})
@@ -944,6 +944,15 @@ func (s *Service) handlePoolStatus(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.QueryRowContext(r.Context(), `SELECT blocked,reason_code,updated_at FROM voice_pool_state WHERE id=1`).Scan(&blocked, &reason, &updatedAt); err != nil {
 		control.WriteError(w, safeSessionError(err))
 		return
+	}
+	// Only session creators may trigger automatic stale-create recovery here;
+	// read-only status access does not authorize persistent recovery writes.
+	if blocked != 0 && reason == "gateway_outcome_unknown" && control.HasScope(p, "voice:open") {
+		s.recoverPoolStatus(r.Context())
+		if err := s.db.QueryRowContext(r.Context(), `SELECT blocked,reason_code,updated_at FROM voice_pool_state WHERE id=1`).Scan(&blocked, &reason, &updatedAt); err != nil {
+			control.WriteError(w, safeSessionError(err))
+			return
+		}
 	}
 	capabilities := AccountMediaCapabilities{}
 	if s.accountMedia != nil {
