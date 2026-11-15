@@ -5,6 +5,27 @@ public enum ServerPush: Sendable {
     case snapshotRequired(reason: String)
 }
 
+/// Splits SSE bytes without dropping empty lines. An unterminated tail is not emitted.
+struct SSELineSplitter {
+    private var lineBytes: [UInt8] = []
+    private var previousWasCarriageReturn = false
+
+    mutating func consume(byte: UInt8) -> String? {
+        if previousWasCarriageReturn {
+            previousWasCarriageReturn = false
+            if byte == 0x0A { return nil }
+        }
+        if byte == 0x0D || byte == 0x0A {
+            previousWasCarriageReturn = byte == 0x0D
+            let line = String(decoding: lineBytes, as: UTF8.self)
+            lineBytes.removeAll(keepingCapacity: true)
+            return line
+        }
+        lineBytes.append(byte)
+        return nil
+    }
+}
+
 /// Small, testable parser for the SSE subset used by Zoe (`id`, `event`, and `data`).
 public struct SSEParser {
     private var id: String?
@@ -87,8 +108,10 @@ public struct EventStreamClient: Sendable {
         let bytes = try await api.events(after: cursor)
         await onConnected()
         var parser = SSEParser()
+        var splitter = SSELineSplitter()
         var latestCursor = cursor
-        for try await line in bytes.lines {
+        for try await byte in bytes {
+            guard let line = splitter.consume(byte: byte) else { continue }
             if let push = try parser.consume(line: line) {
                 switch push {
                 case let .event(envelope): latestCursor = envelope.cursor
