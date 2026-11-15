@@ -1,7 +1,7 @@
 import A2UISwiftCore
 
 public enum SurfaceKind: String, Codable, Sendable {
-    case statusItem, popover, window
+    case popover, window
 }
 
 public struct SurfaceSpec: Codable, Sendable, Identifiable {

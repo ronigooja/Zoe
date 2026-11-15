@@ -43,15 +43,15 @@ final class ScreenTests: XCTestCase {
         var store = SurfaceStore()
         store.update(id: "missing", messages: [])
         XCTAssertTrue(store.surfaces.isEmpty)
-        for kind in [SurfaceKind.statusItem, .popover, .window] {
+        for kind in [SurfaceKind.popover, .window] {
             store.open(SurfaceSpec(id: kind.rawValue, kind: kind, messages: []))
         }
-        XCTAssertEqual(store.surfaces.count, 3)
+        XCTAssertEqual(store.surfaces.count, 2)
         store.open(SurfaceSpec(id: "window", kind: .popover, messages: []))
         XCTAssertEqual(store.surfaces["window"]?.kind, .popover)
         store.close(id: "window")
         store.close(id: "window")
-        XCTAssertEqual(store.surfaces.count, 2)
+        XCTAssertEqual(store.surfaces.count, 1)
     }
 
     func testMessagesResetOnCreateAndPreserveUpdatesAndDelete() throws {

@@ -23,6 +23,7 @@ func TestParse(t *testing.T) {
 		valid      bool
 	}{
 		{"valid", valid, true},
+		{"popover", strings.Replace(valid, `"window"`, `"popover"`, 1), true},
 		{"input", strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(valid, `"Shown."`, `""`), `"awaiting_input":false`, `"awaiting_input":true`), `"input_note":""`, `"input_note":"Requested value"`), true},
 		{"fence_json", "```json\n" + valid + "\n```", true},
 		{"fence_plain", "```\n" + valid + "\n```", true},
@@ -78,6 +79,13 @@ func TestParse(t *testing.T) {
 				t.Fatalf("valid=%t err=%v", tc.valid, err)
 			}
 		})
+	}
+}
+
+func TestParseRejectsStatusItem(t *testing.T) {
+	text := strings.Replace(fixture(create+","+root), `"window"`, `"statusItem"`, 1)
+	if _, err := Parse(text); err == nil || err.Error() != "container_invalid" {
+		t.Fatalf("expected container_invalid, got %v", err)
 	}
 }
 

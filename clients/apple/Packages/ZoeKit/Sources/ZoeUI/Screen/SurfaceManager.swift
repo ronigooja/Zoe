@@ -11,7 +11,6 @@ import A2UISwiftUI
         let viewModel: SurfaceViewModel
         var window: NSWindow?
         var popover: NSPopover?
-        var statusItem: NSStatusItem?
     }
 
     private var store = SurfaceStore()
@@ -48,20 +47,13 @@ import A2UISwiftUI
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             entry.window = window
-        case .statusItem, .popover:
+        case .popover:
             let popover = NSPopover()
             popover.delegate = self
             popover.behavior = .transient
             popover.contentViewController = controller
             popover.contentSize = NSSize(width: 400, height: 360)
             entry.popover = popover
-            if spec.kind == .statusItem {
-                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-                item.button?.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "Zoe surface")
-                item.button?.target = self
-                item.button?.action = #selector(togglePanel(_:))
-                entry.statusItem = item
-            }
         }
         entries[spec.id] = entry
         if spec.kind == .popover, let anchor = popoverAnchor() {
@@ -79,7 +71,7 @@ import A2UISwiftUI
             errors.append(contentsOf: model.processMessages([message]))
         }
         if !errors.isEmpty { onRenderError?(id, errors) }
-        entries[id] = Entry(viewModel: model, window: entry.window, popover: entry.popover, statusItem: entry.statusItem)
+        entries[id] = Entry(viewModel: model, window: entry.window, popover: entry.popover)
         if let window = entry.window {
             let contentSize = window.contentRect(forFrameRect: window.frame).size
             window.contentViewController = hostingController(model, id: id)
@@ -112,8 +104,6 @@ import A2UISwiftUI
                 entry.popover?.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
             }
             return entry.popover?.isShown == true
-        case .statusItem:
-            return entry.statusItem?.isVisible == true
         }
     }
 
@@ -124,7 +114,6 @@ import A2UISwiftUI
         entry.window?.close()
         entry.popover?.delegate = nil
         entry.popover?.performClose(nil)
-        if let item = entry.statusItem { NSStatusBar.system.removeStatusItem(item) }
     }
 
     public func windowWillClose(_ notification: Notification) {
@@ -136,12 +125,6 @@ import A2UISwiftUI
 
     public func popoverDidClose(_ notification: Notification) {
         onUserClosed?()
-    }
-
-    @objc private func togglePanel(_ sender: NSStatusBarButton) {
-        guard let popover = entries.values.first(where: { $0.statusItem?.button === sender })?.popover else { return }
-        if popover.isShown { popover.performClose(nil) }
-        else { popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY) }
     }
 
     private func hostingController(_ model: SurfaceViewModel, id: String) -> NSViewController {

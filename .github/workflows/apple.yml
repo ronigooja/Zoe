@@ -127,13 +127,12 @@ jobs:
           set -euo pipefail
           mkdir -p "$CI_OUTPUT/artifacts"
           mkdir -p "$CI_OUTPUT/dmg-root"
-          ditto "$CI_OUTPUT/mac-derived/Build/Products/Release/ZoeMac.app" \
-            "$CI_OUTPUT/dmg-root/ZoeMac.app"
+          ditto "$CI_OUTPUT/mac-derived/Build/Products/Release/Zoe.app" \
+            "$CI_OUTPUT/dmg-root/Zoe.app"
           ln -s /Applications "$CI_OUTPUT/dmg-root/Applications"
-          install -m 0755 clients/apple/tools/Sign-Zoe.command "$CI_OUTPUT/dmg-root/Sign-Zoe.command"
           hdiutil create -volname Zoe -srcfolder \
             "$CI_OUTPUT/dmg-root" \
-            -ov -format UDRO "$CI_OUTPUT/artifacts/ZoeMac-unsigned.dmg"
+            -ov -format UDRO "$CI_OUTPUT/artifacts/Zoe-unsigned.dmg"
           cd "$CI_OUTPUT/artifacts"
 
       - name: Upload unsigned macOS app
@@ -141,7 +140,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: apple-macos-build-${{ github.sha }}
-          path: ${{ env.CI_OUTPUT }}/artifacts/ZoeMac-unsigned.dmg
+          path: ${{ env.CI_OUTPUT }}/artifacts/Zoe-unsigned.dmg
           retention-days: 3
           if-no-files-found: error
           compression-level: 0

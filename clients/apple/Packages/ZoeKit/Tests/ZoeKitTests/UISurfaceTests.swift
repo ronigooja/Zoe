@@ -25,6 +25,18 @@ final class UISurfaceTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(UISurfaceEvent.decode(payload(deletion: true))).isDeletion)
     }
 
+    func testRemovedStatusContainerIsRejected() throws {
+        guard case var .object(fields) = try payload() else { return XCTFail("object") }
+        fields["container"] = .string("statusItem")
+        let payload = JSONValue.object(fields)
+        let data = try JSONEncoder().encode(payload)
+        XCTAssertThrowsError(try JSONDecoder().decode(UISurfaceEvent.self, from: data))
+        XCTAssertNil(UISurfaceEvent.decode(payload))
+        let result = UISurfaceEvent.decodeWithDiagnostic(payload)
+        XCTAssertNil(result.event)
+        XCTAssertEqual(result.failure, "payload_decode")
+    }
+
     func testMalformedPayloadIsIgnored() throws {
         XCTAssertEqual(UISurfaceEvent.decodeWithDiagnostic(.object([:])).failure, "payload_decode")
         XCTAssertNil(UISurfaceEvent.decode(.object([:])))

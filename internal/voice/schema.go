@@ -159,7 +159,7 @@ source_hash TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', leas
 PRIMARY KEY(workspace_id,owner_subject_id));
 CREATE TABLE ui_surfaces (
 workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
-surface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('statusItem','popover','window')),
+surface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('popover','window')),
 state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),
 version INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
 PRIMARY KEY(workspace_id,owner_subject_id,surface_id));
