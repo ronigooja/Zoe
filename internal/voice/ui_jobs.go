@@ -185,7 +185,7 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 			return nil, err
 		}
 	}
-	rows, err = s.db.QueryContext(ctx, `SELECT container,state_json FROM ui_surfaces WHERE workspace_id=? AND owner_subject_id=? ORDER BY updated_at,surface_id LIMIT 65`, j.w, j.o)
+	rows, err = s.db.QueryContext(ctx, `SELECT container,state_json,width,height FROM ui_surfaces WHERE workspace_id=? AND owner_subject_id=? ORDER BY updated_at,surface_id LIMIT 65`, j.w, j.o)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +193,8 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 	for rows.Next() {
 		var sf uictl.Surface
 		var raw []byte
-		if err = rows.Scan(&sf.Container, &raw); err != nil {
+		var width, height sql.NullInt64
+		if err = rows.Scan(&sf.Container, &raw, &width, &height); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -201,10 +202,21 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 			rows.Close()
 			return nil, err
 		}
+		if width.Valid && height.Valid {
+			sf.Size = &uictl.Size{Width: int(width.Int64), Height: int(height.Int64)}
+		}
 		surfaces = append(surfaces, sf)
 	}
 	rows.Close()
-	return uictl.BuildInput(s.now(), utterances, restatements, message, surfaces)
+	var screen uictl.Size
+	err = s.db.QueryRowContext(ctx, `SELECT width,height FROM ui_screens WHERE workspace_id=? AND owner_subject_id=?`, j.w, j.o).Scan(&screen.Width, &screen.Height)
+	if err == sql.ErrNoRows {
+		return uictl.BuildInput(s.now(), utterances, restatements, message, surfaces, nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return uictl.BuildInput(s.now(), utterances, restatements, message, surfaces, &screen)
 }
 func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 	now := s.now().UTC()
@@ -243,7 +255,12 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 		s.failUIJob(ctx, j, "model_error", true)
 		return
 	}
-	parsed, err := uictl.Parse(output)
+	var controllerInput uictl.Input
+	if err = json.Unmarshal(input, &controllerInput); err != nil {
+		s.failUIJob(ctx, j, "input_invalid", false)
+		return
+	}
+	parsed, err := uictl.Parse(output, controllerInput.Screen)
 	if err != nil {
 		call.Result(nil, "validation_failed")
 		s.failUIJob(ctx, j, "validation_failed", false)
@@ -277,7 +294,8 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output) erro
 	}
 	var raw []byte
 	var version int64
-	err = tx.QueryRowContext(ctx, `SELECT state_json,version FROM ui_surfaces WHERE workspace_id=? AND owner_subject_id=? AND surface_id=?`, j.w, j.o, o.SurfaceID).Scan(&raw, &version)
+	var width, height sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT state_json,version,width,height FROM ui_surfaces WHERE workspace_id=? AND owner_subject_id=? AND surface_id=?`, j.w, j.o, o.SurfaceID).Scan(&raw, &version, &width, &height)
 	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
@@ -304,7 +322,13 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output) erro
 		_, err = tx.ExecContext(ctx, `DELETE FROM ui_surfaces WHERE workspace_id=? AND owner_subject_id=? AND surface_id=?`, j.w, j.o, o.SurfaceID)
 	} else {
 		data, _ := json.Marshal(state.Messages)
-		_, err = tx.ExecContext(ctx, `INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,owner_subject_id,surface_id) DO UPDATE SET container=excluded.container,state_json=excluded.state_json,version=excluded.version,updated_at=excluded.updated_at`, j.w, j.o, o.SurfaceID, o.Container, string(data), version, at, at)
+		var newWidth, newHeight any
+		if o.Size != nil {
+			newWidth, newHeight = o.Size.Width, o.Size.Height
+			width, height = sql.NullInt64{Int64: int64(o.Size.Width), Valid: true}, sql.NullInt64{Int64: int64(o.Size.Height), Valid: true}
+		}
+		// Omitted size preserves the previously stored dimensions on updates.
+		_, err = tx.ExecContext(ctx, `INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,created_at,updated_at,width,height) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,owner_subject_id,surface_id) DO UPDATE SET container=excluded.container,state_json=excluded.state_json,version=excluded.version,updated_at=excluded.updated_at,width=COALESCE(excluded.width,ui_surfaces.width),height=COALESCE(excluded.height,ui_surfaces.height)`, j.w, j.o, o.SurfaceID, o.Container, string(data), version, at, at, newWidth, newHeight)
 	}
 	if err != nil {
 		return err
@@ -312,7 +336,11 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output) erro
 	if _, err = tx.ExecContext(ctx, `UPDATE ui_requests SET surface_id=?,awaiting_input=?,input_note=?,status='generated',updated_at=? WHERE id=?`, o.SurfaceID, o.AwaitingInput, o.InputNote, at, j.request); err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{"request_id": j.request, "surface_id": o.SurfaceID, "container": o.Container, "awaiting_input": o.AwaitingInput, "messages": state.Messages})
+	eventPayload := map[string]any{"request_id": j.request, "surface_id": o.SurfaceID, "container": o.Container, "awaiting_input": o.AwaitingInput, "messages": state.Messages}
+	if !state.Deleted && width.Valid && height.Valid {
+		eventPayload["size"] = uictl.Size{Width: int(width.Int64), Height: int(height.Int64)}
+	}
+	payload, _ := json.Marshal(eventPayload)
 	if s.uiEventServer == nil {
 		return errors.New("event_server_missing")
 	}

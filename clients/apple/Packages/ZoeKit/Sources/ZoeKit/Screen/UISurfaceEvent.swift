@@ -8,10 +8,11 @@ public struct UISurfaceEvent: Decodable, Sendable {
     public let container: SurfaceKind
     public let awaitingInput: Bool
     public let messages: [A2uiMessage]
+    public let size: SurfaceSize?
 
     private enum CodingKeys: String, CodingKey {
         case requestID = "request_id", surfaceID = "surface_id", container
-        case awaitingInput = "awaiting_input", messages
+        case awaitingInput = "awaiting_input", messages, size
     }
 
     public var isDeletion: Bool {

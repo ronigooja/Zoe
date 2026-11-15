@@ -31,18 +31,20 @@ import A2UISwiftUI
         store.open(spec)
         let model = SurfaceViewModel(catalog: basicCatalog)
         let errors = model.processMessages(store.surfaces[spec.id]!.messages)
+        model.a2uiStyle = Self.fixedStyle
         if !errors.isEmpty { onRenderError?(spec.id, errors) }
         let controller = hostingController(model, id: spec.id)
         var entry = Entry(viewModel: model)
         switch spec.kind {
         case .window:
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 400), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            let size = clampedSize(spec.size, kind: .window)
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.identifier = NSUserInterfaceItemIdentifier(spec.id)
             window.delegate = self
             window.contentViewController = controller
-            window.minSize = NSSize(width: 320, height: 240)
-            window.setContentSize(NSSize(width: 480, height: 400))
+            window.minSize = NSSize(width: 360, height: 300)
+            window.setContentSize(size)
             window.center()
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
@@ -52,7 +54,7 @@ import A2UISwiftUI
             popover.delegate = self
             popover.behavior = .transient
             popover.contentViewController = controller
-            popover.contentSize = NSSize(width: 400, height: 360)
+            popover.contentSize = clampedSize(spec.size, kind: .popover)
             entry.popover = popover
         }
         entries[spec.id] = entry
@@ -62,6 +64,10 @@ import A2UISwiftUI
     }
 
     public func update(id: String, messages: [A2uiMessage]) {
+        update(id: id, messages: messages, size: nil)
+    }
+
+    private func update(id: String, messages: [A2uiMessage], size: SurfaceSize?) {
         guard let entry = entries[id] else { return }
         store.update(id: id, messages: messages)
         var model = entry.viewModel
@@ -69,24 +75,26 @@ import A2UISwiftUI
         for message in messages {
             if case .createSurface = message { model = SurfaceViewModel(catalog: basicCatalog) }
             errors.append(contentsOf: model.processMessages([message]))
+            model.a2uiStyle = Self.fixedStyle
         }
         if !errors.isEmpty { onRenderError?(id, errors) }
         entries[id] = Entry(viewModel: model, window: entry.window, popover: entry.popover)
         if let window = entry.window {
             let contentSize = window.contentRect(forFrameRect: window.frame).size
             window.contentViewController = hostingController(model, id: id)
-            window.setContentSize(contentSize)
+            window.setContentSize(size.map { clampedSize($0, kind: .window) } ?? contentSize)
         }
         if let popover = entry.popover {
+            let contentSize = popover.contentSize
             popover.contentViewController = hostingController(model, id: id)
-            popover.contentSize = NSSize(width: 400, height: 360)
+            popover.contentSize = size.map { clampedSize($0, kind: .popover) } ?? contentSize
         }
     }
 
     /// A dismissed popover keeps its renderer; every new server state presents it again.
     @discardableResult public func display(_ spec: SurfaceSpec) -> Bool {
         if entries[spec.id] != nil, store.surfaces[spec.id]?.kind == spec.kind {
-            update(id: spec.id, messages: spec.messages)
+            update(id: spec.id, messages: spec.messages, size: spec.size)
         } else {
             open(spec)
         }
@@ -125,6 +133,28 @@ import A2UISwiftUI
 
     public func popoverDidClose(_ notification: Notification) {
         onUserClosed?()
+    }
+
+    static var fixedStyle: A2UIStyle {
+        A2UIStyle(primaryColor: .accentColor, textStyles: [
+            "h1": .init(font: .system(size: 22), weight: .bold),
+            "h2": .init(font: .system(size: 18), weight: .semibold),
+            "h3": .init(font: .system(size: 15), weight: .semibold),
+            "body": .init(font: .system(size: 13)),
+            "caption": .init(font: .system(size: 11), color: .secondary)
+        ], cardStyle: .init(padding: 16, cornerRadius: 12, backgroundColor: Color(nsColor: .controlBackgroundColor)))
+    }
+
+    func viewModel(for id: String) -> SurfaceViewModel? { entries[id]?.viewModel }
+    func popoverContentSize(for id: String) -> NSSize? { entries[id]?.popover?.contentSize }
+
+    private func clampedSize(_ requested: SurfaceSize?, kind: SurfaceKind) -> NSSize {
+        let minimum = kind == .window ? NSSize(width: 320, height: 240) : NSSize(width: 280, height: 200)
+        let fallback = kind == .window ? NSSize(width: 520, height: 640) : NSSize(width: 400, height: 480)
+        let desired = requested.map { NSSize(width: $0.width, height: $0.height) } ?? fallback
+        let visible = (kind == .popover ? (popoverAnchor()?.window?.screen ?? NSScreen.main) : NSScreen.main)?.visibleFrame.size ?? fallback
+        return NSSize(width: min(max(desired.width, minimum.width), max(1, visible.width - 20)),
+                      height: min(max(desired.height, minimum.height), max(1, visible.height - 20)))
     }
 
     private func hostingController(_ model: SurfaceViewModel, id: String) -> NSViewController {

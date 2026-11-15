@@ -4,6 +4,24 @@ import A2UISwiftCore
 @testable import ZoeUI
 
 final class UISurfaceTests: XCTestCase {
+    func testOptionalSizeAndInvalidFractionalSize() throws {
+        guard case var .object(fields) = try payload() else { return XCTFail("object") }
+        XCTAssertNil(try XCTUnwrap(UISurfaceEvent.decode(.object(fields))).size)
+        fields["size"] = .object(["width": .integer(700), "height": .integer(500)])
+        XCTAssertEqual(try XCTUnwrap(UISurfaceEvent.decode(.object(fields))).size, SurfaceSize(width: 700, height: 500))
+        fields["size"] = .object(["width": .number(700.5), "height": .integer(500)])
+        XCTAssertEqual(UISurfaceEvent.decodeWithDiagnostic(.object(fields)).failure, "payload_decode")
+    }
+
+    func testScreenCommandPayloadAndKey() {
+        let size = SurfaceSize(width: 1440, height: 875)
+        XCTAssertEqual(size.screenPayload, .object(["width": .integer(1440), "height": .integer(875)]))
+        XCTAssertEqual(size.screenIdempotencyKey, "ui.screen-1440-875")
+        XCTAssertEqual(size.screenIdempotencyKey, SurfaceSize(width: 1440, height: 875).screenIdempotencyKey)
+        XCTAssertNotEqual(size.screenIdempotencyKey, SurfaceSize(width: 1441, height: 875).screenIdempotencyKey)
+        XCTAssertNotEqual(size.screenIdempotencyKey, SurfaceSize(width: 1440, height: 876).screenIdempotencyKey)
+    }
+
     private func payload(request: String = "r1", deletion: Bool = false) throws -> JSONValue {
         let messages = deletion
             ? #"[{"version":"v0.9","deleteSurface":{"surfaceId":"s1"}}]"#

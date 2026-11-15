@@ -130,6 +130,7 @@ const voiceBaselineReference = `{
     "sqlite_autoindex_ui_jobs_1": ["index", "sqlite_autoindex_ui_jobs_1", "ui_jobs", ""],
     "sqlite_autoindex_ui_jobs_2": ["index", "sqlite_autoindex_ui_jobs_2", "ui_jobs", ""],
     "sqlite_autoindex_ui_requests_1": ["index", "sqlite_autoindex_ui_requests_1", "ui_requests", ""],
+    "sqlite_autoindex_ui_screens_1": ["index", "sqlite_autoindex_ui_screens_1", "ui_screens", ""],
     "sqlite_autoindex_ui_surfaces_1": ["index", "sqlite_autoindex_ui_surfaces_1", "ui_surfaces", ""],
     "sqlite_autoindex_ui_task_cursor_1": ["index", "sqlite_autoindex_ui_task_cursor_1", "ui_task_cursor", ""],
     "sqlite_autoindex_voice_account_terminations_1": ["index", "sqlite_autoindex_voice_account_terminations_1", "voice_account_terminations", ""],
@@ -154,7 +155,8 @@ const voiceBaselineReference = `{
     "ui_jobs_due": ["index", "ui_jobs_due", "ui_jobs", "CREATE INDEX ui_jobs_due ON ui_jobs(status,next_attempt_at)"],
     "ui_requests": ["table", "ui_requests", "ui_requests", "CREATE TABLE ui_requests (\nid TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nsource TEXT NOT NULL CHECK(source IN ('register','task')), voice_turn_id TEXT REFERENCES voice_turns(id),\ntask_id TEXT REFERENCES tasks(id), surface_id TEXT,\nawaiting_input INTEGER NOT NULL DEFAULT 0 CHECK(awaiting_input IN (0,1)), input_note TEXT,\nstatus TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','rendered','input_received','feedback_delivered','failed')),\ncreated_at TEXT NOT NULL, updated_at TEXT NOT NULL, restatement TEXT, utterance TEXT)"],
     "ui_requests_voice_turn": ["index", "ui_requests_voice_turn", "ui_requests", "CREATE UNIQUE INDEX ui_requests_voice_turn ON ui_requests(workspace_id,voice_turn_id) WHERE voice_turn_id IS NOT NULL"],
-    "ui_surfaces": ["table", "ui_surfaces", "ui_surfaces", "CREATE TABLE ui_surfaces (\nworkspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nsurface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('popover','window')),\nstate_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),\nversion INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,\nPRIMARY KEY(workspace_id,owner_subject_id,surface_id))"],
+    "ui_screens": ["table", "ui_screens", "ui_screens", "CREATE TABLE ui_screens (\nworkspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nwidth INTEGER NOT NULL, height INTEGER NOT NULL, updated_at TEXT NOT NULL,\nPRIMARY KEY(workspace_id,owner_subject_id))"],
+    "ui_surfaces": ["table", "ui_surfaces", "ui_surfaces", "CREATE TABLE ui_surfaces (\nworkspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nsurface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('popover','window')),\nstate_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),\nwidth INTEGER, height INTEGER,\nversion INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,\nPRIMARY KEY(workspace_id,owner_subject_id,surface_id),\nCHECK((width IS NULL AND height IS NULL) OR (width IS NOT NULL AND height IS NOT NULL)))"],
     "ui_task_cursor": ["table", "ui_task_cursor", "ui_task_cursor", "CREATE TABLE ui_task_cursor(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),last_cursor INTEGER NOT NULL DEFAULT 0)"],
     "voice_account_terminations": ["table", "voice_account_terminations", "voice_account_terminations", "CREATE TABLE voice_account_terminations (\n  id TEXT PRIMARY KEY,\n  session_id TEXT NOT NULL REFERENCES voice_sessions(id),\n  generation INTEGER NOT NULL,\n  account_id_hash BLOB NOT NULL,\n  lease_id_hash BLOB NOT NULL,\n  evidence_id TEXT NOT NULL,\n  observed_at TEXT NOT NULL,\n  adapter_kind TEXT NOT NULL\n)"],
     "voice_context_registers": ["table", "voice_context_registers", "voice_context_registers", "CREATE TABLE voice_context_registers (\nworkspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\ncompact TEXT NOT NULL DEFAULT '', compact_through TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',\nbuilt_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', version INTEGER NOT NULL DEFAULT 0,\nsource_hash TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, source_memory_boundary TEXT NOT NULL DEFAULT '',\nPRIMARY KEY(workspace_id,owner_subject_id))"],
@@ -257,12 +259,21 @@ const voiceBaselineReference = `{
       ["restatement", "TEXT", 0, null, 0],
       ["utterance", "TEXT", 0, null, 0]
     ],
+    "ui_screens": [
+      ["workspace_id", "TEXT", 1, null, 1],
+      ["owner_subject_id", "TEXT", 1, null, 2],
+      ["width", "INTEGER", 1, null, 0],
+      ["height", "INTEGER", 1, null, 0],
+      ["updated_at", "TEXT", 1, null, 0]
+    ],
     "ui_surfaces": [
       ["workspace_id", "TEXT", 1, null, 1],
       ["owner_subject_id", "TEXT", 1, null, 2],
       ["surface_id", "TEXT", 1, null, 3],
       ["container", "TEXT", 1, null, 0],
       ["state_json", "TEXT", 1, null, 0],
+      ["width", "INTEGER", 0, null, 0],
+      ["height", "INTEGER", 0, null, 0],
       ["version", "INTEGER", 1, null, 0],
       ["created_at", "TEXT", 1, null, 0],
       ["updated_at", "TEXT", 1, null, 0]

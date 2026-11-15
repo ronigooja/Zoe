@@ -38,6 +38,13 @@ struct ZoeMacApp {
         menu.addItem(quit)
         item.menu = menu
         statusItem = item
+        model.screenVisibleSize = { [weak self] in
+            (self?.statusItem?.button?.window?.screen ?? NSScreen.main)?.visibleFrame.size
+        }
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in await self?.model.reportScreenSize() }
+            }.store(in: &subscriptions)
         surfaces.onUserClosed = { [weak self] in self?.model.noteUISurfaceUserClosed() }
         surfaces.onRenderError = { [weak self] _, errors in self?.model.noteUISurfaceRenderErrors(errors) }
         model.onUISurface = { [weak self] event in
@@ -46,7 +53,7 @@ struct ZoeMacApp {
                 self.surfaces.close(id: event.surfaceID)
                 return false
             }
-            return self.surfaces.display(SurfaceSpec(id: event.surfaceID, kind: event.container, messages: event.messages))
+            return self.surfaces.display(SurfaceSpec(id: event.surfaceID, kind: event.container, messages: event.messages, size: event.size))
         }
         model.onUISurfacesClosed = { [weak self] ids in
             for id in ids { self?.surfaces.close(id: id) }

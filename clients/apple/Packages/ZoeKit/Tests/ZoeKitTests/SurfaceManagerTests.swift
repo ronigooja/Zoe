@@ -29,7 +29,8 @@ final class SurfaceManagerTests: XCTestCase {
         let initial = window.contentRect(forFrameRect: window.frame).size
         XCTAssertGreaterThanOrEqual(initial.width, 300)
         XCTAssertGreaterThanOrEqual(initial.height, 200)
-        XCTAssertEqual(initial, NSSize(width: 480, height: 400))
+        let visible = try XCTUnwrap(NSScreen.main).visibleFrame.size
+        XCTAssertEqual(initial, NSSize(width: min(520, visible.width - 20), height: min(640, visible.height - 20)))
         XCTAssertGreaterThanOrEqual(window.minSize.width, 320)
         XCTAssertGreaterThanOrEqual(window.minSize.height, 240)
         window.setContentSize(NSSize(width: 620, height: 460))
@@ -59,6 +60,47 @@ final class SurfaceManagerTests: XCTestCase {
         XCTAssertEqual(reports.count, 2)
         XCTAssertEqual(reports.last?.0, id)
         XCTAssertEqual(reports.last?.1.count, 1)
+    }
+
+    func testRequestedWindowSizeUpdatesClampsAndIgnoresTheme() throws {
+        _ = NSApplication.shared
+        let manager = SurfaceManager(popoverAnchor: { nil })
+        let id = "surface-explicit-size-test"
+        defer { manager.close(id: id) }
+        let batch = try messages("""
+        [{"version":"v0.9","createSurface":{"surfaceId":"\(id)","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json","theme":{"primaryColor":"#FF0000"}}},
+         {"version":"v0.9","updateComponents":{"surfaceId":"\(id)","components":[{"id":"root","component":"Text","text":"Hello"}]}}]
+        """)
+        let visible = try XCTUnwrap(NSScreen.main).visibleFrame.size
+        manager.open(SurfaceSpec(id: id, kind: .window, messages: batch, size: .init(width: 700, height: 500)))
+        let window = try XCTUnwrap(NSApp.windows.first { $0.identifier?.rawValue == id })
+        XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size, NSSize(width: min(700, visible.width - 20), height: min(500, visible.height - 20)))
+        XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle, SurfaceManager.fixedStyle)
+        let before = window.contentRect(forFrameRect: window.frame).size
+        XCTAssertTrue(manager.display(SurfaceSpec(id: id, kind: .window, messages: batch)))
+        XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size, before)
+        XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle.primaryColor, SurfaceManager.fixedStyle.primaryColor)
+        XCTAssertTrue(manager.display(SurfaceSpec(id: id, kind: .window, messages: batch, size: .init(width: 600, height: 400))))
+        XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size, NSSize(width: min(600, visible.width - 20), height: min(400, visible.height - 20)))
+        XCTAssertTrue(manager.display(SurfaceSpec(id: id, kind: .window, messages: batch, size: .init(width: 5000, height: 5000))))
+        let oversized = window.contentRect(forFrameRect: window.frame).size
+        XCTAssertLessThanOrEqual(oversized.width, visible.width - 20)
+        XCTAssertLessThanOrEqual(oversized.height, visible.height - 20)
+        XCTAssertGreaterThanOrEqual(oversized.width, 320)
+        XCTAssertGreaterThanOrEqual(oversized.height, 240)
+    }
+
+    func testPopoverPreservesSizeWithoutRequestAndAppliesRequest() throws {
+        _ = NSApplication.shared
+        let manager = SurfaceManager(popoverAnchor: { nil })
+        let id = "surface-popover-size-test"
+        defer { manager.close(id: id) }
+        manager.open(SurfaceSpec(id: id, kind: .popover, messages: [], size: .init(width: 360, height: 320)))
+        XCTAssertEqual(manager.popoverContentSize(for: id), NSSize(width: 360, height: 320))
+        manager.update(id: id, messages: [])
+        XCTAssertEqual(manager.popoverContentSize(for: id), NSSize(width: 360, height: 320))
+        _ = manager.display(SurfaceSpec(id: id, kind: .popover, messages: [], size: .init(width: 380, height: 340)))
+        XCTAssertEqual(manager.popoverContentSize(for: id), NSSize(width: 380, height: 340))
     }
 
     func testMissingRootBatchDoesNotCrash() throws {

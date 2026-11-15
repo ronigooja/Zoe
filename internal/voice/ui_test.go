@@ -160,7 +160,7 @@ func TestUIDisplaySchema(t *testing.T) {
 		t.Fatalf("legacy column=%d err=%v", legacy, err)
 	}
 	for _, query := range []string{
-		`INSERT INTO ui_surfaces VALUES('default','owner','main','window','[]',1,'now','now')`,
+		`INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,created_at,updated_at) VALUES('default','owner','main','window','[]',1,'now','now')`,
 		`INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES('request','default','owner','register','now','now')`,
 		`INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('request','default','owner','input','now','now')`,
 	} {
@@ -170,6 +170,7 @@ func TestUIDisplaySchema(t *testing.T) {
 	}
 	for _, query := range []string{
 		`UPDATE ui_surfaces SET container='unknown'`, `UPDATE ui_surfaces SET state_json='{}'`,
+		`UPDATE ui_surfaces SET width=400`, `UPDATE ui_surfaces SET height=300`,
 		`UPDATE ui_requests SET source='unknown'`, `UPDATE ui_requests SET status='pending'`, `UPDATE ui_requests SET awaiting_input=2`,
 		`UPDATE ui_feedback_deliveries SET status='generated'`, `UPDATE ui_feedback_deliveries SET attempts=-1`,
 		`INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('missing','default','owner','input','now','now')`,

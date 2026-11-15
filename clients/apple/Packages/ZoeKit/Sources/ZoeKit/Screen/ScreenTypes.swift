@@ -4,15 +4,33 @@ public enum SurfaceKind: String, Codable, Sendable {
     case popover, window
 }
 
+public struct SurfaceSize: Codable, Sendable, Equatable {
+    public var width: Int
+    public var height: Int
+
+    public init(width: Int, height: Int) {
+        self.width = width
+        self.height = height
+    }
+
+    public var screenPayload: JSONValue {
+        .object(["width": .integer(Int64(width)), "height": .integer(Int64(height))])
+    }
+
+    public var screenIdempotencyKey: String { "ui.screen-\(width)-\(height)" }
+}
+
 public struct SurfaceSpec: Codable, Sendable, Identifiable {
     public var id: String
     public var kind: SurfaceKind
     public var messages: [A2uiMessage]
+    public var size: SurfaceSize?
 
-    public init(id: String, kind: SurfaceKind, messages: [A2uiMessage]) {
+    public init(id: String, kind: SurfaceKind, messages: [A2uiMessage], size: SurfaceSize? = nil) {
         self.id = id
         self.kind = kind
         self.messages = messages
+        self.size = size
     }
 }
 

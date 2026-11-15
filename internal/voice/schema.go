@@ -157,12 +157,18 @@ compact TEXT NOT NULL DEFAULT '', compact_through TEXT NOT NULL DEFAULT '1970-01
 built_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', version INTEGER NOT NULL DEFAULT 0,
 source_hash TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, source_memory_boundary TEXT NOT NULL DEFAULT '',
 PRIMARY KEY(workspace_id,owner_subject_id));
+CREATE TABLE ui_screens (
+workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
+width INTEGER NOT NULL, height INTEGER NOT NULL, updated_at TEXT NOT NULL,
+PRIMARY KEY(workspace_id,owner_subject_id));
 CREATE TABLE ui_surfaces (
 workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
 surface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('popover','window')),
 state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),
+width INTEGER, height INTEGER,
 version INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-PRIMARY KEY(workspace_id,owner_subject_id,surface_id));
+PRIMARY KEY(workspace_id,owner_subject_id,surface_id),
+CHECK((width IS NULL AND height IS NULL) OR (width IS NOT NULL AND height IS NOT NULL)));
 CREATE TABLE ui_requests (
 id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
 source TEXT NOT NULL CHECK(source IN ('register','task')), voice_turn_id TEXT REFERENCES voice_turns(id),

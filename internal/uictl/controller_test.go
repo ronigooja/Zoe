@@ -74,7 +74,7 @@ func TestParse(t *testing.T) {
 		{"oversized", valid + strings.Repeat(" ", MaxOutput), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Parse(tc.text)
+			_, err := Parse(tc.text, nil)
 			if (err == nil) != tc.valid {
 				t.Fatalf("valid=%t err=%v", tc.valid, err)
 			}
@@ -84,7 +84,7 @@ func TestParse(t *testing.T) {
 
 func TestParseRejectsStatusItem(t *testing.T) {
 	text := strings.Replace(fixture(create+","+root), `"window"`, `"statusItem"`, 1)
-	if _, err := Parse(text); err == nil || err.Error() != "container_invalid" {
+	if _, err := Parse(text, nil); err == nil || err.Error() != "container_invalid" {
 		t.Fatalf("expected container_invalid, got %v", err)
 	}
 }
@@ -115,14 +115,14 @@ func TestCatalogComponentNames(t *testing.T) {
 		}
 		b, _ := json.Marshal(c)
 		message := `{"version":"v0.9.1","updateComponents":{"surfaceId":"screen","components":[` + string(b) + `]}}`
-		if _, err := Parse(fixture(message)); err != nil {
+		if _, err := Parse(fixture(message), nil); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
 }
 
 func TestApply(t *testing.T) {
-	initial, _ := Parse(fixture(create + "," + root))
+	initial, _ := Parse(fixture(create+","+root), nil)
 	state, err := Apply(nil, initial)
 	if err != nil || len(state.Messages) != 2 {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestApply(t *testing.T) {
 		{"recreate", remove + "," + create + "," + root, state.Messages, 2, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			o, e := Parse(fixture(tc.messages))
+			o, e := Parse(fixture(tc.messages), nil)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -160,24 +160,24 @@ func TestApply(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		large = append(large, json.RawMessage(strings.Replace(update, `"data"`, `"`+strings.Repeat("x", 8000)+`"`, 1)))
 	}
-	o, _ := Parse(fixture(update))
+	o, _ := Parse(fixture(update), nil)
 	if _, err := Apply(large, o); err == nil {
 		t.Fatal("accepted oversized state")
 	}
 }
 
 func TestBuildInput(t *testing.T) {
-	b, err := BuildInput(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), nil, nil, "", nil)
+	b, err := BuildInput(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), nil, nil, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(b) != `{"now":"2026-01-02T03:04:05Z","utterances":[],"restatements":[],"task_message":"","surfaces":[]}` {
 		t.Fatal(string(b))
 	}
-	if _, err = BuildInput(time.Now(), nil, nil, "", make([]Surface, 65)); err == nil {
+	if _, err = BuildInput(time.Now(), nil, nil, "", make([]Surface, 65), nil); err == nil {
 		t.Fatal("accepted too many surfaces")
 	}
-	if _, err = BuildInput(time.Now(), nil, nil, strings.Repeat("x", 16*MaxState+1), nil); err == nil {
+	if _, err = BuildInput(time.Now(), nil, nil, strings.Repeat("x", 16*MaxState+1), nil, nil); err == nil {
 		t.Fatal("accepted oversized input")
 	}
 }

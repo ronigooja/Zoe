@@ -14,6 +14,10 @@ public final class ZoeAppModel: ObservableObject {
     public var onUISurface: ((UISurfaceEvent) -> Bool)?
     public var onUISurfacesClosed: (([String]) -> Void)?
     private var uiSurfaceRequests = UISurfaceRequests()
+    #if os(macOS)
+    public var screenVisibleSize: () -> NSSize? = { NSScreen.main?.visibleFrame.size }
+    private var lastReportedScreenSize: SurfaceSize?
+    #endif
     @Published public internal(set) var serverAddress: String
     @Published public private(set) var isConnecting = false
     @Published public private(set) var notice: String?
@@ -608,6 +612,9 @@ public final class ZoeAppModel: ObservableObject {
             voiceDraftRevision = 0
             voiceStatus = .active(sessionID: created.voiceSessionId, mediaGeneration: created.generation)
             noteVoiceConnected()
+            #if os(macOS)
+            await reportScreenSize()
+            #endif
             await api.recordDiagnosticAndWait(phase: "voice_connected", requestPath: "/v1/voice/sessions/connected", level: .info, voiceSessionID: created.voiceSessionId, voiceGeneration: created.generation, voiceMediaEpoch: mediaEpoch)
             startVoiceHeartbeat(sessionID: created.voiceSessionId, api: api, generation: generation)
         } catch {
@@ -1427,18 +1434,37 @@ public final class ZoeAppModel: ObservableObject {
         }
     }
 
-    private func submitUICommand(kind: String, payload: JSONValue, key: String) async {
-        guard authentication.isConnected, let api else { return }
+    #if os(macOS)
+    public func reportScreenSize() async {
+        guard authentication.isConnected, let visible = screenVisibleSize() else { return }
+        let size = SurfaceSize(width: Int(visible.width.rounded()), height: Int(visible.height.rounded()))
+        guard size != lastReportedScreenSize else { return }
+        // Reserve before suspension so simultaneous screen notifications do not duplicate reports.
+        let previous = lastReportedScreenSize
+        lastReportedScreenSize = size
+        let sent = await submitUICommand(kind: "ui.screen", payload: size.screenPayload, key: size.screenIdempotencyKey)
+        if sent {
+            api?.recordDiagnostic(phase: "ui_screen_report", requestPath: "/v1/commands", errorSummary: "w=\(size.width);h=\(size.height)", level: .info)
+        } else if lastReportedScreenSize == size {
+            lastReportedScreenSize = previous
+        }
+    }
+    #endif
+
+    @discardableResult private func submitUICommand(kind: String, payload: JSONValue, key: String) async -> Bool {
+        guard authentication.isConnected, let api else { return false }
         do {
             // UI commands are transient: submit once, never journal/retry failed actions.
             _ = try await api.submit(kind: kind, payload: payload, idempotencyKey: key)
+            return true
         } catch {
             let diagnostic = RedactedDiagnostic(error)
-            api.recordDiagnostic(phase: "ui_command", requestPath: "/v1/commands", httpStatus: diagnostic.httpStatus,
+            api.recordDiagnostic(phase: kind == "ui.screen" ? "ui_screen_report" : "ui_command", requestPath: "/v1/commands", httpStatus: diagnostic.httpStatus,
                                  errorType: diagnostic.errorType, errorSummary: diagnostic.errorSummary, level: .warn)
             if kind == "ui.rendered" {
                 api.recordDiagnostic(phase: "ui_rendered_ack", requestPath: "/v1/commands", httpStatus: diagnostic.httpStatus, errorType: diagnostic.errorType, errorSummary: diagnostic.errorSummary, level: .error)
             }
+            return false
         }
     }
 

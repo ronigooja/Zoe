@@ -87,6 +87,24 @@ func uiOwned(ctx context.Context, tx *sql.Tx, p contracts.Principal, id string) 
 	}
 	return surface, status, awaiting, note, err
 }
+func (s *Service) commandUIScreen(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
+	if err := uiScope(cmd); err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	var p struct {
+		Width  int `json:"width"`
+		Height int `json:"height"`
+	}
+	if err := decodePayload(req.Payload, &p); err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	if p.Width < 320 || p.Width > 8192 || p.Height < 240 || p.Height > 8192 {
+		return contracts.CommandResult{}, nil, apiError(400, "invalid_request", "UI screen dimensions are invalid", nil)
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO ui_screens(workspace_id,owner_subject_id,width,height,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(workspace_id,owner_subject_id) DO UPDATE SET width=excluded.width,height=excluded.height,updated_at=excluded.updated_at`, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.Width, p.Height, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano))
+	return contracts.CommandResult{ResourceType: "ui_screen", ResourceID: cmd.Principal.SubjectID}, nil, err
+}
+
 func (s *Service) commandUIRendered(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
 	if err := uiScope(cmd); err != nil {
 		return contracts.CommandResult{}, nil, err
