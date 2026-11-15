@@ -58,12 +58,28 @@ final class DiagnosticsTests: XCTestCase {
     }
 
     func testDiagnosticLevelParsingAndEventEncoding() throws {
+        XCTAssertEqual(DiagnosticLevel.parse("warn"), .warn)
+        XCTAssertEqual(DiagnosticLevel.parse("WARN"), .warn)
         XCTAssertEqual(DiagnosticLevel.parse("debug"), .debug)
         XCTAssertEqual(DiagnosticLevel.parse("unknown"), .error)
         let event = DiagnosticEvent(clientRequestID: "r", phase: "p", requestPath: "/v1/p", installationID: "i", level: .info)
         let data = try JSONEncoder().encode(event)
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(object["level"] as? String, "info")
+    }
+
+    func testLifecycleEventsRemainInfo() async throws {
+        let server = URL(string: "https://lifecycle-\(UUID().uuidString).example")!
+        let installation = UUID().uuidString
+        let api = try APIClient(serverURL: server, credentials: nil, installationID: installation)
+        await api.applyDiagnosticLevel(.info)
+        for phase in ["app_start", "voice_start", "voice_connected", "voice_end"] {
+            await api.recordDiagnosticAndWait(phase: phase, requestPath: "client", level: .info)
+        }
+        let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: api.serverURL, installationID: installation))
+        let events = await queue.take(limit: 10)
+        XCTAssertEqual(events.map(\.phase), ["app_start", "voice_start", "voice_connected", "voice_end"])
+        XCTAssertEqual(events.map(\.level), Array(repeating: "info", count: 4))
     }
 
     func testDiagnosticPayloadIncludesBuildIdentityAndSuccessIsInfo() async throws {
@@ -115,12 +131,34 @@ final class DiagnosticsTests: XCTestCase {
 
     func testClientPolicyClampsIntervalAndUnknownLevel() throws {
         let decoder = JSONDecoder()
+        let warning = try decoder.decode(ClientPolicy.self, from: Data(#"{"log_level":"warn","poll_interval_seconds":60,"revision":5}"#.utf8))
+        XCTAssertEqual(warning.logLevel, .warn)
         let low = try decoder.decode(ClientPolicy.self, from: Data(#"{"log_level":"verbose","poll_interval_seconds":1,"revision":3}"#.utf8))
         XCTAssertEqual(low.logLevel, .error)
         XCTAssertEqual(low.pollIntervalSeconds, 30)
         let high = try decoder.decode(ClientPolicy.self, from: Data(#"{"log_level":"debug","poll_interval_seconds":999,"revision":4}"#.utf8))
         XCTAssertEqual(high.logLevel, .debug)
         XCTAssertEqual(high.pollIntervalSeconds, 600)
+    }
+
+    func testEveryEventLevelAtEveryPolicyLevel() async throws {
+        let levels: [DiagnosticLevel] = [.error, .warn, .info, .debug]
+        XCTAssertEqual(DiagnosticLevel.allCases, levels)
+        for (policyRank, policy) in levels.enumerated() {
+            let server = URL(string: "https://matrix-\(UUID().uuidString).example")!
+            let installation = UUID().uuidString
+            let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: server, installationID: installation))
+            await queue.setLevel(policy)
+            for eventLevel in levels {
+                let stored = await queue.append(DiagnosticEvent(clientRequestID: eventLevel.rawValue, phase: "test", requestPath: "client", installationID: installation, level: eventLevel))
+                XCTAssertTrue(stored)
+            }
+            let events = await queue.take(limit: 10)
+            XCTAssertEqual(events.map(\.level), levels.prefix(policyRank + 1).map(\.rawValue), "policy=\(policy)")
+            let restored = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: server, installationID: installation))
+            let restoredLevel = await restored.currentLevel()
+            XCTAssertEqual(restoredLevel, policy)
+        }
     }
 
     func testDiagnosticEventHashesInstallationAndQueueBoundsOldestEntries() async throws {

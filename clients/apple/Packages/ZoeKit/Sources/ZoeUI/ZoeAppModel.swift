@@ -1146,7 +1146,7 @@ public final class ZoeAppModel: ObservableObject {
             if envelope.type == "ui.surface", authentication.isConnected {
                 guard let event = UISurfaceEvent.decode(envelope.payload),
                       envelope.aggregateType == "ui_surface", envelope.aggregateId == event.surfaceID else {
-                    api?.recordDiagnostic(phase: "ui_surface", requestPath: "/v1/events", errorType: "contract_rejected", errorSummary: "invalid_ui_surface", level: .error)
+                    api?.recordDiagnostic(phase: "ui_surface", requestPath: "/v1/events", errorType: "contract_rejected", errorSummary: "invalid_ui_surface", level: .warn)
                     return
                 }
                 uiSurfaceRequests.apply(event)
@@ -1187,7 +1187,7 @@ public final class ZoeAppModel: ObservableObject {
                 await self.submitUICommand(kind: "ui.action", payload: payload, key: UUID().uuidString.lowercased())
             }
         } catch {
-            api?.recordDiagnostic(phase: "ui_action", requestPath: "/v1/commands", errorType: "encoding_error", errorSummary: "invalid_action_context", level: .error)
+            api?.recordDiagnostic(phase: "ui_action", requestPath: "/v1/commands", errorType: "encoding_error", errorSummary: "invalid_action_context", level: .warn)
         }
     }
 
@@ -1202,7 +1202,7 @@ public final class ZoeAppModel: ObservableObject {
         } catch {
             let diagnostic = RedactedDiagnostic(error)
             api.recordDiagnostic(phase: "ui_command", requestPath: "/v1/commands", httpStatus: diagnostic.httpStatus,
-                                 errorType: diagnostic.errorType, errorSummary: diagnostic.errorSummary, level: .error)
+                                 errorType: diagnostic.errorType, errorSummary: diagnostic.errorSummary, level: .warn)
             if kind == "ui.rendered" {
                 api.recordDiagnostic(phase: "ui_rendered_ack", requestPath: "/v1/commands", httpStatus: diagnostic.httpStatus, errorType: diagnostic.errorType, errorSummary: diagnostic.errorSummary, level: .error)
             }
