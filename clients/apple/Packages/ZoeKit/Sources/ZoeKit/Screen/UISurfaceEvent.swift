@@ -47,6 +47,11 @@ public struct UISurfaceEvent: Decodable, Sendable {
 
     public var renderedPayload: JSONValue { .object(["request_id": .string(requestID)]) }
 
+    public var diagnosticSummary: String {
+        let safeID = surfaceID.prefix(128).filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
+        return "surface=\(safeID);container=\(container.rawValue);messages=\(messages.count)"
+    }
+
     public func renderedIdempotencyKey(cursor: String, version: Int64) -> String {
         let identity = Data([requestID, cursor, String(version)].map { "\($0.utf8.count):\($0)" }.joined().utf8)
         return "ui-rendered-" + SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()

@@ -9,14 +9,54 @@ private final class DiagnosticsFailureURLProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        let response = HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!
+        let policy = request.url!.path.hasSuffix("/policy")
+        let response = HTTPURLResponse(url: request.url!, statusCode: policy ? 200 : 503, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        if policy { client?.urlProtocol(self, didLoad: Data(#"{"log_level":"info","poll_interval_seconds":30,"revision":7}"#.utf8)) }
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
 }
 
 final class DiagnosticsTests: XCTestCase {
+    func testFetchedPolicyReachesRecordingQueue() async throws {
+        let server = URL(string: "https://policy-\(UUID().uuidString).example")!
+        let installation = UUID().uuidString
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [DiagnosticsFailureURLProtocol.self]
+        let api = try APIClient(serverURL: server, credentials: DiagnosticsCredential(), session: URLSession(configuration: configuration), installationID: installation)
+        let policy = try await api.fetchClientPolicy()
+        XCTAssertEqual(policy.logLevel, .info)
+        XCTAssertEqual(policy.pollIntervalSeconds, 30)
+        XCTAssertEqual(policy.revision, 7)
+        await api.applyDiagnosticLevel(policy.logLevel)
+        await api.recordDiagnosticAndWait(phase: "voice_connected", requestPath: "/v1/voice", level: .info)
+        let restored = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: api.serverURL, installationID: installation))
+        let events = await restored.take(limit: 50)
+        XCTAssertEqual(events.map(\.phase), ["voice_connected"])
+    }
+
+    func testInfoDroppedAtErrorAndUploadFenceReleased() async throws {
+        let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: URL(string: "https://filter-\(UUID().uuidString).example")!, installationID: UUID().uuidString))
+        await queue.setLevel(.error)
+        _ = await queue.append(DiagnosticEvent(clientRequestID: "r", phase: "voice_end", requestPath: "client", installationID: "i", level: .info))
+        let events = await queue.take(limit: 50)
+        XCTAssertTrue(events.isEmpty)
+        let first = await queue.beginUpload()
+        let duplicate = await queue.beginUpload()
+        XCTAssertTrue(first)
+        XCTAssertFalse(duplicate)
+        await queue.endUpload()
+        await queue.markFailure()
+        let backedOff = await queue.canAttempt()
+        XCTAssertFalse(backedOff)
+        await queue.markSuccess()
+        let retriable = await queue.canAttempt()
+        let released = await queue.beginUpload()
+        XCTAssertTrue(retriable)
+        XCTAssertTrue(released)
+    }
+
     func testDiagnosticLevelParsingAndEventEncoding() throws {
         XCTAssertEqual(DiagnosticLevel.parse("debug"), .debug)
         XCTAssertEqual(DiagnosticLevel.parse("unknown"), .error)

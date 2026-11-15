@@ -74,7 +74,8 @@ public final class APIClient: @unchecked Sendable {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ZoeError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw decodeFailure(status: http.statusCode, data: data) }
-        return try decoder.decode(ClientPolicy.self, from: data)
+        // ClientPolicy declares wire-format keys; do not transform them a second time.
+        return try JSONDecoder().decode(ClientPolicy.self, from: data)
     }
 
     public func uploadDiagnosticsIfPossible() async {
@@ -85,6 +86,7 @@ public final class APIClient: @unchecked Sendable {
         let events = await queue.take(limit: 50)
         guard !events.isEmpty, let url = try? makeURL(path: ["v1", "diagnostics", "client"]), let body = try? encoder.encode(["events": events]) else { noteDiagnosticDeliveryFailure("prepare"); return }
         var request = URLRequest(url: url)
+        request.timeoutInterval = 2
         request.httpMethod = "POST"
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

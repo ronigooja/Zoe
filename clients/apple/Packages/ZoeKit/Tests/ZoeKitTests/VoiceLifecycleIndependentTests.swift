@@ -12,7 +12,9 @@ private final class IndependentVoiceURLProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         let body = Data(#"{"ok":true,"state":"ended","upstream_termination":"verified","pool_blocked":false}"#.utf8)
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        // Retain diagnostic events for the queue assertions; hangup still succeeds.
+        let status = request.url!.path == "/v1/diagnostics/client" ? 503 : 200
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)

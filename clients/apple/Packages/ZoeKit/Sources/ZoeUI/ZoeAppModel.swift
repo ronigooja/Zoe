@@ -124,6 +124,9 @@ public final class ZoeAppModel: ObservableObject {
     private var voiceSessionMediaClosed = false
     private var voiceStartMediaLoss: (epoch: UInt64, reason: String)?
     private var voiceStartInProgress = false
+    private var voiceStartedAt: Date?
+    private var voiceAttemptEndReason: VoiceEndReason?
+    private var recordedAppStart = false
     private var voiceHangupInFlightSessionID: String?
     private var voiceAPI: APIClient?
     private var recordedVoiceMediaLosses = Set<String>()
@@ -149,7 +152,7 @@ public final class ZoeAppModel: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, !Task.isCancelled else { return }
-                if self.silence.tick() == .timedOut { await self.endVoiceSession() }
+                if self.silence.tick() == .timedOut { await self.endVoiceSession(reason: .silenceTimeout) }
             }
         }
 #if os(macOS)
@@ -193,6 +196,13 @@ public final class ZoeAppModel: ObservableObject {
             let syncLoop = ClientSyncLoop(api: configuredAPI)
             self.syncLoop = syncLoop
             await syncLoop.start()
+            if !recordedAppStart {
+                recordedAppStart = true
+                if let policy = try? await configuredAPI.fetchClientPolicy() {
+                    await configuredAPI.applyDiagnosticLevel(policy.logLevel)
+                }
+                await configuredAPI.recordDiagnosticAndWait(phase: "app_start", requestPath: "client", level: .info)
+            }
             #if DEBUG
             if suppressConnectionFollowupsForTesting { return }
             #endif
@@ -200,7 +210,7 @@ public final class ZoeAppModel: ObservableObject {
             guard generation == connectionGeneration.value else { return }
             startEventLoop()
             if continuousVoiceEnabled, voiceSession == nil {
-                Task { @MainActor [weak self] in await self?.startVoiceIfEnabled() }
+                Task { @MainActor [weak self] in await self?.startVoiceIfEnabled(trigger: "app_start") }
             }
         } catch {
             if Self.isAccessDenied(error) || (error as? ZoeError).map({ if case .missingCredential = $0 { true } else { false } }) == true {
@@ -218,16 +228,16 @@ public final class ZoeAppModel: ObservableObject {
         continuousVoiceEnabled = enabled
         defaults.set(enabled, forKey: continuousVoiceKey)
         if enabled, authentication.isConnected {
-            Task { await startVoiceIfEnabled() }
+            Task { await startVoiceIfEnabled(trigger: "menu_toggle") }
         } else if !enabled {
-            Task { await endVoiceSession() }
+            Task { await endVoiceSession(reason: .userToggleOff) }
         }
     }
 
-    private func startVoiceIfEnabled() async {
+    private func startVoiceIfEnabled(trigger: String = "auto_resume") async {
         guard continuousVoiceEnabled, authentication.isConnected, voiceSession == nil else { return }
         silence.noteVoiceActivity()
-        await startVoice()
+        await startVoice(voice: nil, voiceMode: nil, languageCode: nil, trigger: trigger)
     }
 
     public func receiveInstallationLink(_ url: URL) {
@@ -271,7 +281,7 @@ public final class ZoeAppModel: ObservableObject {
                 guard try store.load() == candidate.key else {
                     throw ZoeError.persistence("The instance key could not be saved in local storage.")
                 }
-                await endVoiceSession()
+                await endVoiceSession(reason: .connectionCleared)
                 // Cleanup must use the old credential scope without deleting the newly saved key.
                 try await removeLocalConnection(preservingCredential: true, previousKey: previousKey)
             } catch {
@@ -300,7 +310,7 @@ public final class ZoeAppModel: ObservableObject {
         guard !isBusy, !isConnecting else { return }
         isBusy = true
         defer { isBusy = false }
-        await endVoiceSession()
+        await endVoiceSession(reason: .connectionCleared)
         do {
             try await removeLocalConnection()
             notice = connectionCleanupWarning ?? uiText("Saved key and local connection data cleared.")
@@ -346,6 +356,8 @@ public final class ZoeAppModel: ObservableObject {
         // Capture and detach old resources synchronously. Later cleanup cannot target a new session.
         let oldSession = voiceSession
         let oldAPI = voiceAPI
+        let oldEpoch = voiceSessionMediaEpoch
+        let oldDuration = voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         _ = voiceMediaFence.stop(voiceMediaEpoch)
         voiceHeartbeat.cancel()
         let oldTransport = voiceTransport
@@ -364,6 +376,7 @@ public final class ZoeAppModel: ObservableObject {
         Task { [weak self] in
             await oldTransport?.close()
             guard let self, let oldSession, let oldAPI else { return }
+            self.deliverVoiceEnd(oldSession, api: oldAPI, mediaEpoch: oldEpoch ?? 0, reason: .connectionCleared, duration: oldDuration)
             await self.releaseVoiceSession(oldSession, api: oldAPI, phase: "workspace_lock")
         }
     }
@@ -385,8 +398,14 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     public func startVoice(voice: String? = nil, voiceMode: String? = nil, languageCode: String? = nil) async {
+        await startVoice(voice: voice, voiceMode: voiceMode, languageCode: languageCode, trigger: "menu_toggle")
+    }
+
+    private func startVoice(voice: String?, voiceMode: String?, languageCode: String?, trigger: String) async {
         guard voiceSession == nil, !voiceStartInProgress else { return }
         voiceStartInProgress = true
+        voiceAttemptEndReason = nil
+        voiceStartedAt = Date()
         defer { voiceStartInProgress = false }
         let mediaEpoch = voiceMediaFence.beginAttempt()
         voiceStartMediaLoss = nil
@@ -395,6 +414,7 @@ public final class ZoeAppModel: ObservableObject {
         do {
             api = try configure()
             generation = connectionGeneration.value
+            voiceAPI = api
         } catch {
             voiceStatus = .unavailable(reason: voiceUnavailableMessage())
             return
@@ -435,6 +455,7 @@ public final class ZoeAppModel: ObservableObject {
             let offer = try await transport!.createOffer()
             guard generation == connectionGeneration.value, mediaEpoch == voiceMediaEpoch else { throw CancellationError() }
             diagnosticPhase = "session_create"
+            await api.recordDiagnosticAndWait(phase: "voice_start", requestPath: "/v1/voice/sessions", errorSummary: trigger, level: .info, voiceMediaEpoch: mediaEpoch)
             let created = try await api.createVoiceSession(
                 requestID: UUID().uuidString.lowercased(),
                 offerSDP: offer,
@@ -463,6 +484,7 @@ public final class ZoeAppModel: ObservableObject {
             voiceDraft = ""
             voiceDraftRevision = 0
             voiceStatus = .active(sessionID: created.voiceSessionId, mediaGeneration: created.generation)
+            await api.recordDiagnosticAndWait(phase: "voice_connected", requestPath: "/v1/voice/sessions/connected", level: .info, voiceSessionID: created.voiceSessionId, voiceGeneration: created.generation, voiceMediaEpoch: mediaEpoch)
             startVoiceHeartbeat(sessionID: created.voiceSessionId, api: api, generation: generation)
         } catch {
             let redacted = RedactedDiagnostic(error)
@@ -471,11 +493,19 @@ public final class ZoeAppModel: ObservableObject {
             await closeVoiceLocalMedia(mediaEpoch: mediaEpoch)
             var remainsQuarantined = false
             if let allocatedSession {
+                deliverVoiceEnd(allocatedSession, api: api, mediaEpoch: mediaEpoch, reason: voiceAttemptEndReason ?? .setupFailed)
                 let release = await releaseVoiceSession(allocatedSession, api: api, phase: "setup_release")
                 remainsQuarantined = release == nil || release?.poolBlocked == true
                 if remainsQuarantined {
                     let latestPool = try? await api.voicePoolStatus()
                     if generation == connectionGeneration.value, api === self.api { voicePoolStatus = latestPool }
+                }
+            } else {
+                let reason = voiceAttemptEndReason ?? .setupFailed
+                let summary = reason.summary(duration: voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0)
+                Task {
+                    await api.recordDiagnosticAndWait(phase: "voice_end", requestPath: "/v1/voice/sessions", errorType: reason.isError ? "voice_lifecycle" : "", errorSummary: summary, level: reason.isError ? .error : .info, voiceMediaEpoch: mediaEpoch)
+                    await api.uploadDiagnosticsIfPossible()
                 }
             }
             let mediaLossReason = voiceStartMediaLoss?.epoch == mediaEpoch ? voiceStartMediaLoss?.reason : nil
@@ -502,8 +532,13 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     public func endVoiceSession() async {
+        await endVoiceSession(reason: .other)
+    }
+
+    private func endVoiceSession(reason: VoiceEndReason) async {
         guard let session = voiceSession, let api = voiceAPI, let mediaEpoch = voiceSessionMediaEpoch else {
             if voiceStartInProgress {
+                voiceAttemptEndReason = reason
                 voiceStartMediaLoss = (voiceMediaEpoch, uiText("Voice setup was stopped locally."))
             }
             let closingEpoch = voiceMediaEpoch
@@ -516,10 +551,19 @@ public final class ZoeAppModel: ObservableObject {
             if case .unavailable = voiceStatus {} else { voiceStatus = .stopped }
             return
         }
-        await finishVoiceSession(session, api: api, mediaEpoch: mediaEpoch, lossReason: nil)
+        await finishVoiceSession(session, api: api, mediaEpoch: mediaEpoch, lossReason: nil, reason: reason)
     }
 
-    private func finishVoiceSession(_ session: VoiceSessionResponse, api: APIClient, mediaEpoch: UInt64, lossReason: String?) async {
+    private func deliverVoiceEnd(_ session: VoiceSessionResponse, api: APIClient, mediaEpoch: UInt64, reason: VoiceEndReason, duration: TimeInterval? = nil) {
+        let summary = reason.summary(duration: duration ?? voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0)
+        // Independent best-effort delivery never gates hangup, even if URLSession ignores cancellation.
+        Task {
+            await api.recordDiagnosticAndWait(phase: "voice_end", requestPath: "/v1/voice/sessions/hangup", errorType: reason.isError ? "voice_lifecycle" : "", errorSummary: summary, level: reason.isError ? .error : .info, voiceSessionID: session.voiceSessionId, voiceGeneration: session.generation, voiceMediaEpoch: mediaEpoch)
+            await api.uploadDiagnosticsIfPossible()
+        }
+    }
+
+    private func finishVoiceSession(_ session: VoiceSessionResponse, api: APIClient, mediaEpoch: UInt64, lossReason: String?, reason: VoiceEndReason) async {
         guard voiceSession?.voiceSessionId == session.voiceSessionId,
               voiceSessionMediaEpoch == mediaEpoch,
               voiceHangupInFlightSessionID != session.voiceSessionId else { return }
@@ -534,6 +578,7 @@ public final class ZoeAppModel: ObservableObject {
             voiceSessionMediaClosed = true
         }
         voiceHangupInFlightSessionID = session.voiceSessionId
+        deliverVoiceEnd(session, api: api, mediaEpoch: mediaEpoch, reason: reason)
         savePendingVoiceHangup(session, api: api)
         defer {
             if voiceHangupInFlightSessionID == session.voiceSessionId {
@@ -556,7 +601,6 @@ public final class ZoeAppModel: ObservableObject {
                 api.recordDiagnostic(phase: "voice_hangup", requestPath: "/v1/voice/sessions/hangup", errorType: "pool_blocked", errorSummary: "release_unconfirmed")
                 scheduleVoiceHangupRetry(session, api: api, phase: "hangup")
             }
-            await api.uploadDiagnosticsIfPossible()
             guard voiceSession?.voiceSessionId == session.voiceSessionId, voiceSessionMediaEpoch == mediaEpoch else { return }
             let latestPool = result.poolBlocked == true ? try? await api.voicePoolStatus() : nil
             guard voiceSession?.voiceSessionId == session.voiceSessionId, voiceSessionMediaEpoch == mediaEpoch else { return }
@@ -582,7 +626,6 @@ public final class ZoeAppModel: ObservableObject {
             savePendingVoiceHangup(session, api: api)
             let redacted = RedactedDiagnostic(error)
             api.recordDiagnostic(phase: "voice_hangup", requestPath: "/v1/voice/sessions/hangup", httpStatus: redacted.httpStatus, errorType: redacted.errorType, errorSummary: redacted.errorSummary)
-            await api.uploadDiagnosticsIfPossible()
             scheduleVoiceHangupRetry(session, api: api, phase: "hangup")
             voiceStatus = .interrupted(reason: uiFormat("Local media is closed, but server hangup is unconfirmed; the session remains fenced. %@%@", lossReason.map { $0 + " " } ?? "", ""))
         }
@@ -651,6 +694,7 @@ public final class ZoeAppModel: ObservableObject {
     #if os(macOS)
     private func terminateVoiceForAppExit() async {
         guard let session = voiceSession, let api = voiceAPI, let epoch = voiceSessionMediaEpoch else { return }
+        deliverVoiceEnd(session, api: api, mediaEpoch: epoch, reason: .appTerminate)
         await closeVoiceLocalMedia(mediaEpoch: epoch)
         await withTaskGroup(of: Void.self) { group in
             group.addTask { _ = await self.releaseVoiceSession(session, api: api, phase: "app_terminate") }
@@ -681,7 +725,7 @@ public final class ZoeAppModel: ObservableObject {
         try? audio?.deactivate()
     }
 
-    private func handleVoiceMediaLoss(_ loss: VoiceMediaLoss, mediaEpoch: UInt64) async {
+    private func handleVoiceMediaLoss(_ loss: VoiceMediaLoss, mediaEpoch: UInt64, endReason: VoiceEndReason? = nil) async {
         guard mediaEpoch == voiceMediaEpoch else { return }
         guard let rawReason = loss.message else { return }
         let reason: String
@@ -719,6 +763,7 @@ public final class ZoeAppModel: ObservableObject {
                     voicePeerState: peerState,
                     voiceDataChannelState: dataChannelState
                 )
+                Task { await api.uploadDiagnosticsIfPossible() }
             }
         }
         if let session = voiceSession, let api = voiceAPI, voiceSessionMediaEpoch == mediaEpoch {
@@ -728,7 +773,7 @@ public final class ZoeAppModel: ObservableObject {
                 voiceStatusObserverForTesting?(voiceStatus)
                 #endif
             }
-            await finishVoiceSession(session, api: api, mediaEpoch: mediaEpoch, lossReason: reason)
+            await finishVoiceSession(session, api: api, mediaEpoch: mediaEpoch, lossReason: reason, reason: endReason ?? loss.diagnosticReason)
             if continuousVoiceEnabled {
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(for: .seconds(2))
@@ -738,6 +783,7 @@ public final class ZoeAppModel: ObservableObject {
             return
         }
         voiceStartMediaLoss = (mediaEpoch, reason)
+        voiceAttemptEndReason = endReason ?? loss.diagnosticReason
         voiceStatus = .interrupted(reason: uiFormat("%@ Stopping voice setup and releasing local media.", reason))
         await closeVoiceLocalMedia(mediaEpoch: mediaEpoch)
     }
@@ -887,7 +933,8 @@ public final class ZoeAppModel: ObservableObject {
               voiceSession?.voiceSessionId == sessionID,
               voiceSessionMediaEpoch == mediaEpoch,
               voiceMediaEpoch == mediaEpoch else { return }
-        await handleVoiceMediaLoss(.leaseRenewalFailed(message), mediaEpoch: mediaEpoch)
+        api.recordDiagnostic(phase: "voice_heartbeat", requestPath: "/v1/voice/sessions/heartbeat", errorType: "heartbeat_failure", errorSummary: "heartbeat_failure", level: .error, voiceSessionID: sessionID, voiceGeneration: voiceSession?.generation, voiceMediaEpoch: mediaEpoch)
+        await handleVoiceMediaLoss(.leaseRenewalFailed(message), mediaEpoch: mediaEpoch, endReason: .heartbeatFailure)
     }
 
     private func receiveVoiceData(_ data: Data, generation: UInt64, mediaEpoch: UInt64) {
@@ -914,7 +961,7 @@ public final class ZoeAppModel: ObservableObject {
         }
         if type == "voice.end" || type == "voice_end" ||
             ((type == "function_call" || type == "tool_call") && ((event["name"] as? String) == "voice.end" || (event["name"] as? String) == "voice_end")) {
-            Task { @MainActor [weak self] in await self?.endVoiceSession() }
+            Task { @MainActor [weak self] in await self?.endVoiceSession(reason: .voiceEndEvent) }
             return
         }
         var messageID: String?
@@ -1099,17 +1146,19 @@ public final class ZoeAppModel: ObservableObject {
             if envelope.type == "ui.surface", authentication.isConnected {
                 guard let event = UISurfaceEvent.decode(envelope.payload),
                       envelope.aggregateType == "ui_surface", envelope.aggregateId == event.surfaceID else {
-                    api?.recordDiagnostic(phase: "ui_surface", requestPath: "/v1/events", errorType: "contract_rejected", errorSummary: "invalid_ui_surface", level: .warn)
+                    api?.recordDiagnostic(phase: "ui_surface", requestPath: "/v1/events", errorType: "contract_rejected", errorSummary: "invalid_ui_surface", level: .error)
                     return
                 }
                 uiSurfaceRequests.apply(event)
+                api?.recordDiagnostic(phase: "ui_surface_received", requestPath: "/v1/events", errorSummary: event.diagnosticSummary, level: .info)
                 let displayed = onUISurface?(event) ?? false
                 if displayed, !event.isDeletion {
+                    api?.recordDiagnostic(phase: "ui_surface_displayed", requestPath: "client", errorSummary: event.diagnosticSummary, level: .info)
                     await submitUICommand(kind: "ui.rendered", payload: event.renderedPayload,
                                           key: event.renderedIdempotencyKey(cursor: envelope.cursor, version: envelope.aggregateVersion))
                 }
             }
-            if envelope.type == "voice.end" { await endVoiceSession() }
+            if envelope.type == "voice.end" { await endVoiceSession(reason: .voiceEndEvent) }
         case .snapshotRequired:
             do { try await validateConnection() }
             catch { setOffline(error) }
@@ -1138,7 +1187,7 @@ public final class ZoeAppModel: ObservableObject {
                 await self.submitUICommand(kind: "ui.action", payload: payload, key: UUID().uuidString.lowercased())
             }
         } catch {
-            api?.recordDiagnostic(phase: "ui_action", requestPath: "/v1/commands", errorType: "encoding_error", errorSummary: "invalid_action_context", level: .warn)
+            api?.recordDiagnostic(phase: "ui_action", requestPath: "/v1/commands", errorType: "encoding_error", errorSummary: "invalid_action_context", level: .error)
         }
     }
 
@@ -1147,10 +1196,16 @@ public final class ZoeAppModel: ObservableObject {
         do {
             // UI commands are transient: submit once, never journal/retry failed actions.
             _ = try await api.submit(kind: kind, payload: payload, idempotencyKey: key)
+            if kind == "ui.rendered" {
+                api.recordDiagnostic(phase: "ui_rendered_ack", requestPath: "/v1/commands", level: .info)
+            }
         } catch {
             let diagnostic = RedactedDiagnostic(error)
             api.recordDiagnostic(phase: "ui_command", requestPath: "/v1/commands", httpStatus: diagnostic.httpStatus,
-                                 errorType: diagnostic.errorType, errorSummary: diagnostic.errorSummary, level: .warn)
+                                 errorType: diagnostic.errorType, errorSummary: diagnostic.errorSummary, level: .error)
+            if kind == "ui.rendered" {
+                api.recordDiagnostic(phase: "ui_rendered_ack", requestPath: "/v1/commands", httpStatus: diagnostic.httpStatus, errorType: diagnostic.errorType, errorSummary: diagnostic.errorSummary, level: .error)
+            }
         }
     }
 

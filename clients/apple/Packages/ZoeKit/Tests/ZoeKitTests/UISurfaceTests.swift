@@ -18,6 +18,9 @@ final class UISurfaceTests: XCTestCase {
         XCTAssertEqual(event.container, .popover)
         XCTAssertTrue(event.awaitingInput)
         XCTAssertEqual(event.messages.count, 2)
+        XCTAssertEqual(event.diagnosticSummary, "surface=s1;container=popover;messages=2")
+        XCTAssertFalse(event.diagnosticSummary.contains("Hello"))
+        XCTAssertFalse(event.diagnosticSummary.contains("https://"))
         XCTAssertFalse(event.isDeletion)
         XCTAssertTrue(try XCTUnwrap(UISurfaceEvent.decode(payload(deletion: true))).isDeletion)
     }
