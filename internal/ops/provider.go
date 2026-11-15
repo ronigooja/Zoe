@@ -155,8 +155,13 @@ func WriteRunnerEnvAtomic(path string, c ProviderConfig) error {
 	lines := strings.Split(string(old), "\n")
 	kept := make([]string, 0, len(lines)+3)
 	for _, line := range lines {
-		key, _, ok := strings.Cut(strings.TrimSpace(line), "=")
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if ok {
+			if key == "ZOE_RUNNER_ROUTES" {
+				if routes, ok := runnerRoutesWithModel(value, c.Model); ok {
+					line = key + "=" + strconv.Quote(routes)
+				}
+			}
 			if _, replace := updates[key]; replace {
 				continue
 			}
@@ -171,6 +176,37 @@ func WriteRunnerEnvAtomic(path string, c ProviderConfig) error {
 		}
 	}
 	return writeFileAtomic(path, []byte(strings.Join(kept, "\n")+"\n"), 0o600)
+}
+
+// runnerRoutesWithModel updates existing route objects without dropping unknown fields.
+// Absent, malformed, or non-object routes are left untouched by the caller.
+func runnerRoutesWithModel(value, model string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "\"") {
+		decoded, err := strconv.Unquote(value)
+		if err != nil {
+			return "", false
+		}
+		value = decoded
+	} else if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
+		value = strings.Trim(value, "'")
+	}
+	if !validOperatorEnvValue("ZOE_RUNNER_ROUTES", value) {
+		return "", false
+	}
+	var routes map[string]map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(value), &routes); err != nil || len(routes) == 0 {
+		return "", false
+	}
+	encodedModel, _ := json.Marshal(model)
+	for _, route := range routes {
+		if route == nil {
+			return "", false
+		}
+		route["model"] = encodedModel
+	}
+	encoded, err := json.Marshal(routes)
+	return string(encoded), err == nil
 }
 
 // WriteFileAtomic restores or writes a private deployment file with the same

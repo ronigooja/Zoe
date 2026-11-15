@@ -31,7 +31,7 @@ type Profile struct {
 
 var Definitions = map[string]Profile{
 	"zoe-worker":  {ID: "zoe-worker", SystemPrompt: "Act as Zoe's Worker. Complete the assigned task using tools and subagents as needed and report evidence.", ModelRouteKey: "default", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, ScopeDefaults: []string{"workspace"}, PermissionTier: TierExternalPaths},
-	"zoe-steward": {ID: "zoe-steward", SystemPrompt: "Act as Zoe's Worker. Execute the assigned task using tools and subagents as needed; report evidence. Zoe manages task admission separately.", ModelRouteKey: "default", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, ScopeDefaults: []string{"workspace"}, PermissionTier: TierFull},
+	"zoe-steward": {ID: "zoe-steward", SystemPrompt: "Act as Zoe's Worker. Execute the assigned task using tools and subagents as needed; report evidence.", ModelRouteKey: "default", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, ScopeDefaults: []string{"workspace"}, PermissionTier: TierFull},
 	"zoe-super":   {ID: "zoe-super", SystemPrompt: "Act as Zoe's Super planner. Decompose complex goals and coordinate bounded work.", ModelRouteKey: "default", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, ScopeDefaults: []string{"workspace"}, PermissionTier: TierExternalPaths},
 }
 

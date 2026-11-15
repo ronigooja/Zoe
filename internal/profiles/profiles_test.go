@@ -16,6 +16,13 @@ func evaluate(rules []contracts.PermissionRule, action, resource string) string 
 	return effect
 }
 
+func TestStewardWorkerSystemPrompt(t *testing.T) {
+	profile, ok := ByID("zoe-steward")
+	if !ok || profile.SystemPrompt != "Act as Zoe's Worker. Execute the assigned task using tools and subagents as needed; report evidence." {
+		t.Fatalf("unexpected steward Worker prompt: %q", profile.SystemPrompt)
+	}
+}
+
 func TestEffectivePermissionSetTiersDenyFirstAndLastMatch(t *testing.T) {
 	for _, tier := range []string{TierReadOnlyResearch, TierWorkspaceReadWrite, TierExternalPaths} {
 		rules, impact, err := EffectivePermissionSet(Profile{PermissionTier: tier}, nil, nil)
