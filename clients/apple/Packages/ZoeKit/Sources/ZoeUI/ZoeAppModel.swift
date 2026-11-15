@@ -1404,6 +1404,13 @@ public final class ZoeAppModel: ObservableObject {
         recordUITrace(phase: "ui_surface_closed", summary: "user_closed", level: .info)
     }
 
+    public func noteUISurfaceRenderErrors(_ errors: [Error]) {
+        guard let first = errors.first else { return }
+        // Error descriptions can contain component IDs and user content; report only the type.
+        let errorType = String(String(reflecting: type(of: first)).prefix(160))
+        recordUITrace(phase: "ui_surface_render_error", summary: "count=\(errors.count) first_type=\(errorType)", level: .warn, upload: true)
+    }
+
     public func sendUISurfaceAction(surfaceID: String, action: ResolvedAction) {
         guard authentication.isConnected, let requestID = uiSurfaceRequests.requestIDs[surfaceID] else { return }
         do {

@@ -19,6 +19,7 @@ import A2UISwiftUI
     private let actionHandler: (String, ResolvedAction) -> Void
     private let popoverAnchor: () -> NSView?
     public var onUserClosed: (() -> Void)?
+    public var onRenderError: ((String, [Error]) -> Void)?
 
     public init(popoverAnchor: @escaping () -> NSView?, actionHandler: @escaping (String, ResolvedAction) -> Void = { _, _ in }) {
         self.popoverAnchor = popoverAnchor
@@ -30,7 +31,8 @@ import A2UISwiftUI
         close(id: spec.id)
         store.open(spec)
         let model = SurfaceViewModel(catalog: basicCatalog)
-        model.processMessages(store.surfaces[spec.id]!.messages)
+        let errors = model.processMessages(store.surfaces[spec.id]!.messages)
+        if !errors.isEmpty { onRenderError?(spec.id, errors) }
         let controller = hostingController(model, id: spec.id)
         var entry = Entry(viewModel: model)
         switch spec.kind {
@@ -40,6 +42,8 @@ import A2UISwiftUI
             window.identifier = NSUserInterfaceItemIdentifier(spec.id)
             window.delegate = self
             window.contentViewController = controller
+            window.minSize = NSSize(width: 320, height: 240)
+            window.setContentSize(NSSize(width: 480, height: 400))
             window.center()
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
@@ -48,8 +52,8 @@ import A2UISwiftUI
             let popover = NSPopover()
             popover.delegate = self
             popover.behavior = .transient
-            popover.contentSize = NSSize(width: 400, height: 360)
             popover.contentViewController = controller
+            popover.contentSize = NSSize(width: 400, height: 360)
             entry.popover = popover
             if spec.kind == .statusItem {
                 let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -69,13 +73,22 @@ import A2UISwiftUI
         guard let entry = entries[id] else { return }
         store.update(id: id, messages: messages)
         var model = entry.viewModel
+        var errors: [Error] = []
         for message in messages {
             if case .createSurface = message { model = SurfaceViewModel(catalog: basicCatalog) }
-            model.processMessages([message])
+            errors.append(contentsOf: model.processMessages([message]))
         }
+        if !errors.isEmpty { onRenderError?(id, errors) }
         entries[id] = Entry(viewModel: model, window: entry.window, popover: entry.popover, statusItem: entry.statusItem)
-        entry.window?.contentViewController = hostingController(model, id: id)
-        entry.popover?.contentViewController = hostingController(model, id: id)
+        if let window = entry.window {
+            let contentSize = window.contentRect(forFrameRect: window.frame).size
+            window.contentViewController = hostingController(model, id: id)
+            window.setContentSize(contentSize)
+        }
+        if let popover = entry.popover {
+            popover.contentViewController = hostingController(model, id: id)
+            popover.contentSize = NSSize(width: 400, height: 360)
+        }
     }
 
     /// A dismissed popover keeps its renderer; every new server state presents it again.
@@ -90,6 +103,8 @@ import A2UISwiftUI
         case .window:
             NSApp.activate(ignoringOtherApps: true)
             entry.window?.makeKeyAndOrderFront(nil)
+            guard let size = entry.window?.contentView?.frame.size,
+                  size.width >= 50, size.height >= 50 else { return false }
             return entry.window?.isVisible == true
         case .popover:
             guard let anchor = popoverAnchor() else { return false }
@@ -130,9 +145,11 @@ import A2UISwiftUI
     }
 
     private func hostingController(_ model: SurfaceViewModel, id: String) -> NSViewController {
-        NSHostingController(rootView: A2UISurfaceView(viewModel: model, onAction: { [weak self] action in
+        let controller = NSHostingController(rootView: A2UISurfaceView(viewModel: model, onAction: { [weak self] action in
             Task { @MainActor [weak self] in self?.actionHandler(id, action) }
         }))
+        controller.sizingOptions = []
+        return controller
     }
 }
 #endif
