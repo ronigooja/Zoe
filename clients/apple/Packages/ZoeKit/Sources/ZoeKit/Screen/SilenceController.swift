@@ -14,7 +14,9 @@ public struct SystemSilenceClock: SilenceClock {
     public var isEnabled: Bool
     private let clock: SilenceClock
     private var lastVoiceActivity: Date?
-    private var interactionInProgress = false
+    public private(set) var interactionInProgress = false
+    public var lastActivityAge: TimeInterval? { lastVoiceActivity.map { clock.now().timeIntervalSince($0) } }
+    public var diagnosticNow: Date { clock.now() }
     private var didTimeOut = false
 
     public init(timeoutSeconds: TimeInterval = 60, isEnabled: Bool = true, clock: SilenceClock = SystemSilenceClock()) {

@@ -83,8 +83,9 @@ public struct EventStreamClient: Sendable {
 
     /// Streams until the server closes the connection or the caller cancels.
     @discardableResult
-    public func run(after cursor: String?, onPush: @Sendable (ServerPush) async throws -> Void) async throws -> String? {
+    public func run(after cursor: String?, onConnected: @Sendable () async -> Void = {}, onPush: @Sendable (ServerPush) async throws -> Void) async throws -> String? {
         let bytes = try await api.events(after: cursor)
+        await onConnected()
         var parser = SSEParser()
         var latestCursor = cursor
         for try await line in bytes.lines {

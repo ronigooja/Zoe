@@ -100,6 +100,15 @@ public final class APIClient: @unchecked Sendable {
         } catch { await queue.markFailure(); noteDiagnosticDeliveryFailure("upload") }
     }
 
+    /// Independent cancellation bounds diagnostic work without gating lifecycle operations.
+    public func triggerDiagnosticUpload(timeout: TimeInterval = 2) {
+        let upload = Task { await self.uploadDiagnosticsIfPossible() }
+        Task {
+            try? await Task.sleep(for: .seconds(timeout))
+            upload.cancel()
+        }
+    }
+
     private func noteDiagnosticDeliveryFailure(_ kind: String) {
         let key = diagnosticDeliveryFailureKey + "." + kind
         UserDefaults.standard.set(min(UserDefaults.standard.integer(forKey: key) + 1, 1000), forKey: key)
@@ -152,7 +161,7 @@ public final class APIClient: @unchecked Sendable {
         request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         try authorize(&request)
         request.httpBody = try encoder.encode(envelope)
-        return try await perform(request)
+        return try await perform(request, successDiagnosticPhase: kind == "ui.rendered" ? "ui_rendered_ack" : nil)
     }
 
     public func events(after cursor: String?) async throws -> URLSession.AsyncBytes {
@@ -193,7 +202,7 @@ public final class APIClient: @unchecked Sendable {
         try await request(path: path, method: method, body: Optional<NoBody>.none, authenticated: authenticated)
     }
 
-    private func perform<Response: Decodable>(_ request: URLRequest, clientRequestID: String? = nil) async throws -> Response {
+    private func perform<Response: Decodable>(_ request: URLRequest, clientRequestID: String? = nil, successDiagnosticPhase: String? = nil) async throws -> Response {
         let path = request.url?.path ?? ""
         let requestID = clientRequestID ?? request.value(forHTTPHeaderField: "X-Zoe-Client-Request-ID") ?? UUID().uuidString.lowercased()
         let phase = diagnosticPhase(path)
@@ -210,6 +219,9 @@ public final class APIClient: @unchecked Sendable {
             }
             do {
                 let decoded = try decoder.decode(Response.self, from: data)
+                if let successDiagnosticPhase {
+                    recordDiagnostic(phase: successDiagnosticPhase, requestPath: path, clientRequestID: requestID, httpStatus: response.statusCode, level: .info)
+                }
                 if phase != "request" {
                     recordDiagnostic(phase: phase, requestPath: path, clientRequestID: requestID, httpStatus: response.statusCode, responseBytes: Int64(data.count), level: .info)
                 }

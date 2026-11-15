@@ -47,6 +47,8 @@ public final class ZoeAppModel: ObservableObject {
     var connectionAPIOverrideForTesting: ((URL, InstanceKey, String) throws -> APIClient)?
     var keyStoreOverrideForTesting: ((URL) throws -> any InstanceKeyStoring)?
     var suppressConnectionFollowupsForTesting = false
+    var voiceDiagnosticObserverForTesting: ((String, String) -> Void)?
+    var voiceCensusSummaryForTesting: String { voiceEventCensus.summary() }
     var voiceLocalMediaStopObserverForTesting: (() -> Void)?
     var voiceStatusObserverForTesting: ((VoiceIntegrationStatus) -> Void)?
     var voiceHangupOverrideForTesting: ((String) async throws -> VoiceOperationResponse)?
@@ -128,6 +130,20 @@ public final class ZoeAppModel: ObservableObject {
     private var voiceStartMediaLoss: (epoch: UInt64, reason: String)?
     private var voiceStartInProgress = false
     private var voiceStartedAt: Date?
+    private var diagnosticConnectedAt: Date?
+    private var silenceResetDiagnostics = SilenceResetDiagnostics()
+    private var voiceEventCensus = EventCensusDiagnostics()
+    private var censusEndRecorded = false
+    private var censusEarlyRecorded = false
+    private final class StreamDiagnostics {
+        var received: EventsReceivedDiagnostics
+        init(now: Date) { received = EventsReceivedDiagnostics(now: now) }
+        func report(api: APIClient, force: Bool = false) {
+            if let summary = received.report(now: Date(), force: force) {
+                api.recordDiagnostic(phase: "events_received", requestPath: "/v1/events", errorSummary: summary, level: .info)
+            }
+        }
+    }
     private var voiceAttemptEndReason: VoiceEndReason?
     private var recordedAppStart = false
     private var voiceHangupInFlightSessionID: String?
@@ -161,12 +177,19 @@ public final class ZoeAppModel: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, !Task.isCancelled else { return }
-                if self.silence.tick() == .timedOut { await self.endVoiceSession(reason: .silenceTimeout) }
+                self.reportEarlyVoiceCensusIfNeeded()
+                if self.silence.tick() == .timedOut {
+                    self.recordVoiceTrace(phase: "silence_tick_timeout", summary: DiagnosticSummaries.timeout(age: self.silence.lastActivityAge, timeout: self.silence.timeoutSeconds, enabled: self.silence.isEnabled, interaction: self.silence.interactionInProgress, elapsed: self.diagnosticElapsed), upload: true)
+                    await self.endVoiceSession(reason: .silenceTimeout)
+                }
             }
         }
 #if os(macOS)
         terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in await self?.terminateVoiceForAppExit() }
+            Task { @MainActor in
+                (self?.api ?? self?.voiceAPI)?.triggerDiagnosticUpload(timeout: 1)
+                await self?.terminateVoiceForAppExit()
+            }
         }
 #endif
     }
@@ -249,23 +272,67 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     public func setSilenceHangupEnabled(_ enabled: Bool) {
+        let before = silenceSettings
         silenceHangupEnabled = enabled
         defaults.set(enabled, forKey: "zoe.voice.silenceHangupEnabled")
         silence.isEnabled = enabled
+        recordSilenceSettingChange(from: before)
     }
 
     public func setSilenceTimeoutSeconds(_ seconds: Double) {
         guard seconds.isFinite else { return }
+        let before = silenceSettings
         silenceTimeoutSeconds = min(3600, max(10, seconds))
         defaults.set(silenceTimeoutSeconds, forKey: "zoe.voice.silenceTimeoutSeconds")
         silence.timeoutSeconds = silenceTimeoutSeconds
+        recordSilenceSettingChange(from: before)
+    }
+
+    private var silenceSettings: String { DiagnosticSummaries.settings(enabled: silenceHangupEnabled, seconds: silenceTimeoutSeconds) }
+    private var silenceSettingsSuffix: String { DiagnosticSummaries.settingsSuffix(enabled: silenceHangupEnabled, seconds: silenceTimeoutSeconds) }
+    private var diagnosticElapsed: TimeInterval { diagnosticConnectedAt.map { silence.diagnosticNow.timeIntervalSince($0) } ?? 0 }
+
+    private func recordSilenceSettingChange(from before: String) {
+        guard before != silenceSettings else { return }
+        (voiceAPI ?? api)?.recordDiagnostic(phase: "silence_setting_changed", requestPath: "client", errorSummary: "\(before)->\(silenceSettings)", level: .info, voiceSessionID: voiceSession?.voiceSessionId, voiceGeneration: voiceSession?.generation, voiceMediaEpoch: voiceSessionMediaEpoch)
+    }
+
+    private func recordVoiceTrace(phase: String, summary: String, upload: Bool = false) {
+        #if DEBUG
+        voiceDiagnosticObserverForTesting?(phase, summary)
+        #endif
+        guard let api = voiceAPI ?? api else { return }
+        let session = voiceSession
+        let epoch = voiceSessionMediaEpoch ?? voiceMediaEpoch
+        Task {
+            await api.recordDiagnosticAndWait(phase: phase, requestPath: "client", errorSummary: String(summary.prefix(200)), level: .info, voiceSessionID: session?.voiceSessionId, voiceGeneration: session?.generation, voiceMediaEpoch: epoch)
+            if upload { api.triggerDiagnosticUpload() }
+        }
+    }
+
+    private func recordSilenceReset(type: String) {
+        if let summary = silenceResetDiagnostics.note(type: type, now: silence.diagnosticNow, elapsed: diagnosticElapsed) {
+            recordVoiceTrace(phase: "silence_reset", summary: summary)
+        }
+    }
+
+    private func reportEarlyVoiceCensusIfNeeded() {
+        guard voiceSession != nil, !censusEarlyRecorded, diagnosticElapsed >= 20 else { return }
+        censusEarlyRecorded = true
+        recordVoiceTrace(phase: "voice_event_census_early", summary: voiceEventCensus.summary())
     }
 
     private func noteVoiceConnected() {
         // Connected calls exclude setup time from both silence and end-duration accounting.
         voiceStartedAt = Date()
+        diagnosticConnectedAt = silence.diagnosticNow
+        silenceResetDiagnostics = SilenceResetDiagnostics()
+        voiceEventCensus = EventCensusDiagnostics()
+        censusEndRecorded = false
+        censusEarlyRecorded = false
         silence.reset()
         silence.noteVoiceActivity()
+        recordSilenceReset(type: "connect")
     }
 
     public func receiveInstallationLink(_ url: URL) {
@@ -402,10 +469,12 @@ public final class ZoeAppModel: ObservableObject {
         voiceAPI = nil
         voiceStatus = .stopped
         try? oldAudio?.deactivate()
+        if let oldSession, let oldAPI {
+            deliverVoiceEnd(oldSession, api: oldAPI, mediaEpoch: oldEpoch ?? 0, reason: .connectionCleared, duration: oldDuration)
+        }
         Task { [weak self] in
             await oldTransport?.close()
             guard let self, let oldSession, let oldAPI else { return }
-            self.deliverVoiceEnd(oldSession, api: oldAPI, mediaEpoch: oldEpoch ?? 0, reason: .connectionCleared, duration: oldDuration)
             await self.releaseVoiceSession(oldSession, api: oldAPI, phase: "workspace_lock")
         }
     }
@@ -434,6 +503,10 @@ public final class ZoeAppModel: ObservableObject {
         guard voiceSession == nil, !voiceStartInProgress else { return }
         voiceStartInProgress = true
         voiceAttemptEndReason = nil
+        voiceEventCensus = EventCensusDiagnostics()
+        censusEndRecorded = false
+        censusEarlyRecorded = false
+        diagnosticConnectedAt = nil
         silence.reset()
         voiceStartedAt = Date()
         defer { voiceStartInProgress = false }
@@ -485,7 +558,7 @@ public final class ZoeAppModel: ObservableObject {
             let offer = try await transport!.createOffer()
             guard generation == connectionGeneration.value, mediaEpoch == voiceMediaEpoch else { throw CancellationError() }
             diagnosticPhase = "session_create"
-            await api.recordDiagnosticAndWait(phase: "voice_start", requestPath: "/v1/voice/sessions", errorSummary: trigger, level: .info, voiceMediaEpoch: mediaEpoch)
+            await api.recordDiagnosticAndWait(phase: "voice_start", requestPath: "/v1/voice/sessions", errorSummary: trigger + silenceSettingsSuffix, level: .info, voiceMediaEpoch: mediaEpoch)
             let created = try await api.createVoiceSession(
                 requestID: UUID().uuidString.lowercased(),
                 offerSDP: offer,
@@ -533,10 +606,13 @@ public final class ZoeAppModel: ObservableObject {
                 }
             } else {
                 let reason = voiceAttemptEndReason ?? .setupFailed
-                let summary = reason.summary(duration: voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0)
+                let summary = reason.summary(duration: voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0) + silenceSettingsSuffix
+                let census = voiceEventCensus.summary()
+                censusEndRecorded = true
                 Task {
+                    await api.recordDiagnosticAndWait(phase: "voice_event_census", requestPath: "client", errorSummary: census, level: .info, voiceMediaEpoch: mediaEpoch)
                     await api.recordDiagnosticAndWait(phase: "voice_end", requestPath: "/v1/voice/sessions", errorType: reason.isError ? "voice_lifecycle" : "", errorSummary: summary, level: reason.isError ? .error : .info, voiceMediaEpoch: mediaEpoch)
-                    await api.uploadDiagnosticsIfPossible()
+                    api.triggerDiagnosticUpload()
                 }
             }
             let mediaLossReason = voiceStartMediaLoss?.epoch == mediaEpoch ? voiceStartMediaLoss?.reason : nil
@@ -586,11 +662,16 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     private func deliverVoiceEnd(_ session: VoiceSessionResponse, api: APIClient, mediaEpoch: UInt64, reason: VoiceEndReason, duration: TimeInterval? = nil) {
-        let summary = reason.summary(duration: duration ?? voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0)
+        let summary = reason.summary(duration: duration ?? voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0) + silenceSettingsSuffix
+        let census = censusEndRecorded ? nil : voiceEventCensus.summary()
+        censusEndRecorded = true
         // Independent best-effort delivery never gates hangup, even if URLSession ignores cancellation.
         Task {
+            if let census {
+                await api.recordDiagnosticAndWait(phase: "voice_event_census", requestPath: "client", errorSummary: census, level: .info, voiceSessionID: session.voiceSessionId, voiceGeneration: session.generation, voiceMediaEpoch: mediaEpoch)
+            }
             await api.recordDiagnosticAndWait(phase: "voice_end", requestPath: "/v1/voice/sessions/hangup", errorType: reason.isError ? "voice_lifecycle" : "", errorSummary: summary, level: reason.isError ? .error : .info, voiceSessionID: session.voiceSessionId, voiceGeneration: session.generation, voiceMediaEpoch: mediaEpoch)
-            await api.uploadDiagnosticsIfPossible()
+            api.triggerDiagnosticUpload()
         }
     }
 
@@ -982,7 +1063,16 @@ public final class ZoeAppModel: ObservableObject {
             event = inner
         }
         let type = (event["type"] as? String) ?? ""
-        if Self.isVoiceActivity(event) { silence.noteVoiceActivity() }
+        let activity = Self.isVoiceActivity(event)
+        let outerType = (outer["type"] as? String) ?? "missing"
+        voiceEventCensus.note(type: outerType, activity: activity)
+        if outerType == "data_message", event["type"] as? String != outerType {
+            voiceEventCensus.note(type: "data_message/" + String(type.prefix(48)), activity: activity)
+        }
+        if activity {
+            silence.noteVoiceActivity()
+            recordSilenceReset(type: type)
+        }
         if type == "user_audio_turn.final" {
             guard let final = Self.parseAuthoritativeVoiceTurn(event) else {
                 recordAutomaticVoiceTurnDiagnostic(errorType: "contract_rejected", errorSummary: "invalid_final_event", mediaEpoch: mediaEpoch)
@@ -1173,14 +1263,33 @@ public final class ZoeAppModel: ObservableObject {
         let generation = connectionGeneration.value
         let stream = EventStreamClient(api: api)
         while !Task.isCancelled && isCurrentConnection(generation, sourceAPI: api) {
-            do {
-                _ = try await stream.run(after: eventCursor) { [weak self] push in
-                    await self?.handle(push, expectedGeneration: generation, sourceAPI: api)
+            let started = Date()
+            let diagnostics = StreamDiagnostics(now: started)
+            api.recordDiagnostic(phase: "events_stream", requestPath: "/v1/events", errorSummary: "connect", level: .info)
+            let streamReportTask = Task { @MainActor in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled else { return }
+                    diagnostics.report(api: api)
                 }
+            }
+            do {
+                _ = try await stream.run(after: eventCursor, onConnected: {
+                    await api.recordDiagnosticAndWait(phase: "events_stream", requestPath: "/v1/events", errorSummary: "connected", level: .info)
+                }) { [weak self] push in
+                    await self?.receiveStreamPush(push, diagnostics: diagnostics, generation: generation, api: api)
+                }
+                streamReportTask.cancel()
+                diagnostics.report(api: api, force: true)
+                api.recordDiagnostic(phase: "events_stream", requestPath: "/v1/events", errorSummary: "ended;dur=\(DiagnosticSummaries.seconds(Date().timeIntervalSince(started)))", level: .info)
                 if Task.isCancelled || !isCurrentConnection(generation, sourceAPI: api) { return }
                 closeUISurfaces()
                 streamBackoff = 1
             } catch {
+                streamReportTask.cancel()
+                diagnostics.report(api: api, force: true)
+                let redacted = RedactedDiagnostic(error)
+                api.recordDiagnostic(phase: "events_stream", requestPath: "/v1/events", httpStatus: redacted.httpStatus, errorType: redacted.errorType, errorSummary: "error;\(redacted.errorType);dur=\(DiagnosticSummaries.seconds(Date().timeIntervalSince(started)))", level: .info)
                 if Task.isCancelled || !isCurrentConnection(generation, sourceAPI: api) { return }
                 closeUISurfaces()
                 if Self.isAccessDenied(error) {
@@ -1193,7 +1302,25 @@ public final class ZoeAppModel: ObservableObject {
             }
             let delay = streamBackoff
             streamBackoff = min(streamBackoff * 2, 30)
+            api.recordDiagnostic(phase: "events_stream", requestPath: "/v1/events", errorSummary: "reconnect_in=\(delay)", level: .info)
             try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+        }
+    }
+
+    private func receiveStreamPush(_ push: ServerPush, diagnostics: StreamDiagnostics, generation: UInt64, api: APIClient) async {
+        switch push {
+        case let .event(envelope): diagnostics.received.note(type: envelope.type)
+        case .snapshotRequired: diagnostics.received.note(type: "snapshot_required")
+        }
+        diagnostics.report(api: api)
+        await handle(push, expectedGeneration: generation, sourceAPI: api)
+    }
+
+    private func recordUITrace(phase: String, summary: String, level: DiagnosticLevel, upload: Bool = false) {
+        guard let api else { return }
+        Task {
+            await api.recordDiagnosticAndWait(phase: phase, requestPath: "/v1/events", errorSummary: String(summary.prefix(200)), level: level)
+            if upload { api.triggerDiagnosticUpload() }
         }
     }
 
@@ -1202,17 +1329,25 @@ public final class ZoeAppModel: ObservableObject {
         switch push {
         case let .event(envelope):
             eventCursor = envelope.cursor
-            if envelope.type == "ui.surface", authentication.isConnected {
-                guard let event = UISurfaceEvent.decode(envelope.payload),
-                      envelope.aggregateType == "ui_surface", envelope.aggregateId == event.surfaceID else {
-                    api?.recordDiagnostic(phase: "ui_surface", requestPath: "/v1/events", errorType: "contract_rejected", errorSummary: "invalid_ui_surface", level: .warn)
+            if envelope.type == "ui.surface" {
+                recordUITrace(phase: "ui_surface_received", summary: UISurfaceEvent.receivedSummary(payload: envelope.payload, cursor: envelope.cursor), level: .info)
+                guard authentication.isConnected else {
+                    recordUITrace(phase: "ui_surface_not_connected", summary: "not_connected", level: .warn)
+                    return
+                }
+                let decoded = UISurfaceEvent.decodeWithDiagnostic(envelope.payload)
+                let failure = decoded.failure ?? ((envelope.aggregateType != "ui_surface" || envelope.aggregateId != decoded.event?.surfaceID) ? "aggregate_mismatch" : nil)
+                guard let event = decoded.event, failure == nil else {
+                    recordUITrace(phase: "ui_surface_decode_failed", summary: failure ?? "payload_decode", level: .warn, upload: true)
                     return
                 }
                 uiSurfaceRequests.apply(event)
-                api?.recordDiagnostic(phase: "ui_surface_received", requestPath: "/v1/events", errorSummary: event.diagnosticSummary, level: .info)
                 let displayed = onUISurface?(event) ?? false
+                if event.isDeletion { recordUITrace(phase: "ui_surface_closed", summary: "server_delete", level: .info) }
+                if !event.isDeletion {
+                    recordUITrace(phase: displayed ? "ui_surface_displayed" : "ui_surface_display_failed", summary: event.diagnosticSummary, level: displayed ? .info : .warn, upload: !displayed)
+                }
                 if displayed, !event.isDeletion {
-                    api?.recordDiagnostic(phase: "ui_surface_displayed", requestPath: "client", errorSummary: event.diagnosticSummary, level: .info)
                     await submitUICommand(kind: "ui.rendered", payload: event.renderedPayload,
                                           key: event.renderedIdempotencyKey(cursor: envelope.cursor, version: envelope.aggregateVersion))
                 }
@@ -1230,8 +1365,13 @@ public final class ZoeAppModel: ObservableObject {
 
     private func closeUISurfaces() {
         let ids = Array(uiSurfaceRequests.requestIDs.keys)
+        for _ in ids { recordUITrace(phase: "ui_surface_closed", summary: "disconnect", level: .info) }
         uiSurfaceRequests.removeAll()
         onUISurfacesClosed?(ids)
+    }
+
+    public func noteUISurfaceUserClosed() {
+        recordUITrace(phase: "ui_surface_closed", summary: "user_closed", level: .info)
     }
 
     public func sendUISurfaceAction(surfaceID: String, action: ResolvedAction) {
@@ -1255,9 +1395,6 @@ public final class ZoeAppModel: ObservableObject {
         do {
             // UI commands are transient: submit once, never journal/retry failed actions.
             _ = try await api.submit(kind: kind, payload: payload, idempotencyKey: key)
-            if kind == "ui.rendered" {
-                api.recordDiagnostic(phase: "ui_rendered_ack", requestPath: "/v1/commands", level: .info)
-            }
         } catch {
             let diagnostic = RedactedDiagnostic(error)
             api.recordDiagnostic(phase: "ui_command", requestPath: "/v1/commands", httpStatus: diagnostic.httpStatus,

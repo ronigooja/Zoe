@@ -38,6 +38,7 @@ struct ZoeMacApp {
         menu.addItem(quit)
         item.menu = menu
         statusItem = item
+        surfaces.onUserClosed = { [weak self] in self?.model.noteUISurfaceUserClosed() }
         model.onUISurface = { [weak self] event in
             guard let self else { return false }
             if event.isDeletion {

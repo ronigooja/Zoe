@@ -18,7 +18,7 @@ final class UISurfaceTests: XCTestCase {
         XCTAssertEqual(event.container, .popover)
         XCTAssertTrue(event.awaitingInput)
         XCTAssertEqual(event.messages.count, 2)
-        XCTAssertEqual(event.diagnosticSummary, "surface=s1;container=popover;messages=2")
+        XCTAssertEqual(event.diagnosticSummary, "container=popover;messages=2;awaiting_input=1")
         XCTAssertFalse(event.diagnosticSummary.contains("Hello"))
         XCTAssertFalse(event.diagnosticSummary.contains("https://"))
         XCTAssertFalse(event.isDeletion)
@@ -26,6 +26,7 @@ final class UISurfaceTests: XCTestCase {
     }
 
     func testMalformedPayloadIsIgnored() throws {
+        XCTAssertEqual(UISurfaceEvent.decodeWithDiagnostic(.object([:])).failure, "payload_decode")
         XCTAssertNil(UISurfaceEvent.decode(.object([:])))
         let data = try JSONEncoder().encode(payload())
         let json = String(decoding: data, as: UTF8.self)
@@ -34,6 +35,30 @@ final class UISurfaceTests: XCTestCase {
                         json.replacingOccurrences(of: "surfaceId", with: "surface_id")] {
             XCTAssertNil(UISurfaceEvent.decode(try JSONDecoder().decode(JSONValue.self, from: Data(invalid.utf8))))
         }
+    }
+
+    func testDiagnosticFailureStepsAndNoPayloadLeakage() throws {
+        var object: [String: JSONValue]
+        guard case let .object(fields) = try payload() else { return XCTFail("object") }
+        object = fields
+        object["request_id"] = .string("")
+        XCTAssertEqual(UISurfaceEvent.decodeWithDiagnostic(.object(object)).failure, "request_id")
+        object = fields
+        object["messages"] = .array([])
+        XCTAssertEqual(UISurfaceEvent.decodeWithDiagnostic(.object(object)).failure, "messages_empty")
+        object = fields
+        object["surface_id"] = .string("different")
+        XCTAssertEqual(UISurfaceEvent.decodeWithDiagnostic(.object(object)).failure, "surface_id_mismatch")
+        object = fields
+        if case let .array(messages) = fields["messages"] { object["messages"] = .array(Array(messages.dropFirst())) }
+        XCTAssertEqual(UISurfaceEvent.decodeWithDiagnostic(.object(object)).failure, "first_not_createSurface")
+        object = fields
+        object["request_id"] = .string("sk-secret-payload")
+        object["container"] = .string("sk-secret-payload")
+        let summary = UISurfaceEvent.receivedSummary(payload: .object(object), cursor: "sk-secret-payload")
+        XCTAssertFalse(summary.contains("sk-secret-payload"))
+        XCTAssertLessThanOrEqual(summary.count, 200)
+        XCTAssertEqual(UISurfaceEvent.receivedSummary(payload: try payload(), cursor: "10"), "container=popover;messages=2;awaiting_input=1;cursor=10")
     }
 
     func testRequestMapReplacementDeletionAndDisconnect() throws {

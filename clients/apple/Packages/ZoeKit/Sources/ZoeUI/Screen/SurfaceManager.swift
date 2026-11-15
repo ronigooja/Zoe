@@ -6,7 +6,7 @@ import A2UISwiftCore
 import A2UISwiftUI
 
 /// On-demand A2UI containers, independent of the application's two-item status menu.
-@MainActor public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate {
+@MainActor public final class SurfaceManager: NSObject, SurfaceHost, NSWindowDelegate, NSPopoverDelegate {
     private struct Entry {
         let viewModel: SurfaceViewModel
         var window: NSWindow?
@@ -18,6 +18,7 @@ import A2UISwiftUI
     private var entries: [String: Entry] = [:]
     private let actionHandler: (String, ResolvedAction) -> Void
     private let popoverAnchor: () -> NSView?
+    public var onUserClosed: (() -> Void)?
 
     public init(popoverAnchor: @escaping () -> NSView?, actionHandler: @escaping (String, ResolvedAction) -> Void = { _, _ in }) {
         self.popoverAnchor = popoverAnchor
@@ -45,6 +46,7 @@ import A2UISwiftUI
             entry.window = window
         case .statusItem, .popover:
             let popover = NSPopover()
+            popover.delegate = self
             popover.behavior = .transient
             popover.contentSize = NSSize(width: 400, height: 360)
             popover.contentViewController = controller
@@ -105,12 +107,20 @@ import A2UISwiftUI
         guard let entry = entries.removeValue(forKey: id) else { return }
         entry.window?.delegate = nil
         entry.window?.close()
+        entry.popover?.delegate = nil
         entry.popover?.performClose(nil)
         if let item = entry.statusItem { NSStatusBar.system.removeStatusItem(item) }
     }
 
     public func windowWillClose(_ notification: Notification) {
-        if let window = notification.object as? NSWindow, let id = window.identifier?.rawValue { close(id: id) }
+        if let window = notification.object as? NSWindow, let id = window.identifier?.rawValue {
+            onUserClosed?()
+            close(id: id)
+        }
+    }
+
+    public func popoverDidClose(_ notification: Notification) {
+        onUserClosed?()
     }
 
     @objc private func togglePanel(_ sender: NSStatusBarButton) {

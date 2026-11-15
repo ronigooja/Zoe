@@ -70,9 +70,15 @@ final class SilenceSettingsTests: XCTestCase {
         let api = try APIClient(serverURL: URL(string: "https://silence.example")!)
         let session = VoiceSessionResponse(voiceSessionId: "silence-test", generation: 1, state: "active", answerSdp: "")
         let epoch = model.installVoiceSessionForTesting(session, api: api)
+        var traces: [(String, String)] = []
+        model.voiceDiagnosticObserverForTesting = { traces.append(($0, $1)) }
         clock.advance(59)
         XCTAssertEqual(model.silence.tick(), .none)
         await model.receiveVoiceDataForTesting(Data(#"{"type":"input_audio_transcription.completed","transcript":"hello"}"#.utf8), mediaEpoch: epoch)
+        XCTAssertTrue(traces.contains { $0.0 == "silence_reset" && $0.1.contains("last=input_audio_transcription.completed") })
+        await model.receiveVoiceDataForTesting(Data(#"{"type":"unrecognized","payload":"sk-secret-payload"}"#.utf8), mediaEpoch: epoch)
+        XCTAssertTrue(model.voiceCensusSummaryForTesting.contains("unrecognized:1:ignored"))
+        XCTAssertFalse(model.voiceCensusSummaryForTesting.contains("sk-secret-payload"))
         clock.advance(59)
         XCTAssertEqual(model.silence.tick(), .none)
         let chat = #"{"type":"chat_message_delta","payload":{"delta":{"v":{"message":{"author":{"role":"user"},"content":{"parts":[{"transcript":"hello again"}]}}}}}}"#
