@@ -32,9 +32,6 @@ func TestStewardMenuConfigurationAndOwnedKey(t *testing.T) {
 	}))
 	defer s.Close()
 	keyPath := filepath.Join(root, "secrets", "steward-key")
-	old := terminalEcho
-	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
-	t.Cleanup(func() { terminalEcho = old })
 	input := strings.NewReader("12\n" + s.URL + "\nconfigured-steward\nnone\ndisabled\n" + keyPath + "\nprivate-steward-fixture\ny\n\n13\n\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(input, &out, &errOut, root); err != nil {

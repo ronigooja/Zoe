@@ -103,9 +103,6 @@ func TestIndependentMenuModelsConfigureAndProbe(t *testing.T) {
 				_, _ = io.WriteString(w, `{"output_text":"OK"}`)
 			}))
 			defer server.Close()
-			old := terminalEcho
-			terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
-			t.Cleanup(func() { terminalEcho = old })
 			input := tc.configure + "\n" + server.URL + "/v1\n" + tc.kind + "-model\nnone\ndisabled\n\nprivate-fixture\ny\n\n" + tc.test + "\n\n0\n"
 			var out, errOut bytes.Buffer
 			if err := menuWithRoot(strings.NewReader(input), &out, &errOut, root); err != nil {

@@ -97,49 +97,38 @@ func TestMenuUsesGroupedTwoDigitLabels(t *testing.T) {
 	}
 }
 
-func TestReadTokenHidesTerminalEchoAndRestoresIt(t *testing.T) {
+func TestReadTokenUsesSharedLineReaderForFileInput(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "tty")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.WriteString("secret-value\n"); err != nil {
+	if _, err := file.WriteString("secret-value\nnext-prompt\n"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := file.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	var hidden, restored int
-	old := terminalEcho
-	terminalEcho = func(*os.File) (func(), bool, error) {
-		hidden++
-		return func() { restored++ }, true, nil
-	}
-	t.Cleanup(func() { terminalEcho = old })
 	var out bytes.Buffer
-	token, err := readToken(file, &out)
+	in := sharedInput(file)
+	token, err := readToken(in, &out)
 	if err != nil || string(token) != "secret-value" {
-		t.Fatalf("token=%q err=%v", token, err)
+		t.Fatal("token input failed")
 	}
-	if hidden != 1 || restored != 1 {
-		t.Fatalf("echo hidden=%d restored=%d", hidden, restored)
+	if next, err := inputLine(in); err != nil || next != "next-prompt" {
+		t.Fatal("secret reader consumed the next prompt")
 	}
-	if strings.Contains(out.String(), "secret-value") {
-		t.Fatal("token was echoed")
+	if out.String() != "API token: " {
+		t.Fatal("unexpected token prompt or secret written to output")
 	}
 }
 
-func TestReadTokenRefusesWhenEchoCannotBeDisabled(t *testing.T) {
-	file, err := os.CreateTemp(t.TempDir(), "tty")
-	if err != nil {
-		t.Fatal(err)
+func TestReadSecretInputPreservesEOF(t *testing.T) {
+	if _, err := readSecretInput(strings.NewReader(""), io.Discard); !errors.Is(err, io.EOF) {
+		t.Fatal("secret reader must preserve cancellation by EOF")
 	}
-	defer file.Close()
-	old := terminalEcho
-	terminalEcho = func(*os.File) (func(), bool, error) { return nil, true, errors.New("no tty") }
-	t.Cleanup(func() { terminalEcho = old })
-	if _, err := readToken(file, io.Discard); err == nil {
-		t.Fatal("readToken must fail instead of echoing the token")
+	if _, err := readToken(strings.NewReader(""), io.Discard); !errors.Is(err, io.EOF) {
+		t.Fatal("token reader must preserve cancellation by EOF")
 	}
 }
 

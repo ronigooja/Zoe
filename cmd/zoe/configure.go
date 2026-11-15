@@ -14,7 +14,7 @@ import (
 )
 
 // ConfigureMenuIO makes the interactive menu deterministic in tests and keeps
-// secret input behind the same no-echo boundary used by the subcommands.
+// secret input on the same shared line reader used by the subcommands.
 type ConfigureMenuIO struct {
 	Root         string
 	In           io.Reader
@@ -142,7 +142,7 @@ func menuSaveModel(m ConfigureMenuIO, d ops.Deployment, base, model, effort, thi
 	if strings.TrimSpace(model) == "" {
 		return errors.New("model is required")
 	}
-	fmt.Fprint(m.Out, "API key (input is hidden; leave empty to keep current): ")
+	fmt.Fprint(m.Out, "API key (leave empty to keep current): ")
 	secret, err := m.PromptSecret(m.Out)
 	if err != nil {
 		return err
@@ -201,7 +201,7 @@ func menuSaveMemory(m ConfigureMenuIO, d ops.Deployment, base, model, effort, ke
 	if err != nil {
 		return err
 	}
-	fmt.Fprint(m.Out, "API key (input is hidden; leave empty to keep current): ")
+	fmt.Fprint(m.Out, "API key (leave empty to keep current): ")
 	secret, err := m.PromptSecret(m.Out)
 	if err != nil {
 		return err
@@ -272,8 +272,23 @@ func menuWorker(m ConfigureMenuIO) error {
 		}
 		break
 	}
-	if cfg.Model, err = menuValue(m, "Model", cfg.Model); err != nil {
+	provider, currentModel, qualified := strings.Cut(cfg.Model, "/")
+	if !qualified {
+		provider, currentModel = "cliproxyapi", cfg.Model
+	}
+	fmt.Fprintf(m.Out, "Model [%s]: ", safeLabel(currentModel))
+	model, err := inputLine(sharedInput(m.In))
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			fmt.Fprintln(m.Out, "Cancelled. Nothing was saved.")
+		}
 		return err
+	}
+	if model != "" {
+		if !strings.Contains(model, "/") {
+			model = provider + "/" + model
+		}
+		cfg.Model = model
 	}
 	for {
 		cfg.ReasoningEffort, err = menuValue(m, "Reasoning effort (none/low/medium/high/max; empty keeps default)", cfg.ReasoningEffort)
@@ -289,7 +304,7 @@ func menuWorker(m ConfigureMenuIO) error {
 	if cfg.SecretPath, err = menuValue(m, "Key file (Enter uses current)", cfg.SecretPath); err != nil {
 		return err
 	}
-	fmt.Fprint(m.Out, "API key (input is hidden; leave empty to keep current): ")
+	fmt.Fprint(m.Out, "API key (leave empty to keep current): ")
 	secret, err := m.PromptSecret(m.Out)
 	if err != nil {
 		if errors.Is(err, io.EOF) {

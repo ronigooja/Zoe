@@ -3,12 +3,11 @@ package main
 import (
 	"errors"
 	"io"
-	"os"
 	"strings"
 )
 
-// commandInput retains the terminal identity and prevents a prompt's reader
-// from consuming bytes intended for the next prompt or menu action.
+// commandInput prevents a prompt's reader from consuming bytes intended for
+// the next prompt or menu action.
 type commandInput struct{ source io.Reader }
 
 func (in *commandInput) Read(p []byte) (int, error) {
@@ -22,13 +21,6 @@ func sharedInput(in io.Reader) *commandInput {
 		return shared
 	}
 	return &commandInput{source: in}
-}
-func terminalFile(in io.Reader) *os.File {
-	if shared, ok := in.(*commandInput); ok {
-		return terminalFile(shared.source)
-	}
-	file, _ := in.(*os.File)
-	return file
 }
 func inputLine(in io.Reader) (string, error) {
 	var b strings.Builder

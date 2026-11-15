@@ -17,9 +17,6 @@ func TestMaintenanceMenuCompactAcceptsEffortNone(t *testing.T) {
 	containerKeyFixture(t)
 	root := t.TempDir()
 	keyPath := filepath.Join(root, "key")
-	old := terminalEcho
-	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
-	t.Cleanup(func() { terminalEcho = old })
 	input := strings.NewReader("10\nhttps://gateway.example\ndeepseek-flash\nnone\ndisabled\n" + keyPath + "\nsecret\nn\n\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(input, &out, &errOut, root); err != nil {

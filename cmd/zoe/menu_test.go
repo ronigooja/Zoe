@@ -47,9 +47,6 @@ func TestMaintenanceMenuCompactFlowPromptsModelAndEffortAndWritesBoth(t *testing
 	}))
 	defer s.Close()
 	keyPath := filepath.Join(root, "compact-key")
-	old := terminalEcho
-	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
-	t.Cleanup(func() { terminalEcho = old })
 	input := strings.NewReader("10\n" + s.URL + "\ntriage\n\n\n" + keyPath + "\nsecret-value\ny\n\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(input, &out, &errOut, root); err != nil {
@@ -76,9 +73,6 @@ func TestMaintenanceMenuCompactPromptsForThinkingAndWritesIt(t *testing.T) {
 	menuManager(t)
 	root := t.TempDir()
 	keyPath := filepath.Join(root, "key")
-	old := terminalEcho
-	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
-	t.Cleanup(func() { terminalEcho = old })
 	input := strings.NewReader("10\nhttps://gateway.example\nm\nlow\ndisabled\n" + keyPath + "\nsecret\nn\n\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(input, &out, &errOut, root); err != nil {
@@ -98,9 +92,6 @@ func TestMaintenanceMenuCompactDoesNotAskForAPIStyle(t *testing.T) {
 	menuManager(t)
 	root := t.TempDir()
 	keyPath := filepath.Join(root, "key")
-	old := terminalEcho
-	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
-	t.Cleanup(func() { terminalEcho = old })
 	var out, errOut bytes.Buffer
 	_ = menuWithRoot(strings.NewReader("10\nhttps://gateway.example\nm\nlow\n\n"+keyPath+"\nsecret\nn\n\n0\n"), &out, &errOut, root)
 	if strings.Contains(out.String(), "API style") {
@@ -113,9 +104,6 @@ func TestMaintenanceMenuCompactValidationErrorSaysNothingSavedAndReprompts(t *te
 	menuManager(t)
 	root := t.TempDir()
 	keyPath := filepath.Join(root, "key")
-	old := terminalEcho
-	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
-	t.Cleanup(func() { terminalEcho = old })
 	in := strings.NewReader("10\nhttp://remote.invalid\nhttps://gateway.example\nm\nlow\n\n" + keyPath + "\nsecret\nn\n\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(in, &out, &errOut, root); err != nil {
@@ -131,9 +119,6 @@ func TestMaintenanceMenuCompactRejectsUnknownThinkingAndSaysNothingSaved(t *test
 	menuManager(t)
 	root := t.TempDir()
 	keyPath := filepath.Join(root, "key")
-	old := terminalEcho
-	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
-	t.Cleanup(func() { terminalEcho = old })
 	in := strings.NewReader("10\nhttps://gateway.example\nm\nlow\ninvalid\ndisabled\n" + keyPath + "\nsecret\nn\n\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(in, &out, &errOut, root); err != nil {
