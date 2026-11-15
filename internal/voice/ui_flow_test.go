@@ -135,6 +135,19 @@ func TestUITaskJobsAccumulate(t *testing.T) {
 	}
 }
 
+func TestUIInputRedisplayKey(t *testing.T) {
+	r := newDeliveryRig(t)
+	r.seedTask(t, "task", "owner")
+	r.seedEntry(t, "task", "entry", "existing result")
+	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,utterance,restatement,created_at,updated_at) VALUES('request','default','owner','task','task','show result','resolved result',?,?)`, r.now().Format(time.RFC3339Nano), r.now().Format(time.RFC3339Nano))
+	for _, key := range []string{"task_entry:entry", "task_entry:entry#turn-one", "task_entry:entry#turn-two"} {
+		input, err := r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", kind: "task_entry", key: key, request: "request"})
+		if err != nil || !strings.Contains(string(input), "existing result") {
+			t.Fatalf("key=%s input=%s err=%v", key, input, err)
+		}
+	}
+}
+
 func TestUIJobFailures(t *testing.T) {
 	for _, name := range []string{"invalid", "disabled", "unconfigured", "state"} {
 		t.Run(name, func(t *testing.T) {

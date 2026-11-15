@@ -20,6 +20,9 @@ import (
 
 func choiceReply(action, request string) string {
 	fields := map[string]string{"action": action, "task": request}
+	if action == "attach" {
+		fields["work"] = "new_work"
+	}
 	if action == "report" {
 		fields["reply"] = "The task is active."
 	}
@@ -29,6 +32,37 @@ func choiceReply(action, request string) string {
 
 const choiceNow = "2026-11-12T12:34:56Z"
 
+func TestParseChoiceWork(t *testing.T) {
+	for _, work := range []string{"new_work", "none"} {
+		action, task, reply, got, err := parseChoice(`{"action":"attach","task":"request","work":"` + work + `"}`)
+		if err != nil || action != ActionAttach || task != "request" || reply != "" || got != work {
+			t.Fatalf("work=%q got=%q err=%v", work, got, err)
+		}
+	}
+	for _, output := range []string{
+		`{"action":"attach","task":"request"}`, `{"action":"attach","task":"request","work":""}`,
+		`{"action":"attach","task":"request","work":"invalid"}`, `{"action":"attach","task":"request","work":null}`,
+		`{"action":"attach","task":"request","work":1}`, `{"action":"attach","task":"request","work":"none","work":"none"}`,
+		`{"action":"attach","task":"request","work":"none"} {}`, `{"action":"attach","task":"request","work":"none","extra":""}`,
+	} {
+		if _, _, _, _, err := parseChoice(output); err == nil {
+			t.Fatalf("accepted %s", output)
+		}
+	}
+	for _, action := range []string{"new", "none", "answer", "cancel", "report"} {
+		for _, work := range []string{"", "new_work", "none"} {
+			fields := map[string]string{"action": action, "task": "", "work": work}
+			if action == "report" {
+				fields["reply"] = "State."
+			}
+			data, _ := json.Marshal(fields)
+			if _, _, _, _, err := parseChoice(string(data)); (err == nil) != (work == "") {
+				t.Fatalf("action=%s work=%q err=%v", action, work, err)
+			}
+		}
+	}
+}
+
 // Old Choose rejects the reply field, cannot report without a task, and omits now.
 // These HTTP-backed cases exercise the model wire contract, not a parser stub.
 func TestChooseReportFullReplyAndNoTask(t *testing.T) {
@@ -36,7 +70,7 @@ func TestChooseReportFullReplyAndNoTask(t *testing.T) {
 		for _, text := range []string{"  No such task was found. \n", " \t" + strings.Repeat("🙂é", 350) + "\n"} {
 			data, _ := json.Marshal(map[string]string{"action": "report", "task": request, "reply": text})
 			s := choiceServer(t, string(data), nil)
-			got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, []Candidate{{Request: "Original request"}})
+			got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, []Candidate{{Request: "Original request"}})
 			s.Close()
 			want := strings.TrimSpace(text)
 			if err != nil || got != (Choice{Action: ActionReport, Request: request, Reply: want}) || !utf8.ValidString(got.Reply) {
@@ -55,9 +89,13 @@ func TestChooseNonReportReply(t *testing.T) {
 			if action == "attach" || action == "answer" || action == "cancel" {
 				request = "Original request"
 			}
-			data, _ := json.Marshal(map[string]string{"action": action, "task": request, "reply": reply})
+			fields := map[string]string{"action": action, "task": request, "reply": reply}
+			if action == "attach" {
+				fields["work"] = "new_work"
+			}
+			data, _ := json.Marshal(fields)
 			s := choiceServer(t, string(data), nil)
-			_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, []Candidate{{Request: "Original request", Question: "Which?"}})
+			_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, []Candidate{{Request: "Original request", Question: "Which?"}})
 			s.Close()
 			if (err == nil) != (reply == "") {
 				t.Fatalf("action=%s reply=%q err=%v", action, reply, err)
@@ -76,8 +114,11 @@ func TestChooseValidReplies(t *testing.T) {
 			}
 			s := choiceServer(t, choiceReply(string(action), request), nil)
 			defer s.Close()
-			got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, candidates)
+			got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, candidates)
 			want := Choice{Action: action, Request: request}
+			if action == ActionAttach {
+				want.Work = "new_work"
+			}
 			if action == ActionReport {
 				want.Reply = "The task is active."
 			}
@@ -98,7 +139,7 @@ func TestChooseExactMatchAndNoMatch(t *testing.T) {
 			t.Run(string(action)+"/"+quote, func(t *testing.T) {
 				s := choiceServer(t, choiceReply(string(action), quote), nil)
 				defer s.Close()
-				got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, []Candidate{{Request: request, Question: "Which?"}})
+				got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, []Candidate{{Request: request, Question: "Which?"}})
 				if !errors.Is(err, ErrNoMatch) || got.Action != action || got.Request != quote {
 					t.Fatalf("choice=%+v err=%v", got, err)
 				}
@@ -128,7 +169,7 @@ func TestChooseRejectsInvalidReplies(t *testing.T) {
 		t.Run(reply, func(t *testing.T) {
 			s := choiceServer(t, reply, nil)
 			defer s.Close()
-			_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, []Candidate{{Request: "request"}})
+			_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, []Candidate{{Request: "request"}})
 			if err == nil {
 				t.Fatal("invalid reply accepted")
 			}
@@ -144,7 +185,7 @@ func TestChooseDuplicateRequestsUseNewest(t *testing.T) {
 			candidates[1].Question = ""
 		}
 		s := choiceServer(t, choiceReply("answer", "same"), nil)
-		_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, candidates)
+		_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, candidates)
 		s.Close()
 		if (err == nil) != newestHasQuestion {
 			t.Fatalf("newest has question=%v err=%v", newestHasQuestion, err)
@@ -170,13 +211,13 @@ func TestChooseCancelDuplicateRequestsPreserveNewestFirstInput(t *testing.T) {
 		if err := json.Unmarshal(outer["instructions"], &instructions); err != nil {
 			t.Error(err)
 		}
-		want := `{"sentence":"stop that work","restatement":"withdraw the same task","now":"2026-11-12T12:34:56Z","tasks":[{"request":"same","status":"active","created_at":"newest","finished_at":"","question":"","result":"","additions":[]},{"request":"same","status":"done","created_at":"older","finished_at":"","question":"","result":"","additions":[]}]}`
+		want := `{"sentence":"stop that work","restatement":"withdraw the same task","now":"2026-11-12T12:34:56Z","screen_display":false,"tasks":[{"request":"same","status":"active","created_at":"newest","finished_at":"","question":"","result":"","additions":[]},{"request":"same","status":"done","created_at":"older","finished_at":"","question":"","result":"","additions":[]}]}`
 		if input != want || instructions != chooseInstructions {
 			t.Error("cancel changed the input contract or newest-first order")
 		}
 	})
 	defer s.Close()
-	got, err := configured(t, s.URL, "").Choose(context.Background(), "stop that work", "withdraw the same task", choiceNow, candidates)
+	got, err := configured(t, s.URL, "").Choose(context.Background(), "stop that work", "withdraw the same task", choiceNow, false, candidates)
 	if err != nil || got != (Choice{Action: ActionCancel, Request: "same"}) {
 		t.Fatalf("choice=%+v err=%v", got, err)
 	}
@@ -211,13 +252,14 @@ func TestChooseInputNoAliasesFullFieldsAndOrder(t *testing.T) {
 		}
 		var input struct {
 			Sentence, Restatement, Now string
+			ScreenDisplay              bool `json:"screen_display"`
 			Tasks                      []map[string]json.RawMessage
 		}
 		if err := json.Unmarshal([]byte(outer.Input), &input); err != nil {
 			t.Error(err)
 			return
 		}
-		if input.Sentence != sentence || input.Restatement != restatement || input.Now != choiceNow || len(input.Tasks) != 10 {
+		if input.Sentence != sentence || input.Restatement != restatement || input.Now != choiceNow || !input.ScreenDisplay || len(input.Tasks) != 10 {
 			t.Errorf("incorrect sentence/restatement or count=%d", len(input.Tasks))
 			return
 		}
@@ -241,8 +283,8 @@ func TestChooseInputNoAliasesFullFieldsAndOrder(t *testing.T) {
 		}
 	})
 	defer s.Close()
-	got, err := configured(t, s.URL, "").Choose(context.Background(), sentence, restatement, choiceNow, candidates)
-	if err != nil || got != (Choice{Action: ActionAttach, Request: candidates[1].Request, Dropped: 2}) {
+	got, err := configured(t, s.URL, "").Choose(context.Background(), sentence, restatement, choiceNow, true, candidates)
+	if err != nil || got != (Choice{Action: ActionAttach, Request: candidates[1].Request, Work: "new_work", Dropped: 2}) {
 		t.Fatalf("choice=%+v err=%v", got, err)
 	}
 	if len(candidates[1].Additions) != 6 || utf8.RuneCountInString(candidates[1].Question) != 140 {
@@ -259,7 +301,7 @@ func TestChooseDroppedCandidatesCannotMatch(t *testing.T) {
 		}
 		candidates = append(candidates, Candidate{Request: "excluded"})
 		s := choiceServer(t, choiceReply("attach", request), nil)
-		got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, candidates)
+		got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, candidates)
 		s.Close()
 		if !errors.Is(err, ErrNoMatch) || got.Dropped != 2 {
 			t.Fatalf("dropped=%d err=%v", got.Dropped, err)
@@ -282,9 +324,14 @@ func TestChooseEmptyCandidatesAndInstructionLanguage(t *testing.T) {
 			t.Errorf("Steward duplicates register chat: %s", chatOnly)
 		}
 	}
-	for _, required := range []string{"cancel = the sentence withdraws or stops the work of one listed task", "For attach, answer, cancel, and a matched report", "report", "newest", "current time", "reply language follows the input"} {
+	for _, required := range []string{"screen_display is true when the sentence asks to show content on the user's screen", "work none = the sentence asks only to present again what that task already produced", "work new_work = the sentence asks for further work building on its result", "For attach on a task that is not completed, work is new_work", "screen_display is false, the action is report rather than attach with work none", "not a report when screen_display is true; it is attach", "cancel = the sentence withdraws or stops the work of one listed task", "For attach, answer, cancel, and a matched report", "report", "newest", "current time", "reply language follows the input"} {
 		if !strings.Contains(chooseInstructions, required) {
 			t.Errorf("instruction missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"for example", "e.g.", "such as", "Example:"} {
+		if strings.Contains(chooseInstructions, forbidden) {
+			t.Errorf("instructions contain example marker %q", forbidden)
 		}
 	}
 	for _, r := range chooseInstructions {
@@ -297,12 +344,12 @@ func TestChooseEmptyCandidatesAndInstructionLanguage(t *testing.T) {
 		if err := json.Unmarshal(body, &outer); err != nil {
 			t.Error(err)
 		}
-		if outer.Input != `{"sentence":"keep going","restatement":"none","now":"2026-11-12T12:34:56Z","tasks":[]}` {
+		if outer.Input != `{"sentence":"keep going","restatement":"none","now":"2026-11-12T12:34:56Z","screen_display":false,"tasks":[]}` {
 			t.Error("incorrect empty candidate input")
 		}
 	})
 	defer s.Close()
-	if _, err := configured(t, s.URL, "").Choose(context.Background(), "keep going", "none", choiceNow, nil); err != nil {
+	if _, err := configured(t, s.URL, "").Choose(context.Background(), "keep going", "none", choiceNow, false, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -317,7 +364,7 @@ func TestChooseLogsExcludePrivateData(t *testing.T) {
 	defer log.SetOutput(previous)
 	s := choiceServer(t, "private-model-output", nil)
 	defer s.Close()
-	_, err := configured(t, s.URL, "").Choose(context.Background(), "private-sentence", "private-restatement", choiceNow, []Candidate{{Request: "private-request", Question: "private-question", Result: "private-result", Additions: []string{"private-addition"}}})
+	_, err := configured(t, s.URL, "").Choose(context.Background(), "private-sentence", "private-restatement", choiceNow, false, []Candidate{{Request: "private-request", Question: "private-question", Result: "private-result", Additions: []string{"private-addition"}}})
 	if err == nil {
 		t.Fatal("expected invalid choice error")
 	}
@@ -353,7 +400,7 @@ func TestChooseDebugFullModelCalls(t *testing.T) {
 	defer s.Close()
 	sentence := strings.Repeat("x", 20000)
 	ctx := logging.WithUserHash(context.Background(), logging.UserHash("private-owner"))
-	if _, err := configured(t, s.URL, "").Choose(ctx, sentence, "private-restatement", choiceNow, nil); err != nil {
+	if _, err := configured(t, s.URL, "").Choose(ctx, sentence, "private-restatement", choiceNow, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, text := range []string{"instructions=" + strconv.Quote(chooseInstructions), "input=" + strconv.Quote(sent), "output=" + strconv.Quote(output), "model_call_input", "model_call_output", "model_call_result", sentence} {
@@ -375,20 +422,20 @@ func TestChooseTimeoutTransportDisabledAndDeadline(t *testing.T) {
 	defer s.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := configured(t, s.URL, "200").Choose(ctx, "sentence", "none", choiceNow, nil); err == nil {
+	if _, err := configured(t, s.URL, "200").Choose(ctx, "sentence", "none", choiceNow, false, nil); err == nil {
 		t.Fatal("timeout accepted")
 	}
 	s.Close()
-	if _, err := configured(t, s.URL, "200").Choose(context.Background(), "sentence", "none", choiceNow, nil); err == nil {
+	if _, err := configured(t, s.URL, "200").Choose(context.Background(), "sentence", "none", choiceNow, false, nil); err == nil {
 		t.Fatal("transport failure accepted")
 	}
 	var disabled *Client
-	if _, err := disabled.Choose(context.Background(), "sentence", "none", choiceNow, nil); err == nil {
+	if _, err := disabled.Choose(context.Background(), "sentence", "none", choiceNow, false, nil); err == nil {
 		t.Fatal("disabled client accepted")
 	}
 	c := configured(t, "http://localhost", "200")
 	c.SetHTTPClient(&http.Client{Transport: stewardDeadlineTransport{t: t, want: 200 * time.Millisecond}})
-	if _, err := c.Choose(context.Background(), "sentence", "none", choiceNow, nil); err == nil {
+	if _, err := c.Choose(context.Background(), "sentence", "none", choiceNow, false, nil); err == nil {
 		t.Fatal("expected transport error")
 	}
 }

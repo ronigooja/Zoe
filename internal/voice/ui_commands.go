@@ -17,6 +17,47 @@ import (
 
 func randomID() (string, error) { id, err := uuid.NewRandom(); return id.String(), err }
 
+// redisplayTaskTx presents an existing completed result without changing task work.
+func (s *Service) redisplayTaskTx(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, p handoffPayload, task string, screenDisplay bool) (contracts.CommandResult, []contracts.Event, error) {
+	result := contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}
+	var entry string
+	err := sql.ErrNoRows
+	if screenDisplay {
+		err = tx.QueryRowContext(ctx, `SELECT id FROM task_entries WHERE workspace_id=? AND task_id=? AND kind='assistant_message' ORDER BY created_at DESC,id DESC LIMIT 1`, cmd.Principal.WorkspaceID, task).Scan(&entry)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		var reply string
+		if err := tx.QueryRowContext(ctx, `SELECT report_text FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&reply); err != nil {
+			return result, nil, err
+		}
+		if reply = strings.TrimSpace(reply); reply == "" {
+			reply = stewardErrorSpeech
+		}
+		err = s.heldReplyTx(ctx, tx, cmd, p, reply)
+		if err == nil {
+			_, err = tx.ExecContext(ctx, `UPDATE voice_fast_replies SET intent_kind='task_report' WHERE session_id=? AND generation=? AND turn_id=?`, p.SessionID, p.Generation, p.TurnID)
+		}
+		return result, nil, err
+	}
+	if err != nil {
+		return result, nil, err
+	}
+	if err = s.recordTaskUITx(ctx, tx, cmd.Principal, task, p.SessionID, p.Generation, p.TurnID, p.Revision, cmd.AcceptedAt); err != nil {
+		return result, nil, err
+	}
+	var request, turn string
+	if err = tx.QueryRowContext(ctx, `SELECT r.id,v.id FROM ui_requests r JOIN voice_turns v ON v.id=r.voice_turn_id WHERE v.workspace_id=? AND v.session_id=? AND v.generation=? AND v.turn_id=? AND v.revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&request, &turn); err != nil {
+		return result, nil, err
+	}
+	if err = s.insertUIJobTx(ctx, tx, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, "task_entry", entry+"#"+turn, request, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+		return result, nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE tasks SET ui_display=1 WHERE workspace_id=? AND id=?`, cmd.Principal.WorkspaceID, task); err != nil {
+		return result, nil, err
+	}
+	return result, nil, s.markHandledTx(ctx, tx, cmd, p)
+}
+
 func (s *Service) recordTaskUITx(ctx context.Context, tx *sql.Tx, p contracts.Principal, task, session string, generation int64, turn string, revision int64, at time.Time) error {
 	id, err := randomID()
 	if err != nil {

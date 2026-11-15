@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
@@ -179,7 +180,8 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 	rows.Close()
 	var message string
 	if j.kind == "task_entry" {
-		if err = s.db.QueryRowContext(ctx, `SELECT content FROM task_entries WHERE workspace_id=? AND task_id=? AND id=? AND kind='assistant_message'`, j.w, task, j.key[len("task_entry:"):]).Scan(&message); err != nil {
+		entry, _, _ := strings.Cut(strings.TrimPrefix(j.key, "task_entry:"), "#")
+		if err = s.db.QueryRowContext(ctx, `SELECT content FROM task_entries WHERE workspace_id=? AND task_id=? AND id=? AND kind='assistant_message'`, j.w, task, entry).Scan(&message); err != nil {
 			return nil, err
 		}
 	}

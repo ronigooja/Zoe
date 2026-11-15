@@ -464,7 +464,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		if stewardAction == string(steward.ActionNone) {
 			return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, s.markHandledTx(ctx, tx, cmd, p)
 		}
-		if stewardTaskID != "" && (stewardAction == string(steward.ActionAnswer) || stewardAction == string(steward.ActionAttach)) {
+		if stewardTaskID != "" && (stewardAction == string(steward.ActionAnswer) || stewardAction == string(steward.ActionAttach) || stewardAction == stewardAttachShow) {
 			var status, interaction, question, oldGoal, result string
 			err := tx.QueryRowContext(ctx, `SELECT t.status,t.interaction_state,t.interaction_question,t.goal,coalesce(t.result,'') FROM tasks t WHERE t.workspace_id=? AND t.owner_subject_id=? AND t.id=?`, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, stewardTaskID).Scan(&status, &interaction, &question, &oldGoal, &result)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -486,7 +486,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 				}
 				return r, events, err
 			}
-			if err == nil && stewardAction == string(steward.ActionAttach) {
+			if err == nil && (stewardAction == string(steward.ActionAttach) || stewardAction == stewardAttachShow) {
 				switch status {
 				case "queued", "active", "waiting", "awaiting_user":
 					if exits.Has("ui") {
@@ -504,10 +504,16 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 					}
 					return r, events, err
 				case "complete":
+					if stewardAction == stewardAttachShow {
+						return s.redisplayTaskTx(ctx, tx, cmd, p, stewardTaskID, exits.Has("ui"))
+					}
 					goal = content + "\n上一个任务的结果:\n" + result
 				}
 			}
 		}
+	}
+	if stewardAction == stewardAttachShow {
+		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}, nil, s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech)
 	}
 	ref, _ := json.Marshal(voiceTaskSourceReference{Kind: "voice_turn", SessionID: p.SessionID, Generation: p.Generation, TurnID: p.TurnID, Revision: p.Revision, ContentHash: p.ContentHash})
 	if goal != content {
@@ -526,6 +532,9 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 
 // stewardErrorSpeech is a plain statement; the Steward error detail stays in the logs.
 const stewardErrorSpeech = "Processing error."
+
+// stewardAttachShow carries attach work=none in the existing durable action field.
+const stewardAttachShow = "attach_show"
 
 func (s *Service) commandCommitTurn(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
 	if !control.HasScope(cmd.Principal, "client:command") && !control.HasScope(cmd.Principal, "voice:turn:commit") {
@@ -609,7 +618,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 			if s.steward == nil {
 				err = errors.New("steward is disabled")
 			} else {
-				choice, err = s.steward.Choose(logging.WithUserHash(ctx, logging.UserHash(owner)), content, route.Restatement, s.now().UTC().Format(time.RFC3339Nano), facts)
+				choice, err = s.steward.Choose(logging.WithUserHash(ctx, logging.UserHash(owner)), content, route.Restatement, s.now().UTC().Format(time.RFC3339Nano), route.Has("ui"), facts)
 			}
 			if err == nil && choice.Request != "" {
 				matched := false
@@ -642,7 +651,11 @@ func (s *Service) classifyCommittedTurn(id string) {
 	if route.Has("recall") || route.Has("memory_write") {
 		choice.Reply = route.Restatement
 	}
-	result, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET exits=?,steward_action=?,steward_task_id=?,report_text=?,restatement=? WHERE id=? AND exits IS NULL`, route.Exits(), string(choice.Action), taskID, choice.Reply, route.Restatement, id)
+	action := string(choice.Action)
+	if choice.Action == steward.ActionAttach && choice.Work == "none" {
+		action = stewardAttachShow
+	}
+	result, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET exits=?,steward_action=?,steward_task_id=?,report_text=?,restatement=? WHERE id=? AND exits IS NULL`, route.Exits(), action, taskID, choice.Reply, route.Restatement, id)
 	if writeErr == nil {
 		var affected int64
 		affected, writeErr = result.RowsAffected()

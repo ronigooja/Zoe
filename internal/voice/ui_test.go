@@ -37,7 +37,7 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 			}))
 			defer model.Close()
 			cfg := RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
-			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(context.Context, string, string, string, []steward.Candidate) (steward.Choice, error) {
+			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(context.Context, string, string, string, bool, []steward.Candidate) (steward.Choice, error) {
 				mu.Lock()
 				defer mu.Unlock()
 				return choice, nil
@@ -59,7 +59,7 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 					t.Fatal(err)
 				}
 				mu.Lock()
-				choice = steward.Choice{Action: steward.ActionAttach, Request: "research the lunar mission"}
+				choice = steward.Choice{Action: steward.ActionAttach, Request: "research the lunar mission", Work: "new_work"}
 				mu.Unlock()
 			}
 			withUI := name == "task_ui" || name == "attach_sets" || name == "complete_sets" || name == "attach_queued" || name == "attach_waiting" || name == "attach_awaiting_user"
@@ -190,5 +190,114 @@ INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updat
 	}
 	if _, err := db.Exec(`INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,voice_turn_id,created_at,updated_at) VALUES('duplicate','default','owner','register','ui-schema-turn','now','now')`); err == nil {
 		t.Fatal("duplicate workspace/voice turn request accepted")
+	}
+}
+
+func TestStewardRedisplayCompletedTask(t *testing.T) {
+	for _, mode := range []string{"show", "no_entry", "no_ui", "report", "running_none"} {
+		t.Run(mode, func(t *testing.T) {
+			var mu sync.Mutex
+			routes := []string{"task"}
+			choice := steward.Choice{Action: steward.ActionNew}
+			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				out, _ := json.Marshal(map[string]any{"routes": routes, "restatement": "resolved result"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": string(out)})
+			}))
+			defer model.Close()
+			cfg := RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
+			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(_ context.Context, _, _, _ string, screen bool, _ []steward.Candidate) (steward.Choice, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				if screen != (len(routes) == 2) {
+					t.Error("screen_display does not reflect register exits")
+				}
+				return choice, nil
+			})})
+			target := commitAndHandoff(t, ts, key, "seed", "research the lunar mission").ResourceID
+			status := "complete"
+			if mode == "running_none" {
+				status = "active"
+			}
+			if _, err := store.DB().Exec(`UPDATE tasks SET status=?,result='previous result' WHERE id=?`, status, target); err != nil {
+				t.Fatal(err)
+			}
+			if mode != "no_entry" {
+				for _, entry := range []struct{ id, at, content string }{{"older", "2026-01-01T00:00:00Z", "old result"}, {"latest", "2026-01-02T00:00:00Z", "latest result"}} {
+					if _, err := store.DB().Exec(`INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) SELECT ?,id,workspace_id,'assistant_message',?,(SELECT author_device_id FROM task_entries WHERE task_id=tasks.id LIMIT 1),? FROM tasks WHERE id=?`, entry.id, entry.content, entry.at, target); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			count := func(query string) int {
+				t.Helper()
+				var n int
+				if err := store.DB().QueryRow(query).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				return n
+			}
+			before := count(`SELECT count(*) FROM task_entries`)
+			mu.Lock()
+			choice = steward.Choice{Action: steward.ActionAttach, Work: "none", Request: "research the lunar mission"}
+			routes = []string{"task", "ui"}
+			if mode == "no_ui" {
+				routes = []string{"task"}
+			}
+			if mode == "report" {
+				choice = steward.Choice{Action: steward.ActionReport, Request: "research the lunar mission", Reply: "The work is complete."}
+			}
+			mu.Unlock()
+			commitAndHandoff(t, ts, key, "display", "show the earlier result")
+			var storedAction string
+			if err := store.DB().QueryRow(`SELECT steward_action FROM voice_turns WHERE turn_id='display'`).Scan(&storedAction); err != nil {
+				t.Fatal(err)
+			}
+			wantAction := stewardAttachShow
+			if mode == "report" {
+				wantAction = string(steward.ActionReport)
+			}
+			if storedAction != wantAction {
+				t.Fatalf("stored action=%q want=%q", storedAction, wantAction)
+			}
+			if count(`SELECT count(*) FROM tasks`) != 1 || count(`SELECT handoff_handled FROM voice_turns WHERE turn_id='display'`) != 1 {
+				t.Fatal("redisplay admitted work or left handoff unhandled")
+			}
+			wantEntries := before
+			if mode == "running_none" {
+				wantEntries++
+			}
+			if count(`SELECT count(*) FROM task_entries`) != wantEntries {
+				t.Fatal("incorrect task append behavior")
+			}
+			if mode == "show" || mode == "running_none" {
+				if count(`SELECT ui_handled FROM voice_turns WHERE turn_id='display'`) != 1 || count(`SELECT count(*) FROM ui_requests WHERE source='task' AND utterance='show the earlier result' AND restatement='resolved result'`) != 1 {
+					t.Fatal("missing UI receipt or handled marker")
+				}
+				if mode == "running_none" {
+					if count(`SELECT count(*) FROM ui_jobs`) != 0 {
+						t.Fatal("running task scheduled completed result")
+					}
+					return
+				}
+				commitAndHandoff(t, ts, key, "display-again", "show the earlier result")
+				if count(`SELECT count(*) FROM ui_jobs WHERE kind='task_entry' AND dedupe_key LIKE 'task_entry:latest#%'`) != 2 || count(`SELECT ui_display FROM tasks`) != 1 {
+					t.Fatal("redisplays deduplicated or latest result not selected")
+				}
+			} else {
+				want := stewardErrorSpeech
+				if mode == "report" {
+					want = "The work is complete."
+				}
+				var text, intent string
+				if err := store.DB().QueryRow(`SELECT text,intent_kind FROM voice_fast_replies WHERE turn_id='display'`).Scan(&text, &intent); err != nil || text != want || intent != "task_report" {
+					t.Fatalf("fallback text=%q intent=%q err=%v", text, intent, err)
+				}
+				if count(`SELECT count(*) FROM ui_jobs`) != 0 || count(`SELECT count(*) FROM ui_requests`) != 0 {
+					t.Fatal("report fallback scheduled UI work")
+				}
+			}
+		})
 	}
 }
