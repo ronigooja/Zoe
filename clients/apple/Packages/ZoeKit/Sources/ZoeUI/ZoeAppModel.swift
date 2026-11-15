@@ -49,6 +49,7 @@ public final class ZoeAppModel: ObservableObject {
     var suppressConnectionFollowupsForTesting = false
     var voiceDiagnosticObserverForTesting: ((String, String) -> Void)?
     var voiceCensusSummaryForTesting: String { voiceEventCensus.summary() }
+    func reportVoiceCensusForTesting() { reportVoiceCensusIfNeeded() }
     var voiceLocalMediaStopObserverForTesting: (() -> Void)?
     var voiceStatusObserverForTesting: ((VoiceIntegrationStatus) -> Void)?
     var voiceHangupOverrideForTesting: ((String) async throws -> VoiceOperationResponse)?
@@ -137,6 +138,7 @@ public final class ZoeAppModel: ObservableObject {
     private var voiceActivityCoalescer = VoiceActivityCoalescer()
     private var censusEndRecorded = false
     private var censusEarlyRecorded = false
+    private var censusNextReportElapsed: TimeInterval = 60
     private final class StreamDiagnostics {
         var received: EventsReceivedDiagnostics
         init(now: Date) { received = EventsReceivedDiagnostics(now: now) }
@@ -179,7 +181,7 @@ public final class ZoeAppModel: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, !Task.isCancelled else { return }
-                self.reportEarlyVoiceCensusIfNeeded()
+                self.reportVoiceCensusIfNeeded()
                 if self.silence.tick() == .timedOut {
                     self.recordVoiceTrace(phase: "silence_tick_timeout", summary: DiagnosticSummaries.timeout(age: self.silence.lastActivityAge, timeout: self.silence.timeoutSeconds, enabled: self.silence.isEnabled, interaction: self.silence.interactionInProgress, elapsed: self.diagnosticElapsed), upload: true)
                     await self.endVoiceSession(reason: .silenceTimeout)
@@ -318,10 +320,17 @@ public final class ZoeAppModel: ObservableObject {
         }
     }
 
-    private func reportEarlyVoiceCensusIfNeeded() {
-        guard voiceSession != nil, !censusEarlyRecorded, diagnosticElapsed >= 20 else { return }
-        censusEarlyRecorded = true
-        recordVoiceTrace(phase: "voice_event_census_early", summary: voiceEventCensus.summary())
+    private func reportVoiceCensusIfNeeded() {
+        guard voiceSession != nil else { return }
+        let elapsed = diagnosticElapsed
+        let early = !censusEarlyRecorded && elapsed >= 20
+        let periodic = elapsed >= censusNextReportElapsed
+        guard early || periodic else { return }
+        if early {
+            censusEarlyRecorded = true
+            recordVoiceTrace(phase: "voice_event_census_early", summary: voiceEventCensus.summary())
+        }
+        if periodic { censusNextReportElapsed = (floor(elapsed / 60) + 1) * 60 }
         for report in voiceInnerEventCensus.typeReports() {
             recordVoiceTrace(phase: "voice_event_types", summary: report)
         }
@@ -337,6 +346,7 @@ public final class ZoeAppModel: ObservableObject {
         voiceActivityCoalescer = VoiceActivityCoalescer()
         censusEndRecorded = false
         censusEarlyRecorded = false
+        censusNextReportElapsed = 60
         silence.reset()
         silence.noteVoiceActivity()
         recordSilenceReset(type: "connect")
@@ -515,6 +525,7 @@ public final class ZoeAppModel: ObservableObject {
         voiceActivityCoalescer = VoiceActivityCoalescer()
         censusEndRecorded = false
         censusEarlyRecorded = false
+        censusNextReportElapsed = 60
         diagnosticConnectedAt = nil
         silence.reset()
         voiceStartedAt = Date()

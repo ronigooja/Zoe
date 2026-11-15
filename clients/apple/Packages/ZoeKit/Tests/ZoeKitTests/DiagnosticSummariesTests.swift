@@ -1,5 +1,12 @@
 import XCTest
 @testable import ZoeKit
+@testable import ZoeUI
+
+private final class CensusClock: SilenceClock {
+    var date = Date(timeIntervalSince1970: 0)
+    func now() -> Date { date }
+    func advance(_ seconds: Double) { date = date.addingTimeInterval(seconds) }
+}
 
 final class DiagnosticSummariesTests: XCTestCase {
     func testCompleteTypeReportsAreBoundedSortedAndNeverSplitEntries() {
@@ -11,9 +18,9 @@ final class DiagnosticSummariesTests: XCTestCase {
             census.note(type: type, activity: index == 0)
             expected.append(type + ":1:" + (index == 0 ? "act=1" : "ignored"))
         }
-        census.note(type: "session.output_audio.delta", activity: true)
-        census.note(type: "session.output_audio.delta", activity: true)
-        expected.insert("session.output_audio.delta:2:act=2", at: 0)
+        census.note(type: "session.output_audio.delta")
+        census.note(type: "session.output_audio.delta")
+        expected.insert("session.output_audio.delta:2:ignored", at: 0)
         let reports = census.typeReports()
         XCTAssertGreaterThan(reports.count, 10)
         var actual: [String] = []
@@ -27,6 +34,61 @@ final class DiagnosticSummariesTests: XCTestCase {
         var long = EventCensusDiagnostics(completeTypes: true)
         long.note(type: String(repeating: "a", count: 80))
         XCTAssertEqual(long.typeReports(), ["part=1/1;types=" + String(repeating: "a", count: 64) + ":1:ignored"])
+    }
+
+    @MainActor
+    func testVoiceTypeReportsRepeatEveryMinuteWithCumulativeCounts() async throws {
+        let clock = CensusClock()
+        let name = "DiagnosticSummariesTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let model = ZoeAppModel(defaults: defaults, silenceClock: clock)
+        model.setSilenceHangupEnabled(false)
+        let api = try APIClient(serverURL: URL(string: "https://census.example")!)
+        let session = VoiceSessionResponse(voiceSessionId: "census-test", generation: 1, state: "active", answerSdp: "")
+        var epoch = model.installVoiceSessionForTesting(session, api: api)
+        var traces: [(String, String)] = []
+        model.voiceDiagnosticObserverForTesting = { traces.append(($0, $1)) }
+        func receive(_ type: String) async throws {
+            let inner = try JSONSerialization.data(withJSONObject: ["type": type])
+            let wrapped = try JSONSerialization.data(withJSONObject: ["type": "data_message", "data": String(decoding: inner, as: UTF8.self)])
+            await model.receiveVoiceDataForTesting(wrapped, mediaEpoch: epoch)
+        }
+        try await receive("session.output_audio.delta")
+        clock.advance(19)
+        model.reportVoiceCensusForTesting()
+        XCTAssertTrue(traces.isEmpty)
+        clock.advance(1)
+        model.reportVoiceCensusForTesting()
+        XCTAssertEqual(traces.filter { $0.0 == "voice_event_census_early" }.count, 1)
+        XCTAssertEqual(traces.filter { $0.0 == "voice_event_types" }.map(\.1), ["part=1/1;types=session.output_audio.delta:1:ignored"])
+        traces.removeAll()
+        try await receive("session.output_audio.delta")
+        try await receive("turn.delta")
+        clock.advance(39)
+        model.reportVoiceCensusForTesting()
+        XCTAssertTrue(traces.isEmpty)
+        clock.advance(1)
+        model.reportVoiceCensusForTesting()
+        XCTAssertEqual(traces.map(\.0), ["voice_event_types"])
+        XCTAssertEqual(traces.map(\.1), ["part=1/1;types=session.output_audio.delta:2:ignored|turn.delta:1:ignored"])
+        traces.removeAll()
+        model.reportVoiceCensusForTesting()
+        clock.advance(59)
+        model.reportVoiceCensusForTesting()
+        XCTAssertTrue(traces.isEmpty)
+        try await receive("turn.delta")
+        clock.advance(1)
+        model.reportVoiceCensusForTesting()
+        XCTAssertEqual(traces.map(\.0), ["voice_event_types"])
+        XCTAssertEqual(traces.map(\.1), ["part=1/1;types=session.output_audio.delta:2:ignored|turn.delta:2:ignored"])
+        XCTAssertTrue(traces.allSatisfy { $0.1.count <= 200 })
+        epoch = model.installVoiceSessionForTesting(session, api: api)
+        traces.removeAll()
+        try await receive("turn.delta")
+        clock.advance(60)
+        model.reportVoiceCensusForTesting()
+        XCTAssertEqual(traces.filter { $0.0 == "voice_event_types" }.map(\.1), ["part=1/1;types=turn.delta:1:ignored"])
     }
 
     func testSettingsAndTimeoutFormats() {

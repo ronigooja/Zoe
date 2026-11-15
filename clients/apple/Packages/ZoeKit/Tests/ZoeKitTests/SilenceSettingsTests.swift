@@ -11,10 +11,10 @@ private final class SettingsSilenceClock: SilenceClock {
 @MainActor
 final class SilenceSettingsTests: XCTestCase {
     func testClassifierTypesAndOneSecondCoalescing() {
-        for type in ["session.output_audio.delta", "output_transcript.added", "turn.delta", "user_audio_turn.final", "assistant.output"] {
+        for type in ["output_transcript.added", "user_audio_turn.final", "assistant.output"] {
             XCTAssertTrue(VoiceActivityClassifier.isActivity(type: type), type)
         }
-        for type in ["session.input_audio.append", "unknown", "data_message", ""] {
+        for type in ["session.output_audio.delta", "turn.delta", "session.input_audio.append", "input_audio.append", "unknown", "data_message", ""] {
             XCTAssertFalse(VoiceActivityClassifier.isActivity(type: type), type)
             XCTAssertFalse(ZoeAppModel.isVoiceActivity(["type": type]))
         }
@@ -31,7 +31,7 @@ final class SilenceSettingsTests: XCTestCase {
         XCTAssertTrue(coalescer.shouldReset(now: clock.now()))
     }
 
-    func testWrappedOutputResetsTimerButContinuousMicrophoneFramesDoNot() async throws {
+    func testWrappedTranscriptResetsTimerButAudioStreamAndUnverifiedTurnsDoNot() async throws {
         let clock = SettingsSilenceClock()
         let name = "SilenceSettingsTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
@@ -48,14 +48,16 @@ final class SilenceSettingsTests: XCTestCase {
         }
         clock.advance(59)
         await model.receiveVoiceDataForTesting(try wrapped("session.output_audio.delta"), mediaEpoch: epoch)
-        XCTAssertEqual(model.silence.lastActivityAge, 0)
-        XCTAssertTrue(traces.contains { $0.0 == "silence_reset" && $0.1.contains("last=session.output_audio.delta") })
+        XCTAssertEqual(model.silence.lastActivityAge, 59)
+        XCTAssertFalse(traces.contains { $0.0 == "silence_reset" })
         clock.advance(0.5)
         await model.receiveVoiceDataForTesting(try wrapped("turn.delta"), mediaEpoch: epoch)
-        XCTAssertEqual(model.silence.lastActivityAge, 0.5)
+        XCTAssertEqual(model.silence.lastActivityAge, 59.5)
+        XCTAssertFalse(traces.contains { $0.0 == "silence_reset" })
         clock.advance(0.5)
         await model.receiveVoiceDataForTesting(try wrapped("output_transcript.added"), mediaEpoch: epoch)
         XCTAssertEqual(model.silence.lastActivityAge, 0)
+        XCTAssertTrue(traces.contains { $0.0 == "silence_reset" && $0.1.contains("last=output_transcript.added") })
         for _ in 0..<59 {
             clock.advance(1)
             await model.receiveVoiceDataForTesting(try wrapped("session.input_audio.append"), mediaEpoch: epoch)

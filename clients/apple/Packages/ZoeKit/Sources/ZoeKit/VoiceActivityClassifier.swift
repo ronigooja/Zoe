@@ -2,12 +2,12 @@ import Foundation
 
 public enum VoiceActivityClassifier {
     public static func isActivity(type: String) -> Bool {
-        // Real 98-second call census: assistant output is activity; continuous
-        // session.input_audio.append microphone frames are not evidence of speech.
+        // In a real 17-minute silent call, session.output_audio.delta remained a
+        // continuous stream while idle. turn.delta idle behavior is unverified.
+        // Neither those events nor continuous microphone frames prove speech.
         // The caller must still validate user_audio_turn.final and legacy payloads.
         switch type {
-        case "session.output_audio.delta", "output_transcript.added", "turn.delta",
-             "user_audio_turn.final", "assistant.output": return true
+        case "output_transcript.added", "user_audio_turn.final", "assistant.output": return true
         default: return false
         }
     }
