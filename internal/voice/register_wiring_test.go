@@ -85,6 +85,9 @@ func TestRegisterHandoffRoutesAndActions(t *testing.T) {
 					return
 				}
 				output := fmt.Sprintf(`{"action":%q,"task":%q,"reply":""}`, action, selected)
+				if action == "attach" {
+					output = fmt.Sprintf(`{"action":"attach","task":%q,"reply":"","work":"new_work"}`, selected)
+				}
 				if action == "report" {
 					output = fmt.Sprintf(`{"action":"report","task":%q,"reply":%q}`, selected, report)
 				}
