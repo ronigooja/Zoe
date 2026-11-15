@@ -51,10 +51,10 @@ func TestWorkerMenuKeepsCurrentAndRetriesBaseURL(t *testing.T) {
 				base = "http://remote.invalid\n" + cfg.BaseURL + "\n"
 			}
 			var out, errOut bytes.Buffer
-			if err := menuWithRoot(strings.NewReader("6\n"+base+"\n\n\n\n\n7\n\n0\n"), &out, &errOut, root); err != nil {
+			if err := menuWithRoot(strings.NewReader("6\n"+base+"\n\n\n\n\n\n7\n\n0\n"), &out, &errOut, root); err != nil {
 				t.Fatal(err)
 			}
-			if strings.Count(out.String(), "PASS HTTP 2xx") != 2 || !strings.Contains(out.String(), "Saved.") || strings.Contains(out.String(), "Reasoning effort") || strings.Contains(out.String(), "Thinking (") {
+			if strings.Count(out.String(), "PASS HTTP 2xx") != 2 || !strings.Contains(out.String(), "Saved.") || !strings.Contains(out.String(), "Reasoning effort") || strings.Contains(out.String(), "Thinking (") {
 				t.Fatalf("Worker output=%s errors=%s", &out, &errOut)
 			}
 			if strings.Count(errOut.String(), "Nothing was saved.") != map[bool]int{false: 0, true: 1}[retry] {
@@ -83,7 +83,7 @@ func TestWorkerMenuProbeAndReloadFailuresPreserveConfiguration(t *testing.T) {
 			path := filepath.Join(root, "zoe-runner.env")
 			before, _ := os.ReadFile(path)
 			var out, errOut bytes.Buffer
-			if err := menuWithRoot(strings.NewReader("6\n\nworker-changed\n\n\n\n7\n\n0\n"), &out, &errOut, root); err != nil {
+			if err := menuWithRoot(strings.NewReader("6\n\nworker-changed\nhigh\n\n\n\n7\n\n0\n"), &out, &errOut, root); err != nil {
 				t.Fatal(err)
 			}
 			after, _ := os.ReadFile(path)

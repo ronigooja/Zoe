@@ -67,12 +67,20 @@ func renderOpenCodeConfig(o LifecycleOptions) error {
 		return errors.New("OpenCode model must be provider/model")
 	}
 	baseURL := v["ZOE_OPENCODE_PROVIDER_BASE_URL"]
+	effort := v["ZOE_OPENCODE_REASONING_EFFORT"]
+	if err := ValidateReasoningEffort(effort); err != nil {
+		return err
+	}
 	providers := map[string]any{}
 	if baseURL != "" {
 		if err := ValidateProviderBaseURL(baseURL); err != nil {
 			return err
 		}
-		providers[provider] = map[string]any{"name": provider, "env": []string{"ZOE_PROVIDER_KEY"}, "package": "@opencode/ai/providers/openai-compatible", "settings": map[string]string{"baseURL": baseURL}, "models": mergeProviderModels(o, provider, modelID)}
+		models := mergeProviderModels(o, provider, modelID)
+		if effort != "" {
+			models[modelID].(map[string]any)["settings"] = map[string]string{"reasoningEffort": effort}
+		}
+		providers[provider] = map[string]any{"name": provider, "env": []string{"ZOE_PROVIDER_KEY"}, "package": "@opencode/ai/providers/openai-compatible", "settings": map[string]string{"baseURL": baseURL}, "models": models}
 	}
 	agents := map[string]any{}
 	for _, p := range profiles.Definitions {

@@ -69,7 +69,7 @@ func TestProviderTransactionRestoresAfterPartialReload(t *testing.T) {
 	server := modelServer(t)
 	secret := filepath.Join(d.Root, "token")
 	_ = os.WriteFile(secret, []byte("old"), 0600)
-	_ = os.WriteFile(d.RunnerEnv, []byte("KEEP=old\n"), 0640)
+	_ = os.WriteFile(d.RunnerEnv, []byte("KEEP=old\nZOE_OPENCODE_REASONING_EFFORT=low\n"), 0640)
 	calls := 0
 	m := NewManager(func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		if strings.Contains(strings.Join(args, " "), "reload-or-restart") {
@@ -80,7 +80,7 @@ func TestProviderTransactionRestoresAfterPartialReload(t *testing.T) {
 		}
 		return nil, nil
 	})
-	_, err := m.ConfigureProvider(context.Background(), d, ProviderConfig{BaseURL: server.URL, Model: "test-model", SecretPath: secret, Secret: "next"}, server.Client())
+	_, err := m.ConfigureProvider(context.Background(), d, ProviderConfig{BaseURL: server.URL, Model: "test-model", ReasoningEffort: "high", SecretPath: secret, Secret: "next"}, server.Client())
 	if err == nil || !strings.Contains(err.Error(), "partial failure") {
 		t.Fatalf("error=%v", err)
 	}
@@ -90,7 +90,7 @@ func TestProviderTransactionRestoresAfterPartialReload(t *testing.T) {
 	}
 	data, _ = os.ReadFile(d.RunnerEnv)
 	info, _ := os.Stat(d.RunnerEnv)
-	if string(data) != "KEEP=old\n" || info.Mode().Perm() != 0640 {
+	if string(data) != "KEEP=old\nZOE_OPENCODE_REASONING_EFFORT=low\n" || info.Mode().Perm() != 0640 {
 		t.Fatal("environment rollback failed")
 	}
 	if calls != 2 {

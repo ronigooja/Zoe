@@ -39,13 +39,14 @@ var (
 // Secret contains the credential only while configuring; it is never rendered
 // into an environment file or included in ProbeResult.
 type ProviderConfig struct {
-	BaseURL        string
-	Model          string
-	SecretPath     string
-	Secret         string
-	Image          string
-	ProviderSocket string
-	WorkspaceRoot  string
+	BaseURL         string
+	Model           string
+	ReasoningEffort string
+	SecretPath      string
+	Secret          string
+	Image           string
+	ProviderSocket  string
+	WorkspaceRoot   string
 }
 
 // MemoryConfig is the credential and endpoint consumed by the memory worker.
@@ -88,6 +89,10 @@ func (c MemoryConfig) Normalized() (MemoryConfig, error) {
 func (c ProviderConfig) Normalized() (ProviderConfig, error) {
 	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	c.Model = strings.TrimSpace(c.Model)
+	c.ReasoningEffort = strings.TrimSpace(c.ReasoningEffort)
+	if err := ValidateReasoningEffort(c.ReasoningEffort); err != nil {
+		return ProviderConfig{}, err
+	}
 	c.SecretPath = strings.TrimSpace(c.SecretPath)
 	if c.SecretPath == "" {
 		c.SecretPath = DefaultProviderSecretPath
@@ -146,7 +151,7 @@ func WriteRunnerEnvAtomic(path string, c ProviderConfig) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	updates := map[string]string{"ZOE_OPENCODE_PROVIDER_BASE_URL": c.BaseURL, "ZOE_OPENCODE_PROVIDER_KEY_FILE": c.SecretPath, "ZOE_OPENCODE_MODEL": c.Model, "ZOE_OPENCODE_WORKSPACE_ROOT": c.WorkspaceRoot}
+	updates := map[string]string{"ZOE_OPENCODE_PROVIDER_BASE_URL": c.BaseURL, "ZOE_OPENCODE_PROVIDER_KEY_FILE": c.SecretPath, "ZOE_OPENCODE_MODEL": c.Model, "ZOE_OPENCODE_REASONING_EFFORT": c.ReasoningEffort, "ZOE_OPENCODE_WORKSPACE_ROOT": c.WorkspaceRoot}
 	lines := strings.Split(string(old), "\n")
 	kept := make([]string, 0, len(lines)+3)
 	for _, line := range lines {
@@ -160,7 +165,7 @@ func WriteRunnerEnvAtomic(path string, c ProviderConfig) error {
 			kept = append(kept, line)
 		}
 	}
-	for _, key := range []string{"ZOE_OPENCODE_PROVIDER_BASE_URL", "ZOE_OPENCODE_PROVIDER_KEY_FILE", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_WORKSPACE_ROOT"} {
+	for _, key := range []string{"ZOE_OPENCODE_PROVIDER_BASE_URL", "ZOE_OPENCODE_PROVIDER_KEY_FILE", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_REASONING_EFFORT", "ZOE_OPENCODE_WORKSPACE_ROOT"} {
 		if updates[key] != "" {
 			kept = append(kept, key+"="+strconv.Quote(updates[key]))
 		}

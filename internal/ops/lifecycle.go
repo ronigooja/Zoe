@@ -1008,6 +1008,12 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 	if o.OpenCodeBinary != "" {
 		runnerEnv["ZOE_OPENCODE_BINARY"] = o.OpenCodeBinary
 	}
+	if effort := readEnvValue(filepath.Join(o.Root, "zoe-runner.env"), "ZOE_OPENCODE_REASONING_EFFORT"); effort != "" {
+		if err := ValidateReasoningEffort(effort); err != nil {
+			return err
+		}
+		runnerEnv["ZOE_OPENCODE_REASONING_EFFORT"] = effort
+	}
 	if err := writeEnv(filepath.Join(o.Root, "zoe-stack.env"), stack, 0600); err != nil {
 		return err
 	}
@@ -1148,7 +1154,7 @@ func isOperatorOwnedEnvKey(key string) bool {
 	switch key {
 	case "ZOE_RUNTIME_PROFILES", "ZOE_DEFAULT_PROFILE_ID", "ZOE_MAX_RUNS", "ZOE_RUNNER_ROUTES", "ZOE_AGENT_CONTEXT_WINDOW_RATIO", "ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "ZOE_AGENT_MAX_ROTATIONS", "ZOE_AGENT_ROTATION_SUMMARY":
 		return true
-	case "ZOE_OPENCODE_BASE_URL", "ZOE_OPENCODE_PASSWORD_FILE", "ZOE_OPENCODE_WORKSPACE_ROOT", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_BINARY", "ZOE_OPENCODE_USER":
+	case "ZOE_OPENCODE_BASE_URL", "ZOE_OPENCODE_PASSWORD_FILE", "ZOE_OPENCODE_WORKSPACE_ROOT", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_REASONING_EFFORT", "ZOE_OPENCODE_BINARY", "ZOE_OPENCODE_USER":
 		return true
 	case "ZOE_SCRAPLING_MODE", "ZOE_SCRAPLING_URL", "ZOE_SCRAPLING_TOKEN_FILE", "ZOE_VOICE_UPSTREAM_ROUTE":
 		return true
@@ -1169,6 +1175,8 @@ func validOperatorEnvValue(key, value string) bool {
 		return false
 	}
 	switch key {
+	case "ZOE_OPENCODE_REASONING_EFFORT":
+		return ValidateReasoningEffort(strings.Trim(value, "\"'")) == nil
 	case "ZOE_OPENCODE_BASE_URL", "ZOE_OPENCODE_PASSWORD_FILE", "ZOE_OPENCODE_WORKSPACE_ROOT", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_BINARY", "ZOE_OPENCODE_USER", "ZOE_SCRAPLING_MODE", "ZOE_SCRAPLING_URL", "ZOE_SCRAPLING_TOKEN_FILE":
 		return true
 	case "ZOE_DEFAULT_PROFILE_ID":

@@ -275,12 +275,26 @@ func menuWorker(m ConfigureMenuIO) error {
 	if cfg.Model, err = menuValue(m, "Model", cfg.Model); err != nil {
 		return err
 	}
+	for {
+		cfg.ReasoningEffort, err = menuValue(m, "Reasoning effort (none/low/medium/high/max; empty keeps default)", cfg.ReasoningEffort)
+		if err != nil {
+			return err
+		}
+		if err := ops.ValidateReasoningEffort(cfg.ReasoningEffort); err != nil {
+			fmt.Fprintf(m.ErrOut, "%s Nothing was saved.\n", err)
+			continue
+		}
+		break
+	}
 	if cfg.SecretPath, err = menuValue(m, "Key file (Enter uses current)", cfg.SecretPath); err != nil {
 		return err
 	}
 	fmt.Fprint(m.Out, "API key (input is hidden; leave empty to keep current): ")
 	secret, err := m.PromptSecret(m.Out)
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			fmt.Fprintln(m.Out, "Cancelled. Nothing was saved.")
+		}
 		return err
 	}
 	if len(secret) == 0 {
