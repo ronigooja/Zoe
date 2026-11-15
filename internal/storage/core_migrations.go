@@ -383,7 +383,7 @@ CREATE INDEX client_diagnostic_events_request ON client_diagnostic_events(client
 ALTER TABLE client_diagnostic_events ADD COLUMN level TEXT NOT NULL DEFAULT 'error';
 CREATE TABLE client_policy (
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-  log_level TEXT NOT NULL CHECK(log_level IN ('error','info','debug')),
+  log_level TEXT NOT NULL CHECK(log_level IN ('error','warn','info','debug')),
   poll_interval_seconds INTEGER NOT NULL,
   revision INTEGER NOT NULL,
   updated_at TEXT NOT NULL

@@ -46,7 +46,7 @@ func clampPollInterval(value int) int {
 }
 
 func validClientLogLevel(level string) bool {
-	return level == "error" || level == "info" || level == "debug"
+	return level == "error" || level == "warn" || level == "info" || level == "debug"
 }
 
 func (s *Server) UpdateClientPolicy(ctx context.Context, level string, interval int) (ClientPolicy, error) {
@@ -71,7 +71,7 @@ func ReadClientPolicy(ctx context.Context, db *sql.DB) (ClientPolicy, error) {
 func UpdateClientPolicy(ctx context.Context, db *sql.DB, level string, interval int) (ClientPolicy, error) {
 	level = strings.ToLower(strings.TrimSpace(level))
 	if !validClientLogLevel(level) {
-		return ClientPolicy{}, apiError(http.StatusBadRequest, "invalid_policy", "log level must be error, info, or debug", nil)
+		return ClientPolicy{}, apiError(http.StatusBadRequest, "invalid_policy", "log level must be error, warn, info, or debug", nil)
 	}
 	interval = clampPollInterval(interval)
 	tx, err := db.BeginTx(ctx, nil)
@@ -122,8 +122,10 @@ func (s *Server) handleClientPolicy(w http.ResponseWriter, r *http.Request) {
 func diagnosticLevelRank(level string) int {
 	switch level {
 	case "debug":
-		return 2
+		return 3
 	case "info":
+		return 2
+	case "warn":
 		return 1
 	default:
 		return 0

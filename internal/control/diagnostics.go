@@ -121,7 +121,7 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		if !validClientLogLevel(level) {
-			writeError(w, apiError(http.StatusBadRequest, "invalid_diagnostic", "level must be error, info, or debug", nil))
+			writeError(w, apiError(http.StatusBadRequest, "invalid_diagnostic", "level must be error, warn, info, or debug", nil))
 			return
 		}
 		if diagnosticLevelRank(level) > diagnosticLevelRank(policy.LogLevel) {

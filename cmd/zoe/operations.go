@@ -42,7 +42,7 @@ func clientPolicyMaintenance(args []string, set bool, out, errOut io.Writer) err
 	fs.SetOutput(errOut)
 	root := fs.String("root", "/etc/zoe", "deployment configuration root")
 	db := fs.String("database", os.Getenv("ZOE_DATABASE_PATH"), "control database path")
-	level := fs.String("level", "", "client log level: error, info, or debug")
+	level := fs.String("level", "", "client log level: error, warn, info, or debug")
 	interval := fs.Int("interval", 0, "client poll interval in seconds")
 	offline := fs.Bool("offline", false, "skip managed service pause; require exclusive database lock")
 	if err := fs.Parse(args); err != nil {
@@ -52,7 +52,7 @@ func clientPolicyMaintenance(args []string, set bool, out, errOut io.Writer) err
 		return errors.New("unexpected arguments")
 	}
 	if set && !validPolicyLevel(*level) {
-		return errors.New("--level must be error, info, or debug")
+		return errors.New("--level must be error, warn, info, or debug")
 	}
 	if *db == "" {
 		d, err := ops.DiscoverDeployment(context.Background(), opsManager(), *root)
@@ -96,7 +96,7 @@ func clientPolicySetOperation(args []string, _ io.Reader, out, errOut io.Writer)
 	return clientPolicyMaintenance(args, true, out, errOut)
 }
 func validPolicyLevel(level string) bool {
-	return level == "error" || level == "info" || level == "debug"
+	return level == "error" || level == "warn" || level == "info" || level == "debug"
 }
 
 func lifecycleFlags(name string, args []string, errOut io.Writer) (ops.LifecycleOptions, *flag.FlagSet, error) {

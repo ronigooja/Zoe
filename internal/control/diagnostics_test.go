@@ -71,3 +71,49 @@ func TestClientDiagnosticsDefaultsSuccessfulEventsToInfo(t *testing.T) {
 		t.Fatalf("level=%q err=%v", level, err)
 	}
 }
+
+func TestClientDiagnosticsLevelFiltering(t *testing.T) {
+	levels := []string{"error", "warn", "info", "debug"}
+	for policyRank, policyLevel := range levels {
+		t.Run(policyLevel, func(t *testing.T) {
+			store, server, key := instanceAuthFixture(t)
+			if _, err := server.UpdateClientPolicy(t.Context(), policyLevel, 60); err != nil {
+				t.Fatal(err)
+			}
+			for eventRank, eventLevel := range levels {
+				body := map[string]any{"events": []any{map[string]any{
+					"client_request_id": "req-" + eventLevel, "occurred_at": "2026-10-29T00:00:00Z",
+					"device_id_hash": sha256Hex("instance"), "phase": "test", "level": eventLevel,
+				}}}
+				data, _ := json.Marshal(body)
+				r := instanceRequest(server.Handler(), http.MethodPost, "/v1/diagnostics/client", key, string(data))
+				if r.Code != http.StatusAccepted {
+					t.Fatalf("event=%s status=%d body=%s", eventLevel, r.Code, r.Body.String())
+				}
+				want := 0
+				if eventRank <= policyRank {
+					want = 1
+				}
+				var count int
+				if err := store.DB().QueryRow(`SELECT count(*) FROM client_diagnostic_events WHERE level=?`, eventLevel).Scan(&count); err != nil || count != want {
+					t.Fatalf("event=%s count=%d want=%d err=%v", eventLevel, count, want, err)
+				}
+				var result struct {
+					Dropped int `json:"dropped"`
+				}
+				if err := json.Unmarshal(r.Body.Bytes(), &result); err != nil || result.Dropped != 1-want {
+					t.Fatalf("event=%s dropped=%d err=%v", eventLevel, result.Dropped, err)
+				}
+			}
+		})
+	}
+}
+
+func TestClientDiagnosticsRejectsInvalidLevel(t *testing.T) {
+	_, server, key := instanceAuthFixture(t)
+	data := `{"events":[{"client_request_id":"req-invalid","occurred_at":"2026-10-29T00:00:00Z","device_id_hash":"` + sha256Hex("instance") + `","phase":"test","level":"verbose"}]}`
+	r := instanceRequest(server.Handler(), http.MethodPost, "/v1/diagnostics/client", key, data)
+	if r.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", r.Code, r.Body.String())
+	}
+}
