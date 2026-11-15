@@ -11,13 +11,15 @@ public struct SystemSilenceClock: SilenceClock {
     public enum TickResult: Equatable, Sendable { case none, timedOut }
 
     public var timeoutSeconds: TimeInterval
+    public var isEnabled: Bool
     private let clock: SilenceClock
     private var lastVoiceActivity: Date?
     private var interactionInProgress = false
     private var didTimeOut = false
 
-    public init(timeoutSeconds: TimeInterval = 60, clock: SilenceClock = SystemSilenceClock()) {
+    public init(timeoutSeconds: TimeInterval = 60, isEnabled: Bool = true, clock: SilenceClock = SystemSilenceClock()) {
         self.timeoutSeconds = timeoutSeconds
+        self.isEnabled = isEnabled
         self.clock = clock
     }
 
@@ -33,7 +35,7 @@ public struct SystemSilenceClock: SilenceClock {
     }
 
     public func tick() -> TickResult {
-        guard !interactionInProgress, !didTimeOut, let lastVoiceActivity else { return .none }
+        guard isEnabled, !interactionInProgress, !didTimeOut, let lastVoiceActivity else { return .none }
         guard clock.now().timeIntervalSince(lastVoiceActivity) >= timeoutSeconds else { return .none }
         didTimeOut = true
         return .timedOut

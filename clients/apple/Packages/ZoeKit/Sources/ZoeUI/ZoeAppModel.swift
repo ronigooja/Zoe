@@ -28,6 +28,8 @@ public final class ZoeAppModel: ObservableObject {
     @Published public private(set) var voicePoolStatus: VoicePoolStatus?
     @Published public private(set) var voiceStatus: VoiceIntegrationStatus = .idle
     @Published public private(set) var continuousVoiceEnabled: Bool
+    @Published public private(set) var silenceHangupEnabled: Bool
+    @Published public private(set) var silenceTimeoutSeconds: Double
     @Published public var voiceDraft = ""
     @Published public private(set) var voiceDraftRevision: Int64 = 0
     private let defaults: UserDefaults
@@ -68,6 +70,7 @@ public final class ZoeAppModel: ObservableObject {
         voiceSessionMediaClosed = false
         voiceAPI = api
         voiceStatus = .active(sessionID: session.voiceSessionId, mediaGeneration: session.generation)
+        noteVoiceConnected()
         return epoch
     }
 
@@ -140,8 +143,14 @@ public final class ZoeAppModel: ObservableObject {
     private var automaticVoiceTurnCompleted = Set<String>()
     private let automaticVoiceTurnSetLimit = 128
     private let voiceHeartbeat = VoiceHeartbeatLease()
-    public init(defaults: UserDefaults = .standard) {
+    public init(defaults: UserDefaults = .standard, silenceClock: SilenceClock = SystemSilenceClock()) {
         self.defaults = defaults
+        let savedEnabled = defaults.object(forKey: "zoe.voice.silenceHangupEnabled") == nil ? true : defaults.bool(forKey: "zoe.voice.silenceHangupEnabled")
+        silenceHangupEnabled = savedEnabled
+        let savedTimeout = (defaults.object(forKey: "zoe.voice.silenceTimeoutSeconds") as? NSNumber)?.doubleValue ?? 60
+        let timeout = savedTimeout.isFinite ? min(3600, max(10, savedTimeout)) : 60
+        silenceTimeoutSeconds = timeout
+        silence = SilenceController(timeoutSeconds: timeout, isEnabled: savedEnabled, clock: silenceClock)
         serverAddress = defaults.string(forKey: "zoe.instance.serverAddress") ?? ""
         let savedInstallation = defaults.string(forKey: "zoe.installationID")
         let identifier = savedInstallation.flatMap(UUID.init(uuidString:))?.uuidString.lowercased() ?? UUID().uuidString.lowercased()
@@ -236,8 +245,27 @@ public final class ZoeAppModel: ObservableObject {
 
     private func startVoiceIfEnabled(trigger: String = "auto_resume") async {
         guard continuousVoiceEnabled, authentication.isConnected, voiceSession == nil else { return }
-        silence.noteVoiceActivity()
         await startVoice(voice: nil, voiceMode: nil, languageCode: nil, trigger: trigger)
+    }
+
+    public func setSilenceHangupEnabled(_ enabled: Bool) {
+        silenceHangupEnabled = enabled
+        defaults.set(enabled, forKey: "zoe.voice.silenceHangupEnabled")
+        silence.isEnabled = enabled
+    }
+
+    public func setSilenceTimeoutSeconds(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        silenceTimeoutSeconds = min(3600, max(10, seconds))
+        defaults.set(silenceTimeoutSeconds, forKey: "zoe.voice.silenceTimeoutSeconds")
+        silence.timeoutSeconds = silenceTimeoutSeconds
+    }
+
+    private func noteVoiceConnected() {
+        // Connected calls exclude setup time from both silence and end-duration accounting.
+        voiceStartedAt = Date()
+        silence.reset()
+        silence.noteVoiceActivity()
     }
 
     public func receiveInstallationLink(_ url: URL) {
@@ -358,6 +386,7 @@ public final class ZoeAppModel: ObservableObject {
         let oldAPI = voiceAPI
         let oldEpoch = voiceSessionMediaEpoch
         let oldDuration = voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        silence.reset()
         _ = voiceMediaFence.stop(voiceMediaEpoch)
         voiceHeartbeat.cancel()
         let oldTransport = voiceTransport
@@ -405,6 +434,7 @@ public final class ZoeAppModel: ObservableObject {
         guard voiceSession == nil, !voiceStartInProgress else { return }
         voiceStartInProgress = true
         voiceAttemptEndReason = nil
+        silence.reset()
         voiceStartedAt = Date()
         defer { voiceStartInProgress = false }
         let mediaEpoch = voiceMediaFence.beginAttempt()
@@ -484,6 +514,7 @@ public final class ZoeAppModel: ObservableObject {
             voiceDraft = ""
             voiceDraftRevision = 0
             voiceStatus = .active(sessionID: created.voiceSessionId, mediaGeneration: created.generation)
+            noteVoiceConnected()
             await api.recordDiagnosticAndWait(phase: "voice_connected", requestPath: "/v1/voice/sessions/connected", level: .info, voiceSessionID: created.voiceSessionId, voiceGeneration: created.generation, voiceMediaEpoch: mediaEpoch)
             startVoiceHeartbeat(sessionID: created.voiceSessionId, api: api, generation: generation)
         } catch {
@@ -567,6 +598,7 @@ public final class ZoeAppModel: ObservableObject {
         guard voiceSession?.voiceSessionId == session.voiceSessionId,
               voiceSessionMediaEpoch == mediaEpoch,
               voiceHangupInFlightSessionID != session.voiceSessionId else { return }
+        let duration = voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         if let lossReason {
             voiceStatus = .interrupted(reason: uiFormat("%@ Voice controls are stopped while local media closes and server release is checked.", lossReason))
         }
@@ -578,7 +610,7 @@ public final class ZoeAppModel: ObservableObject {
             voiceSessionMediaClosed = true
         }
         voiceHangupInFlightSessionID = session.voiceSessionId
-        deliverVoiceEnd(session, api: api, mediaEpoch: mediaEpoch, reason: reason)
+        deliverVoiceEnd(session, api: api, mediaEpoch: mediaEpoch, reason: reason, duration: duration)
         savePendingVoiceHangup(session, api: api)
         defer {
             if voiceHangupInFlightSessionID == session.voiceSessionId {
@@ -709,6 +741,7 @@ public final class ZoeAppModel: ObservableObject {
 
     private func closeVoiceLocalMedia(mediaEpoch: UInt64) async {
         guard voiceMediaFence.stop(mediaEpoch) else { return }
+        silence.reset()
         voiceHeartbeat.cancel()
         #if DEBUG
         voiceLocalMediaStopObserverForTesting?()
@@ -949,6 +982,7 @@ public final class ZoeAppModel: ObservableObject {
             event = inner
         }
         let type = (event["type"] as? String) ?? ""
+        if Self.isVoiceActivity(event) { silence.noteVoiceActivity() }
         if type == "user_audio_turn.final" {
             guard let final = Self.parseAuthoritativeVoiceTurn(event) else {
                 recordAutomaticVoiceTurnDiagnostic(errorType: "contract_rejected", errorSummary: "invalid_final_event", mediaEpoch: mediaEpoch)
@@ -997,6 +1031,31 @@ public final class ZoeAppModel: ObservableObject {
         guard voiceDraft != clean else { return }
         voiceDraft = clean
         voiceDraftRevision += 1
+    }
+
+    static func isVoiceActivity(_ event: [String: Any]) -> Bool {
+        let type = event["type"] as? String ?? ""
+        if type == "user_audio_turn.final" { return parseAuthoritativeVoiceTurn(event) != nil }
+        // This output event is present in the voice lifecycle fixtures.
+        if type == "assistant.output" { return true }
+        let payload = (event["payload"] as? [String: Any]) ?? event
+        if type.contains("input_audio") && type.contains("transcription") {
+            let text = (event["transcript"] as? String) ?? (event["text"] as? String) ?? (payload["transcript"] as? String) ?? (payload["text"] as? String)
+            return text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+        guard type == "chat_message_delta",
+              let delta = payload["delta"] as? [String: Any],
+              let version = delta["v"] as? [String: Any],
+              let message = version["message"] as? [String: Any],
+              let author = message["author"] as? [String: Any],
+              let role = author["role"] as? String, role == "user" || role == "assistant",
+              let content = message["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]] else { return false }
+        return parts.contains { part in
+            if role == "user", part["content_type"] as? String == "audio_transcription", part["direction"] as? String == "out" { return false }
+            let text = (part["transcript"] as? String) ?? (part["text"] as? String) ?? (part["content"] as? String)
+            return text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
     }
 
     private struct AuthoritativeVoiceTurn: Sendable {
@@ -1098,7 +1157,7 @@ public final class ZoeAppModel: ObservableObject {
 
     private var workspaceID: String?
     private var eventCursor: String?
-    public let silence = SilenceController()
+    public let silence: SilenceController
     private var silenceTask: Task<Void, Never>?
 
     private func validateConnection() async throws {

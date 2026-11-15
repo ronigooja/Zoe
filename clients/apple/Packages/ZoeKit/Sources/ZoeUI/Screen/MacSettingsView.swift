@@ -6,6 +6,7 @@ public struct MacSettingsView: View {
     @ObservedObject var model: ZoeAppModel
     @State private var address = ""
     @State private var key = ""
+    @State private var silenceSeconds = ""
 
     public init(model: ZoeAppModel) { self.model = model }
 
@@ -44,9 +45,38 @@ public struct MacSettingsView: View {
             }
             .padding(20)
             .tabItem { Text("Connection") }
+            Form {
+                Toggle("Hang up after silence", isOn: Binding(
+                    get: { model.silenceHangupEnabled },
+                    set: { model.setSilenceHangupEnabled($0) }
+                ))
+                TextField("Seconds", text: $silenceSeconds)
+                    .onSubmit { applySilenceSeconds() }
+                    .onChange(of: secondsFocused) { _, focused in
+                        if !focused { applySilenceSeconds() }
+                    }
+                    .focused($secondsFocused)
+            }
+            .padding(20)
+            .tabItem { Text("General") }
         }
         .frame(width: 520, height: 360)
-        .onAppear { address = model.serverAddress }
+        .onAppear { address = model.serverAddress; refreshSilenceSeconds() }
+        .onChange(of: model.silenceTimeoutSeconds) { _, _ in refreshSilenceSeconds() }
+    }
+
+    @FocusState private var secondsFocused: Bool
+
+    private func applySilenceSeconds() {
+        if let seconds = Double(silenceSeconds.trimmingCharacters(in: .whitespacesAndNewlines)), seconds.isFinite {
+            model.setSilenceTimeoutSeconds(seconds)
+        }
+        refreshSilenceSeconds()
+    }
+
+    private func refreshSilenceSeconds() {
+        let seconds = model.silenceTimeoutSeconds
+        silenceSeconds = seconds.rounded() == seconds ? String(Int(seconds)) : String(seconds)
     }
 
     private var connectionStatus: String {
