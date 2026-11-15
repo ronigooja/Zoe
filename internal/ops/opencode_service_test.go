@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -76,6 +77,58 @@ func TestRenderedOpenCodeConfigHasProfilesAndWorkerFullPermissions(t *testing.T)
 	}
 	if _, exists := cfg["permissions"]; exists {
 		t.Fatalf("global permissions must be absent: %v", cfg["permissions"])
+	}
+}
+
+func TestRenderedOpenCodeProviderAPIKeyUsesEnvironmentSubstitution(t *testing.T) {
+	o, _ := catalogOptions(t)
+	const syntheticKey = "fixture-only-provider-key-never-render"
+	t.Setenv("ZOE_PROVIDER_KEY", syntheticKey)
+	secretPath := filepath.Join(o.Root, "provider-key")
+	if err := os.WriteFile(secretPath, []byte(syntheticKey), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteRunnerEnvAtomic(filepath.Join(o.Root, "zoe-runner.env"), ProviderConfig{
+		BaseURL: "https://provider.example.test/v1", Model: "cliproxyapi/model", ReasoningEffort: "high", SecretPath: secretPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistProviderModels(o, "cliproxyapi", []ProviderModelMetadata{
+		{ID: "model", Name: "Selected", Limit: ModelLimit{Context: 100, Input: 80, Output: 20}},
+		{ID: "other", Name: "Other"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderOpenCodeConfig(o); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(openCodeConfigPath(o))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), syntheticKey) || strings.Contains(string(b), secretPath) {
+		t.Fatal("generated config contains credential material or its file path")
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	var want map[string]any
+	if err := json.Unmarshal([]byte(`{
+		"name": "cliproxyapi",
+		"env": ["ZOE_PROVIDER_KEY"],
+		"package": "@opencode/ai/providers/openai-compatible",
+		"settings": {"baseURL": "https://provider.example.test/v1", "apiKey": "{env:ZOE_PROVIDER_KEY}"},
+		"models": {
+			"model": {"name": "Selected", "limit": {"context": 100, "input": 80, "output": 20}, "settings": {"reasoningEffort": "high"}},
+			"other": {"name": "Other"}
+		}
+	}`), &want); err != nil {
+		t.Fatal(err)
+	}
+	got := cfg["providers"].(map[string]any)["cliproxyapi"]
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider binding or metadata mismatch: got %v want %v", got, want)
 	}
 }
 

@@ -80,7 +80,7 @@ func renderOpenCodeConfig(o LifecycleOptions) error {
 		if effort != "" {
 			models[modelID].(map[string]any)["settings"] = map[string]string{"reasoningEffort": effort}
 		}
-		providers[provider] = map[string]any{"name": provider, "env": []string{"ZOE_PROVIDER_KEY"}, "package": "@opencode/ai/providers/openai-compatible", "settings": map[string]string{"baseURL": baseURL}, "models": models}
+		providers[provider] = map[string]any{"name": provider, "env": []string{"ZOE_PROVIDER_KEY"}, "package": "@opencode/ai/providers/openai-compatible", "settings": map[string]string{"baseURL": baseURL, "apiKey": "{env:ZOE_PROVIDER_KEY}"}, "models": models}
 	}
 	agents := map[string]any{}
 	for _, p := range profiles.Definitions {
