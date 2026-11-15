@@ -24,7 +24,7 @@ func TestMaintenanceMenuVoiceInstructionShowsEffectiveDefaultAndCustom(t *testin
 	menuManager(t)
 	root := t.TempDir()
 	var out, errOut bytes.Buffer
-	if err := menuWithRoot(strings.NewReader("19\ncustom rule\n19\n\n0\n"), &out, &errOut, root); err != nil {
+	if err := menuWithRoot(strings.NewReader("19\ncustom rule\n\n19\n\n\n0\n"), &out, &errOut, root); err != nil {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{"Current voice instruction (default):\n" + voice.DefaultInstructionText, "Current voice instruction (custom):\ncustom rule"} {
@@ -42,7 +42,7 @@ func TestMaintenanceMenuVoiceInstructionWritesAndRestores(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "zoe-stack.env")
 	var out, errOut bytes.Buffer
-	if err := menuWithRoot(strings.NewReader("19\ncustom instruction $HOME\n0\n"), &out, &errOut, root); err != nil {
+	if err := menuWithRoot(strings.NewReader("19\ncustom instruction $HOME\n\n0\n"), &out, &errOut, root); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "19) Configure voice instruction") {
@@ -54,7 +54,7 @@ func TestMaintenanceMenuVoiceInstructionWritesAndRestores(t *testing.T) {
 	}
 	for _, text := range []string{"off", ""} {
 		out.Reset()
-		if err := menuWithRoot(strings.NewReader("19\n"+text+"\n0\n"), &out, &errOut, root); err != nil {
+		if err := menuWithRoot(strings.NewReader("19\n"+text+"\n\n0\n"), &out, &errOut, root); err != nil {
 			t.Fatal(err)
 		}
 		data, err = os.ReadFile(path)
@@ -78,7 +78,7 @@ func TestMaintenanceMenuVoiceInstructionRejectsInvalid(t *testing.T) {
 	for _, text := range []string{string([]byte{255}), strings.Repeat("x", 6001)} {
 		root := t.TempDir()
 		var out, errOut bytes.Buffer
-		if err := menuWithRoot(strings.NewReader("19\n"+text+"\n0\n"), &out, &errOut, root); err != nil {
+		if err := menuWithRoot(strings.NewReader("19\n"+text+"\n\n0\n"), &out, &errOut, root); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(errOut.String(), "nothing saved") {

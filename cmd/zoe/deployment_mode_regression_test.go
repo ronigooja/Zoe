@@ -14,7 +14,7 @@ import (
 
 func TestDeploymentModeHybridModelConfiguration(t *testing.T) {
 	containerKeyFixture(t)
-	fakeServices(t, false)
+	calls := fakeServices(t, false)
 	t.Setenv("ZOE_DEPLOYMENT_MODE", "")
 	t.Setenv("ZOE_COMPOSE_FILE", "")
 	root := t.TempDir()
@@ -48,6 +48,10 @@ func TestDeploymentModeHybridModelConfiguration(t *testing.T) {
 		if !strings.Contains(string(b), "ZOE_"+name+"_MODEL=") {
 			t.Errorf("missing %s configuration", name)
 		}
+	}
+	command := "docker compose --project-name zoe --file " + compose + " --env-file " + d.StackEnv + " up -d --no-build --no-deps --force-recreate zoe-server"
+	if strings.Count(strings.Join(*calls, "\n"), command) != 2 {
+		t.Fatalf("hybrid saves did not reload only server: %v", *calls)
 	}
 }
 

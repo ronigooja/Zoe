@@ -77,7 +77,7 @@ func TestRemovedTriageCommands(t *testing.T) {
 func TestIndependentMenuModelsConfigureAndProbe(t *testing.T) {
 	for _, tc := range []struct{ kind, configure, test, other string }{{"Register", "8", "9", "COMPACT"}, {"Compact", "10", "11", "REGISTER"}, {"UI_Controller", "24", "25", "STEWARD"}} {
 		t.Run(tc.kind, func(t *testing.T) {
-			menuManager(t)
+			calls := fakeServices(t, false)
 			containerKeyFixture(t)
 			root := t.TempDir()
 			prefix := "ZOE_" + strings.ToUpper(tc.kind)
@@ -106,7 +106,7 @@ func TestIndependentMenuModelsConfigureAndProbe(t *testing.T) {
 			old := terminalEcho
 			terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
 			t.Cleanup(func() { terminalEcho = old })
-			input := tc.configure + "\n" + server.URL + "/v1\n" + tc.kind + "-model\nnone\ndisabled\n\nprivate-fixture\ny\n" + tc.test + "\n0\n"
+			input := tc.configure + "\n" + server.URL + "/v1\n" + tc.kind + "-model\nnone\ndisabled\n\nprivate-fixture\ny\n\n" + tc.test + "\n\n0\n"
 			var out, errOut bytes.Buffer
 			if err := menuWithRoot(strings.NewReader(input), &out, &errOut, root); err != nil {
 				t.Fatal(err)
@@ -135,8 +135,12 @@ func TestIndependentMenuModelsConfigureAndProbe(t *testing.T) {
 			if strings.Contains(out.String()+errOut.String()+string(data), "private-fixture") {
 				t.Fatal("secret leaked")
 			}
-			if !strings.Contains(out.String(), "Apply with: zoe update (restart/redeploy the server)") {
-				t.Fatal("missing apply reminder")
+			if !strings.Contains(out.String(), "Zoe services reloaded.") || strings.Contains(out.String(), "Apply with:") {
+				t.Fatal("missing automatic reload confirmation")
+			}
+			wantCommand := "docker compose --project-name zoe --env-file " + path + " up -d --no-build --no-deps --force-recreate zoe-server"
+			if !strings.Contains(strings.Join(*calls, "\n"), wantCommand) {
+				t.Fatalf("missing server-only compose reload: %v", *calls)
 			}
 		})
 	}
@@ -166,7 +170,7 @@ func TestIndependentMenuModelsMissingKeysNeverFallback(t *testing.T) {
 					choice = "25"
 				}
 				var out, errOut bytes.Buffer
-				if err := menuWithRoot(strings.NewReader(choice+"\n0\n"), &out, &errOut, root); err != nil {
+				if err := menuWithRoot(strings.NewReader(choice+"\n\n0\n"), &out, &errOut, root); err != nil {
 					t.Fatal(err)
 				}
 				message := "server will not start without it"
@@ -208,7 +212,7 @@ func TestIndependentMenuModelsProbeFailureMakesOneCall(t *testing.T) {
 				if kind == "UI_Controller" {
 					choice = "25"
 				}
-				if err := menuWithRoot(strings.NewReader(choice+"\n0\n"), &out, &errOut, root); err != nil {
+				if err := menuWithRoot(strings.NewReader(choice+"\n\n0\n"), &out, &errOut, root); err != nil {
 					t.Fatal(err)
 				}
 				if requests != 1 || errOut.Len() == 0 || strings.Contains(out.String(), "PASS style=") {

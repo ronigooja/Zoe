@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 // sourceRevision is set by release builds and is used by the host updater to
@@ -61,6 +63,7 @@ func RegisterOperation(name string, fn func([]string, io.Reader, io.Writer, io.W
 }
 
 func main() {
+	configureCLILogging()
 	if len(os.Args) == 2 && os.Args[1] == "--source-revision" {
 		fmt.Println(sourceRevision)
 		return
@@ -69,6 +72,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "zoe:", err)
 		os.Exit(1)
 	}
+}
+
+func configureCLILogging() {
+	value, set := os.LookupEnv("ZOE_LOG_LEVEL")
+	if _, valid := logging.ParseLevel(value); set && strings.TrimSpace(value) != "" && valid {
+		logging.ConfigureFromEnv()
+		return
+	}
+	logging.SetLevel(logging.Error)
 }
 
 func run(args []string, in io.Reader, out, errOut io.Writer) error {
@@ -165,34 +177,38 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		if choice == "0" || strings.EqualFold(choice, "q") || strings.EqualFold(choice, "quit") || strings.EqualFold(choice, "exit") {
 			return nil
 		}
-		if choice == "19" {
-			if err := menuVoiceInstruction(configureMenuIO(root, in, out, errOut)); err != nil && !errors.Is(err, io.EOF) {
-				fmt.Fprintln(errOut, "Error:", err)
-			}
-			continue
-		}
-		name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "6": "provider configure", "7": "provider test", "15": "memory test", "16": "voice configure", "17": "voice test", "18": "voice status", "20": "key init", "21": "key rotate", "22": "client-policy show", "23": "client-policy set"}[choice]
-		if !ok {
-			if choice == "8" || choice == "10" || choice == "12" || choice == "14" || choice == "24" {
-				kind := map[string]string{"8": "Register", "10": "Compact", "12": "Steward", "14": "Memory", "24": "UI_Controller"}[choice]
-				err := menuModel(configureMenuIO(root, in, out, errOut), kind)
-				if err != nil && !errors.Is(err, io.EOF) {
-					fmt.Fprintln(errOut, "Error:", err)
-				}
-				continue
-			}
-			if choice == "9" || choice == "11" || choice == "13" || choice == "25" {
-				kind := map[string]string{"9": "Register", "11": "Compact", "13": "Steward", "25": "UI_Controller"}[choice]
-				if err := menuTestModel(root, out, kind); err != nil {
-					fmt.Fprintln(errOut, "Error:", err)
-				}
-				continue
+		var actionErr error
+		switch choice {
+		case "6":
+			actionErr = menuWorker(configureMenuIO(root, in, out, errOut))
+		case "7":
+			actionErr = menuTestWorker(root, out)
+		case "19":
+			actionErr = menuVoiceInstruction(configureMenuIO(root, in, out, errOut))
+		case "8", "10", "12", "14", "24":
+			kind := map[string]string{"8": "Register", "10": "Compact", "12": "Steward", "14": "Memory", "24": "UI_Controller"}[choice]
+			actionErr = menuModel(configureMenuIO(root, in, out, errOut), kind)
+		case "9", "11", "13", "25":
+			kind := map[string]string{"9": "Register", "11": "Compact", "13": "Steward", "25": "UI_Controller"}[choice]
+			actionErr = menuTestModel(root, out, kind)
+		default:
+			name, ok := map[string]string{"1": "status", "2": "setup", "3": "install", "4": "update", "5": "uninstall", "15": "memory test", "16": "voice configure", "17": "voice test", "18": "voice status", "20": "key init", "21": "key rotate", "22": "client-policy show", "23": "client-policy set"}[choice]
+			if ok {
+				actionErr = operations[name](nil, in, out, errOut)
+				break
 			}
 			fmt.Fprintln(errOut, "Please choose a number from 0 to 25.")
 			continue
 		}
-		if err := operations[name](nil, in, out, errOut); err != nil {
-			fmt.Fprintln(errOut, "Error:", err)
+		if actionErr != nil && !errors.Is(actionErr, io.EOF) {
+			fmt.Fprintln(errOut, "Error:", actionErr)
+		}
+		fmt.Fprintln(out, "Press Enter to return to the menu")
+		if _, err := inputLine(in); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
 		}
 	}
 }

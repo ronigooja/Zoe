@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,10 +10,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/ops"
 )
 
 func TestStewardMenuConfigurationAndOwnedKey(t *testing.T) {
+	previous, output := logging.CurrentLevel(), log.Writer()
+	t.Cleanup(func() { logging.SetLevel(previous); log.SetOutput(output) })
+	t.Setenv("ZOE_LOG_LEVEL", "")
+	if err := os.Unsetenv("ZOE_LOG_LEVEL"); err != nil {
+		t.Fatal(err)
+	}
+	configureCLILogging()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
 	containerKeyFixture(t)
 	menuManager(t)
 	root := t.TempDir()
@@ -24,7 +35,7 @@ func TestStewardMenuConfigurationAndOwnedKey(t *testing.T) {
 	old := terminalEcho
 	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
 	t.Cleanup(func() { terminalEcho = old })
-	input := strings.NewReader("12\n" + s.URL + "\nconfigured-steward\nnone\ndisabled\n" + keyPath + "\nprivate-steward-fixture\ny\n13\n0\n")
+	input := strings.NewReader("12\n" + s.URL + "\nconfigured-steward\nnone\ndisabled\n" + keyPath + "\nprivate-steward-fixture\ny\n\n13\n\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(input, &out, &errOut, root); err != nil {
 		t.Fatal(err)
@@ -49,5 +60,8 @@ func TestStewardMenuConfigurationAndOwnedKey(t *testing.T) {
 	}
 	if strings.Count(out.String(), "PASS style=") != 2 {
 		t.Fatalf("probes missing: %s", out.String())
+	}
+	if strings.Contains(out.String()+errOut.String()+logs.String(), "model_call_") {
+		t.Fatal("CLI logged model prompts")
 	}
 }

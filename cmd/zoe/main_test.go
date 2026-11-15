@@ -29,7 +29,7 @@ func TestMenuDispatchesSelectedOperationAndExits(t *testing.T) {
 		return nil
 	}
 	var out, errOut bytes.Buffer
-	if err := menu(strings.NewReader("1\n0\n"), &out, &errOut); err != nil {
+	if err := menu(strings.NewReader("1\n\n0\n"), &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
 	if !called || !strings.Contains(out.String(), "ok") || errOut.Len() != 0 {
@@ -38,10 +38,10 @@ func TestMenuDispatchesSelectedOperationAndExits(t *testing.T) {
 }
 
 func TestMenuSharesInputAcrossPromptsAndActions(t *testing.T) {
-	old := operations["provider configure"]
-	t.Cleanup(func() { operations["provider configure"] = old })
+	old := operations["setup"]
+	t.Cleanup(func() { operations["setup"] = old })
 	calls := 0
-	operations["provider configure"] = func(_ []string, in io.Reader, out, _ io.Writer) error {
+	operations["setup"] = func(_ []string, in io.Reader, out, _ io.Writer) error {
 		calls++
 		url, err := inputLine(in)
 		if err != nil {
@@ -61,7 +61,7 @@ func TestMenuSharesInputAcrossPromptsAndActions(t *testing.T) {
 		return nil
 	}
 	var out, errOut bytes.Buffer
-	if err := menu(strings.NewReader("6\nhttps://provider/v1\nmodel\nprivate\n6\nhttps://provider/v1\nmodel\nprivate\n0\n"), &out, &errOut); err != nil {
+	if err := menu(strings.NewReader("2\nhttps://provider/v1\nmodel\nprivate\n\n2\nhttps://provider/v1\nmodel\nprivate\n\n0\n"), &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 || errOut.Len() != 0 {
@@ -84,7 +84,7 @@ func TestMenuUsesGroupedTwoDigitLabels(t *testing.T) {
 		return nil
 	}
 	var out, errOut bytes.Buffer
-	if err := menu(strings.NewReader("21\n0\n"), &out, &errOut); err != nil {
+	if err := menu(strings.NewReader("21\n\n0\n"), &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
 	for _, label := range []string{"Overview:", "1) Show status", "First-time setup", "System:", "3) Install host", "4) Update host", "5) Uninstall host", "Models:", "14) Configure Memory extraction model", "10) Configure Compact model", "11) Test Compact model", "12) Configure Steward model", "13) Test Steward model", "24) Configure UI_Controller model", "25) Test UI_Controller model", "Voice:", "19) Configure voice instruction", "Access:", "20) Create instance key", "21) Rotate instance key", "22) Show client policy", "23) Set client policy"} {
@@ -140,5 +140,17 @@ func TestReadTokenRefusesWhenEchoCannotBeDisabled(t *testing.T) {
 	t.Cleanup(func() { terminalEcho = old })
 	if _, err := readToken(file, io.Discard); err == nil {
 		t.Fatal("readToken must fail instead of echoing the token")
+	}
+}
+
+func TestMenuSecretAllowsEmptyWithoutDuplicateTokenPrompt(t *testing.T) {
+	var out bytes.Buffer
+	m := configureMenuIO(t.TempDir(), strings.NewReader("\n"), &out, io.Discard)
+	secret, err := m.PromptSecret(&out)
+	if err != nil || len(secret) != 0 || strings.Contains(out.String(), "API token:") {
+		t.Fatalf("empty menu secret rejected or duplicate prompt: %v %s", err, &out)
+	}
+	if _, err := readToken(strings.NewReader("\n"), io.Discard); err == nil {
+		t.Fatal("scripted token input must still require a token")
 	}
 }

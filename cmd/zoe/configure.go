@@ -25,7 +25,7 @@ type ConfigureMenuIO struct {
 
 func configureMenuIO(root string, in io.Reader, out, errOut io.Writer) ConfigureMenuIO {
 	return ConfigureMenuIO{Root: root, In: in, Out: out, ErrOut: errOut, PromptSecret: func(w io.Writer) ([]byte, error) {
-		return readToken(in, w)
+		return readSecretInput(in, w)
 	}}
 }
 
@@ -106,7 +106,6 @@ func menuModel(m ConfigureMenuIO, kind string) error {
 	}
 	if independent {
 		if err := menuSaveModel(m, d, base, model, effort, thinking, keyPath, kind); err != nil {
-			fmt.Fprintf(m.ErrOut, "%s Nothing was saved.\n", err)
 			return err
 		}
 		return nil
@@ -169,10 +168,7 @@ func menuSaveModel(m ConfigureMenuIO, d ops.Deployment, base, model, effort, thi
 	fmt.Fprintln(m.Out, "Saved.")
 	fmt.Fprint(m.Out, "Test now? [Y/n]: ")
 	answer, err := inputLine(sharedInput(m.In))
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(answer) == "" || strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes") {
+	if err == nil && (strings.TrimSpace(answer) == "" || strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes")) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		r, testErr := ops.TestMenuModel(ctx, c, kind, nil)
@@ -182,8 +178,13 @@ func menuSaveModel(m ConfigureMenuIO, d ops.Deployment, base, model, effort, thi
 			fmt.Fprintf(m.Out, "PASS style=%s HTTP %dxx latency=%dms category=%s\n", safeLabel(r.Style), r.HTTPStatus/100, r.Latency.Milliseconds(), safeLabel(r.Category))
 		}
 	}
-	fmt.Fprintln(m.Out, "Apply with: zoe update (restart/redeploy the server)")
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if reloadErr := opsManager().ReloadCompose(ctx, []string{"zoe-server"}, d.ComposeProject, d.ComposeFile, d.StackEnv); reloadErr != nil {
+		return fmt.Errorf("saved but service reload failed: %s", safeLabel(reloadErr.Error()))
+	}
+	fmt.Fprintln(m.Out, "Zoe services reloaded.")
+	return err
 }
 
 func menuSaveMemory(m ConfigureMenuIO, d ops.Deployment, base, model, effort, keyPath string) error {
@@ -244,7 +245,90 @@ func menuSaveMemory(m ConfigureMenuIO, d ops.Deployment, base, model, effort, ke
 			fmt.Fprintf(m.Out, "PASS HTTP %dxx\n", testResult.HTTPStatus/100)
 		}
 	}
-	fmt.Fprintln(m.Out, "Apply with: zoe update")
+	return nil
+}
+
+func menuProviderDeployment(ctx context.Context, root string) (ops.Deployment, ops.ProviderConfig, error) {
+	empty := ""
+	return providerDeployment(ctx, providerFlags{root: &root, base: &empty, model: &empty, secret: &empty})
+}
+
+func menuWorker(m ConfigureMenuIO) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	d, cfg, err := menuProviderDeployment(ctx, m.Root)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(m.Out, "Worker model configuration (Enter keeps current value)")
+	for {
+		cfg.BaseURL, err = menuValue(m, "Base URL", cfg.BaseURL)
+		if err != nil {
+			return err
+		}
+		if err = ops.ValidateModelBaseURL(cfg.BaseURL); err != nil {
+			fmt.Fprintf(m.ErrOut, "%s Nothing was saved.\n", err)
+			continue
+		}
+		break
+	}
+	if cfg.Model, err = menuValue(m, "Model", cfg.Model); err != nil {
+		return err
+	}
+	if cfg.SecretPath, err = menuValue(m, "Key file (Enter uses current)", cfg.SecretPath); err != nil {
+		return err
+	}
+	fmt.Fprint(m.Out, "API key (input is hidden; leave empty to keep current): ")
+	secret, err := m.PromptSecret(m.Out)
+	if err != nil {
+		return err
+	}
+	if len(secret) == 0 {
+		if err := ops.ValidateKeyFile(cfg.SecretPath); err != nil {
+			return err
+		}
+		secret, err = os.ReadFile(cfg.SecretPath)
+		if err != nil {
+			return errors.New("key file is unavailable")
+		}
+	}
+	cfg.Secret = strings.TrimSpace(string(secret))
+	for i := range secret {
+		secret[i] = 0
+	}
+	if _, err := opsManager().ConfigureProvider(ctx, d, cfg, nil); err != nil {
+		return err
+	}
+	fmt.Fprintln(m.Out, "Saved.")
+	fmt.Fprint(m.Out, "Test now? [Y/n]: ")
+	answer, err := inputLine(sharedInput(m.In))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(answer) == "" || strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes") {
+		r, testErr := opsManager().TestProvider(ctx, d, cfg, nil)
+		if testErr != nil {
+			fmt.Fprintf(m.ErrOut, "FAIL HTTP %dxx\n", r.HTTPStatus/100)
+		} else {
+			fmt.Fprintf(m.Out, "PASS HTTP %dxx\n", r.HTTPStatus/100)
+		}
+	}
+	return nil
+}
+
+func menuTestWorker(root string, out io.Writer) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	d, cfg, err := menuProviderDeployment(ctx, root)
+	if err != nil {
+		return err
+	}
+	r, err := opsManager().TestProvider(ctx, d, cfg, nil)
+	if err != nil {
+		fmt.Fprintf(out, "FAIL HTTP %dxx\n", r.HTTPStatus/100)
+		return err
+	}
+	fmt.Fprintf(out, "PASS HTTP %dxx\n", r.HTTPStatus/100)
 	return nil
 }
 

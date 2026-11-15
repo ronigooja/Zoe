@@ -972,8 +972,16 @@ func safeLabel(value string) string {
 var terminalEcho = disableTerminalEcho
 
 func readToken(in io.Reader, out io.Writer) ([]byte, error) {
-	in = sharedInput(in)
 	fmt.Fprint(out, "API token: ")
+	secret, err := readSecretInput(in, out)
+	if err == nil && len(secret) == 0 {
+		return nil, errors.New("API token is required")
+	}
+	return secret, err
+}
+
+func readSecretInput(in io.Reader, out io.Writer) ([]byte, error) {
+	in = sharedInput(in)
 	if file := terminalFile(in); file != nil {
 		restore, isTerminal, err := terminalEcho(file)
 		if err != nil {
@@ -1002,9 +1010,6 @@ func readToken(in io.Reader, out io.Writer) ([]byte, error) {
 	value, err := inputLine(in)
 	if err != nil {
 		return nil, err
-	}
-	if value == "" {
-		return nil, errors.New("API token is required")
 	}
 	return []byte(value), nil
 }

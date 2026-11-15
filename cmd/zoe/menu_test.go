@@ -50,7 +50,7 @@ func TestMaintenanceMenuCompactFlowPromptsModelAndEffortAndWritesBoth(t *testing
 	old := terminalEcho
 	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
 	t.Cleanup(func() { terminalEcho = old })
-	input := strings.NewReader("10\n" + s.URL + "\ntriage\n\n\n" + keyPath + "\nsecret-value\ny\n0\n")
+	input := strings.NewReader("10\n" + s.URL + "\ntriage\n\n\n" + keyPath + "\nsecret-value\ny\n\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(input, &out, &errOut, root); err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestMaintenanceMenuCompactPromptsForThinkingAndWritesIt(t *testing.T) {
 	old := terminalEcho
 	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
 	t.Cleanup(func() { terminalEcho = old })
-	input := strings.NewReader("10\nhttps://gateway.example\nm\nlow\ndisabled\n" + keyPath + "\nsecret\nn\n0\n")
+	input := strings.NewReader("10\nhttps://gateway.example\nm\nlow\ndisabled\n" + keyPath + "\nsecret\nn\n\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(input, &out, &errOut, root); err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestMaintenanceMenuCompactDoesNotAskForAPIStyle(t *testing.T) {
 	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
 	t.Cleanup(func() { terminalEcho = old })
 	var out, errOut bytes.Buffer
-	_ = menuWithRoot(strings.NewReader("10\nhttps://gateway.example\nm\nlow\n\n"+keyPath+"\nsecret\nn\n0\n"), &out, &errOut, root)
+	_ = menuWithRoot(strings.NewReader("10\nhttps://gateway.example\nm\nlow\n\n"+keyPath+"\nsecret\nn\n\n0\n"), &out, &errOut, root)
 	if strings.Contains(out.String(), "API style") {
 		t.Fatal(out.String())
 	}
@@ -116,7 +116,7 @@ func TestMaintenanceMenuCompactValidationErrorSaysNothingSavedAndReprompts(t *te
 	old := terminalEcho
 	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
 	t.Cleanup(func() { terminalEcho = old })
-	in := strings.NewReader("10\nhttp://remote.invalid\nhttps://gateway.example\nm\nlow\n\n" + keyPath + "\nsecret\nn\n0\n")
+	in := strings.NewReader("10\nhttp://remote.invalid\nhttps://gateway.example\nm\nlow\n\n" + keyPath + "\nsecret\nn\n\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(in, &out, &errOut, root); err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func TestMaintenanceMenuCompactRejectsUnknownThinkingAndSaysNothingSaved(t *test
 	old := terminalEcho
 	terminalEcho = func(*os.File) (func(), bool, error) { return func() {}, true, nil }
 	t.Cleanup(func() { terminalEcho = old })
-	in := strings.NewReader("10\nhttps://gateway.example\nm\nlow\ninvalid\ndisabled\n" + keyPath + "\nsecret\nn\n0\n")
+	in := strings.NewReader("10\nhttps://gateway.example\nm\nlow\ninvalid\ndisabled\n" + keyPath + "\nsecret\nn\n\n0\n")
 	var out, errOut bytes.Buffer
 	if err := menuWithRoot(in, &out, &errOut, root); err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestMaintenanceMenuTestCompactReportsPass(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	if err := menuWithRoot(strings.NewReader("11\n0\n"), &out, &errOut, root); err != nil {
+	if err := menuWithRoot(strings.NewReader("11\n\n0\n"), &out, &errOut, root); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "PASS style=responses HTTP 2xx") {
