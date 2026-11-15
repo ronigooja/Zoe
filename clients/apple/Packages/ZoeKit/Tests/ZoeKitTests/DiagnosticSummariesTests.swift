@@ -2,6 +2,33 @@ import XCTest
 @testable import ZoeKit
 
 final class DiagnosticSummariesTests: XCTestCase {
+    func testCompleteTypeReportsAreBoundedSortedAndNeverSplitEntries() {
+        var census = EventCensusDiagnostics(completeTypes: true)
+        XCTAssertEqual(census.typeReports(), [])
+        var expected: [String] = []
+        for index in 0..<110 {
+            let type = String(format: "event_%03d_", index) + String(repeating: "x", count: 54)
+            census.note(type: type, activity: index == 0)
+            expected.append(type + ":1:" + (index == 0 ? "act=1" : "ignored"))
+        }
+        census.note(type: "session.output_audio.delta", activity: true)
+        census.note(type: "session.output_audio.delta", activity: true)
+        expected.insert("session.output_audio.delta:2:act=2", at: 0)
+        let reports = census.typeReports()
+        XCTAssertGreaterThan(reports.count, 10)
+        var actual: [String] = []
+        for (index, report) in reports.enumerated() {
+            XCTAssertLessThanOrEqual(report.count, 200)
+            let prefix = "part=\(index + 1)/\(reports.count);types="
+            XCTAssertTrue(report.hasPrefix(prefix))
+            actual += report.dropFirst(prefix.count).components(separatedBy: "|")
+        }
+        XCTAssertEqual(actual, expected)
+        var long = EventCensusDiagnostics(completeTypes: true)
+        long.note(type: String(repeating: "a", count: 80))
+        XCTAssertEqual(long.typeReports(), ["part=1/1;types=" + String(repeating: "a", count: 64) + ":1:ignored"])
+    }
+
     func testSettingsAndTimeoutFormats() {
         XCTAssertEqual(DiagnosticSummaries.settingsSuffix(enabled: true, seconds: 60), ";sil=on,60")
         XCTAssertEqual(DiagnosticSummaries.settingsSuffix(enabled: false, seconds: 60), ";sil=off")

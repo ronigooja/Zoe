@@ -133,6 +133,8 @@ public final class ZoeAppModel: ObservableObject {
     private var diagnosticConnectedAt: Date?
     private var silenceResetDiagnostics = SilenceResetDiagnostics()
     private var voiceEventCensus = EventCensusDiagnostics()
+    private var voiceInnerEventCensus = EventCensusDiagnostics(completeTypes: true)
+    private var voiceActivityCoalescer = VoiceActivityCoalescer()
     private var censusEndRecorded = false
     private var censusEarlyRecorded = false
     private final class StreamDiagnostics {
@@ -320,6 +322,9 @@ public final class ZoeAppModel: ObservableObject {
         guard voiceSession != nil, !censusEarlyRecorded, diagnosticElapsed >= 20 else { return }
         censusEarlyRecorded = true
         recordVoiceTrace(phase: "voice_event_census_early", summary: voiceEventCensus.summary())
+        for report in voiceInnerEventCensus.typeReports() {
+            recordVoiceTrace(phase: "voice_event_types", summary: report)
+        }
     }
 
     private func noteVoiceConnected() {
@@ -328,6 +333,8 @@ public final class ZoeAppModel: ObservableObject {
         diagnosticConnectedAt = silence.diagnosticNow
         silenceResetDiagnostics = SilenceResetDiagnostics()
         voiceEventCensus = EventCensusDiagnostics()
+        voiceInnerEventCensus = EventCensusDiagnostics(completeTypes: true)
+        voiceActivityCoalescer = VoiceActivityCoalescer()
         censusEndRecorded = false
         censusEarlyRecorded = false
         silence.reset()
@@ -504,6 +511,8 @@ public final class ZoeAppModel: ObservableObject {
         voiceStartInProgress = true
         voiceAttemptEndReason = nil
         voiceEventCensus = EventCensusDiagnostics()
+        voiceInnerEventCensus = EventCensusDiagnostics(completeTypes: true)
+        voiceActivityCoalescer = VoiceActivityCoalescer()
         censusEndRecorded = false
         censusEarlyRecorded = false
         diagnosticConnectedAt = nil
@@ -608,9 +617,13 @@ public final class ZoeAppModel: ObservableObject {
                 let reason = voiceAttemptEndReason ?? .setupFailed
                 let summary = reason.summary(duration: voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0) + silenceSettingsSuffix
                 let census = voiceEventCensus.summary()
+                let typeReports = voiceInnerEventCensus.typeReports()
                 censusEndRecorded = true
                 Task {
                     await api.recordDiagnosticAndWait(phase: "voice_event_census", requestPath: "client", errorSummary: census, level: .info, voiceMediaEpoch: mediaEpoch)
+                    for report in typeReports {
+                        await api.recordDiagnosticAndWait(phase: "voice_event_types", requestPath: "client", errorSummary: report, level: .info, voiceMediaEpoch: mediaEpoch)
+                    }
                     await api.recordDiagnosticAndWait(phase: "voice_end", requestPath: "/v1/voice/sessions", errorType: reason.isError ? "voice_lifecycle" : "", errorSummary: summary, level: reason.isError ? .error : .info, voiceMediaEpoch: mediaEpoch)
                     api.triggerDiagnosticUpload()
                 }
@@ -664,11 +677,15 @@ public final class ZoeAppModel: ObservableObject {
     private func deliverVoiceEnd(_ session: VoiceSessionResponse, api: APIClient, mediaEpoch: UInt64, reason: VoiceEndReason, duration: TimeInterval? = nil) {
         let summary = reason.summary(duration: duration ?? voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0) + silenceSettingsSuffix
         let census = censusEndRecorded ? nil : voiceEventCensus.summary()
+        let typeReports = censusEndRecorded ? [] : voiceInnerEventCensus.typeReports()
         censusEndRecorded = true
         // Independent best-effort delivery never gates hangup, even if URLSession ignores cancellation.
         Task {
             if let census {
                 await api.recordDiagnosticAndWait(phase: "voice_event_census", requestPath: "client", errorSummary: census, level: .info, voiceSessionID: session.voiceSessionId, voiceGeneration: session.generation, voiceMediaEpoch: mediaEpoch)
+            }
+            for report in typeReports {
+                await api.recordDiagnosticAndWait(phase: "voice_event_types", requestPath: "client", errorSummary: report, level: .info, voiceSessionID: session.voiceSessionId, voiceGeneration: session.generation, voiceMediaEpoch: mediaEpoch)
             }
             await api.recordDiagnosticAndWait(phase: "voice_end", requestPath: "/v1/voice/sessions/hangup", errorType: reason.isError ? "voice_lifecycle" : "", errorSummary: summary, level: reason.isError ? .error : .info, voiceSessionID: session.voiceSessionId, voiceGeneration: session.generation, voiceMediaEpoch: mediaEpoch)
             api.triggerDiagnosticUpload()
@@ -1069,7 +1086,10 @@ public final class ZoeAppModel: ObservableObject {
         if outerType == "data_message", event["type"] as? String != outerType {
             voiceEventCensus.note(type: "data_message/" + String(type.prefix(48)), activity: activity)
         }
-        if activity {
+        if type != "data_message" {
+            voiceInnerEventCensus.note(type: type, activity: activity)
+        }
+        if activity, voiceActivityCoalescer.shouldReset(now: silence.diagnosticNow) {
             silence.noteVoiceActivity()
             recordSilenceReset(type: type)
         }
@@ -1126,8 +1146,7 @@ public final class ZoeAppModel: ObservableObject {
     static func isVoiceActivity(_ event: [String: Any]) -> Bool {
         let type = event["type"] as? String ?? ""
         if type == "user_audio_turn.final" { return parseAuthoritativeVoiceTurn(event) != nil }
-        // This output event is present in the voice lifecycle fixtures.
-        if type == "assistant.output" { return true }
+        if VoiceActivityClassifier.isActivity(type: type) { return true }
         let payload = (event["payload"] as? [String: Any]) ?? event
         if type.contains("input_audio") && type.contains("transcription") {
             let text = (event["transcript"] as? String) ?? (event["text"] as? String) ?? (payload["transcript"] as? String) ?? (payload["text"] as? String)

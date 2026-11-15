@@ -17,7 +17,10 @@ public enum DiagnosticSummaries {
         return bounded.rounded() == bounded ? String(Int(bounded)) : String(bounded)
     }
     public static func eventType(_ type: String) -> String {
-        let safe = type.prefix(48).filter { $0.isASCII && ($0.isLetter || $0.isNumber || "._-/".contains($0)) }
+        eventType(type, limit: 48)
+    }
+    fileprivate static func eventType(_ type: String, limit: Int) -> String {
+        let safe = type.prefix(limit).filter { $0.isASCII && ($0.isLetter || $0.isNumber || "._-/".contains($0)) }
         return safe.isEmpty ? "missing" : String(safe)
     }
     public static func timeout(age: TimeInterval?, timeout: Double, enabled: Bool, interaction: Bool, elapsed: Double) -> String {
@@ -43,16 +46,40 @@ public struct SilenceResetDiagnostics {
 public struct EventCensusDiagnostics {
     private struct Count { var total = 0; var active = 0 }
     private var counts: [String: Count] = [:]
+    private let completeTypes: Bool
     public private(set) var total = 0
-    public init() {}
+    public init(completeTypes: Bool = false) { self.completeTypes = completeTypes }
     public mutating func note(type: String, activity: Bool = false, preserveSurface: Bool = false) {
-        var key = DiagnosticSummaries.eventType(type)
-        if counts[key] == nil, counts.keys.filter({ $0 != "other" }).count >= 40, !(preserveSurface && key == "ui.surface") { key = "other" }
+        var key = DiagnosticSummaries.eventType(type, limit: completeTypes ? 64 : 48)
+        if !completeTypes, counts[key] == nil, counts.keys.filter({ $0 != "other" }).count >= 40, !(preserveSurface && key == "ui.surface") { key = "other" }
         var count = counts[key] ?? Count()
         count.total += 1
         if activity { count.active += 1 }
         counts[key] = count
         total += 1
+    }
+    public func typeReports() -> [String] {
+        let entries = counts.sorted {
+            $0.value.total == $1.value.total ? $0.key < $1.key : $0.value.total > $1.value.total
+        }.map { key, count in
+            "\(key):\(count.total)" + (count.active == 0 ? ":ignored" : ":act=\(count.active)")
+        }
+        guard !entries.isEmpty else { return [] }
+        // At most one entry per part: reserve enough digits for both part numbers.
+        let overhead = "part=\(entries.count)/\(entries.count);types=".count
+        var chunks: [String] = []
+        var chunk = ""
+        for entry in entries {
+            let candidate = chunk.isEmpty ? entry : chunk + "|" + entry
+            if overhead + candidate.count > 200, !chunk.isEmpty {
+                chunks.append(chunk)
+                chunk = entry
+            } else {
+                chunk = candidate
+            }
+        }
+        if !chunk.isEmpty { chunks.append(chunk) }
+        return chunks.enumerated().map { "part=\($0.offset + 1)/\(chunks.count);types=\($0.element)" }
     }
     public func summary(includeActivity: Bool = true, prefix: String = "types=", prioritizeSurface: Bool = false) -> String {
         let ordered = counts.sorted {

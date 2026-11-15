@@ -10,6 +10,62 @@ private final class SettingsSilenceClock: SilenceClock {
 
 @MainActor
 final class SilenceSettingsTests: XCTestCase {
+    func testClassifierTypesAndOneSecondCoalescing() {
+        for type in ["session.output_audio.delta", "output_transcript.added", "turn.delta", "user_audio_turn.final", "assistant.output"] {
+            XCTAssertTrue(VoiceActivityClassifier.isActivity(type: type), type)
+        }
+        for type in ["session.input_audio.append", "unknown", "data_message", ""] {
+            XCTAssertFalse(VoiceActivityClassifier.isActivity(type: type), type)
+            XCTAssertFalse(ZoeAppModel.isVoiceActivity(["type": type]))
+        }
+        XCTAssertFalse(ZoeAppModel.isVoiceActivity(["type": "user_audio_turn.final"]))
+        let clock = SettingsSilenceClock()
+        var coalescer = VoiceActivityCoalescer()
+        XCTAssertTrue(coalescer.shouldReset(now: clock.now()))
+        XCTAssertFalse(coalescer.shouldReset(now: clock.now()))
+        clock.advance(0.999)
+        XCTAssertFalse(coalescer.shouldReset(now: clock.now()))
+        clock.advance(0.001)
+        XCTAssertTrue(coalescer.shouldReset(now: clock.now()))
+        clock.advance(20)
+        XCTAssertTrue(coalescer.shouldReset(now: clock.now()))
+    }
+
+    func testWrappedOutputResetsTimerButContinuousMicrophoneFramesDoNot() async throws {
+        let clock = SettingsSilenceClock()
+        let name = "SilenceSettingsTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let model = ZoeAppModel(defaults: defaults, silenceClock: clock)
+        let api = try APIClient(serverURL: URL(string: "https://silence.example")!)
+        let session = VoiceSessionResponse(voiceSessionId: "silence-test", generation: 1, state: "active", answerSdp: "")
+        let epoch = model.installVoiceSessionForTesting(session, api: api)
+        var traces: [(String, String)] = []
+        model.voiceDiagnosticObserverForTesting = { traces.append(($0, $1)) }
+        func wrapped(_ type: String) throws -> Data {
+            let inner = try JSONSerialization.data(withJSONObject: ["type": type])
+            return try JSONSerialization.data(withJSONObject: ["type": "data_message", "data": String(decoding: inner, as: UTF8.self)])
+        }
+        clock.advance(59)
+        await model.receiveVoiceDataForTesting(try wrapped("session.output_audio.delta"), mediaEpoch: epoch)
+        XCTAssertEqual(model.silence.lastActivityAge, 0)
+        XCTAssertTrue(traces.contains { $0.0 == "silence_reset" && $0.1.contains("last=session.output_audio.delta") })
+        clock.advance(0.5)
+        await model.receiveVoiceDataForTesting(try wrapped("turn.delta"), mediaEpoch: epoch)
+        XCTAssertEqual(model.silence.lastActivityAge, 0.5)
+        clock.advance(0.5)
+        await model.receiveVoiceDataForTesting(try wrapped("output_transcript.added"), mediaEpoch: epoch)
+        XCTAssertEqual(model.silence.lastActivityAge, 0)
+        for _ in 0..<59 {
+            clock.advance(1)
+            await model.receiveVoiceDataForTesting(try wrapped("session.input_audio.append"), mediaEpoch: epoch)
+        }
+        XCTAssertEqual(model.silence.lastActivityAge, 59)
+        XCTAssertEqual(model.silence.tick(), .none)
+        clock.advance(1)
+        XCTAssertEqual(model.silence.tick(), .timedOut)
+    }
+
     func testDisabledNeverTimesOutAndActivityRestartsConfiguredWindow() {
         let clock = SettingsSilenceClock()
         let controller = SilenceController(timeoutSeconds: 25, isEnabled: false, clock: clock)
