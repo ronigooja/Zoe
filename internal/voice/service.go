@@ -28,6 +28,7 @@ import (
 
 type Config struct {
 	ResultDelivery         ResultDeliveryConfig
+	DiscoverResultReceipts bool
 	MemoryAPI              *memoryapi.Client
 	InstructionText        string
 	IngestEnabled          bool
@@ -58,6 +59,7 @@ type TaskSteward interface {
 
 type Service struct {
 	resultReceiptAdapter   ResultReceiptAdapter
+	resultCapability       *gatewayResultCapability
 	db                     *sql.DB
 	base                   *url.URL
 	key                    string
@@ -489,7 +491,14 @@ func newService(db *sql.DB, cfg Config) *Service {
 		interval = time.Second
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	return &Service{resultReceiptAdapter: cfg.ResultDelivery.ReceiptAdapter, db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	s := &Service{resultReceiptAdapter: cfg.ResultDelivery.ReceiptAdapter, db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	if cfg.DiscoverResultReceipts && s.gatewayReady() && s.resultReceiptAdapter == nil {
+		s.resultCapability = &gatewayResultCapability{adapter: NewGatewayResultReceiptAdapter(s)}
+	}
+	if cfg.DiscoverResultReceipts && s.gatewayReady() {
+		s.resultDeliveryEnabled = true
+	}
+	return s
 }
 
 func (s *Service) rotateIfOverBudget(ctx context.Context, p contracts.Principal) error {

@@ -105,6 +105,10 @@ Pending next-call delivery must retain source/task/result identity and delivery 
 
 Implementation locations: [result delivery](../../internal/voice/result_delivery.go), [UI commands](../../internal/voice/ui_commands.go), [UI jobs](../../internal/voice/ui_jobs.go), [UI feedback](../../internal/voice/ui_feedback.go), [UI controller](../../internal/uictl/), [Apple client](../../clients/apple/Packages/ZoeKit/Sources/).
 
+For production receipt delivery, Zoe probes authenticated `GET /v1/health` using the configured gateway URL, owner bearer and HTTP client before checkpoint transactions. Only the exact `result_deliveries` contract `{version:"v1",max_text_bytes:8000,applied_evidence:"local_transport_writes_and_durable_receipt"}` enables the receipt adapter for task results and generic durable texts. Capability evidence is cached for 30 seconds, with one probe in flight and a two-second probe budget; unsupported, malformed or unavailable health retains pending work with `receipt_capability_disabled`, without transport attempts. No new deployment setting is required. An applied receipt proves local transport writes plus durable receipt persistence, never upstream consumption or speech; capability discovery is not live end-to-end evidence. See [capability gate](../../internal/voice/result_capability.go).
+
+Production discovery starts the result dispatcher only with a configured HTTPS gateway and owner key; it is independent of account-media enablement and register configuration. Without gateway configuration, discovery starts neither the dispatcher nor a capability probe. Explicit `ResultDeliveryEnabled` and register-owned worker startup retain their separate configuration semantics.
+
 ## 4. Memory and continuous conversation coverage
 
 | Producer / fields | Consumer and transformation | Persistence / idempotency | Failure / recovery |

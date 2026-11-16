@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/ronigooja/Zoe/internal/capabilities"
@@ -45,9 +46,23 @@ func TestComposedServerUsesWorkerOnlyMemoryAndRegistersExport(t *testing.T) {
 	if err := store.DB().QueryRow(`SELECT version FROM schema_migrations WHERE namespace='memory_ingest'`).Scan(&ingestVersion); err != nil || ingestVersion != 222 {
 		t.Fatalf("ingest version=%d err=%v", ingestVersion, err)
 	}
-	var memoryTables int
-	if err := store.DB().QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name GLOB 'memory_*'`).Scan(&memoryTables); err != nil || memoryTables != 1 {
-		t.Fatalf("expected only worker ingestion state, tables=%d err=%v", memoryTables, err)
+	rows, err := store.DB().Query(`SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'memory_*' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var memoryTables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		memoryTables = append(memoryTables, name)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(memoryTables, []string{"memory_ingest_batches", "memory_ingest_chunks", "memory_ingest_members", "memory_ingest_state", "memory_write_outcomes"}) {
+		t.Fatalf("worker memory tables=%v", memoryTables)
 	}
 	var tokenBytes [32]byte
 	if _, err := rand.Read(tokenBytes[:]); err != nil {

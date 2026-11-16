@@ -36,7 +36,8 @@ CREATE TABLE voice_text_chunks (
 // deliverDurableText applies to persisted non-task speech sources. No transaction
 // is held during HTTP. Attempted chunks are reconciled, never blindly resubmitted.
 func (s *Service) deliverDurableText(ctx context.Context, workspace, owner, kind, id, session string, generation int64, text string) (bool, string) {
-	if s.resultReceiptAdapter == nil {
+	adapter := s.receiptAdapter(ctx)
+	if adapter == nil {
 		return false, "receipt_capability_disabled"
 	}
 	if !utf8.ValidString(text) || strings.TrimSpace(text) == "" {
@@ -124,9 +125,9 @@ func (s *Service) deliverDurableText(ctx context.Context, workspace, owner, kind
 			return false, "checkpoint_lease_lost"
 		}
 		if state == "pending" {
-			receipt, err = s.resultReceiptAdapter.Submit(ctx, gateway, request)
+			receipt, err = adapter.Submit(ctx, gateway, request)
 		} else {
-			receipt, err = s.resultReceiptAdapter.Lookup(ctx, gateway, request)
+			receipt, err = adapter.Lookup(ctx, gateway, request)
 		}
 		next, code := "confirmed", "gateway_accepted"
 		if err != nil {

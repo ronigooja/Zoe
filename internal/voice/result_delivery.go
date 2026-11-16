@@ -240,11 +240,12 @@ func (s *Service) retryFastReply(id string, attempt int, code string) {
 }
 
 func (s *Service) deliverResult(ctx context.Context, id, workspace, task, run, subject string, attempts int) {
-	if s.resultReceiptAdapter == nil {
+	adapter := s.receiptAdapter(ctx)
+	if adapter == nil {
 		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries SET last_error_code=CASE WHEN last_error_code='awaiting_context' THEN last_error_code ELSE 'receipt_capability_disabled' END,next_attempt_at=?,updated_at=? WHERE entry_id=? AND status='pending'`, s.now().Add(resultDeliveryLease).UTC().Format(time.RFC3339Nano), s.now().UTC().Format(time.RFC3339Nano), id)
 		return
 	}
-	s.deliverCheckpointedResult(ctx, id, workspace, task, run, subject, attempts, s.resultReceiptAdapter)
+	s.deliverCheckpointedResult(ctx, id, workspace, task, run, subject, attempts, adapter)
 }
 
 func (s *Service) finishResult(id, status, code string) {
