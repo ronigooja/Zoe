@@ -28,7 +28,7 @@ func TestStewardMenuConfigurationAndOwnedKey(t *testing.T) {
 	menuManager(t)
 	root := t.TempDir()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"output_text":"{\"action\":\"none\",\"task\":\"\",\"reply\":\"\"}"}`))
+		_, _ = w.Write([]byte(`{"output_text":"{\"action\":\"new\",\"task_id\":null,\"question_id\":null,\"reply\":null}"}`))
 	}))
 	defer s.Close()
 	keyPath := filepath.Join(root, "secrets", "steward-key")

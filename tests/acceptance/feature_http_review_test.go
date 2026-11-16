@@ -85,6 +85,11 @@ func TestReviewVoiceAtomicTaskSourceOverHTTP(t *testing.T) {
 	}
 	create := func(revision int, key string) int {
 		featureCommand(t, h, token, fmt.Sprintf("commit-%d", revision), "voice.turn.commit", map[string]any{"session_id": "review-atomic", "generation": 1, "turn_id": "stable", "revision": revision, "content": fmt.Sprintf("confirmed transcript %d", revision), "user_confirmed": true})
+		// This source-admission fixture supplies the already accepted register
+		// boundary explicitly; committing a turn must not start model work.
+		if _, err := store.DB().Exec(`UPDATE voice_turns SET exits='task',request=? WHERE session_id='review-atomic' AND turn_id='stable' AND revision=?`, fmt.Sprintf("Complete resolved request %d", revision), revision); err != nil {
+			t.Fatal(err)
+		}
 		raw, _ := json.Marshal(map[string]any{"title": "forged title", "goal": "forged goal", "initial_message": "forged message", "source": "voice", "source_reference": map[string]any{"kind": "voice_turn", "voice_session_id": "review-atomic", "generation": 1, "turn_id": "stable", "revision": revision}})
 		return reviewRequest(h, "POST", "/v1/commands", token, key, contracts.CommandRequest{Kind: "task.create", Payload: raw}).Code
 	}
@@ -118,7 +123,7 @@ func TestReviewVoiceAtomicTaskSourceOverHTTP(t *testing.T) {
 	if err := store.DB().QueryRow(`SELECT content FROM task_entries`).Scan(&entry); err != nil {
 		t.Fatal(err)
 	}
-	if goal != "confirmed transcript 1" || entry != goal {
+	if goal != "Complete resolved request 1" || entry != goal {
 		t.Fatalf("canonical goal=%q entry=%q", goal, entry)
 	}
 	var raw []byte

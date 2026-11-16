@@ -304,6 +304,25 @@ func TestVoiceTaskAdmissionBindsStableTurnAcrossRevisions(t *testing.T) {
 	}
 	principal := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}
 	ref, _ := json.Marshal(voiceTaskSourceReference{Kind: "voice_turn", SessionID: "session-atomic", Generation: 1, TurnID: "stable-turn", Revision: 1})
+	for _, unavailable := range []any{nil, "", "none", " NONE "} {
+		if _, err := store.DB().ExecContext(ctx, `UPDATE voice_turns SET request=? WHERE id='turn-1'`, unavailable); err != nil {
+			t.Fatal(err)
+		}
+		tx, err := store.DB().BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := &control.TaskSourceRequest{Title: "client title", Goal: "client goal", InitialMessage: "client message"}
+		events, admissionErr := svc.admitVoiceTask(ctx, tx, principal, "task-1", request, ref, time.Now().UTC())
+		_ = tx.Rollback()
+		var apiErr *control.APIError
+		if !errors.As(admissionErr, &apiErr) || apiErr.Code != "request_unavailable" || len(events) != 0 || request.Goal != "client goal" {
+			t.Fatalf("unavailable request %v used raw/client fallback: request=%+v events=%+v err=%v", unavailable, request, events, admissionErr)
+		}
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE voice_turns SET exits='task',request='Complete resolved request, not the raw transcript'`); err != nil {
+		t.Fatal(err)
+	}
 	request := &control.TaskSourceRequest{Title: "client title", Goal: "client goal", InitialMessage: "client message"}
 	tx, err := store.DB().BeginTx(ctx, nil)
 	if err != nil {
@@ -314,8 +333,8 @@ func TestVoiceTaskAdmissionBindsStableTurnAcrossRevisions(t *testing.T) {
 		_ = tx.Rollback()
 		t.Fatal(err)
 	}
-	if request.Title != "authoritative transcript" || request.Goal != "authoritative transcript" || request.InitialMessage != "authoritative transcript" || len(events) != 1 || events[0].Type != "voice.task.created" {
-		t.Fatalf("task not derived from confirmed transcript: request=%#v events=%#v", request, events)
+	if request.Title != "Complete resolved request, not the raw transcript" || request.Goal != request.Title || request.InitialMessage != request.Goal || len(events) != 1 || events[0].Type != "voice.task.created" {
+		t.Fatalf("task not derived from accepted register request: request=%#v events=%#v", request, events)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)

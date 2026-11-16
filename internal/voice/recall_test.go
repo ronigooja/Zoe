@@ -32,7 +32,7 @@ func workerClient(t *testing.T, handler http.HandlerFunc) *memoryapi.Client {
 func TestRecallWorkerUnmodifiedContext(t *testing.T) {
 	for _, mode := range []string{"found", "empty", "failure", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
-			r := newDeliveryRig(t)
+			r := newReceiptDeliveryRig(t)
 			text := " \n**unmodified** 🙂\t" + strings.Repeat("memory 🙂\n", 2000) + "\x00 "
 			calls := 0
 			if mode != "disabled" {
@@ -60,7 +60,8 @@ func TestRecallWorkerUnmodifiedContext(t *testing.T) {
 				if got != text {
 					t.Fatal("memory text changed")
 				}
-				ok, code := r.svc.appendContext(context.Background(), "gateway", got)
+				r.seedCall(t, "recall-call", "owner", 1)
+				ok, code := r.svc.deliverDurableText(context.Background(), "default", "owner", "fast_reply", "recall-source", "recall-call", 1, got)
 				if !ok {
 					t.Fatal(code)
 				}

@@ -251,21 +251,33 @@ func TestCandidatesFieldsAdditionsAndNullHandling(t *testing.T) {
 		rosterExec(t, db, `INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,'waiting','default',?,?,'default-owner',?)`, fmt.Sprintf("entry-%d", i), kind, fmt.Sprintf("%d", i)+strings.Repeat("文", 350), now.Add(time.Duration(-180+i)*time.Minute).Format(time.RFC3339Nano))
 	}
 	// Nullability is tested against a real SQLite temporary shadow of tasks;
-	// production's title/result/question columns are currently NOT NULL.
+	// production's result/question columns are currently NOT NULL. Titles do
+	// not participate in selection: a null title must not hide a matching goal.
 	rosterExec(t, db, `CREATE TEMP TABLE tasks AS SELECT * FROM main.tasks`)
 	rosterExec(t, db, `UPDATE tasks SET result=NULL,interaction_question=NULL,finished_at=NULL WHERE id='hidden'`)
 	rosterExec(t, db, `UPDATE tasks SET title=NULL WHERE id='null-title'`)
 	rosterExec(t, db, `PRAGMA query_only=ON`)
 	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 20)
-	if err != nil || len(got) != 5 {
+	if err != nil || len(got) != 6 {
 		t.Fatalf("fields got=%+v err=%v", got, err)
+	}
+	var ids []string
+	for _, c := range got {
+		ids = append(ids, c.TaskID)
+	}
+	if want := []string{"waiting", "null-title", "hidden", "confirmation", "complete", "approval"}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("stable candidate IDs=%v want=%v", ids, want)
 	}
 	for _, c := range got {
 		if _, err := time.Parse(time.RFC3339, c.CreatedAt); err != nil {
 			t.Fatal(err)
 		}
 		if c.Goal == "budget waiting" {
-			if c.Question != "Which budget?" || c.Result != strings.Repeat("中", 650) || len(c.Additions) != 3 || c.Additions[0] != "2"+strings.Repeat("文", 350) || c.Additions[2] != "4"+strings.Repeat("文", 350) {
+			wantAdditions := make([]string, 0, 4)
+			for i := 1; i <= 4; i++ {
+				wantAdditions = append(wantAdditions, fmt.Sprintf("%d", i)+strings.Repeat("文", 350))
+			}
+			if c.TaskID != "waiting" || c.Question != "Which budget?" || c.Result != strings.Repeat("中", 650) || !reflect.DeepEqual(c.Additions, wantAdditions) {
 				t.Fatalf("waiting facts=%+v", c)
 			}
 		} else if c.Goal == "budget confirmation" {

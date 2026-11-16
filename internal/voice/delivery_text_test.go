@@ -9,7 +9,7 @@ import (
 func TestDeliveredResultIsPlainChineseText(t *testing.T) {
 	for _, text := range []string{"今天东京有雨。", strings.Repeat("天气晴朗。", 200)} {
 		t.Run(string([]rune(text)[:5]), func(t *testing.T) {
-			r := newDeliveryRig(t)
+			r := newReceiptDeliveryRig(t)
 			r.setup(t, text)
 			r.exec(t, `UPDATE tasks SET status='complete' WHERE id='task-1'`)
 			r.seedCall(t, "s1", "user-1", 1)

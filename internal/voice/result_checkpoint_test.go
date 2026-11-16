@@ -12,7 +12,7 @@ import (
 
 func checkpointRig(t *testing.T) *deliveryRig {
 	t.Helper()
-	r := newDeliveryRig(t)
+	r := newReceiptDeliveryRig(t)
 	// Checkpoint tables come from the production fresh baseline.
 	return r
 }
@@ -80,7 +80,7 @@ func TestResultCheckpointSelectionUnsentCanRebind(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.run(t)
-	if len(r.paths) != 1 || r.paths[0] != "/v1/voice/sessions/gw-next/context" {
+	if len(r.paths) != 1 || r.paths[0] != "/v1/voice/sessions/gw-next/result-deliveries" {
 		t.Fatal(r.paths)
 	}
 }
@@ -126,6 +126,7 @@ func TestResultCheckpointForgedDeliveryRejectedByEvent(t *testing.T) {
 type checkpointAdapter struct {
 	submits, lookups int
 	failAt           int
+	lookupApplied    bool
 	requests         []ResultChunkRequest
 }
 
@@ -139,6 +140,9 @@ func (a *checkpointAdapter) Submit(_ context.Context, _ string, p ResultChunkReq
 }
 func (a *checkpointAdapter) Lookup(_ context.Context, _ string, p ResultChunkRequest) (ResultChunkReceipt, error) {
 	a.lookups++
+	if a.lookupApplied {
+		return ResultChunkReceipt{p.MediaGeneration, p.DeliveryID, p.ContentHash, "applied"}, nil
+	}
 	return ResultChunkReceipt{p.MediaGeneration, p.DeliveryID, p.ContentHash, "unknown"}, nil
 }
 func (r *deliveryRig) checkpointSend(a ResultReceiptAdapter) {
@@ -224,9 +228,25 @@ func TestResultCheckpointRestartSkipsConfirmedFencesUnknown(t *testing.T) {
 	if status != "pending" {
 		t.Fatal(status)
 	}
+	// An unknown lookup must keep the suffix blocked, even on repeated retries.
+	r.advance(time.Minute)
+	r.checkpointSend(a)
+	if a.submits != 2 || a.lookups != 2 {
+		t.Fatalf("unknown receipt replayed prefix: submits=%d lookups=%d", a.submits, a.lookups)
+	}
+	a.lookupApplied = true
+	r.advance(time.Minute)
+	r.checkpointSend(a)
+	var chunks []string
+	for _, request := range a.requests {
+		chunks = append(chunks, request.Text)
+	}
+	if status, _, _ := r.row(t, "entry-1"); status != "delivered" || a.submits != 3 || a.lookups != 3 || strings.Join(chunks, "") != strings.Repeat("界", 6000) {
+		t.Fatalf("reconciliation status=%s submits=%d lookups=%d", status, a.submits, a.lookups)
+	}
 }
 
-func TestResultCheckpointLegacyFailureNeverReplaysPrefix(t *testing.T) {
+func TestResultCheckpointAmbiguousFailureNeverReplaysPrefix(t *testing.T) {
 	r := checkpointRig(t)
 	r.setup(t, strings.Repeat("x", 16001))
 	r.seedCall(t, "s1", "user-1", 1)
@@ -235,8 +255,11 @@ func TestResultCheckpointLegacyFailureNeverReplaysPrefix(t *testing.T) {
 	r.code.Store(200)
 	r.advance(time.Minute)
 	r.run(t)
-	if r.posts.Load() != 1 {
-		t.Fatalf("ambiguous legacy attempt replayed: %d", r.posts.Load())
+	if r.posts.Load() != 3 || r.lookups.Load() != 1 || strings.Join(r.texts, "") != strings.Repeat("x", 16001) {
+		t.Fatalf("prefix replay or incomplete continuation: posts=%d lookups=%d", r.posts.Load(), r.lookups.Load())
+	}
+	if status, _, _ := r.row(t, "entry-1"); status != "delivered" {
+		t.Fatal(status)
 	}
 }
 
@@ -278,7 +301,7 @@ func TestResultCheckpointConcurrentClaims(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.svc.deliverCheckpointedResult(context.Background(), "entry-1", "default", "task-1", "run-1", "user-1", 0, nil)
+			r.svc.deliverCheckpointedResult(context.Background(), "entry-1", "default", "task-1", "run-1", "user-1", 0, r.svc.resultReceiptAdapter)
 		}()
 	}
 	wg.Wait()
@@ -334,10 +357,31 @@ func TestResultCheckpointReceiptBinding(t *testing.T) {
 	}
 }
 
+func TestResultCheckpointMissingAuthoritativeEventCannotDeliver(t *testing.T) {
+	r := checkpointRig(t)
+	r.setup(t, "original result")
+	r.seedCall(t, "s1", "user-1", 1)
+	r.svc.consumeResultEvents(context.Background())
+	r.exec(t, `DELETE FROM events WHERE event_type='task.assistant_message'`)
+	r.run(t)
+	if status, _, attempts := r.row(t, "entry-1"); status != "pending" || attempts != 0 || r.posts.Load() != 0 {
+		t.Fatalf("unauthoritative source status=%s attempts=%d posts=%d", status, attempts, r.posts.Load())
+	}
+	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
+	if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "s1", 1); err == nil {
+		t.Fatal("source without authoritative event selected")
+	}
+	pending, err := r.svc.PendingResultsForContext(context.Background(), "default", "user-1", 25)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("unauthoritative context=%v err=%v", pending, err)
+	}
+}
+
 func TestResultCheckpointMissingMediaGenerationDoesNotSubmit(t *testing.T) {
 	r := checkpointRig(t)
 	r.setup(t, "hello")
 	r.seedCall(t, "s1", "user-1", 99)
+	r.exec(t, `UPDATE voice_sessions SET gateway_media_generation=0`)
 	r.svc.consumeResultEvents(context.Background())
 	a := &checkpointAdapter{}
 	r.checkpointSend(a)

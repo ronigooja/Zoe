@@ -139,6 +139,34 @@ func TestClassificationSingleFlightDifferentRows(t *testing.T) {
 	r.assertResult(t, "second-row", "task", "new")
 }
 
+func TestClassificationConcurrentRouteAcceptancePreservesWinner(t *testing.T) {
+	var r *classificationRig
+	r = newClassificationRig(t, func() {
+		r.exec(t, `UPDATE voice_turns SET exits='chat',request=NULL WHERE id='route-race'`)
+	})
+	r.seedTurn(t, "route-race")
+	r.svc.classifyCommittedTurn("route-race")
+	if r.routes.Load() != 1 || r.choices.Load() != 0 {
+		t.Fatalf("Route=%d Choose=%d; losing route must not reach Steward", r.routes.Load(), r.choices.Load())
+	}
+	r.assertResult(t, "route-race", "chat", "")
+}
+
+func TestClassificationSelectionRefreshReusesAcceptedRegister(t *testing.T) {
+	r := newClassificationRig(t, nil)
+	r.seedTurn(t, "refresh-row")
+	r.svc.classifyCommittedTurn("refresh-row")
+	// Preflight invalidates only the selection when authoritative task facts
+	// change. The accepted register request must survive selection refreshes.
+	r.exec(t, `UPDATE voice_turns SET steward_snapshot='',steward_action='' WHERE id='refresh-row'`)
+	r.svc.classifyCommittedTurn("refresh-row")
+	r.svc.classifyCommittedTurn("refresh-row")
+	if r.routes.Load() != 1 || r.choices.Load() != 2 {
+		t.Fatalf("Route=%d Choose=%d; refresh must run only Steward once", r.routes.Load(), r.choices.Load())
+	}
+	r.assertResult(t, "refresh-row", "task", "new")
+}
+
 func TestClassificationSingleFlightRetryAfterFailure(t *testing.T) {
 	r := newClassificationRig(t, nil)
 	r.seedTurn(t, "retry-row")

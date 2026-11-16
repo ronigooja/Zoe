@@ -18,15 +18,17 @@ import (
 )
 
 type deliveryRig struct {
-	store *storage.Store
-	svc   *Service
-	posts atomic.Int32
-	mu    sync.Mutex
-	paths []string
-	auth  []string
-	texts []string
-	code  atomic.Int32
-	clock atomic.Int64
+	store    *storage.Store
+	svc      *Service
+	posts    atomic.Int32
+	lookups  atomic.Int32
+	mu       sync.Mutex
+	paths    []string
+	auth     []string
+	texts    []string
+	requests map[string]ResultChunkRequest
+	code     atomic.Int32
+	clock    atomic.Int64
 }
 
 func (r *deliveryRig) now() time.Time { return time.Unix(0, r.clock.Load()).UTC() }
@@ -36,10 +38,21 @@ func (r *deliveryRig) advance(d time.Duration) {
 
 func newDeliveryRig(t *testing.T) *deliveryRig {
 	t.Helper()
-	r := &deliveryRig{}
+	r := &deliveryRig{requests: make(map[string]ResultChunkRequest)}
 	r.clock.Store(time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC).UnixNano())
 	r.code.Store(200)
 	gw := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet {
+			r.lookups.Add(1)
+			r.mu.Lock()
+			p := r.requests[req.URL.Path[strings.LastIndex(req.URL.Path, "/")+1:]]
+			r.mu.Unlock()
+			w.WriteHeader(int(r.code.Load()))
+			if r.code.Load() == http.StatusOK {
+				_ = json.NewEncoder(w).Encode(ResultChunkReceipt{MediaGeneration: p.MediaGeneration, DeliveryID: p.DeliveryID, ContentHash: p.ContentHash, State: "applied"})
+			}
+			return
+		}
 		body, _ := io.ReadAll(req.Body)
 		var p ResultChunkRequest
 		_ = json.Unmarshal(body, &p)
@@ -48,6 +61,7 @@ func newDeliveryRig(t *testing.T) *deliveryRig {
 		r.paths = append(r.paths, req.URL.Path)
 		r.auth = append(r.auth, req.Header.Get("Authorization"))
 		r.texts = append(r.texts, p.Text)
+		r.requests[p.DeliveryID] = p
 		r.mu.Unlock()
 		w.WriteHeader(int(r.code.Load()))
 		if r.code.Load() == 200 {
@@ -57,6 +71,13 @@ func newDeliveryRig(t *testing.T) *deliveryRig {
 	t.Cleanup(gw.Close)
 	store, svc := newVoiceTestService(t, Config{GatewayURL: gw.URL, GatewayAPIKey: "gw-key", HTTPClient: gw.Client(), Now: r.now})
 	r.store, r.svc = store, svc
+	return r
+}
+
+func newReceiptDeliveryRig(t *testing.T) *deliveryRig {
+	t.Helper()
+	r := newDeliveryRig(t)
+	r.svc.resultReceiptAdapter = NewGatewayResultReceiptAdapter(r.svc)
 	return r
 }
 
@@ -96,7 +117,7 @@ func (r *deliveryRig) seedEvent(t *testing.T, cursor int64, taskID, runID, entry
 func (r *deliveryRig) seedCall(t *testing.T, sessionID, owner string, generation int64) {
 	t.Helper()
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,gateway_session_id,generation,state,created_at,updated_at) VALUES(?, 'default',?, 'device-1',?,X'01','gw-'||?,?,'active',?,?)`, sessionID, owner, "req-"+sessionID, sessionID, generation, at, at)
+	r.exec(t, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,gateway_session_id,generation,gateway_media_generation,state,created_at,updated_at) VALUES(?, 'default',?, 'device-1',?,X'01','gw-'||?,?,1,'active',?,?)`, sessionID, owner, "req-"+sessionID, sessionID, generation, at, at)
 }
 
 func (r *deliveryRig) run(t *testing.T) {
@@ -121,7 +142,7 @@ func (r *deliveryRig) setup(t *testing.T, text string) {
 }
 
 func TestResultDeliveryLiveCallSendsOneBoundedMessage(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := newReceiptDeliveryRig(t)
 	r.setup(t, "Tokyo will be rainy today.")
 	r.seedCall(t, "s1", "user-1", 1)
 	r.exec(t, `UPDATE voice_sessions SET gateway_media_generation=1 WHERE id='s1'`)
@@ -139,6 +160,11 @@ func TestResultDeliveryLiveCallSendsOneBoundedMessage(t *testing.T) {
 	if status, _, attempts := r.row(t, "entry-1"); status != "delivered" || attempts != 1 {
 		t.Fatalf("status=%s attempts=%d", status, attempts)
 	}
+	// Applied receipts prove gateway acceptance only, not audible playback.
+	var evidence string
+	if err := r.store.DB().QueryRow(`SELECT last_error_code FROM voice_result_deliveries WHERE entry_id='entry-1'`).Scan(&evidence); err != nil || evidence != "gateway_accepted" {
+		t.Fatalf("receipt evidence=%q err=%v", evidence, err)
+	}
 	r.run(t)
 	if got := r.posts.Load(); got != 1 {
 		t.Fatalf("delivered row must not be re-sent, posts=%d", got)
@@ -146,7 +172,7 @@ func TestResultDeliveryLiveCallSendsOneBoundedMessage(t *testing.T) {
 }
 
 func TestResultDeliveryNoLiveCallRemainsPending(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := newReceiptDeliveryRig(t)
 	r.setup(t, "hello")
 	r.run(t)
 	if r.posts.Load() != 0 {
@@ -158,7 +184,7 @@ func TestResultDeliveryNoLiveCallRemainsPending(t *testing.T) {
 }
 
 func TestResultDeliveryIgnoresAnotherOwnersCall(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := newReceiptDeliveryRig(t)
 	r.setup(t, "hello")
 	r.seedCall(t, "s-other", "someone-else", 1)
 	r.run(t)
@@ -170,13 +196,13 @@ func TestResultDeliveryIgnoresAnotherOwnersCall(t *testing.T) {
 	}
 }
 
-func TestResultDeliveryGatewayFailureRetriesThenFails(t *testing.T) {
-	r := newDeliveryRig(t)
+func TestResultDeliveryGatewayFailureReconcilesWithoutResubmit(t *testing.T) {
+	r := newReceiptDeliveryRig(t)
 	r.code.Store(503)
 	r.setup(t, "hello")
 	r.seedCall(t, "s1", "user-1", 1)
 	r.run(t)
-	if status, code, attempts := r.row(t, "entry-1"); status != "pending" || attempts != 1 || code != "gateway_failed" {
+	if status, code, attempts := r.row(t, "entry-1"); status != "pending" || attempts != 1 {
 		t.Fatalf("after first failure status=%s attempts=%d code=%s", status, attempts, code)
 	}
 	r.run(t)
@@ -184,27 +210,27 @@ func TestResultDeliveryGatewayFailureRetriesThenFails(t *testing.T) {
 		t.Fatalf("backoff must delay the retry, posts=%d", r.posts.Load())
 	}
 	for i := 0; i < 4; i++ {
-		r.advance(10 * time.Second)
+		r.advance(time.Minute)
 		r.run(t)
 	}
 	status, _, attempts := r.row(t, "entry-1")
-	if status != "failed" || attempts != resultDeliveryMaxAttempts {
+	if status != "pending" || attempts != 5 {
 		t.Fatalf("status=%s attempts=%d", status, attempts)
 	}
-	if got := r.posts.Load(); got != int32(resultDeliveryMaxAttempts) {
-		t.Fatalf("posts=%d, want %d", got, resultDeliveryMaxAttempts)
+	if got := r.posts.Load(); got != 1 || r.lookups.Load() != 4 {
+		t.Fatalf("posts=%d lookups=%d", got, r.lookups.Load())
 	}
 }
 
-func TestResultDeliveryUnsupportedRouteFailsWithoutRetry(t *testing.T) {
-	r := newDeliveryRig(t)
+func TestResultDeliveryUnsupportedRouteRemainsUnknownWithoutResubmit(t *testing.T) {
+	r := newReceiptDeliveryRig(t)
 	r.code.Store(501)
 	r.setup(t, "hello")
 	r.seedCall(t, "s1", "user-1", 1)
 	r.run(t)
 	r.advance(time.Minute)
 	r.run(t)
-	if status, code, _ := r.row(t, "entry-1"); status != "failed" || code != "route_unsupported" {
+	if status, code, _ := r.row(t, "entry-1"); status != "pending" {
 		t.Fatalf("status=%s code=%s", status, code)
 	}
 	if r.posts.Load() != 1 {
@@ -229,29 +255,34 @@ func TestResultDeliveryDuplicateEventSendsOnce(t *testing.T) {
 	}
 }
 
-func TestResultDeliveryMissingEntryRetriesThenFails(t *testing.T) {
-	r := newDeliveryRig(t)
+func TestResultDeliveryMissingEntryWaitsWithoutSending(t *testing.T) {
+	r := newReceiptDeliveryRig(t)
 	r.seedTask(t, "task-1", "user-1")
 	r.seedEvent(t, 1, "task-1", "run-1", "entry-missing")
 	r.seedCall(t, "s1", "user-1", 1)
 	r.run(t)
-	if status, code, _ := r.row(t, "entry-missing"); status != "pending" || code != "entry_missing" {
+	if status, code, attempts := r.row(t, "entry-missing"); status != "pending" || attempts != 0 {
 		t.Fatalf("status=%s code=%s", status, code)
 	}
 	for i := 0; i < 4; i++ {
 		r.advance(10 * time.Second)
 		r.run(t)
 	}
-	if status, code, _ := r.row(t, "entry-missing"); status != "failed" || code != "entry_missing" {
+	if status, code, attempts := r.row(t, "entry-missing"); status != "pending" || attempts != 0 {
 		t.Fatalf("status=%s code=%s", status, code)
 	}
 	if r.posts.Load() != 0 {
 		t.Fatal("a missing entry must never reach the gateway")
 	}
+	r.seedEntry(t, "task-1", "entry-missing", "late authoritative entry")
+	r.run(t)
+	if status, _, _ := r.row(t, "entry-missing"); status != "delivered" || r.posts.Load() != 1 {
+		t.Fatalf("late entry status=%s posts=%d", status, r.posts.Load())
+	}
 }
 
 func TestResultDeliveryUnknownTaskDoesNotBlockLaterEvents(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := newReceiptDeliveryRig(t)
 	r.seedEvent(t, 1, "task-ghost", "run-0", "entry-ghost")
 	r.seedTask(t, "task-1", "user-1")
 	r.seedEntry(t, "task-1", "entry-1", "hello")
@@ -267,7 +298,7 @@ func TestResultDeliveryUnknownTaskDoesNotBlockLaterEvents(t *testing.T) {
 }
 
 func TestResultDeliverySessionEndedBeforeSendIsNotSentToANewerCall(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := newReceiptDeliveryRig(t)
 	r.setup(t, "hello")
 	r.seedCall(t, "s-old", "user-1", 1)
 	r.svc.consumeResultEvents(context.Background())
@@ -282,7 +313,7 @@ func TestResultDeliverySessionEndedBeforeSendIsNotSentToANewerCall(t *testing.T)
 }
 
 func TestResultDeliveryConcurrentDispatchersSendOnce(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := newReceiptDeliveryRig(t)
 	r.setup(t, "hello")
 	r.seedCall(t, "s1", "user-1", 1)
 	r.svc.consumeResultEvents(context.Background())
@@ -399,7 +430,7 @@ func TestAppendContextRejectsInvalidOrEmptyText(t *testing.T) {
 }
 
 func TestResultDeliveryWhitespaceOnlyReplyIsNotSent(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := newReceiptDeliveryRig(t)
 	r.setup(t, " \n\t ")
 	r.seedCall(t, "s1", "user-1", 1)
 	r.run(t)
@@ -412,7 +443,7 @@ func TestResultDeliveryWhitespaceOnlyReplyIsNotSent(t *testing.T) {
 }
 
 func TestResultCursorAdvancesMonotonicallyAndSurvivesRestart(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := newReceiptDeliveryRig(t)
 	r.seedTask(t, "task-1", "user-1")
 	for i, id := range []string{"entry-1", "entry-2", "entry-3"} {
 		r.seedEntry(t, "task-1", id, "reply "+id)
@@ -428,6 +459,7 @@ func TestResultCursorAdvancesMonotonicallyAndSurvivesRestart(t *testing.T) {
 		t.Fatalf("cursor=%d err=%v", cursor, err)
 	}
 	restarted := newService(r.store.DB(), Config{GatewayURL: r.svc.base.String(), GatewayAPIKey: "gw-key", HTTPClient: r.svc.client, Now: r.now})
+	restarted.resultReceiptAdapter = NewGatewayResultReceiptAdapter(restarted)
 	restarted.consumeResultEvents(context.Background())
 	restarted.dispatchResults(context.Background())
 	if r.posts.Load() != 3 {
@@ -442,7 +474,7 @@ func TestResultCursorAdvancesMonotonicallyAndSurvivesRestart(t *testing.T) {
 	}
 }
 
-func TestFastReplySkippedWhenNoActiveCall(t *testing.T) {
+func TestFastReplyPendingWhenNoActiveCall(t *testing.T) {
 	r := newDeliveryRig(t)
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-none','default','missing',1,'turn','现在没有在处理的任务。','progress','pending',?,?,?)`, at, at, at)
@@ -451,31 +483,31 @@ func TestFastReplySkippedWhenNoActiveCall(t *testing.T) {
 	if err := r.store.DB().QueryRow(`SELECT status FROM voice_fast_replies WHERE id='fast-none'`).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status != "skipped" || r.posts.Load() != 0 {
+	if status != "pending" || r.posts.Load() != 0 {
 		t.Fatalf("status=%q posts=%d", status, r.posts.Load())
 	}
 }
 
-func TestFastReplyDeliveryRetriesThenFails(t *testing.T) {
-	r := newDeliveryRig(t)
+func TestFastReplyDeliveryFailureReconcilesWithoutResubmit(t *testing.T) {
+	r := newReceiptDeliveryRig(t)
 	r.code.Store(503)
 	r.seedCall(t, "s-fast", "user-1", 1)
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-fail','default','s-fast',1,'turn','hello','progress','pending',?,?,?)`, at, at, at)
 	for i := 0; i < 4; i++ {
 		r.svc.dispatchFastReplies(context.Background())
-		r.advance(10 * time.Second)
+		r.advance(time.Minute)
 	}
 	var status string
 	var attempts int
 	_ = r.store.DB().QueryRow(`SELECT status,attempts FROM voice_fast_replies WHERE id='fast-fail'`).Scan(&status, &attempts)
-	if status != "failed" || attempts != resultDeliveryMaxAttempts || r.posts.Load() != resultDeliveryMaxAttempts {
+	if status != "pending" || attempts != 0 || r.posts.Load() != 1 || r.lookups.Load() != 3 {
 		t.Fatalf("status=%q attempts=%d posts=%d", status, attempts, r.posts.Load())
 	}
 }
 
 func TestTaskReportRetryPreservesStewardReply(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := newReceiptDeliveryRig(t)
 	r.code.Store(http.StatusServiceUnavailable)
 	r.seedCall(t, "s-fast", "user-1", 1)
 	at := r.now().Add(-5 * time.Second).Format(time.RFC3339Nano)
@@ -490,10 +522,10 @@ func TestTaskReportRetryPreservesStewardReply(t *testing.T) {
 	if err := r.store.DB().QueryRow(`SELECT status,attempts FROM voice_fast_replies WHERE id='fast-report'`).Scan(&status, &attempts); err != nil {
 		t.Fatal(err)
 	}
-	if status != "pending" || attempts != 1 || len(r.texts) != 1 || r.texts[0] != reply {
+	if status != "pending" || len(r.texts) != 1 || r.texts[0] != reply {
 		t.Fatalf("first delivery: status=%q attempts=%d texts=%q", status, attempts, r.texts)
 	}
-	r.advance(10 * time.Second)
+	r.advance(time.Minute)
 	r.exec(t, `UPDATE tasks SET status='complete',result='Research finished.' WHERE id='task-fast'`)
 	r.code.Store(http.StatusOK)
 	r.svc.dispatchFastReplies(context.Background())
@@ -501,7 +533,7 @@ func TestTaskReportRetryPreservesStewardReply(t *testing.T) {
 	if err := r.store.DB().QueryRow(`SELECT status,attempts FROM voice_fast_replies WHERE id='fast-report'`).Scan(&status, &attempts); err != nil {
 		t.Fatal(err)
 	}
-	if status != "delivered" || attempts != 2 || len(r.texts) != 2 || r.texts[1] != reply || r.posts.Load() != 2 {
+	if status != "delivered" || len(r.texts) != 1 || r.texts[0] != reply || r.posts.Load() != 1 || r.lookups.Load() != 1 {
 		t.Fatalf("retry delivery: status=%q attempts=%d texts=%q posts=%d", status, attempts, r.texts, r.posts.Load())
 	}
 }

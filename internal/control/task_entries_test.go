@@ -258,7 +258,7 @@ func TestTaskAppendWaitingPersistsMessageAndTransitionsThroughServerPolicy(t *te
 	if err = server.store.DB().QueryRow(`SELECT count(*) FROM task_entries WHERE task_id='entries-task' AND content='continue'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if status != "queued" || interaction != "awaiting_message" || count != 1 {
+	if status != "waiting" || interaction != "awaiting_message" || count != 1 {
 		t.Fatalf("server policy not durable: status=%q interaction=%q count=%d", status, interaction, count)
 	}
 }
@@ -313,7 +313,7 @@ func TestAmbiguousConfirmationIsRetainedButDoesNotAuthorize(t *testing.T) {
 	}
 }
 
-func TestExplicitConfirmationClearsInteractionAndRequeuesTask(t *testing.T) {
+func TestExplicitConfirmationAppendDoesNotAnswerOrAuthorize(t *testing.T) {
 	server, closeStore := taskEntriesTestServer(t)
 	defer closeStore()
 	expires := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
@@ -331,14 +331,14 @@ func TestExplicitConfirmationClearsInteractionAndRequeuesTask(t *testing.T) {
 	if err = server.store.DB().QueryRow(`SELECT status,interaction_state FROM tasks WHERE id='entries-task'`).Scan(&status, &interaction); err != nil {
 		t.Fatal(err)
 	}
-	if status != "queued" || interaction != "none" {
-		t.Fatalf("confirmed task was not requeued and cleared: status=%q interaction=%q", status, interaction)
+	if status != "waiting" || interaction != "explicit_confirmation" {
+		t.Fatalf("append implicitly answered confirmation: status=%q interaction=%q", status, interaction)
 	}
 	var confirmations int
 	if err = server.store.DB().QueryRow(`SELECT count(*) FROM task_confirmations WHERE task_id='entries-task'`).Scan(&confirmations); err != nil {
 		t.Fatal(err)
 	}
-	if confirmations != 1 {
-		t.Fatalf("confirmation audit count=%d want 1", confirmations)
+	if confirmations != 0 {
+		t.Fatalf("confirmation audit count=%d want 0 without explicit question_id", confirmations)
 	}
 }

@@ -198,18 +198,33 @@ final class ClientContractTests: XCTestCase {
         let model = ZoeAppModel()
         model.setAuthenticationForTesting(.connected)
         model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10"))
+        _ = model.installVoiceSessionForTesting(VoiceSessionResponse(voiceSessionId: "old", generation: 1, state: "active", answerSdp: ""), api: api)
+        var stops = 0
+        var hangups = 0
+        model.voiceLocalMediaStopObserverForTesting = { stops += 1 }
+        model.voiceHangupOverrideForTesting = { id in
+            XCTAssertEqual(id, "old")
+            hangups += 1
+            return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
+        }
         var paths: [String] = []
         var streams = 0
         ContractURLProtocol.responseHandler = { request in
             let path = request.url!.path
             paths.append(path)
-            if path == "/v1/recovery" { return (200, [:], Self.recoveryBody(cursor: "20")) }
+            if path == "/v1/recovery" {
+                let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!
+                    .replacingOccurrences(of: "\"current_session\":null", with: "\"current_session\":{\"id\":\"old\",\"generation\":1,\"state\":\"active\"}")
+                return (200, [:], Data(body.utf8))
+            }
             if path == "/v1/ui/snapshot" { return (200, [:], Data(#"{"cursor":20,"surfaces":[]}"#.utf8)) }
             streams += 1
             if streams == 1 {
                 return (200, ["Content-Type": "text/event-stream"], Data("event: snapshot_required\ndata: {\"reason\":\"cursor_expired\"}\n\n".utf8))
             }
             XCTAssertEqual(request.value(forHTTPHeaderField: "Last-Event-ID"), "20")
+            XCTAssertEqual(stops, 0, "Exact active recovery session must survive until post-checkpoint SSE")
+            XCTAssertEqual(hangups, 0)
             let event = #"{"schema_version":1,"event_id":"end","cursor":"21","type":"voice.end","occurred_at":"","workspace_id":"default","aggregate_type":"voice_session","aggregate_id":"old","aggregate_version":1,"payload":{}}"#
             return (200, ["Content-Type": "text/event-stream"], Data("id: 21\nevent: voice.end\ndata: \(event)\n\n".utf8))
         }
@@ -219,7 +234,9 @@ final class ClientContractTests: XCTestCase {
         XCTAssertFalse(model.eventRecoveryRequired)
         XCTAssertEqual(model.eventCursorForTesting, "21")
         XCTAssertEqual(model.authoritativeControlSnapshot?.tasks.count, 1)
-        guard case .stopped = model.voiceStatus else { return XCTFail("Post-checkpoint end was not applied") }
+        XCTAssertEqual(stops, 1, "Post-checkpoint voice.end must close actual local media")
+        XCTAssertEqual(hangups, 1, "Post-checkpoint voice.end must invoke server hangup")
+        guard case .idle = model.voiceStatus else { return XCTFail("Confirmed post-checkpoint voice shutdown must finish idle") }
         XCTAssertTrue(paths.contains("/v1/recovery"))
     }
 

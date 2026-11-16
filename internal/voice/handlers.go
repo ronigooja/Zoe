@@ -618,7 +618,12 @@ func (s *Service) classifyCommittedTurn(id string) {
 	var content, workspace, owner string
 	var acceptedRoutes sql.NullString
 	var acceptedRequest *string
-	if err := s.db.QueryRowContext(ctx, `SELECT v.content,v.workspace_id,s.owner_id,v.exits,v.request FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id WHERE v.id=? AND v.handoff_handled=0`, id).Scan(&content, &workspace, &owner, &acceptedRoutes, &acceptedRequest); err != nil {
+	var acceptedSnapshot string
+	if err := s.db.QueryRowContext(ctx, `SELECT v.content,v.workspace_id,s.owner_id,v.exits,v.request,v.steward_snapshot FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id WHERE v.id=? AND v.handoff_handled=0`, id).Scan(&content, &workspace, &owner, &acceptedRoutes, &acceptedRequest, &acceptedSnapshot); err != nil {
+		return
+	}
+	// A completed selection is reused until preflight explicitly invalidates it.
+	if acceptedSnapshot != "" || (acceptedRoutes.Valid && !(RouteResult{Routes: strings.Split(acceptedRoutes.String, ",")}).Has("task")) {
 		return
 	}
 	route := RouteResult{Routes: []string{"task"}}
@@ -633,9 +638,19 @@ func (s *Service) classifyCommittedTurn(id string) {
 	if err == nil && !acceptedRoutes.Valid {
 		// The register boundary is accepted once; subsequent selection refreshes
 		// must never invoke it again, including after Steward failure.
-		_, err = s.db.ExecContext(ctx, `UPDATE voice_turns SET exits=?,request=? WHERE id=? AND exits IS NULL`, route.Exits(), route.Request, id)
+		var accepted sql.Result
+		accepted, err = s.db.ExecContext(ctx, `UPDATE voice_turns SET exits=?,request=? WHERE id=? AND exits IS NULL`, route.Exits(), route.Request, id)
+		if err == nil {
+			var changed int64
+			changed, err = accepted.RowsAffected()
+			if err == nil && changed == 0 {
+				logging.Warnf("voice_routing_discarded id=%s reason=already_classified", id)
+				return
+			}
+		}
 		if err == nil {
 			acceptedRoutes = sql.NullString{String: route.Exits(), Valid: true}
+			acceptedRequest = route.Request
 		}
 	}
 	var choice steward.Choice
@@ -708,7 +723,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 	writeCtx, stop := context.WithTimeout(context.Background(), time.Second)
 	defer stop()
 	action := string(choice.Action)
-	result, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET exits=?,steward_action=?,steward_task_id=?,steward_question_id=?,steward_task_version=?,report_text=?,request=?,steward_snapshot=? WHERE id=? AND handoff_handled=0 AND coalesce(steward_snapshot,'')=?`, route.Exits(), action, taskID, pointerText(choice.QuestionID), selectedVersion, pointerText(choice.Reply), route.Request, snapshot, id, "")
+	result, writeErr := s.db.ExecContext(writeCtx, `UPDATE voice_turns SET exits=?,steward_action=?,steward_task_id=?,steward_question_id=?,steward_task_version=?,report_text=?,request=?,steward_snapshot=? WHERE id=? AND handoff_handled=0 AND coalesce(steward_snapshot,'')=? AND exits IS ? AND request IS ?`, route.Exits(), action, taskID, pointerText(choice.QuestionID), selectedVersion, pointerText(choice.Reply), route.Request, snapshot, id, "", acceptedRoutes, acceptedRequest)
 	if writeErr == nil {
 		var affected int64
 		affected, writeErr = result.RowsAffected()
