@@ -61,16 +61,16 @@ func uiFlowServer(t *testing.T, r *deliveryRig) {
 func uiFlowRegister(t *testing.T, r *deliveryRig) {
 	t.Helper()
 	r.seedCall(t, "call", "owner", 1)
-	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,restatement) VALUES('turn','default','call',1,'turn',1,'original sentence',X'01',?,'turn-command','ui','resolved request')`, r.now().Format(time.RFC3339Nano))
+	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request) VALUES('turn','default','call',1,'turn',1,'original sentence',X'01',?,'turn-command','ui','resolved request')`, r.now().Format(time.RFC3339Nano))
 	r.svc.createRegisterUIJobs(context.Background())
 	r.svc.dispatchUIJobs(context.Background())
 }
 
 func TestUIRegisterJobFlow(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := uiTargetRig(t)
 	uiFlowServer(t, r)
 	var mu sync.Mutex
-	output := uiFlowOutput(uiFlowCreate+","+uiFlowRoot, true)
+	output := uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false)
 	r.svc.uiController = uiFlowModel(t, &output, &mu)
 	uiFlowRegister(t, r)
 	var id, status, state string
@@ -81,7 +81,7 @@ func TestUIRegisterJobFlow(t *testing.T) {
 	_ = r.store.DB().QueryRow(`SELECT state_json FROM ui_surfaces`).Scan(&state)
 	_ = r.store.DB().QueryRow(`SELECT ui_handled FROM voice_turns WHERE id='turn'`).Scan(&handled)
 	_ = r.store.DB().QueryRow(`SELECT count(*) FROM events WHERE event_type='ui.surface'`).Scan(&events)
-	if status != "generated" || awaiting != 1 || handled != 1 || events != 1 || !strings.Contains(state, `"root"`) {
+	if status != "generated" || awaiting != 0 || handled != 1 || events != 1 || !strings.Contains(state, `"root"`) {
 		t.Fatalf("status=%s awaiting=%d handled=%d events=%d state=%s", status, awaiting, handled, events, state)
 	}
 	var raw []byte
@@ -89,7 +89,7 @@ func TestUIRegisterJobFlow(t *testing.T) {
 	var e struct {
 		Payload map[string]json.RawMessage `json:"payload"`
 	}
-	if json.Unmarshal(raw, &e) != nil || len(e.Payload) != 5 {
+	if json.Unmarshal(raw, &e) != nil || len(e.Payload) != 7 {
 		t.Fatal(string(raw))
 	}
 	r.svc.createRegisterUIJobs(context.Background())
@@ -101,13 +101,13 @@ func TestUIRegisterJobFlow(t *testing.T) {
 }
 
 func TestUITaskJobsAccumulate(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := uiTargetRig(t)
 	uiFlowServer(t, r)
 	var mu sync.Mutex
 	output := uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false)
 	r.svc.uiController = uiFlowModel(t, &output, &mu)
 	r.seedTask(t, "task", "owner")
-	r.exec(t, `UPDATE tasks SET ui_display=1 WHERE id='task'`)
+	r.exec(t, `UPDATE tasks SET ui_display=1,result='first result' WHERE id='task'`)
 	r.seedEntry(t, "task", "entry-one", "first result")
 	r.seedEvent(t, 1, "task", "run", "entry-one")
 	r.exec(t, `UPDATE event_counters SET current_cursor=1 WHERE workspace_id='default'`)
@@ -117,6 +117,7 @@ func TestUITaskJobsAccumulate(t *testing.T) {
 	output = uiFlowOutput(`{"version":"v0.9.1","updateDataModel":{"surfaceId":"screen","value":{"text":"second"}}}`, false)
 	mu.Unlock()
 	r.seedEntry(t, "task", "entry-two", "second result")
+	r.exec(t, `UPDATE tasks SET result='second result' WHERE id='task'`)
 	r.seedEvent(t, 3, "task", "run", "entry-two")
 	r.exec(t, `UPDATE event_counters SET current_cursor=3 WHERE workspace_id='default'`)
 	r.svc.consumeUITaskEvents(context.Background())
@@ -130,16 +131,17 @@ func TestUITaskJobsAccumulate(t *testing.T) {
 	_ = r.store.DB().QueryRow(`SELECT state_json FROM ui_surfaces`).Scan(&raw)
 	var messages []json.RawMessage
 	_ = json.Unmarshal(raw, &messages)
-	if events != 2 || feedback != 2 || jobs != 2 || len(messages) != 3 {
+	if events != 2 || feedback != 0 || jobs != 2 || len(messages) != 3 {
 		t.Fatalf("events=%d feedback=%d jobs=%d messages=%d", events, feedback, jobs, len(messages))
 	}
 }
 
 func TestUIInputRedisplayKey(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := uiTargetRig(t)
 	r.seedTask(t, "task", "owner")
 	r.seedEntry(t, "task", "entry", "existing result")
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,utterance,restatement,created_at,updated_at) VALUES('request','default','owner','task','task','show result','resolved result',?,?)`, r.now().Format(time.RFC3339Nano), r.now().Format(time.RFC3339Nano))
+	r.exec(t, `UPDATE tasks SET result='existing result' WHERE id='task'`)
+	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,request,created_at,updated_at) VALUES('request','default','owner','task','task','Show the existing task result.',?,?)`, r.now().Format(time.RFC3339Nano), r.now().Format(time.RFC3339Nano))
 	for _, key := range []string{"task_entry:entry", "task_entry:entry#turn-one", "task_entry:entry#turn-two"} {
 		input, err := r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", kind: "task_entry", key: key, request: "request"})
 		if err != nil || !strings.Contains(string(input), "existing result") {
@@ -151,7 +153,7 @@ func TestUIInputRedisplayKey(t *testing.T) {
 func TestUIJobFailures(t *testing.T) {
 	for _, name := range []string{"invalid", "disabled", "unconfigured", "state"} {
 		t.Run(name, func(t *testing.T) {
-			r := newDeliveryRig(t)
+			r := uiTargetRig(t)
 			uiFlowServer(t, r)
 			var mu sync.Mutex
 			output := "{}"
@@ -180,7 +182,7 @@ func TestUIJobFailures(t *testing.T) {
 }
 
 func TestUICommands(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := uiTargetRig(t)
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,awaiting_input,input_note,created_at,updated_at) VALUES('request','default','owner','register','screen',1,'Requested input',?,?)`, at, at)
 	cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}}
@@ -190,17 +192,14 @@ func TestUICommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := contracts.CommandRequest{Payload: json.RawMessage(`{"request_id":"request"}`)}
-	if _, _, err = r.svc.commandUIRendered(ctx, tx, cmd, request); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err = r.svc.commandUIRendered(ctx, tx, cmd, request); err != nil {
-		t.Fatal(err)
+	if _, _, err = r.svc.commandUIRendered(ctx, tx, cmd, request); err == nil {
+		t.Fatal("incomplete acknowledgement accepted")
 	}
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	content := "  <raw>\n中文  "
-	payload, _ := json.Marshal(map[string]any{"request_id": "request", "surface_id": "screen", "name": "submit", "source_component_id": "submit", "context": map[string]string{"value": content}})
+	payload, _ := json.Marshal(map[string]any{"request_id": "request", "surface_id": "screen", "surface_version": 1, "name": "submit", "source_component_id": "submit", "context": map[string]string{"value": content}})
 	request.Payload = payload
 	tx, _ = r.store.DB().BeginTx(ctx, nil)
 	wrong := cmd
@@ -210,15 +209,15 @@ func TestUICommands(t *testing.T) {
 	}
 	_ = tx.Rollback()
 	tx, _ = r.store.DB().BeginTx(ctx, nil)
-	if _, _, err = r.svc.commandUIAction(ctx, tx, cmd, request); err != nil {
-		t.Fatal(err)
+	if _, _, err = r.svc.commandUIAction(ctx, tx, cmd, request); err == nil {
+		t.Fatal("unbound input accepted")
 	}
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	var text string
 	_ = r.store.DB().QueryRow(`SELECT text FROM ui_feedback_deliveries`).Scan(&text)
-	if text != "Requested input\n"+content {
+	if text != "" {
 		t.Fatalf("text=%q", text)
 	}
 	tx, _ = r.store.DB().BeginTx(ctx, nil)
@@ -228,20 +227,20 @@ func TestUICommands(t *testing.T) {
 		t.Fatalf("double submit=%v", err)
 	}
 	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,awaiting_input,input_note,created_at,updated_at) VALUES('compact','default','owner','register','screen',1,'Fields',?,?)`, at, at)
-	request.Payload = json.RawMessage(`{"request_id":"compact","surface_id":"screen","name":"submit","source_component_id":"submit","context":{"a":"<raw>","b":2}}`)
+	request.Payload = json.RawMessage(`{"request_id":"compact","surface_id":"screen","surface_version":1,"name":"submit","source_component_id":"submit","context":{"a":"<raw>","b":2}}`)
 	tx, _ = r.store.DB().BeginTx(ctx, nil)
-	if _, _, err = r.svc.commandUIAction(ctx, tx, cmd, request); err != nil {
-		t.Fatal(err)
+	if _, _, err = r.svc.commandUIAction(ctx, tx, cmd, request); err == nil {
+		t.Fatal("unbound structured input accepted")
 	}
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	_ = r.store.DB().QueryRow(`SELECT text FROM ui_feedback_deliveries WHERE request_id='compact'`).Scan(&text)
-	if text != "Fields\n"+`{"a":"<raw>","b":2}` {
+	if text != "" {
 		t.Fatalf("compact=%q", text)
 	}
 	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,awaiting_input,created_at,updated_at) VALUES('not-awaiting','default','owner','register','screen',0,?,?)`, at, at)
-	request.Payload = json.RawMessage(`{"request_id":"not-awaiting","surface_id":"screen","name":"submit","source_component_id":"submit","context":{}}`)
+	request.Payload = json.RawMessage(`{"request_id":"not-awaiting","surface_id":"screen","surface_version":1,"name":"submit","source_component_id":"submit","context":{}}`)
 	tx, _ = r.store.DB().BeginTx(ctx, nil)
 	_, _, err = r.svc.commandUIAction(ctx, tx, cmd, request)
 	_ = tx.Rollback()
@@ -251,9 +250,10 @@ func TestUICommands(t *testing.T) {
 }
 
 func TestUIFeedbackContinuity(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := uiTargetRig(t)
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES('request','default','owner','register',?,?)`, at, at)
+	r.exec(t, `UPDATE ui_requests SET status='failed' WHERE id='request'`)
 	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('request','default','owner','Shown text',?,?)`, at, at)
 	r.svc.dispatchUIFeedback(context.Background())
 	var status string
@@ -276,11 +276,12 @@ func TestUIFeedbackContinuity(t *testing.T) {
 }
 
 func TestUIFeedbackGatewayRetries(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := uiTargetRig(t)
 	at := r.now().Format(time.RFC3339Nano)
 	r.seedCall(t, "call", "owner", 1)
 	r.code.Store(503)
 	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES('request','default','owner','register',?,?)`, at, at)
+	r.exec(t, `UPDATE ui_requests SET status='failed' WHERE id='request'`)
 	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('request','default','owner','Shown text',?,?)`, at, at)
 	for i := 0; i < 3; i++ {
 		r.svc.dispatchUIFeedback(context.Background())
@@ -295,7 +296,7 @@ func TestUIFeedbackGatewayRetries(t *testing.T) {
 }
 
 func TestUIModelRetries(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := uiTargetRig(t)
 	uiFlowServer(t, r)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
 	defer server.Close()
@@ -353,10 +354,10 @@ func TestUIOpeningFeedbackOrderAndBudget(t *testing.T) {
 }
 
 func TestUIDeleteEventAndLease(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := uiTargetRig(t)
 	uiFlowServer(t, r)
 	var mu sync.Mutex
-	output := uiFlowOutput(uiFlowCreate+","+uiFlowRoot, true)
+	output := uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false)
 	r.svc.uiController = uiFlowModel(t, &output, &mu)
 	uiFlowRegister(t, r)
 	at := r.now().Format(time.RFC3339Nano)
@@ -373,9 +374,9 @@ func TestUIDeleteEventAndLease(t *testing.T) {
 	}
 	r.advance(31 * time.Second)
 	r.svc.dispatchUIJobs(context.Background())
-	_ = r.store.DB().QueryRow(`SELECT count(*) FROM ui_surfaces`).Scan(&count)
+	_ = r.store.DB().QueryRow(`SELECT count(*) FROM ui_surfaces WHERE deleted=0`).Scan(&count)
 	if count != 0 {
-		t.Fatal("surface was not deleted")
+		t.Fatal("surface was not tombstoned")
 	}
 	var raw []byte
 	_ = r.store.DB().QueryRow(`SELECT payload FROM events WHERE event_type='ui.surface' ORDER BY cursor DESC LIMIT 1`).Scan(&raw)

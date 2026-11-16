@@ -6,14 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ronigooja/Zoe/internal/logging"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
-
-	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 type Client struct {
@@ -84,7 +83,7 @@ func (c *Client) call(ctx context.Context, kind string, input, output any) error
 		_ = json.Unmarshal(data, &failure)
 		// Only allow protocol labels, never arbitrary server text, into errors.
 		switch failure.Kind {
-		case "unauthorized", "busy", "request_invalid", "body_too_large", "not_found", "deadline_exceeded", "backend_unavailable":
+		case "unauthorized", "busy", "request_invalid", "body_too_large", "not_found", "deadline_exceeded", "backend_unavailable", "ingest_uncertain", "write_uncertain", "idempotency_conflict":
 			return &Error{failure.Kind}
 		}
 		return &Error{"http_status"}
@@ -95,26 +94,26 @@ func (c *Client) call(ctx context.Context, kind string, input, output any) error
 	return nil
 }
 
-func (c *Client) Search(ctx context.Context, user, query string) ([]Item, error) {
+func (c *Client) Search(ctx context.Context, user, request string) ([]Item, error) {
 	var out struct {
 		Items []Item `json:"items"`
 	}
-	err := c.call(ctx, "search", map[string]string{"user": user, "query": query}, &out)
+	err := c.call(ctx, "search", map[string]string{"user": user, "request": request}, &out)
 	return out.Items, err
 }
-func (c *Client) Write(ctx context.Context, user, sentence, restatement string) error {
+func (c *Client) Write(ctx context.Context, user, opID, request string) error {
 	var out struct {
 		Operations []json.RawMessage `json:"operations"`
 	}
-	return c.call(ctx, "write", map[string]string{"user": user, "sentence": sentence, "restatement": restatement}, &out)
+	return c.call(ctx, "write", map[string]string{"user": user, "op_id": opID, "request": request}, &out)
 }
 
-func (c *Client) Ingest(ctx context.Context, user, text string) (added, updated int, err error) {
+func (c *Client) IngestChunk(ctx context.Context, user, batchID, chunkID, text string) (added, updated int, err error) {
 	var out struct {
 		Added   int `json:"added"`
 		Updated int `json:"updated"`
 	}
-	err = c.call(ctx, "ingest", map[string]string{"user": user, "text": text}, &out)
+	err = c.call(ctx, "ingest", map[string]string{"user": user, "batch_id": batchID, "chunk_id": chunkID, "text": text}, &out)
 	return out.Added, out.Updated, err
 }
 

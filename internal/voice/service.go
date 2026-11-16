@@ -27,6 +27,7 @@ import (
 )
 
 type Config struct {
+	ResultDelivery         ResultDeliveryConfig
 	MemoryAPI              *memoryapi.Client
 	InstructionText        string
 	IngestEnabled          bool
@@ -56,6 +57,7 @@ type TaskSteward interface {
 }
 
 type Service struct {
+	resultReceiptAdapter   ResultReceiptAdapter
 	db                     *sql.DB
 	base                   *url.URL
 	key                    string
@@ -166,15 +168,17 @@ type openingContextItem struct {
 	Text string `json:"text"`
 }
 type openingContext struct {
-	Kind    string               `json:"kind"`
-	Version int                  `json:"version"`
-	Items   []openingContextItem `json:"items"`
+	PendingResults []PendingResultContext `json:"-"`
+	Kind           string                 `json:"kind"`
+	Version        int                    `json:"version"`
+	Items          []openingContextItem   `json:"items"`
 }
 type openingContextResult struct {
-	Applied   bool  `json:"applied"`
-	Version   int   `json:"version,omitempty"`
-	Silent    any   `json:"silent,omitempty"`
-	Supported *bool `json:"supported,omitempty"`
+	ContentHash string `json:"content_hash,omitempty"`
+	Applied     bool   `json:"applied"`
+	Version     int    `json:"version,omitempty"`
+	Silent      any    `json:"silent,omitempty"`
+	Supported   *bool  `json:"supported,omitempty"`
 }
 
 func openingCharsFor(c *openingContext) int {
@@ -186,6 +190,31 @@ func openingCharsFor(c *openingContext) int {
 		n += len([]rune(item.Text))
 	}
 	return n
+}
+
+// openingContextHash binds the gateway creation receipt to exactly the sent items.
+func openingContextHash(c *openingContext) string {
+	data, _ := json.Marshal(c)
+	return resultHash(string(data))
+}
+
+func (s *Service) acknowledgeOpeningResults(ctx context.Context, p contracts.Principal, session string, generation int64, opening *openingContext, receipt *openingContextResult) error {
+	if opening == nil || receipt == nil || !receipt.Applied || receipt.Silent != true || receipt.Version != opening.Version || receipt.ContentHash != openingContextHash(opening) {
+		return nil
+	}
+	for _, result := range opening.PendingResults {
+		var text string
+		if err := s.db.QueryRowContext(ctx, `SELECT e.content FROM task_entries e JOIN tasks t ON t.id=e.task_id AND t.workspace_id=e.workspace_id WHERE e.id=? AND e.task_id=? AND e.workspace_id=? AND t.owner_subject_id=?`, result.EntryID, result.TaskID, p.WorkspaceID, p.SubjectID).Scan(&text); err != nil {
+			return err
+		}
+		if resultHash(text) != result.ContentHash {
+			return errors.New("opening_result_source_changed")
+		}
+		if err := s.MarkResultAvailable(ctx, p.WorkspaceID, p.SubjectID, result.EntryID, session, generation); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) buildOpeningContext(ctx context.Context, p contracts.Principal) *openingContext {
@@ -235,6 +264,16 @@ func (s *Service) buildAVASOpeningContext(ctx context.Context, p contracts.Princ
 		c.Items = append(c.Items, openingContextItem{Role: "user", Text: text})
 		used += cost
 		return true
+	}
+	// Full authoritative texts are silent model context, never automatic playback.
+	if pending, err := s.PendingResultsForContext(ctx, p.WorkspaceID, p.SubjectID, 25); err == nil {
+		for _, result := range pending {
+			data, _ := json.Marshal(result)
+			if !appendItem("Pending authoritative result (availability only; respond contextually, do not automatically read all history):\n" + string(data)) {
+				break
+			}
+			c.PendingResults = append(c.PendingResults, result)
+		}
 	}
 	if s.register != nil {
 		text, err := s.register.AssembleContext(ctx, RegisterOwner{p.WorkspaceID, p.SubjectID}, s.now(), max(0, s.openingBudget-used))
@@ -394,6 +433,7 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 		}
 	}
 	return server.RegisterAuthenticatedRoutes(func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /v1/ui/snapshot", svc.handleUISnapshot)
 		mux.HandleFunc("GET /v1/voice/pool/status", svc.handlePoolStatus)
 		mux.HandleFunc("GET /v1/voice/config", svc.handleVoiceConfig)
 		mux.HandleFunc("POST /v1/voice/sessions", svc.handleCreate)
@@ -449,7 +489,7 @@ func newService(db *sql.DB, cfg Config) *Service {
 		interval = time.Second
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	return &Service{db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	return &Service{resultReceiptAdapter: cfg.ResultDelivery.ReceiptAdapter, db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 }
 
 func (s *Service) rotateIfOverBudget(ctx context.Context, p contracts.Principal) error {
@@ -876,6 +916,11 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	if opening != nil {
 		manifest, _ := json.Marshal(opening)
 		_, _ = s.db.ExecContext(ctx, `UPDATE voice_sessions SET opening_context_delivery=?,opening_context_version=?,opening_context_chars=?,opening_context_manifest=?,gateway_context_chars=? WHERE id=?`, string(openingDelivery), openingVersion, openingChars, manifest, upstream.ContextChars, id)
+	}
+	if s.upstreamRoute == "avas" {
+		if err := s.acknowledgeOpeningResults(ctx, p, id, 1, opening, upstream.OpeningContext); err != nil {
+			logging.Warnf("opening_result_availability_failed")
+		}
 	}
 	if opening == nil {
 		openingDelivery = []byte("unsupported")

@@ -7,6 +7,61 @@ import ZoeKit
 
 @MainActor
 final class SurfaceManagerTests: XCTestCase {
+    private func event(version: Int64, deleted: Bool = false) throws -> UISurfaceEvent {
+        let messages = deleted
+            ? #"[{"version":"v0.9","deleteSurface":{"surfaceId":"versioned"}}]"#
+            : #"[{"version":"v0.9","createSurface":{"surfaceId":"versioned","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"versioned","components":[{"id":"root","component":"Text","text":"Hello"}]}}]"#
+        let json = "{\"request_id\":\"r1\",\"surface_id\":\"versioned\",\"surface_version\":\(version),\"deleted\":\(deleted),\"container\":\"window\",\"awaiting_input\":false,\"messages\":\(messages)}"
+        let value = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
+        return try XCTUnwrap(UISurfaceEvent.decode(value))
+    }
+
+    func testClosedRevisionDoesNotReopenAndDeletionRendersSuccessfully() throws {
+        _ = NSApplication.shared
+        let manager = SurfaceManager(popoverAnchor: { nil })
+        defer { manager.reset() }
+        XCTAssertTrue(manager.display(try event(version: 1)))
+        manager.close(id: "versioned")
+        XCTAssertFalse(manager.display(try event(version: 1)))
+        XCTAssertNil(manager.viewModel(for: "versioned"))
+        XCTAssertTrue(manager.display(try event(version: 2)))
+        XCTAssertTrue(manager.display(try event(version: 3, deleted: true)))
+        XCTAssertNil(manager.viewModel(for: "versioned"))
+        XCTAssertFalse(manager.display(try event(version: 2)))
+        manager.reset()
+        XCTAssertTrue(manager.display(try event(version: 1)))
+    }
+
+    func testActualRendererActionClosureKeepsCapturedRevisionAfterReplacement() async throws {
+        _ = NSApplication.shared
+        let manager = SurfaceManager(popoverAnchor: { nil })
+        defer { manager.reset() }
+        XCTAssertTrue(manager.display(try event(version: 1)))
+        let oldRendererHandler = manager.capturedActionHandler(id: "versioned")
+        XCTAssertTrue(manager.display(try event(version: 2)))
+        let received = expectation(description: "Old renderer dispatches original identity")
+        manager.onBoundAction = { binding, action in
+            XCTAssertEqual(binding.surfaceVersion, 1)
+            XCTAssertEqual(binding.surfaceID, "versioned")
+            XCTAssertEqual(action.name, "answer")
+            received.fulfill()
+        }
+        oldRendererHandler(ResolvedAction(name: "answer", sourceComponentId: "submit", context: [:]))
+        await fulfillment(of: [received], timeout: 2)
+    }
+
+    func testDisplayReportsRendererFailureInsteadOfSuccess() throws {
+        _ = NSApplication.shared
+        let manager = SurfaceManager(popoverAnchor: { nil })
+        defer { manager.reset() }
+        let invalid = try messages("""
+        [{"version":"v0.9","updateDataModel":{"surfaceId":"invalid","path":"/value","value":"primitive"}},
+         {"version":"v0.9","updateDataModel":{"surfaceId":"invalid","path":"/value/child","value":"invalid"}}]
+        """)
+        XCTAssertFalse(manager.display(SurfaceSpec(id: "invalid", kind: .window, messages: invalid)))
+        XCTAssertNil(manager.viewModel(for: "invalid"))
+    }
+
     private func messages(_ json: String) throws -> [A2uiMessage] {
         try JSONDecoder().decode([A2uiMessage].self, from: Data(json.utf8))
     }

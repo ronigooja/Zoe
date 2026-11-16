@@ -115,14 +115,14 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 	hash := sha256.New()
 	count := 0
 	for _, turn := range s.turns {
-		if turn.at.Before(edge) {
+		if turn.at.Before(edge) && turn.eligible {
 			count++
 			transcript.WriteString(registerLine(turn))
 			fmt.Fprintf(hash, "%q %q %d %q %q\n", turn.at.UTC().Format(time.RFC3339Nano), turn.session, turn.seq, turn.role, turn.text)
 		}
 	}
 	fingerprint := hex.EncodeToString(hash.Sum(nil))
-	if count == 0 || fingerprint == s.hash {
+	if count == 0 || (fingerprint == s.hash && s.CompactFrom.Equal(s.MemoryBoundary)) {
 		return false, nil
 	}
 	callCtx, cancel := context.WithTimeout(ctx, r.compactTimeout)
@@ -153,8 +153,7 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 		stage, kind = "invalid_output", "output_invalid"
 		return false, errors.New("invalid register compact")
 	}
-	// Re-read caller-owned M immediately before committing; provenance also invalidates
-	// this compact on reads if the memory batch advances after this check.
+	// Re-read caller-owned M before replacing coverage; a failed fence retains it.
 	stage, kind = "write", "db"
 	boundary, err := r.memoryBoundary(ctx, o)
 	if err != nil {

@@ -19,9 +19,7 @@ struct ZoeMacApp {
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var subscriptions = Set<AnyCancellable>()
-    private lazy var surfaces = SurfaceManager(popoverAnchor: { [weak self] in self?.statusItem?.button }, actionHandler: { [weak self] id, action in
-        self?.model.sendUISurfaceAction(surfaceID: id, action: action)
-    })
+    private lazy var surfaces = SurfaceManager(popoverAnchor: { [weak self] in self?.statusItem?.button })
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -47,17 +45,17 @@ struct ZoeMacApp {
             }.store(in: &subscriptions)
         surfaces.onUserClosed = { [weak self] in self?.model.noteUISurfaceUserClosed() }
         surfaces.onRenderError = { [weak self] _, errors in self?.model.noteUISurfaceRenderErrors(errors) }
+        surfaces.onBoundAction = { [weak self] binding, action in
+            self?.model.sendUISurfaceAction(binding: binding, action: action)
+        }
         model.onUISurface = { [weak self] event in
             guard let self else { return false }
-            if event.isDeletion {
-                self.surfaces.close(id: event.surfaceID)
-                return false
-            }
-            return self.surfaces.display(SurfaceSpec(id: event.surfaceID, kind: event.container, messages: event.messages, size: event.size))
+            return self.surfaces.display(event)
         }
         model.onUISurfacesClosed = { [weak self] ids in
             for id in ids { self?.surfaces.close(id: id) }
         }
+        model.onUISurfacesReset = { [weak self] in self?.surfaces.reset() }
         model.$continuousVoiceEnabled.sink { enabled in voice.state = enabled ? .on : .off }.store(in: &subscriptions)
         model.$voiceStatus.sink { status in
             let active: Bool

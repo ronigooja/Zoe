@@ -56,11 +56,7 @@ func (s *Server) AppendTaskInputTx(ctx context.Context, tx *sql.Tx, c CommandCon
 		if err = tx.QueryRowContext(ctx, `SELECT status IN ('dispatching','active','uncertain') FROM runs WHERE id=?`, runID).Scan(&live); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		if live {
-			if err = markRunEntries(ctx, tx, runID, "answer", []contracts.RunEntry{{ID: id}}); err != nil {
-				return contracts.CommandResult{}, nil, err
-			}
-		} else {
+		if !live {
 			status = "queued"
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET interaction_state='none',interaction_question='' WHERE id=? AND workspace_id=?`, taskID, c.Principal.WorkspaceID); err != nil {

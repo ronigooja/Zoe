@@ -2,7 +2,9 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -14,15 +16,22 @@ import (
 
 const ingestChunkBytes = 200 * 1024
 
+// Reserve the exact fixed-length SHA-256 identities when sizing HTTP bodies.
+func batchBodyFits(user, text string) bool {
+	data, _ := json.Marshal(map[string]string{"user": user, "text": text, "batch_id": fmt.Sprintf("%064d", 0), "chunk_id": fmt.Sprintf("%064d", 0)})
+	return len(data) <= 256*1024
+}
+
 type ingestClient interface {
-	Ingest(context.Context, string, string) (int, int, error)
+	IngestChunk(context.Context, string, string, string, string) (int, int, error)
 }
 
 type batchEntry struct {
-	at   time.Time
-	id   string
-	seq  int64
-	text string
+	at     time.Time
+	id     string
+	seq    int64
+	text   string
+	source string
 }
 
 // BoundaryAt returns the last successful worker ingestion boundary, without
@@ -40,9 +49,32 @@ func (r *Repository) BoundaryAt(ctx context.Context, workspace, principal string
 }
 
 // batchInput reads only transcript turns and completed task requests/results.
-func (r *Repository) batchInput(ctx context.Context, workspace, principal string, from, until time.Time) ([]string, error) {
+type batchQuerier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func batchSources(ctx context.Context, q batchQuerier, workspace, principal string, from, until time.Time, unseen bool) ([]batchEntry, error) {
 	var turns, tasks []batchEntry
-	rows, err := r.db.QueryContext(ctx, `SELECT t.at,t.session_id,t.seq,t.role,t.text FROM voice_transcript_turns t JOIN voice_sessions s ON s.id=t.session_id AND s.workspace_id=t.workspace_id WHERE s.workspace_id=? AND s.owner_id=?`, workspace, principal)
+	seen := map[string]bool{}
+	if unseen {
+		rows, err := q.QueryContext(ctx, `SELECT source_id FROM memory_ingest_members WHERE workspace_id=? AND principal_id=?`, workspace, principal)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err = rows.Scan(&id); err != nil {
+				return nil, err
+			}
+			seen[id] = true
+		}
+		if err = rows.Err(); err != nil {
+			return nil, err
+		}
+		rows.Close()
+	}
+	rows, err := q.QueryContext(ctx, `SELECT t.at,t.session_id,t.seq,t.role,t.text FROM voice_transcript_turns t JOIN voice_sessions s ON s.id=t.session_id AND s.workspace_id=t.workspace_id WHERE s.workspace_id=? AND s.owner_id=?`, workspace, principal)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +88,8 @@ func (r *Repository) batchInput(ctx context.Context, workspace, principal string
 		if err != nil {
 			break
 		}
-		if e.at.After(from) && !e.at.After(until) {
+		e.source = fmt.Sprintf("turn:%q:%d", e.id, e.seq)
+		if !seen[e.source] && (unseen || e.at.After(from)) && !e.at.After(until) {
 			e.text = fmt.Sprintf("[%s] %s: %s\n", e.at.UTC().Format(time.RFC3339Nano), role, text)
 			turns = append(turns, e)
 		}
@@ -68,7 +101,7 @@ func (r *Repository) batchInput(ctx context.Context, workspace, principal string
 	if err != nil {
 		return nil, err
 	}
-	rows, err = r.db.QueryContext(ctx, `SELECT id,finished_at,title,result FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND status='complete' AND finished_at IS NOT NULL`, workspace, principal)
+	rows, err = q.QueryContext(ctx, `SELECT id,finished_at,goal,coalesce(result,'') FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND status='complete' AND finished_at IS NOT NULL`, workspace, principal)
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +115,9 @@ func (r *Repository) batchInput(ctx context.Context, workspace, principal string
 		if err != nil {
 			break
 		}
-		if e.at.After(from) && !e.at.After(until) {
-			e.text = fmt.Sprintf("[%s] completed task:\nuser: %s\nresult: %s\n", e.at.UTC().Format(time.RFC3339Nano), request, result)
+		e.source = fmt.Sprintf("task:%q", e.id)
+		if !seen[e.source] && (unseen || e.at.After(from)) && !e.at.After(until) {
+			e.text = fmt.Sprintf("[%s] completed task %s:\nrequest: %s\nresult: %s\n", e.at.UTC().Format(time.RFC3339Nano), e.id, request, result)
 			tasks = append(tasks, e)
 		}
 	}
@@ -106,13 +140,18 @@ func (r *Repository) batchInput(ctx context.Context, workspace, principal string
 			return a.seq < b.seq
 		})
 	}
-	less(turns)
-	less(tasks)
+	entries := append(turns, tasks...)
+	less(entries)
+	return entries, nil
+}
+
+func (r *Repository) batchInput(ctx context.Context, workspace, principal string, from, until time.Time) ([]string, error) {
+	entries, err := batchSources(ctx, r.db, workspace, principal, from, until, false)
 	var blocks []string
-	for _, e := range append(turns, tasks...) {
+	for _, e := range entries {
 		blocks = append(blocks, e.text)
 	}
-	return blocks, nil
+	return blocks, err
 }
 
 // ingestChunks preserves whole turns/tasks unless one block exceeds the limit.
@@ -122,8 +161,8 @@ func ingestChunks(blocks []string, user string) []string {
 	current := ""
 	for _, block := range blocks {
 		for len(block) > 0 {
-			if len(block) <= ingestChunkBytes && ingestBodyFits(user, block) {
-				if len(current)+len(block) > ingestChunkBytes || !ingestBodyFits(user, current+block) {
+			if len(block) <= ingestChunkBytes && batchBodyFits(user, block) {
+				if len(current)+len(block) > ingestChunkBytes || !batchBodyFits(user, current+block) {
 					if current != "" {
 						chunks = append(chunks, current)
 						current = ""
@@ -139,7 +178,7 @@ func ingestChunks(blocks []string, user string) []string {
 			low, high := 0, min(len(block), ingestChunkBytes)
 			for low < high {
 				mid := low + (high-low+1)/2
-				if ingestBodyFits(user, block[:mid]) {
+				if batchBodyFits(user, block[:mid]) {
 					low = mid
 				} else {
 					high = mid - 1
@@ -172,30 +211,92 @@ func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspac
 	if now.UnixMilli() < next || now.UnixNano() <= boundary {
 		return 0, nil
 	}
-	blocks, err := r.batchInput(ctx, workspace, principal, time.Unix(0, boundary), now)
+	user := memoryapi.User(workspace, principal)
+	if !batchBodyFits(user, "\u0000\u0000\u0000\u0000") {
+		return 0, errors.New("memory ingest owner exceeds request limit")
+	}
+	var batchID string
+	var until int64
+	// The source snapshot and membership assignment are one SQLite transaction.
+	// Inserts after this snapshot remain unassigned even if their event time < M.
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	user := memoryapi.User(workspace, principal)
-	if !ingestBodyFits(user, "\u0000\u0000\u0000\u0000") {
-		return 0, errors.New("memory ingest owner exceeds request limit")
+	defer tx.Rollback()
+	err = tx.QueryRowContext(ctx, `SELECT id,until_ns FROM memory_ingest_batches WHERE workspace_id=? AND principal_id=? AND from_ns=?`, workspace, principal, boundary).Scan(&batchID, &until)
+	if errors.Is(err, sql.ErrNoRows) {
+		entries, e := batchSources(ctx, tx, workspace, principal, time.Time{}, now, true)
+		if e != nil {
+			return 0, e
+		}
+		if len(entries) == 0 {
+			return 0, nil
+		}
+		var blocks []string
+		for _, entry := range entries {
+			blocks = append(blocks, entry.text)
+		}
+		chunks := ingestChunks(blocks, user)
+		until = now.UnixNano()
+		batchID = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%d", user, boundary, until))))
+		if _, e = tx.ExecContext(ctx, `INSERT INTO memory_ingest_batches VALUES(?,?,?,?,?)`, batchID, workspace, principal, boundary, until); e != nil {
+			return 0, e
+		}
+		for _, entry := range entries {
+			if _, e = tx.ExecContext(ctx, `INSERT INTO memory_ingest_members VALUES(?,?,?,?)`, workspace, principal, entry.source, batchID); e != nil {
+				return 0, e
+			}
+		}
+		for i, text := range chunks {
+			id := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", batchID, i, text))))
+			if _, e = tx.ExecContext(ctx, `INSERT INTO memory_ingest_chunks(batch_id,position,id,text) VALUES(?,?,?,?)`, batchID, i, id, text); e != nil {
+				return 0, e
+			}
+		}
+	} else if err != nil {
+		return 0, err
 	}
-	chunks := ingestChunks(blocks, user)
-	for i, text := range chunks {
-		if _, _, err = client.Ingest(ctx, user, text); err != nil {
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	// Read and close before HTTP: never hold the single SQLite connection
+	// during external work. The persisted snapshot fixes the retry interval.
+	rows, err := r.db.QueryContext(ctx, `SELECT id,text FROM memory_ingest_chunks WHERE batch_id=? AND done=0 ORDER BY position`, batchID)
+	if err != nil {
+		return 0, err
+	}
+	type pendingChunk struct{ id, text string }
+	var pending []pendingChunk
+	for rows.Next() {
+		var c pendingChunk
+		if err = rows.Scan(&c.id, &c.text); err != nil {
+			break
+		}
+		pending = append(pending, c)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return 0, err
+	}
+	for i, c := range pending {
+		if _, _, err = client.IngestChunk(ctx, user, batchID, c.id, c.text); err != nil {
+			return i, err
+		}
+		if _, err = r.db.ExecContext(ctx, `UPDATE memory_ingest_chunks SET done=1 WHERE id=?`, c.id); err != nil {
 			return i, err
 		}
 	}
-	if len(chunks) == 0 {
-		return 0, nil
-	}
-	res, err := r.db.ExecContext(ctx, `UPDATE memory_ingest_state SET boundary_ns=?,next_attempt_ms=? WHERE workspace_id=? AND principal_id=? AND boundary_ns=? AND next_attempt_ms=?`, now.UnixNano(), now.Add(interval).UnixMilli(), workspace, principal, boundary, next)
+	res, err := r.db.ExecContext(ctx, `UPDATE memory_ingest_state SET boundary_ns=?,next_attempt_ms=? WHERE workspace_id=? AND principal_id=? AND boundary_ns=? AND next_attempt_ms=?`, until, now.Add(interval).UnixMilli(), workspace, principal, boundary, next)
 	if err != nil {
-		return len(chunks), err
+		return len(pending), err
 	}
 	n, err := res.RowsAffected()
 	if err == nil && n != 1 {
 		err = ErrVersionConflict
 	}
-	return len(chunks), err
+	return len(pending), err
 }

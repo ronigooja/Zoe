@@ -39,6 +39,12 @@ public final class APIClient: @unchecked Sendable {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
     }
 
+    public func uiSnapshot() async throws -> UISnapshot {
+        // A2UI message keys and the strict UI contract must not undergo snake-case conversion.
+        let value: JSONValue = try await request(path: ["v1", "ui", "snapshot"], method: "GET", authenticated: true)
+        return try JSONDecoder().decode(UISnapshot.self, from: JSONEncoder().encode(value))
+    }
+
     public func snapshot() async throws -> Snapshot {
         let snapshot: Snapshot = try await request(path: ["v1", "snapshot"], method: "GET", authenticated: true)
         guard snapshot.workspaceId == "default", snapshot.subjectId == "owner" else { throw ZoeError.invalidResponse }

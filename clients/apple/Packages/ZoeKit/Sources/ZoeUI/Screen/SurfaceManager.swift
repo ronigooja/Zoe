@@ -16,6 +16,10 @@ import A2UISwiftUI
     private var store = SurfaceStore()
     private var entries: [String: Entry] = [:]
     private let actionHandler: (String, ResolvedAction) -> Void
+    public var onBoundAction: ((UISurfaceBinding, ResolvedAction) -> Void)?
+    private var bindings: [String: UISurfaceBinding] = [:]
+    private var revisions: [String: Int64] = [:]
+    private var renderFailed = Set<String>()
     private let popoverAnchor: () -> NSView?
     public var onUserClosed: (() -> Void)?
     public var onRenderError: ((String, [Error]) -> Void)?
@@ -32,7 +36,7 @@ import A2UISwiftUI
         let model = SurfaceViewModel(catalog: basicCatalog)
         let errors = model.processMessages(store.surfaces[spec.id]!.messages)
         model.a2uiStyle = Self.fixedStyle
-        if !errors.isEmpty { onRenderError?(spec.id, errors) }
+        if !errors.isEmpty { renderFailed.insert(spec.id); onRenderError?(spec.id, errors) }
         let controller = hostingController(model, id: spec.id)
         var entry = Entry(viewModel: model)
         switch spec.kind {
@@ -77,7 +81,7 @@ import A2UISwiftUI
             errors.append(contentsOf: model.processMessages([message]))
             model.a2uiStyle = Self.fixedStyle
         }
-        if !errors.isEmpty { onRenderError?(id, errors) }
+        if !errors.isEmpty { renderFailed.insert(id); onRenderError?(id, errors) }
         entries[id] = Entry(viewModel: model, window: entry.window, popover: entry.popover)
         if let window = entry.window {
             let contentSize = window.contentRect(forFrameRect: window.frame).size
@@ -91,14 +95,30 @@ import A2UISwiftUI
         }
     }
 
-    /// A dismissed popover keeps its renderer; every new server state presents it again.
+    /// Only a newer server revision presents a dismissed surface again.
+    @discardableResult public func display(_ event: UISurfaceEvent) -> Bool {
+        guard event.surfaceVersion > (revisions[event.surfaceID] ?? 0) else { return false }
+        revisions[event.surfaceID] = event.surfaceVersion
+        if event.deleted {
+            close(id: event.surfaceID)
+            return entries[event.surfaceID] == nil
+        }
+        bindings[event.surfaceID] = event.binding
+        return display(SurfaceSpec(id: event.surfaceID, kind: event.container, messages: event.messages, size: event.size))
+    }
+
     @discardableResult public func display(_ spec: SurfaceSpec) -> Bool {
+        renderFailed.remove(spec.id)
         if entries[spec.id] != nil, store.surfaces[spec.id]?.kind == spec.kind {
             update(id: spec.id, messages: spec.messages, size: spec.size)
         } else {
             open(spec)
         }
         guard let entry = entries[spec.id] else { return false }
+        guard !renderFailed.contains(spec.id) else {
+            close(id: spec.id)
+            return false
+        }
         switch spec.kind {
         case .window:
             NSApp.activate(ignoringOtherApps: true)
@@ -122,6 +142,13 @@ import A2UISwiftUI
         entry.window?.close()
         entry.popover?.delegate = nil
         entry.popover?.performClose(nil)
+    }
+
+    /// Clear revision fences only when the authenticated connection scope is discarded.
+    public func reset() {
+        for id in Array(entries.keys) { close(id: id) }
+        bindings.removeAll()
+        revisions.removeAll()
     }
 
     public func windowWillClose(_ notification: Notification) {
@@ -158,11 +185,22 @@ import A2UISwiftUI
     }
 
     private func hostingController(_ model: SurfaceViewModel, id: String) -> NSViewController {
-        let controller = NSHostingController(rootView: A2UISurfaceView(viewModel: model, onAction: { [weak self] action in
-            Task { @MainActor [weak self] in self?.actionHandler(id, action) }
-        }))
+        let handler = capturedActionHandler(id: id)
+        let controller = NSHostingController(rootView: A2UISurfaceView(viewModel: model, onAction: handler))
         controller.sizingOptions = []
         return controller
+    }
+
+    // Shared with the native hosting view so fixtures exercise the actual renderer closure.
+    func capturedActionHandler(id: String) -> (ResolvedAction) -> Void {
+        // Capture the renderer's immutable identity, not the manager's newest mapping at dispatch time.
+        let binding = bindings[id]
+        return { [weak self] action in
+            Task { @MainActor [weak self] in
+                if let binding { self?.onBoundAction?(binding, action) }
+                else { self?.actionHandler(id, action) }
+            }
+        }
     }
 }
 #endif

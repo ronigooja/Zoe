@@ -80,6 +80,119 @@ final class ClientContractTests: XCTestCase {
         XCTAssertFalse(generation.accepts(reauthenticatedRequest, from: serverB))
     }
 
+    func testUISnapshotUsesAuthenticatedEndpointAndExactInt64Cursor() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        ContractURLProtocol.responseHandler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/ui/snapshot")
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertNotNil(request.value(forHTTPHeaderField: "Authorization"))
+            return (200, ["Content-Type": "application/json"], Data(#"{"cursor":9007199254740993,"surfaces":[]}"#.utf8))
+        }
+        let snapshot = try await api.uiSnapshot()
+        XCTAssertEqual(snapshot.cursor, 9_007_199_254_740_993)
+        XCTAssertTrue(snapshot.surfaces.isEmpty)
+    }
+
+    @MainActor func testReconnectTransportReplaysNonUIEventsDespiteNewerUISnapshotAndFetchFailure() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let model = ZoeAppModel()
+        model.setAuthenticationForTesting(.connected)
+        func envelope(_ cursor: Int64, _ type: String, payload: String = "{}", version: Int64 = 1) -> String {
+            "{\"schema_version\":1,\"event_id\":\"e\(cursor)\",\"cursor\":\"\(cursor)\",\"type\":\"\(type)\",\"occurred_at\":\"\",\"workspace_id\":\"default\",\"aggregate_type\":\"ui_surface\",\"aggregate_id\":\"s1\",\"aggregate_version\":\(version),\"payload\":\(payload)}"
+        }
+        func frame(_ cursor: Int64, _ type: String, payload: String = "{}", version: Int64 = 1) -> String {
+            "id: \(cursor)\nevent: \(type)\ndata: \(envelope(cursor, type, payload: payload, version: version))\n\n"
+        }
+        let surface = #"{"request_id":"r1","surface_id":"s1","surface_version":2,"deleted":true,"container":"window","awaiting_input":false,"messages":[{"version":"v0.9","deleteSurface":{"surfaceId":"s1"}}]}"#
+        let snapshot = "{\"cursor\":12,\"surfaces\":[\(surface.dropLast()),\"render_status\":\"rendered\"}]}"
+        var renderCount = 0
+        var consumed: [String] = []
+        model.onUISurface = { _ in renderCount += 1; return true }
+        model.consumedEventObserverForTesting = { consumed.append($0) }
+        var attempt = 0
+        var streamCursors: [String?] = []
+        ContractURLProtocol.responseHandler = { request in
+            if request.url?.path == "/v1/ui/snapshot" {
+                attempt += 1
+                if attempt == 2 { return (503, [:], Data()) }
+                return (200, ["Content-Type": "application/json"], Data((attempt == 1 ? #"{"cursor":10,"surfaces":[]}"# : snapshot).utf8))
+            }
+            guard request.url?.path == "/v1/events" else { return (503, [:], Data()) }
+            streamCursors.append(request.value(forHTTPHeaderField: "Last-Event-ID"))
+            let body = attempt == 1 ? frame(10, "task.updated")
+                : frame(11, "voice.end") + frame(12, "ui.surface", payload: surface, version: 2) + frame(13, "task.updated")
+            return (200, ["Content-Type": "text/event-stream"], Data(body.utf8))
+        }
+        try await model.receiveEventConnectionForTesting(api: api)
+        XCTAssertEqual(model.eventCursorForTesting, "10")
+        do {
+            try await model.receiveEventConnectionForTesting(api: api)
+            XCTFail("Failed snapshot must not open SSE or advance cursor")
+        } catch { }
+        XCTAssertEqual(model.eventCursorForTesting, "10")
+        XCTAssertEqual(streamCursors.count, 1)
+        try await model.receiveEventConnectionForTesting(api: api)
+        XCTAssertEqual(streamCursors, ["0", "10"])
+        XCTAssertEqual(consumed, ["task.updated", "voice.end", "ui.surface", "task.updated"])
+        guard case .stopped = model.voiceStatus else { return XCTFail("Replayed voice.end must run the voice shutdown handler") }
+        XCTAssertEqual(renderCount, 1, "Snapshot revision must suppress its obsolete SSE replay")
+        XCTAssertEqual(model.eventCursorForTesting, "13", "Event racing snapshot12 remains consumed")
+    }
+
+    @MainActor func testExpiredGlobalHistoryStopsWithoutAdvancingToUISnapshotCursor() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let model = ZoeAppModel()
+        model.setAuthenticationForTesting(.connected)
+        model.setSnapshotForTesting(Snapshot(serverVersion: "test", eventCursor: "10"))
+        ContractURLProtocol.responseHandler = { request in
+            if request.url?.path == "/v1/ui/snapshot" {
+                return (200, ["Content-Type": "application/json"], Data(#"{"cursor":99,"surfaces":[]}"#.utf8))
+            }
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Last-Event-ID"), "10")
+            return (200, ["Content-Type": "text/event-stream"], Data("event: snapshot_required\ndata: {\"reason\":\"cursor_expired\"}\n\n".utf8))
+        }
+        try await model.receiveEventConnectionForTesting(api: api)
+        XCTAssertTrue(model.eventRecoveryRequired)
+        XCTAssertEqual(model.authentication, .unavailable)
+        XCTAssertEqual(model.eventCursorForTesting, "10")
+    }
+
+    func testUIACKAndActionUnknownAcceptanceRecoverOriginalReceipt() async throws {
+        for kind in ["ui.rendered", "ui.action"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
+            let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+            let coordinator = CommandCoordinator(api: api, journal: journal)
+            let key = UUID().uuidString
+            let payload: JSONValue = .object(["request_id": .string("r1"), "surface_id": .string("s1"), "surface_version": .integer(2)])
+            var posts = 0
+            ContractURLProtocol.failureHandler = { request in
+                guard request.httpMethod == "POST" else { return nil }
+                posts += 1
+                return URLError(.timedOut)
+            }
+            ContractURLProtocol.responseHandler = { request in
+                XCTAssertEqual(request.httpMethod, "GET")
+                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: kind, workspaceID: "workspace-1", resourceID: "s1"))
+            }
+            do {
+                _ = try await coordinator.submit(kind: kind, payload: payload, workspaceID: "workspace-1", idempotencyKey: key)
+                XCTFail("Expected uncertain acceptance")
+            } catch { }
+            let pending = try await journal.all()
+            XCTAssertEqual(pending.first?.payload, payload)
+            let outcomes = try await coordinator.recoverPending(currentWorkspaceID: "workspace-1", onOutcome: { _ in })
+            XCTAssertEqual(outcomes.count, 1)
+            XCTAssertTrue(try XCTUnwrap(outcomes.first).recovered)
+            XCTAssertEqual(posts, 1)
+            let remaining = try await journal.all()
+            XCTAssertTrue(remaining.isEmpty)
+        }
+        ContractURLProtocol.failureHandler = nil
+    }
+
     func testSSEParserCombinesDataLinesAndPreservesDecimalCursor() throws {
         let payload = #"{"schema_version":1,"event_id":"ev-7","cursor":"9007199254740993","type":"task.updated","occurred_at":"2026-10-20T12:00:00Z","workspace_id":"workspace","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":5,"payload":{"status":"active"}}"#
         var parser = SSEParser()

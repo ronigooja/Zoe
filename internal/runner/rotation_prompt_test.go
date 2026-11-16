@@ -27,6 +27,7 @@ type rotationContextControlFake struct {
 
 func (c *rotationContextControlFake) RotationContext(context.Context, string, string, uint64) (contracts.RotationContext, error) {
 	c.calls++
+	c.context.SchemaVersion = 1
 	return c.context, c.err
 }
 

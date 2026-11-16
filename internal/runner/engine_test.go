@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -950,12 +951,17 @@ type authorizationFake struct {
 	request  string
 }
 
-func (f *authorizationFake) RuntimeAuthorization(context.Context, string, string, uint64) (*contracts.RuntimeAuthorization, error) {
+func (f *authorizationFake) RuntimeAuthorization(_ context.Context, runID, _ string, fence uint64) (*contracts.RuntimeAuthorization, error) {
 	f.calls++
 	if f.decision == "" || f.calls == 1 {
 		return nil, nil
 	}
-	return &contracts.RuntimeAuthorization{RequestID: f.request, Decision: f.decision, Message: "answer"}, nil
+	canonical, _ := json.Marshal(map[string]any{"run_id": runID, "request_id": f.request, "action": "", "resources": []string{}, "question": "What?"})
+	return &contracts.RuntimeAuthorization{EntryID: "accepted-answer", QuestionID: "server-question", RunID: runID, Fence: fence, ActionDigest: fmt.Sprintf("%x", sha256.Sum256(canonical)), RequestID: f.request, Decision: f.decision, Message: "answer"}, nil
+}
+
+func (f *controlFake) AcknowledgeEntry(context.Context, string, contracts.EntryDelivery) error {
+	return nil
 }
 
 func TestWorkerQuestionAnswerUsesSameSessionFormReply(t *testing.T) {

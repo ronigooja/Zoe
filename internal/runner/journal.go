@@ -196,6 +196,11 @@ CREATE TABLE IF NOT EXISTS journal_observations (
   created_at TEXT NOT NULL,
   acknowledged_at TEXT
 );
+CREATE TABLE IF NOT EXISTS journal_answer_deliveries (
+ run_id TEXT NOT NULL, entry_id TEXT NOT NULL, session_id TEXT NOT NULL,
+ binding_json BLOB NOT NULL, state TEXT NOT NULL CHECK(state IN ('attempted','confirmed','acknowledged')),
+ PRIMARY KEY(run_id,entry_id)
+);
 CREATE TABLE IF NOT EXISTS journal_reconciliations (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,

@@ -13,6 +13,7 @@ public final class ZoeAppModel: ObservableObject {
     /// Returns true only once the native host has displayed the replacement surface.
     public var onUISurface: ((UISurfaceEvent) -> Bool)?
     public var onUISurfacesClosed: (([String]) -> Void)?
+    public var onUISurfacesReset: (() -> Void)?
     private var uiSurfaceRequests = UISurfaceRequests()
     #if os(macOS)
     public var screenVisibleSize: () -> NSSize? = { NSScreen.main?.visibleFrame.size }
@@ -23,6 +24,7 @@ public final class ZoeAppModel: ObservableObject {
     @Published public private(set) var notice: String?
     @Published public private(set) var isBusy = false
     @Published public private(set) var authentication: InstanceConnectionState = .checking
+    @Published public private(set) var eventRecoveryRequired = false
     @Published public private(set) var pendingConnectionImport: InstallationConnection?
     @Published public private(set) var connectionImportError: String?
     private let installationID: String
@@ -59,6 +61,14 @@ public final class ZoeAppModel: ObservableObject {
     var voiceHangupOverrideForTesting: ((String) async throws -> VoiceOperationResponse)?
     func handleEventForTesting(_ envelope: EventEnvelope, expectedConnectionEpoch: UInt64? = nil) async {
         await handle(.event(envelope), expectedGeneration: expectedConnectionEpoch ?? connectionGeneration.value, sourceAPI: nil)
+    }
+    var eventCursorForTesting: String? { eventCursor }
+    var consumedEventObserverForTesting: ((String) -> Void)?
+    func receiveEventConnectionForTesting(api: APIClient) async throws {
+        let generation = connectionGeneration.value
+        try await receiveEventConnection(using: api, generation: generation) { [weak self] push in
+            await self?.handle(push, expectedGeneration: generation, sourceAPI: nil)
+        }
     }
     func setAuthenticationForTesting(_ state: InstanceConnectionState) {
         authentication = state
@@ -214,6 +224,7 @@ public final class ZoeAppModel: ObservableObject {
     public var canEndVoiceSession: Bool { voiceSession != nil }
 
     public func start() async {
+        guard !eventRecoveryRequired else { return }
         guard !isConnecting, !isBusy else { return }
         guard !serverAddress.isEmpty else { authentication = .disconnected; return }
         isConnecting = true
@@ -462,6 +473,7 @@ public final class ZoeAppModel: ObservableObject {
         syncLoop = nil
         workspaceID = nil
         eventCursor = nil
+        eventRecoveryRequired = false
         voiceConfig = nil
         voicePoolStatus = nil
         if clearDrafts { voiceDraft = "" }
@@ -1293,12 +1305,11 @@ public final class ZoeAppModel: ObservableObject {
         let snapshot = try await api.snapshot()
         guard isCurrentConnection(generation, sourceAPI: api) else { return }
         workspaceID = snapshot.workspaceId
-        eventCursor = snapshot.eventCursor
+        // Neither metadata nor UI snapshots prove consumption of global events.
     }
 
     private func listen(using api: APIClient) async {
         let generation = connectionGeneration.value
-        let stream = EventStreamClient(api: api)
         while !Task.isCancelled && isCurrentConnection(generation, sourceAPI: api) {
             let started = Date()
             let diagnostics = StreamDiagnostics(now: started)
@@ -1311,16 +1322,14 @@ public final class ZoeAppModel: ObservableObject {
                 }
             }
             do {
-                _ = try await stream.run(after: eventCursor, onConnected: {
-                    await api.recordDiagnosticAndWait(phase: "events_stream", requestPath: "/v1/events", errorSummary: "connected", level: .info)
-                }) { [weak self] push in
+                try await receiveEventConnection(using: api, generation: generation) { [weak self] push in
                     await self?.receiveStreamPush(push, diagnostics: diagnostics, generation: generation, api: api)
                 }
                 streamReportTask.cancel()
                 diagnostics.report(api: api, force: true)
                 api.recordDiagnostic(phase: "events_stream", requestPath: "/v1/events", errorSummary: "ended;dur=\(DiagnosticSummaries.seconds(Date().timeIntervalSince(started)))", level: .info)
                 if Task.isCancelled || !isCurrentConnection(generation, sourceAPI: api) { return }
-                closeUISurfaces()
+                if eventRecoveryRequired { return }
                 streamBackoff = 1
             } catch {
                 streamReportTask.cancel()
@@ -1328,7 +1337,6 @@ public final class ZoeAppModel: ObservableObject {
                 let redacted = RedactedDiagnostic(error)
                 api.recordDiagnostic(phase: "events_stream", requestPath: "/v1/events", httpStatus: redacted.httpStatus, errorType: redacted.errorType, errorSummary: "error;\(redacted.errorType);dur=\(DiagnosticSummaries.seconds(Date().timeIntervalSince(started)))", level: .info)
                 if Task.isCancelled || !isCurrentConnection(generation, sourceAPI: api) { return }
-                closeUISurfaces()
                 if Self.isAccessDenied(error) {
                     lockWorkspace(clearDrafts: false)
                     authentication = .disconnected
@@ -1342,6 +1350,29 @@ public final class ZoeAppModel: ObservableObject {
             api.recordDiagnostic(phase: "events_stream", requestPath: "/v1/events", errorSummary: "reconnect_in=\(delay)", level: .info)
             try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
         }
+    }
+
+    /// UI repair never advances global delivery. Replaying from the last consumed global
+    /// cursor preserves non-UI events; surface revisions suppress obsolete UI presentations.
+    private func receiveEventConnection(using api: APIClient, generation: UInt64,
+                                        onPush: @escaping @Sendable (ServerPush) async -> Void) async throws {
+        let snapshot = try await api.uiSnapshot()
+        guard !Task.isCancelled, generation == connectionGeneration.value else { return }
+        let removed = uiSurfaceRequests.reconcile(snapshot)
+        onUISurfacesClosed?(removed)
+        for surface in snapshot.surfaces {
+            await applyUISurface(surface.event)
+            guard !Task.isCancelled, generation == connectionGeneration.value else { return }
+        }
+        if let coordinator {
+            _ = try? await coordinator.recoverPending(currentWorkspaceID: workspaceID, onOutcome: { _ in })
+        }
+        guard !Task.isCancelled, generation == connectionGeneration.value else { return }
+        // A fresh installation conservatively requests all retained history, as supported
+        // by handleEvents (cursor zero). It does not claim a complete full-state baseline.
+        _ = try await EventStreamClient(api: api).run(after: eventCursor ?? "0", onConnected: {
+            await api.recordDiagnosticAndWait(phase: "events_stream", requestPath: "/v1/events", errorSummary: "connected", level: .info)
+        }, onPush: onPush)
     }
 
     private func receiveStreamPush(_ push: ServerPush, diagnostics: StreamDiagnostics, generation: UInt64, api: APIClient) async {
@@ -1365,7 +1396,20 @@ public final class ZoeAppModel: ObservableObject {
         guard isCurrentConnection(expectedGeneration, sourceAPI: sourceAPI), !Task.isCancelled else { return }
         switch push {
         case let .event(envelope):
-            eventCursor = envelope.cursor
+            if let cursor = Int64(envelope.cursor), let previous = eventCursor.flatMap(Int64.init), cursor <= previous {
+                // A same-version replay can still reconcile a pending ACK below.
+                if envelope.type != "ui.surface" { return }
+            }
+            // Advance only after this event has been handled, never from a UI snapshot.
+            defer {
+                if isCurrentConnection(expectedGeneration, sourceAPI: sourceAPI),
+                   let cursor = Int64(envelope.cursor), cursor > (eventCursor.flatMap(Int64.init) ?? -1) {
+                    eventCursor = envelope.cursor
+                }
+                #if DEBUG
+                consumedEventObserverForTesting?(envelope.type)
+                #endif
+            }
             if envelope.type == "ui.surface" {
                 recordUITrace(phase: "ui_surface_received", summary: UISurfaceEvent.receivedSummary(payload: envelope.payload, cursor: envelope.cursor), level: .info)
                 guard authentication.isConnected else {
@@ -1378,22 +1422,35 @@ public final class ZoeAppModel: ObservableObject {
                     recordUITrace(phase: "ui_surface_decode_failed", summary: failure ?? "payload_decode", level: .warn, upload: true)
                     return
                 }
-                uiSurfaceRequests.apply(event)
-                let displayed = onUISurface?(event) ?? false
-                if event.isDeletion { recordUITrace(phase: "ui_surface_closed", summary: "server_delete", level: .info) }
-                if !event.isDeletion {
-                    recordUITrace(phase: displayed ? "ui_surface_displayed" : "ui_surface_display_failed", summary: event.diagnosticSummary, level: displayed ? .info : .warn, upload: !displayed)
-                }
-                if displayed, !event.isDeletion {
-                    await submitUICommand(kind: "ui.rendered", payload: event.renderedPayload,
-                                          key: event.renderedIdempotencyKey(cursor: envelope.cursor, version: envelope.aggregateVersion))
-                }
+                guard envelope.aggregateVersion == event.surfaceVersion else { return }
+                await applyUISurface(event)
             }
             if envelope.type == "voice.end" { await endVoiceSession(reason: .voiceEndEvent) }
         case .snapshotRequired:
-            do { try await validateConnection() }
-            catch { setOffline(error) }
+            // /v1/snapshot repairs tasks/projects but omits voice/control state; the
+            // per-session GET is not a complete global-event checkpoint. Stop, retaining
+            // the consumed cursor, rather than silently jumping over missing history.
+            eventRecoveryRequired = true
+            authentication = .unavailable
+            notice = uiText("Event history is unavailable. Full-state recovery is required before reconnecting.")
+            api?.recordDiagnostic(phase: "events_recovery_required", requestPath: "/v1/events", errorType: "global_history_unavailable", errorSummary: "non_ui_recovery_endpoint_required", level: .error)
         }
+    }
+
+    private func applyUISurface(_ event: UISurfaceEvent) async {
+        guard uiSurfaceRequests.apply(event) else {
+            if uiSurfaceRequests.outcomes[event.binding] != nil,
+               let journal, let coordinator,
+               let pending = try? await journal.all(),
+               pending.contains(where: { $0.idempotencyKey == event.renderedIdempotencyKey }) {
+                _ = try? await coordinator.retryPending(idempotencyKey: event.renderedIdempotencyKey, currentWorkspaceID: workspaceID)
+            }
+            return
+        }
+        let displayed = onUISurface?(event) ?? false
+        uiSurfaceRequests.recordRender(event, success: displayed)
+        recordUITrace(phase: displayed ? "ui_surface_displayed" : "ui_surface_display_failed", summary: event.diagnosticSummary, level: displayed ? .info : .warn, upload: !displayed)
+        await submitUICommand(kind: "ui.rendered", payload: event.renderedPayload(success: displayed), key: event.renderedIdempotencyKey)
     }
 
     private func isCurrentConnection(_ generation: UInt64, sourceAPI: APIClient?) -> Bool {
@@ -1405,6 +1462,7 @@ public final class ZoeAppModel: ObservableObject {
         for _ in ids { recordUITrace(phase: "ui_surface_closed", summary: "disconnect", level: .info) }
         uiSurfaceRequests.removeAll()
         onUISurfacesClosed?(ids)
+        onUISurfacesReset?()
     }
 
     public func noteUISurfaceUserClosed() {
@@ -1418,15 +1476,14 @@ public final class ZoeAppModel: ObservableObject {
         recordUITrace(phase: "ui_surface_render_error", summary: "count=\(errors.count) first_type=\(errorType)", level: .warn, upload: true)
     }
 
-    public func sendUISurfaceAction(surfaceID: String, action: ResolvedAction) {
-        guard authentication.isConnected, let requestID = uiSurfaceRequests.requestIDs[surfaceID] else { return }
+    public func sendUISurfaceAction(binding: UISurfaceBinding, action: ResolvedAction) {
+        guard authentication.isConnected else { return }
         do {
-            let payload = try uiActionPayload(requestID: requestID, surfaceID: surfaceID, action: action)
+            let payload = try uiActionPayload(binding: binding, action: action)
             let generation = connectionGeneration.value
             let sourceAPI = api
             Task { @MainActor [weak self] in
-                guard let self, self.isCurrentConnection(generation, sourceAPI: sourceAPI),
-                      self.uiSurfaceRequests.requestIDs[surfaceID] == requestID else { return }
+                guard let self, self.isCurrentConnection(generation, sourceAPI: sourceAPI) else { return }
                 await self.submitUICommand(kind: "ui.action", payload: payload, key: UUID().uuidString.lowercased())
             }
         } catch {
@@ -1454,8 +1511,12 @@ public final class ZoeAppModel: ObservableObject {
     @discardableResult private func submitUICommand(kind: String, payload: JSONValue, key: String) async -> Bool {
         guard authentication.isConnected, let api else { return false }
         do {
-            // UI commands are transient: submit once, never journal/retry failed actions.
-            _ = try await api.submit(kind: kind, payload: payload, idempotencyKey: key)
+            if kind == "ui.screen" {
+                _ = try await api.submit(kind: kind, payload: payload, idempotencyKey: key)
+            } else {
+                guard let coordinator else { return false }
+                _ = try await coordinator.submit(kind: kind, payload: payload, workspaceID: workspaceID, idempotencyKey: key)
+            }
             return true
         } catch {
             let diagnostic = RedactedDiagnostic(error)

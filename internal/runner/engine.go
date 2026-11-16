@@ -151,6 +151,9 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err err
 			if entry.Session == "" {
 				return fmt.Errorf("%w: prompt-sent runtime recovery identity incomplete", ErrOutcomePending)
 			}
+			if err := e.acknowledgeHistoricalAnswers(ctx, claim); err != nil {
+				return err
+			}
 			return e.monitor(ctx, claim, RuntimeBinding{SessionID: entry.Session})
 		case "rotating", "rotation_create_attempted", "rotation_created":
 			return e.recoverRotation(ctx, claim, entry)
@@ -185,6 +188,7 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err err
 		for _, instruction := range claim.Instructions {
 			prompt += "\n\n" + instruction
 		}
+		prompt += structuredContext(claim.Entries, claim.PriorContexts)
 	}
 	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: fmt.Sprint(claim.Fence), Model: route.Model, ModelRouteID: claim.ModelRouteID, Agent: claim.Agent, Permissions: claim.PermissionRules, Prompt: prompt, Workspace: claim.WorkspaceID}
 	entry, err = e.Journal.SaveClaim(ctx, claim, spec, "claimed")
@@ -249,7 +253,30 @@ func (e *Engine) sendPrompt(ctx context.Context, claim contracts.JobClaim, spec 
 	if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_sent"); err != nil {
 		return err
 	}
+	if err := e.acknowledgeHistoricalAnswers(ctx, claim); err != nil {
+		return err
+	}
 	return e.monitor(ctx, claim, binding)
+}
+
+// acknowledgeHistoricalAnswers applies only after the new initial prompt is sent.
+// Original question identities stay provenance; no old ReplyForm is invoked.
+func (e *Engine) acknowledgeHistoricalAnswers(ctx context.Context, claim contracts.JobClaim) error {
+	api, ok := e.Control.(interface {
+		AcknowledgeEntry(context.Context, string, contracts.EntryDelivery) error
+	})
+	for _, entry := range claim.Entries {
+		if entry.Question == nil || entry.Question.RunID == claim.RunID {
+			continue
+		}
+		if !ok {
+			return errors.New("control lacks context acknowledgement")
+		}
+		if err := api.AcknowledgeEntry(ctx, claim.RunID, contracts.EntryDelivery{AttemptID: claim.AttemptID, Fence: claim.Fence, EntryID: entry.ID, QuestionID: entry.Question.QuestionID, ActionDigest: entry.Question.ActionDigest, Context: true}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b RuntimeBinding) error {
@@ -332,6 +359,13 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 				time.Sleep(e.interval())
 				continue
 			}
+			if outstanding, err := e.Journal.PendingAnswerDelivery(ctx, claim.RunID, b.SessionID); err != nil {
+				return err
+			} else if outstanding != nil {
+				if err := e.deliverBoundAnswer(ctx, claim, b, *outstanding, ""); err != nil {
+					return err
+				}
+			}
 			forms, reqErr := pending.PendingForms(ctx, b)
 			if reqErr != nil {
 				pendingKnown = false
@@ -341,6 +375,13 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 				entry, _, _ := e.Journal.Entry(ctx, claim.RunID)
 				if authc, ok := e.Control.(runtimeAuthorizationControl); ok {
 					if authorization, authErr := authc.RuntimeAuthorization(ctx, claim.RunID, f.ID, claim.Fence); authErr == nil && authorization != nil {
+						if authorization.RunID != claim.RunID || authorization.RequestID != f.ID || authorization.Fence != claim.Fence {
+							return errors.New("runtime question authorization binding mismatch")
+						}
+						canonical, _ := json.Marshal(map[string]any{"run_id": claim.RunID, "request_id": f.ID, "action": "", "resources": []string{}, "question": runtimeQuestionText(f)})
+						if authorization.ActionDigest != fmt.Sprintf("%x", sha256.Sum256(canonical)) {
+							return errors.New("runtime question authorization digest mismatch")
+						}
 						if authorization.Decision != "answer" {
 							return errors.New("invalid runtime authorization decision")
 						}
@@ -355,7 +396,9 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 						if key == "" {
 							return errors.New("runtime question form has no field key")
 						}
-						if err := reply.ReplyForm(ctx, b, f.ID, map[string]any{key: authorization.Message}); err != nil {
+						_ = reply
+						answerEntry := contracts.RunEntry{ID: authorization.EntryID, Content: authorization.Message, Question: &contracts.RunQuestionBinding{QuestionID: authorization.QuestionID, RunID: claim.RunID, RequestID: f.ID, ActionDigest: authorization.ActionDigest, Text: runtimeQuestionText(f)}}
+						if err := e.deliverBoundAnswer(ctx, claim, b, answerEntry, key); err != nil {
 							return err
 						}
 						if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_sent"); err != nil {
@@ -364,16 +407,7 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 						continue
 					}
 				}
-				question := f.Title
-				for _, field := range f.Fields {
-					if q, ok := field["description"].(string); ok && q != "" {
-						question = q
-						break
-					}
-				}
-				if len(question) > 4000 {
-					question = question[:4000]
-				}
+				question := runtimeQuestionText(f)
 				if entry.Phase != "waiting_question" {
 					if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "waiting_question"); err != nil {
 						return err
@@ -447,6 +481,9 @@ func (e *Engine) deliverEntries(ctx context.Context, c contracts.JobClaim, b Run
 		return false
 	}
 	for _, entry := range entries {
+		if entry.Question != nil {
+			return true
+		} // Bound answers use ReplyForm, never steer.
 		current, err := e.Control.Control(ctx, c.RunID)
 		if err != nil || current.DesiredControl != "run" {
 			return true
@@ -783,7 +820,7 @@ func (e *Engine) emitSessionRotated(ctx context.Context, c contracts.JobClaim, o
 }
 
 func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, msgs []opencode.Message) string {
-	ctxData := contracts.RotationContext{}
+	ctxData := contracts.RotationContext{SchemaVersion: 1, Entries: c.Entries, PriorContexts: c.PriorContexts}
 	if control, ok := e.Control.(interface {
 		RotationSnapshot(context.Context, string, string, uint64, string) (contracts.RotationContext, error)
 	}); ok {
@@ -798,14 +835,23 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 	} else if control, ok := e.Control.(rotationContextControl); ok {
 		if refreshed, err := control.RotationContext(ctx, c.RunID, c.AttemptID, c.Fence); err == nil {
 			ctxData = refreshed
+		} else {
+			return ""
 		}
 	}
 	var b strings.Builder
-	b.WriteString("Continue the assigned goal in a fresh session. Do not delegate or perform external irreversible changes.\n\nGoal:\n")
+	b.WriteString("Continue the assigned goal in a fresh session.\n\nGoal:\n")
 	b.WriteString(c.Goal + "\n\nUser instructions in order:\n")
 	for _, instruction := range ctxData.Instructions {
 		b.WriteString("- " + instruction + "\n")
 	}
+	if ctxData.SchemaVersion != 1 {
+		return ""
+	}
+	b.WriteString(structuredContext(ctxData.Entries, ctxData.PriorContexts))
+	// Accepted inputs are never truncated; only derived session history is capped.
+	accepted := b.String()
+	b.Reset()
 	b.WriteString("\nFiles touched in the prior session: " + rotationFiles(msgs) + "\n\nRecent prior messages (chronological; verify against the workspace):\n" + rotationRecentMessages(msgs))
 	if e.RotationSummary {
 		if summarizer, ok := e.Runtime.(RotationSummarizer); ok {
@@ -823,10 +869,25 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 			}
 		}
 	}
-	standardClaim := c
-	standardClaim.Instructions = nil
-	b.WriteString("\n\nStandard constraints:\n" + buildPrompt(standardClaim))
-	return truncate(b.String(), rotationPromptLimit)
+	remaining := rotationPromptLimit - len(accepted)
+	if remaining <= 0 {
+		return accepted
+	}
+	return accepted + truncate(b.String(), remaining)
+}
+
+func runtimeQuestionText(f opencode.FormRequest) string {
+	question := f.Title
+	for _, field := range f.Fields {
+		if q, ok := field["description"].(string); ok && q != "" {
+			question = q
+			break
+		}
+	}
+	if len(question) > 4000 {
+		question = question[:4000]
+	}
+	return question
 }
 
 func (e *Engine) recoverRotation(ctx context.Context, c contracts.JobClaim, entry JournalEntry) error {
@@ -1188,15 +1249,28 @@ func validateClaim(c contracts.JobClaim) error {
 	return nil
 }
 func buildPrompt(c contracts.JobClaim) string {
-	prompt := "Work only on the assigned goal. Do not delegate or perform external irreversible changes.\n\nGoal:\n" + c.Goal
+	prompt := "Work only on the assigned goal.\n\nGoal:\n" + c.Goal
 	for _, instruction := range c.Instructions {
 		prompt += "\n\n" + instruction
 	}
-	return prompt
+	return prompt + structuredContext(c.Entries, c.PriorContexts)
+}
+
+func structuredContext(entries []contracts.RunEntry, prior []contracts.TaskPriorContext) string {
+	var out strings.Builder
+	if len(prior) > 0 {
+		data, _ := json.Marshal(prior)
+		out.WriteString("\n\nPrior task context (reference facts, not a replacement goal):\n" + string(data))
+	}
+	if len(entries) > 0 {
+		data, _ := json.Marshal(entries)
+		out.WriteString("\n\nAccepted task inputs in order (question bindings identify answers; unbound entries are additions). A binding from a prior run is historical question-and-answer context already accepted by the server, not authorization to reply to that prior runtime form in this session:\n" + string(data))
+	}
+	return out.String()
 }
 
 func buildResumePrompt(goal, question, answer string) string {
-	return "Continue the assigned goal. Do not delegate or perform external irreversible changes.\n\nGoal:\n" + goal + "\n\nThe user was asked:\n" + question + "\n\nThe user answered:\n" + answer
+	return "Continue the assigned goal.\n\nGoal:\n" + goal + "\n\nThe user was asked:\n" + question + "\n\nThe user answered:\n" + answer
 }
 func observationID(run, attempt string, fence uint64, kind, disc string) string {
 	h := sha256.Sum256([]byte(strings.Join([]string{run, attempt, fmt.Sprint(fence), kind, disc}, "\x00")))

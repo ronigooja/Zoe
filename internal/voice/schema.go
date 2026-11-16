@@ -174,6 +174,7 @@ surface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('popover',
 state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),
 width INTEGER, height INTEGER,
 version INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+request_id TEXT REFERENCES ui_requests(id), deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
 PRIMARY KEY(workspace_id,owner_subject_id,surface_id),
 CHECK((width IS NULL AND height IS NULL) OR (width IS NOT NULL AND height IS NOT NULL)));
 CREATE TABLE ui_requests (
@@ -181,9 +182,17 @@ id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner
 source TEXT NOT NULL CHECK(source IN ('register','task')), voice_turn_id TEXT REFERENCES voice_turns(id),
 task_id TEXT REFERENCES tasks(id), surface_id TEXT,
 awaiting_input INTEGER NOT NULL DEFAULT 0 CHECK(awaiting_input IN (0,1)), input_note TEXT,
-status TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','rendered','input_received','feedback_delivered','failed')),
-created_at TEXT NOT NULL, updated_at TEXT NOT NULL, restatement TEXT, utterance TEXT);
+status TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','rendered','input_received','failed')),
+created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+request TEXT CHECK(request IS NULL OR (length(trim(request))>0 AND trim(request)<>'none')),
+question_id TEXT REFERENCES pending_runtime_actions(id), surface_version INTEGER CHECK(surface_version IS NULL OR surface_version>=1), feedback TEXT);
 CREATE UNIQUE INDEX ui_requests_voice_turn ON ui_requests(workspace_id,voice_turn_id) WHERE voice_turn_id IS NOT NULL;
+CREATE TABLE ui_result_sources (
+ request_id TEXT PRIMARY KEY REFERENCES ui_requests(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+ task_id TEXT NOT NULL REFERENCES tasks(id), run_id TEXT NOT NULL REFERENCES runs(id),
+ entry_id TEXT NOT NULL REFERENCES task_entries(id), event_cursor INTEGER NOT NULL CHECK(event_cursor>0),
+ content_hash TEXT NOT NULL
+);
 CREATE TABLE ui_feedback_deliveries (
 request_id TEXT PRIMARY KEY REFERENCES ui_requests(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),
 owner_subject_id TEXT NOT NULL, text TEXT NOT NULL,
@@ -199,7 +208,7 @@ created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX ui_jobs_due ON ui_jobs(status,next_attempt_at);
 CREATE TABLE ui_task_cursor(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),last_cursor INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX ui_feedback_due ON ui_feedback_deliveries(status,next_attempt_at);
-`)
+`+ResultCheckpointSchema+TextCheckpointSchema)
 		return err
 	}})
 }

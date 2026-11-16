@@ -21,8 +21,11 @@ const writeRestatement = "The user prefers LHR."
 func memoryWriteJobFixture(t *testing.T) (*storage.Store, *Service, func()) {
 	t.Helper()
 	store, svc := recallRecoveryFixture(t, Config{}, 0)
+	if _, err := store.DB().Exec(`CREATE TABLE memory_write_outcomes(op_id TEXT PRIMARY KEY,status TEXT NOT NULL,error_kind TEXT NOT NULL DEFAULT '')`); err != nil {
+		t.Fatal(err)
+	}
 	hash := sha256.Sum256([]byte(writeSentence))
-	_, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,report_text) VALUES('write-turn','default','handoff-session',1,'write-turn',1,?,?,?,'write-command','memory_write',?)`, writeSentence, hash[:], svc.now().Format(time.RFC3339Nano), writeRestatement)
+	_, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request) VALUES('write-turn','default','handoff-session',1,'write-turn',1,?,?,?,'write-command','memory_write',?)`, writeSentence, hash[:], svc.now().Format(time.RFC3339Nano), writeRestatement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +61,7 @@ func writeJobCount(t *testing.T, store *storage.Store, query string, args ...any
 }
 
 func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
-	for _, mode := range []string{"success", "failure", "disabled", "timeout"} {
+	for _, mode := range []string{"success", "failure", "disabled", "timeout", "uncertain"} {
 		t.Run(mode, func(t *testing.T) {
 			store, svc, handoff := memoryWriteJobFixture(t)
 			var calls atomic.Int32
@@ -69,7 +72,7 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 					if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 						t.Error(err)
 					}
-					if req.URL.Path != "/v1/memory/write" || body["sentence"] != writeSentence || body["restatement"] != writeRestatement || body["user"] != memoryUser("default", "owner") {
+					if req.URL.Path != "/v1/memory/write" || len(body) != 3 || body["op_id"] == "" || body["request"] != writeRestatement || body["user"] != memoryUser("default", "owner") {
 						t.Errorf("path=%s body=%v", req.URL.Path, body)
 					}
 					// The store has one connection. This independent write would
@@ -80,11 +83,16 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 						t.Errorf("worker called inside transaction: %v", err)
 					}
 					if mode == "timeout" {
-						<-req.Context().Done()
+						time.Sleep(150 * time.Millisecond)
 						return
 					}
 					if mode == "failure" {
 						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
+					if mode == "uncertain" {
+						w.WriteHeader(http.StatusConflict)
+						_, _ = w.Write([]byte(`{"error_kind":"write_uncertain"}`))
 						return
 					}
 					_, _ = w.Write([]byte(`{"operations":[]}`))
@@ -103,13 +111,27 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 			}
 			// Later handled transcript revisions must not replace the original
 			// sentence paired with the first durable job's restatement.
-			if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,report_text,handoff_handled) SELECT 'later-revision',workspace_id,session_id,generation,turn_id,2,'different sentence',content_hash,confirmed_at,command_id,exits,'different restatement',1 FROM voice_turns WHERE id='write-turn'`); err != nil {
+			if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request,handoff_handled) SELECT 'later-revision',workspace_id,session_id,generation,turn_id,2,'different sentence',content_hash,confirmed_at,command_id,exits,'different restatement',1 FROM voice_turns WHERE id='write-turn'`); err != nil {
 				t.Fatal(err)
 			}
 			svc.dispatchRecall(context.Background())
 			waitRecall(t, func() bool {
 				return writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='done'`) == 1
 			})
+			var outcome string
+			if err := store.DB().QueryRow(`SELECT status FROM memory_write_outcomes`).Scan(&outcome); err != nil {
+				t.Fatal(err)
+			}
+			wantOutcome := "write_error"
+			if mode == "success" {
+				wantOutcome = "write_ok"
+			}
+			if mode == "uncertain" || mode == "timeout" || mode == "failure" {
+				wantOutcome = "write_uncertain"
+			}
+			if outcome != wantOutcome {
+				t.Fatalf("outcome=%s want=%s", outcome, wantOutcome)
+			}
 			handoff()
 			svc.dispatchRecall(context.Background())
 			svc.recoverRecall(context.Background(), true)
@@ -129,7 +151,7 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 	}
 }
 
-func TestMemoryWriteRunningRecoveryNeverResends(t *testing.T) {
+func TestMemoryWriteRunningRecoveryReconcilesStableOperation(t *testing.T) {
 	for _, startup := range []bool{true, false} {
 		t.Run(map[bool]string{true: "restart", false: "lease"}[startup], func(t *testing.T) {
 			store, svc, handoff := memoryWriteJobFixture(t)
@@ -155,7 +177,8 @@ func TestMemoryWriteRunningRecoveryNeverResends(t *testing.T) {
 			svc.recoverRecall(context.Background(), true)
 			handoff()
 			svc.dispatchRecall(context.Background())
-			if calls.Load() != 0 || writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='done'`) != 1 || writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE text=?`, stewardErrorSpeech) != 1 || writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE text<>''`) != 1 || writeJobCount(t, store, `SELECT count(*) FROM tasks`) != 0 {
+			svc.workers.Wait()
+			if calls.Load() != 1 || writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='done'`) != 1 || writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE text=?`, stewardErrorSpeech) != 0 || writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE text<>''`) != 0 || writeJobCount(t, store, `SELECT count(*) FROM tasks`) != 0 {
 				t.Fatal("recovery resent write or failed to persist exactly one error")
 			}
 		})

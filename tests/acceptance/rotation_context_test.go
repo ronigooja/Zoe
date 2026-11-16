@@ -141,7 +141,7 @@ func assertRotationContextError(t *testing.T, h http.Handler, runID, attempt str
 	}
 }
 
-func TestRotationContextInstructionCapKeepsNewestWithMarker(t *testing.T) {
+func TestRotationContextPreservesAllAcceptedEntries(t *testing.T) {
 	f := newRotationContextFixture(t, false)
 	for i := 0; i < 3; i++ {
 		content := fmt.Sprintf("old-%d-%s", i, strings.Repeat("x", 5000))
@@ -154,11 +154,16 @@ func TestRotationContextInstructionCapKeepsNewestWithMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Instructions[0] != "[Earlier user instructions omitted: rotation context capped; newest instructions retained.]" {
-		t.Fatalf("marker=%q", got.Instructions[0])
+	if got.SchemaVersion != 1 || len(got.Instructions) != 0 || len(got.Entries) != 5 {
+		t.Fatalf("snapshot=%+v", got)
 	}
-	if strings.Contains(strings.Join(got.Instructions, "\n"), "old-0-") || !strings.Contains(got.Instructions[len(got.Instructions)-1], "old-2-") {
-		t.Fatalf("instructions did not retain newest entries: %v", got.Instructions)
+	for i, entry := range got.Entries {
+		if entry.ID == "" || entry.Content == "first" {
+			t.Fatal("missing identity or duplicated admission input")
+		}
+		if i >= 2 && !strings.HasPrefix(entry.Content, fmt.Sprintf("old-%d-", i-2)) {
+			t.Fatalf("entry %d out of order: %s", i, entry.Content)
+		}
 	}
 }
 
@@ -169,4 +174,35 @@ func taskIDForRotation(t *testing.T, f *rotationContextFixture) string {
 		t.Fatal(err)
 	}
 	return taskID
+}
+
+func TestRotationSnapshotIsImmutableAndRejectsLegacyArray(t *testing.T) {
+	f := newRotationContextFixture(t, false)
+	first, err := f.client.RotationSnapshot(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "immutable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := reviewRequest(f.h, http.MethodPost, "/v1/commands", f.device, "after-snapshot", contracts.CommandRequest{Kind: "task.append", Payload: mustJSON(t, map[string]any{"task_id": taskIDForRotation(t, f), "content": "accepted after snapshot"})})
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	again, err := f.client.RotationSnapshot(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "immutable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := json.Marshal(first)
+	b, _ := json.Marshal(again)
+	if string(a) != string(b) {
+		t.Fatal("snapshot changed after new admission")
+	}
+	fresh, err := f.client.RotationSnapshot(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "next")
+	if err != nil || len(fresh.Entries) != len(first.Entries)+1 {
+		t.Fatalf("next=%+v err=%v", fresh, err)
+	}
+	if _, err := f.store.DB().Exec(`INSERT INTO run_rotation_snapshots(run_id,snapshot_id,instructions_json) VALUES(?,'legacy','["old"]')`, f.claim.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.client.RotationSnapshot(t.Context(), f.claim.RunID, f.claim.AttemptID, f.claim.Fence, "legacy"); err == nil {
+		t.Fatal("legacy snapshot accepted")
+	}
 }

@@ -1,0 +1,381 @@
+package voice
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/control"
+	"github.com/ronigooja/Zoe/internal/uictl"
+)
+
+// uiTargetRig uses the production fresh baseline for UI fixtures.
+func uiTargetRig(t *testing.T) *deliveryRig {
+	t.Helper()
+	r := newDeliveryRig(t)
+	uiTargetSchema(t, r.store.DB())
+	return r
+}
+
+func uiTargetSchema(t *testing.T, db *sql.DB) {
+	t.Helper()
+	var present int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('ui_surfaces') WHERE name='deleted'`).Scan(&present); err != nil {
+		t.Fatal(err)
+	}
+	if present != 1 {
+		t.Fatal("production UI baseline missing deleted column")
+	}
+}
+
+func TestUITargetResolvedRequestAndResult(t *testing.T) {
+	r := uiTargetRig(t)
+	r.seedTask(t, "task", "owner")
+	r.seedEntry(t, "task", "decoy", "unrelated latest assistant message")
+	r.exec(t, `UPDATE tasks SET result='authoritative result',status='complete' WHERE id='task'`)
+	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,request,created_at,updated_at) VALUES('request','default','owner','task','task','Show the complete resolved request.','now','now')`)
+	r.seedEntry(t, "task", "authoritative", "authoritative result")
+	r.exec(t, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('result-run','default','task','attempt','stopped',1,'runner','device-1','cmd','goal','profile','runtime','model','worker','opencode','now')`)
+	r.seedEvent(t, 1, "task", "result-run", "authoritative")
+	tx, err := r.store.DB().BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pinUIResultTx(context.Background(), tx, "default", "owner", "task", "request", "authoritative", 1); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", request: "request", kind: "task_entry", key: "task_entry:decoy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"ORIGINAL SECRET", "LEGACY SECRET", "unrelated latest", "utterances", "restatements", "task_message"} {
+		if strings.Contains(string(b), forbidden) {
+			t.Fatalf("leaked %s: %s", forbidden, b)
+		}
+	}
+	if !strings.Contains(string(b), "authoritative result") || !strings.Contains(string(b), "Show the complete resolved request.") {
+		t.Fatal(string(b))
+	}
+	r.exec(t, `UPDATE task_entries SET content='forged replacement' WHERE id='authoritative'`)
+	if _, err = r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", request: "request"}); err == nil {
+		t.Fatal("missing result accepted")
+	}
+}
+
+func uiTargetPresentation(t *testing.T, r *deliveryRig, awaiting bool) {
+	t.Helper()
+	at := r.now().Format(time.RFC3339Nano)
+	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,created_at,updated_at) VALUES('request','default','owner','task','task',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('job','default','owner','task_entry','task_entry:result','request',1,?,?,?)`, at, at, at)
+	o, err := uictl.Parse(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, awaiting), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := &uictl.Task{TaskID: "task", QuestionID: "question", Question: "Which?"}
+	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "job", w: "default", o: "owner", request: "request", kind: "task_entry", attempts: 1}, o, facts, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUITargetRenderACKBarrier(t *testing.T) {
+	r := uiTargetRig(t)
+	uiFlowServer(t, r)
+	r.seedTask(t, "task", "owner")
+	r.seedCall(t, "call", "owner", 1)
+	r.enableReceiptFixture(t)
+	uiTargetPresentation(t, r, false)
+	r.svc.dispatchUIFeedback(context.Background())
+	if r.posts.Load() != 0 {
+		t.Fatal("feedback before ACK")
+	}
+	cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
+	for _, payload := range []string{
+		`{"request_id":"request","surface_id":"screen","surface_version":2,"success":true}`,
+	} {
+		tx, _ := r.store.DB().BeginTx(context.Background(), nil)
+		_, _, err := r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(payload)})
+		_ = tx.Rollback()
+		if err == nil {
+			t.Fatal("stale or failed ACK accepted")
+		}
+	}
+	for i := 0; i < 2; i++ {
+		tx, _ := r.store.DB().BeginTx(context.Background(), nil)
+		_, _, err := r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(`{"request_id":"request","surface_id":"screen","surface_version":1,"success":true}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.svc.dispatchUIFeedback(context.Background())
+	if r.posts.Load() != 1 {
+		t.Fatal("ACK feedback missing or duplicated")
+	}
+}
+
+func uiTargetQuestion(t *testing.T, r *deliveryRig) {
+	t.Helper()
+	r.seedTask(t, "task", "owner")
+	at := r.now().Format(time.RFC3339Nano)
+	r.exec(t, `UPDATE tasks SET status='waiting',interaction_state='awaiting_message',interaction_run_id='question-run',interaction_action_digest='digest',interaction_question='Which?' WHERE id='task'`)
+	r.exec(t, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('question-run','default','task','question-attempt','stopped','run',1,1,'runner','device-1','cmd-task','goal','zoe-steward','opencode','runtime','model','worker',?)`, at)
+	r.exec(t, `INSERT INTO pending_runtime_actions(id,workspace_id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES('question','default','task','question-run',1,'question-request','worker_question','Which?','digest',?,?)`, r.now().Add(time.Hour).Format(time.RFC3339Nano), at)
+}
+
+func TestUITargetDirectQuestionInput(t *testing.T) {
+	for _, mode := range []string{"answer", "duplicate", "owner", "stale-question", "stale-surface", "stale-client-version"} {
+		t.Run(mode, func(t *testing.T) {
+			r := uiTargetRig(t)
+			uiFlowServer(t, r)
+			uiTargetQuestion(t, r)
+			uiTargetPresentation(t, r, true)
+			cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "device-1", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
+			if mode == "owner" {
+				cmd.Principal.SubjectID = "other"
+			}
+			if mode == "stale-question" {
+				r.exec(t, `UPDATE tasks SET interaction_action_digest='new-question' WHERE id='task'`)
+			}
+			if mode == "stale-surface" {
+				r.exec(t, `UPDATE ui_surfaces SET version=version+1 WHERE surface_id='screen'`)
+			}
+			content := "  full answer\n中文  "
+			version := 1
+			if mode == "stale-client-version" {
+				version = 2
+			}
+			b, _ := json.Marshal(map[string]any{"request_id": "request", "surface_id": "screen", "surface_version": version, "name": "submit", "source_component_id": "submit", "context": map[string]string{"value": content}})
+			submit := func() error {
+				tx, _ := r.store.DB().BeginTx(context.Background(), nil)
+				defer tx.Rollback()
+				_, _, err := r.svc.commandUIAction(context.Background(), tx, cmd, contracts.CommandRequest{Payload: b})
+				if err != nil {
+					return err
+				}
+				return tx.Commit()
+			}
+			err := submit()
+			wantSuccess := mode == "answer" || mode == "duplicate"
+			if (err == nil) != wantSuccess {
+				t.Fatalf("err=%v", err)
+			}
+			if mode == "duplicate" && submit() == nil {
+				t.Fatal("duplicate accepted")
+			}
+			var answers, feedback int
+			_ = r.store.DB().QueryRow(`SELECT count(*) FROM task_question_answers`).Scan(&answers)
+			_ = r.store.DB().QueryRow(`SELECT count(*) FROM ui_feedback_deliveries`).Scan(&feedback)
+			want := 0
+			if wantSuccess {
+				want = 1
+				var got string
+				_ = r.store.DB().QueryRow(`SELECT e.content FROM task_entries e JOIN task_question_answers a ON a.entry_id=e.id WHERE a.question_id='question'`).Scan(&got)
+				if got != content {
+					t.Fatalf("content=%q", got)
+				}
+			}
+			if answers != want || feedback != 0 {
+				t.Fatalf("answers=%d feedback=%d", answers, feedback)
+			}
+		})
+	}
+}
+
+func uiTargetDelete(t *testing.T, r *deliveryRig) {
+	t.Helper()
+	at := r.now().Format(time.RFC3339Nano)
+	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,request,created_at,updated_at) VALUES('delete','default','owner','register','Close the screen.',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('delete-job','default','owner','register','register:delete','delete',1,?,?,?)`, at, at, at)
+	input, err := r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", request: "delete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot uictl.Input
+	if err = json.Unmarshal(input, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	o, err := uictl.Parse(uiFlowOutput(`{"version":"v0.9.1","deleteSurface":{"surfaceId":"screen"}}`, false), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "delete-job", w: "default", o: "owner", request: "delete", attempts: 1}, o, nil, snapshot.Surfaces); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUITargetDeletionACK(t *testing.T) {
+	r := uiTargetRig(t)
+	uiFlowServer(t, r)
+	r.seedTask(t, "task", "owner")
+	uiTargetPresentation(t, r, false)
+	uiTargetDelete(t, r)
+	var deleted, version int
+	var raw string
+	if err := r.store.DB().QueryRow(`SELECT deleted,version,state_json FROM ui_surfaces WHERE surface_id='screen'`).Scan(&deleted, &version, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 || version != 2 || strings.Contains(raw, "Title") || !strings.Contains(raw, "deleteSurface") {
+		t.Fatalf("%d %d %s", deleted, version, raw)
+	}
+	tx, _ := r.store.DB().BeginTx(context.Background(), nil)
+	defer tx.Rollback()
+	cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
+	_, _, err := r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(`{"request_id":"delete","surface_id":"screen","surface_version":2,"success":true}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUITargetConcurrentSnapshot(t *testing.T) {
+	r := uiTargetRig(t)
+	uiFlowServer(t, r)
+	r.seedTask(t, "task", "owner")
+	uiTargetPresentation(t, r, false)
+	at := r.now().Format(time.RFC3339Nano)
+	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,request,created_at,updated_at) VALUES('update','default','owner','register','Update the presentation.',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('update-job','default','owner','register','register:update','update',1,?,?,?)`, at, at, at)
+	b, err := r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", request: "update"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var in uictl.Input
+	_ = json.Unmarshal(b, &in)
+	r.exec(t, `UPDATE ui_surfaces SET version=version+1 WHERE surface_id='screen'`)
+	o, err := uictl.Parse(uiFlowOutput(uiFlowRoot, false), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := uiJob{id: "update-job", w: "default", o: "owner", request: "update", attempts: 1}
+	err = r.svc.commitUIJob(context.Background(), j, o, nil, in.Surfaces)
+	if !errors.Is(err, errUISnapshot) {
+		t.Fatal(err)
+	}
+	r.svc.failUIJob(context.Background(), j, "snapshot_changed", true)
+	var status string
+	var version int
+	_ = r.store.DB().QueryRow(`SELECT status FROM ui_jobs WHERE id='update-job'`).Scan(&status)
+	_ = r.store.DB().QueryRow(`SELECT version FROM ui_surfaces WHERE surface_id='screen'`).Scan(&version)
+	if status != "pending" || version != 2 {
+		t.Fatalf("%s %d", status, version)
+	}
+	// Snapshot churn is regenerated only within the existing three-call budget.
+	r.exec(t, `UPDATE ui_jobs SET attempts=3 WHERE id='update-job'`)
+	j.attempts = 3
+	r.svc.failUIJob(context.Background(), j, "snapshot_changed", true)
+	_ = r.store.DB().QueryRow(`SELECT status FROM ui_jobs WHERE id='update-job'`).Scan(&status)
+	if status != "failed" {
+		t.Fatal("unbounded snapshot regeneration")
+	}
+}
+
+func TestUITargetReplacedAfterFeedbackSelection(t *testing.T) {
+	r := uiTargetRig(t)
+	uiFlowServer(t, r)
+	r.seedTask(t, "task", "owner")
+	r.seedCall(t, "call", "owner", 1)
+	uiTargetPresentation(t, r, false)
+	at := r.now().Format(time.RFC3339Nano)
+	r.exec(t, `UPDATE ui_requests SET status='rendered' WHERE id='request'`)
+	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('request','default','owner','Shown.',?,?)`, at, at)
+	d := uiFeedback{id: "request", workspace: "default", owner: "owner", text: "Shown."}
+	r.exec(t, `UPDATE ui_surfaces SET version=version+1 WHERE surface_id='screen'`)
+	r.svc.deliverUIFeedback(context.Background(), d)
+	if r.posts.Load() != 0 {
+		t.Fatal("superseded feedback sent")
+	}
+	var status string
+	_ = r.store.DB().QueryRow(`SELECT status FROM ui_feedback_deliveries`).Scan(&status)
+	if status != "failed" {
+		t.Fatal(status)
+	}
+}
+
+func TestUITargetFailureEvidenceSurvivesFeedback(t *testing.T) {
+	r := uiTargetRig(t)
+	r.seedCall(t, "call", "owner", 1)
+	at := r.now().Format(time.RFC3339Nano)
+	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,status,created_at,updated_at) VALUES('failure','default','owner','register','failed',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('failure','default','owner','Failed.',?,?)`, at, at)
+	r.svc.dispatchUIFeedback(context.Background())
+	var request, delivery string
+	_ = r.store.DB().QueryRow(`SELECT r.status,d.status FROM ui_requests r JOIN ui_feedback_deliveries d ON d.request_id=r.id`).Scan(&request, &delivery)
+	if request != "failed" || delivery != "delivered" {
+		t.Fatalf("%s %s", request, delivery)
+	}
+}
+
+func TestUITargetFailedACK(t *testing.T) {
+	r := uiTargetRig(t)
+	uiFlowServer(t, r)
+	r.seedTask(t, "task", "owner")
+	uiTargetPresentation(t, r, false)
+	cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
+	tx, _ := r.store.DB().BeginTx(context.Background(), nil)
+	_, _, err := r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(`{"request_id":"request","surface_id":"screen","surface_version":1,"success":false}`)})
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var feedback int
+	_ = r.store.DB().QueryRow(`SELECT status FROM ui_requests WHERE id='request'`).Scan(&status)
+	_ = r.store.DB().QueryRow(`SELECT count(*) FROM ui_feedback_deliveries`).Scan(&feedback)
+	if status != "failed" || feedback != 0 {
+		t.Fatalf("%s %d", status, feedback)
+	}
+}
+
+func TestUITargetCommandReceiptReplay(t *testing.T) {
+	r := uiTargetRig(t)
+	uiFlowServer(t, r)
+	uiTargetQuestion(t, r)
+	uiTargetPresentation(t, r, true)
+	r.exec(t, `UPDATE pending_runtime_actions SET expires_at=? WHERE id='question'`, time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano))
+	key := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	if _, _, err := control.InitializeInstanceAuth(context.Background(), r.store, key); err != nil {
+		t.Fatal(err)
+	}
+	// The actual authenticated command endpoint owns the durable receipt boundary.
+	if err := r.svc.uiEventServer.RegisterCommand("ui.action", r.svc.commandUIAction); err != nil {
+		t.Fatal(err)
+	}
+	r.exec(t, `UPDATE actors SET subject_id='owner' WHERE id='instance'`)
+	server := httptest.NewServer(r.svc.uiEventServer.Handler())
+	defer server.Close()
+	payload := json.RawMessage(`{"request_id":"request","surface_id":"screen","surface_version":1,"name":"submit","source_component_id":"submit","context":{"value":"Bound answer"}}`)
+	status, receipt, raw := handoffCommand(t, server.Client(), server.URL, key, "same-command", "ui.action", payload)
+	if status != 200 && status != 202 {
+		t.Fatalf("%d %s", status, raw)
+	}
+	status, replay, raw := handoffCommand(t, server.Client(), server.URL, key, "same-command", "ui.action", payload)
+	if (status != 200 && status != 202) || replay.CommandID != receipt.CommandID {
+		t.Fatalf("replay %d %s", status, raw)
+	}
+	status, _, raw = handoffCommand(t, server.Client(), server.URL, key, "different-command", "ui.action", payload)
+	if status != 409 {
+		t.Fatalf("new duplicate %d %s", status, raw)
+	}
+	var n int
+	_ = r.store.DB().QueryRow(`SELECT count(*) FROM task_question_answers WHERE question_id='question'`).Scan(&n)
+	if n != 1 {
+		t.Fatal(n)
+	}
+}

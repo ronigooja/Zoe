@@ -87,6 +87,8 @@ CREATE TABLE task_prior_contexts (
 CREATE TABLE task_question_answers (
  entry_id TEXT PRIMARY KEY REFERENCES task_entries(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),
  task_id TEXT NOT NULL REFERENCES tasks(id), question_id TEXT NOT NULL REFERENCES pending_runtime_actions(id),
+ delivery_state TEXT NOT NULL DEFAULT 'pending' CHECK(delivery_state IN ('pending','acknowledged')),
+ acknowledged_at TEXT NULL,
  UNIQUE(workspace_id,task_id,question_id)
 );
 CREATE TABLE approvals (

@@ -33,6 +33,10 @@ func TestClientProtocolAndLogging(t *testing.T) {
 				t.Error("missing auth")
 			}
 			if r.URL.Path == "/v1/memory/search" {
+				var input map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&input); err != nil || len(input) != 2 || input["request"] != "PRIVATE_QUERY" {
+					t.Error("search must send only scoped full request")
+				}
 				_, _ = w.Write([]byte(`{"items":[{"id":"id","text":"PRIVATE_RESPONSE","score":0.8}]}`))
 			} else if r.URL.Path == "/v1/memory/ingest" {
 				var input map[string]string
@@ -41,6 +45,10 @@ func TestClientProtocolAndLogging(t *testing.T) {
 				}
 				_, _ = w.Write([]byte(`{"added":2,"updated":1}`))
 			} else {
+				var input map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&input); err != nil || len(input) != 3 || input["op_id"] != "operation" || input["request"] != "PRIVATE_REQUEST" {
+					t.Error("write must send only scoped full request")
+				}
 				_, _ = w.Write([]byte(`{"operations":[]}`))
 			}
 		}))
@@ -52,17 +60,17 @@ func TestClientProtocolAndLogging(t *testing.T) {
 		if err != nil || len(items) != 1 || items[0].Text != "PRIVATE_RESPONSE" {
 			t.Fatalf("items=%v err=%v", items, err)
 		}
-		if err := client.Write(context.Background(), "person", "PRIVATE_SENTENCE", "PRIVATE_RESTATEMENT"); err != nil {
+		if err := client.Write(context.Background(), "person", "operation", "PRIVATE_REQUEST"); err != nil {
 			t.Fatal(err)
 		}
-		if added, updated, err := client.Ingest(context.Background(), User("workspace", "owner"), "PRIVATE_INGEST"); err != nil || added != 2 || updated != 1 {
+		if added, updated, err := client.IngestChunk(context.Background(), User("workspace", "owner"), "batch", "chunk", "PRIVATE_INGEST"); err != nil || added != 2 || updated != 1 {
 			t.Fatalf("ingest=%d/%d err=%v", added, updated, err)
 		}
 		server.Close()
 		if strings.Contains(logs.String(), "PRIVATE_TOKEN") {
 			t.Fatal("token leaked")
 		}
-		for _, value := range []string{"PRIVATE_QUERY", "PRIVATE_RESPONSE", "PRIVATE_SENTENCE", "PRIVATE_RESTATEMENT", "PRIVATE_INGEST", "component=memory_ingest", "component=memory_search", "component=memory_write"} {
+		for _, value := range []string{"PRIVATE_QUERY", "PRIVATE_RESPONSE", "PRIVATE_REQUEST", "PRIVATE_INGEST", "component=memory_ingest", "component=memory_search", "component=memory_write"} {
 			if strings.Contains(logs.String(), value) != (level == logging.Debug) {
 				t.Errorf("level=%v missing/unexpected %s", level, value)
 			}
@@ -100,7 +108,7 @@ func TestClientFailures(t *testing.T) {
 		})
 	}
 	var client *Client
-	if err := client.Write(context.Background(), "person", "sentence", "restatement"); err == nil {
+	if err := client.Write(context.Background(), "person", "operation", "request"); err == nil {
 		t.Fatal("disabled accepted")
 	}
 }

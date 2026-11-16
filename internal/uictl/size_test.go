@@ -49,7 +49,7 @@ func TestParseSize(t *testing.T) {
 
 func TestBuildInputScreen(t *testing.T) {
 	for _, screen := range []*Size{nil, {Width: 1440, Height: 900}} {
-		b, err := BuildInput(time.Now(), nil, nil, "", []Surface{{Container: "window", Messages: []json.RawMessage{}, Size: &Size{400, 300}}}, screen)
+		b, err := BuildInput(time.Now(), nil, nil, []Surface{{Container: "window", Messages: []json.RawMessage{}, Size: &Size{400, 300}}}, screen)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -12,7 +12,7 @@ type uiFeedback struct {
 }
 
 func (s *Service) dispatchUIFeedback(ctx context.Context) {
-	rows, err := s.db.QueryContext(ctx, `SELECT request_id,workspace_id,owner_subject_id,text,attempts FROM ui_feedback_deliveries WHERE status='pending' AND coalesce(next_attempt_at,'')<=? ORDER BY created_at,request_id LIMIT 25`, s.now().UTC().Format(time.RFC3339Nano))
+	rows, err := s.db.QueryContext(ctx, `SELECT d.request_id,d.workspace_id,d.owner_subject_id,d.text,d.attempts FROM ui_feedback_deliveries d JOIN ui_requests r ON r.id=d.request_id WHERE d.status='pending' AND coalesce(d.next_attempt_at,'')<=? AND (r.status='failed' OR (r.status='rendered' AND EXISTS(SELECT 1 FROM ui_surfaces s WHERE s.workspace_id=r.workspace_id AND s.owner_subject_id=r.owner_subject_id AND s.surface_id=r.surface_id AND s.request_id=r.id AND s.version=r.surface_version))) ORDER BY d.created_at,d.request_id LIMIT 25`, s.now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return
 	}
@@ -30,6 +30,8 @@ func (s *Service) dispatchUIFeedback(ctx context.Context) {
 }
 
 func (s *Service) deliverUIFeedback(ctx context.Context, d uiFeedback) {
+	unlock := s.lockUIOwner(d.workspace, d.owner)
+	defer unlock()
 	now := s.now().UTC()
 	at := now.Format(time.RFC3339Nano)
 	r, err := s.db.ExecContext(ctx, `UPDATE ui_feedback_deliveries SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE request_id=? AND status='pending' AND attempts=? AND coalesce(next_attempt_at,'')<=?`, now.Add(30*time.Second).Format(time.RFC3339Nano), at, d.id, d.attempts, at)
@@ -56,17 +58,20 @@ func (s *Service) deliverUIFeedback(ctx context.Context, d uiFeedback) {
 		s.deferUIFeedback(ctx, d, attempt, "stale_generation")
 		return
 	}
-	if attempt > 3 {
-		s.finishUIFeedback(ctx, d, attempt, "gateway_failed")
+	// Revalidate after selection and session lookup, immediately before HTTP.
+	var eligible bool
+	err = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ui_requests r JOIN ui_feedback_deliveries d ON d.request_id=r.id WHERE r.id=? AND r.workspace_id=? AND r.owner_subject_id=? AND d.status='pending' AND d.attempts=? AND (r.status='failed' OR (r.status='rendered' AND EXISTS(SELECT 1 FROM ui_surfaces s WHERE s.workspace_id=r.workspace_id AND s.owner_subject_id=r.owner_subject_id AND s.surface_id=r.surface_id AND s.request_id=r.id AND s.version=r.surface_version))))`, d.id, d.workspace, d.owner, attempt).Scan(&eligible)
+	if err != nil {
+		s.retryUIFeedback(ctx, d, attempt, "eligibility_lookup")
 		return
 	}
-	ok, code := s.appendContext(ctx, gateway, d.text)
+	if !eligible {
+		s.finishUIFeedback(ctx, d, attempt, "presentation_superseded")
+		return
+	}
+	ok, code := s.deliverDurableText(ctx, d.workspace, d.owner, "ui_feedback", d.id, session, generation, d.text)
 	if !ok {
-		if code == "gateway_failed" {
-			s.retryUIFeedback(ctx, d, attempt, code)
-		} else {
-			s.finishUIFeedback(ctx, d, attempt, code)
-		}
+		s.deferUIFeedback(ctx, d, attempt, code)
 		return
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -82,9 +87,7 @@ func (s *Service) deliverUIFeedback(ctx context.Context, d uiFeedback) {
 	if n != 1 {
 		return
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE ui_requests SET status='feedback_delivered',updated_at=? WHERE id=?`, s.now().UTC().Format(time.RFC3339Nano), d.id); err != nil {
-		return
-	}
+	// Transport delivery state never changes render/failure evidence on the request.
 	_ = tx.Commit()
 }
 

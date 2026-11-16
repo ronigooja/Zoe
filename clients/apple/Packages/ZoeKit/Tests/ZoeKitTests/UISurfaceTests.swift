@@ -22,11 +22,12 @@ final class UISurfaceTests: XCTestCase {
         XCTAssertNotEqual(size.screenIdempotencyKey, SurfaceSize(width: 1440, height: 876).screenIdempotencyKey)
     }
 
-    private func payload(request: String = "r1", deletion: Bool = false) throws -> JSONValue {
+    private func payload(request: String = "r1", deletion: Bool = false, version: Int64 = 1) throws -> JSONValue {
         let messages = deletion
             ? #"[{"version":"v0.9","deleteSurface":{"surfaceId":"s1"}}]"#
             : #"[{"version":"v0.9.1","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"s1","components":[{"id":"root","component":"Text","text":"Hello"}]}}]"#
-        return try JSONDecoder().decode(JSONValue.self, from: Data("{\"request_id\":\"\(request)\",\"surface_id\":\"s1\",\"container\":\"popover\",\"awaiting_input\":true,\"messages\":\(messages)}".utf8))
+        let binding = deletion ? "" : ",\"task_id\":\"t1\",\"question_id\":\"q1\""
+        return try JSONDecoder().decode(JSONValue.self, from: Data("{\"request_id\":\"\(request)\",\"surface_id\":\"s1\",\"surface_version\":\(version),\"deleted\":\(deletion),\"container\":\"popover\",\"awaiting_input\":\(!deletion)\(binding),\"messages\":\(messages)}".utf8))
     }
 
     func testValidAndDeletePayloadDecoding() throws {
@@ -95,9 +96,9 @@ final class UISurfaceTests: XCTestCase {
         var map = UISurfaceRequests()
         map.apply(try XCTUnwrap(UISurfaceEvent.decode(payload())))
         XCTAssertEqual(map.requestIDs, ["s1": "r1"])
-        map.apply(try XCTUnwrap(UISurfaceEvent.decode(payload(request: "r2"))))
+        map.apply(try XCTUnwrap(UISurfaceEvent.decode(payload(request: "r2", version: 2))))
         XCTAssertEqual(map.requestIDs, ["s1": "r2"])
-        map.apply(try XCTUnwrap(UISurfaceEvent.decode(payload(deletion: true))))
+        map.apply(try XCTUnwrap(UISurfaceEvent.decode(payload(deletion: true, version: 3))))
         XCTAssertTrue(map.requestIDs.isEmpty)
         map.apply(try XCTUnwrap(UISurfaceEvent.decode(payload())))
         map.removeAll()
@@ -106,15 +107,86 @@ final class UISurfaceTests: XCTestCase {
 
     func testExactCommandPayloadsAndStableKey() throws {
         let event = try XCTUnwrap(UISurfaceEvent.decode(payload()))
-        XCTAssertEqual(event.renderedPayload, .object(["request_id": .string("r1")]))
-        XCTAssertEqual(event.renderedIdempotencyKey(cursor: "10", version: 2), event.renderedIdempotencyKey(cursor: "10", version: 2))
-        XCTAssertNotEqual(event.renderedIdempotencyKey(cursor: "10", version: 2), event.renderedIdempotencyKey(cursor: "11", version: 2))
-        XCTAssertNotEqual(event.renderedIdempotencyKey(cursor: "10", version: 2), event.renderedIdempotencyKey(cursor: "10", version: 3))
+        XCTAssertEqual(event.renderedPayload(success: true), .object([
+            "request_id": .string("r1"), "surface_id": .string("s1"), "surface_version": .integer(1), "success": .bool(true)
+        ]))
+        XCTAssertEqual(event.renderedIdempotencyKey, try XCTUnwrap(UISurfaceEvent.decode(payload())).renderedIdempotencyKey)
+        XCTAssertNotEqual(event.renderedIdempotencyKey, try XCTUnwrap(UISurfaceEvent.decode(payload(version: 2))).renderedIdempotencyKey)
         let action = ResolvedAction(name: "approve", sourceComponentId: "button", context: ["value": .bool(true), "nested": .dictionary(["count": .number(2)])])
-        XCTAssertEqual(try uiActionPayload(requestID: "r1", surfaceID: "s1", action: action), .object([
+        XCTAssertEqual(try uiActionPayload(binding: event.binding, action: action), .object([
             "request_id": .string("r1"), "surface_id": .string("s1"), "name": .string("approve"),
+            "surface_version": .integer(1),
             "source_component_id": .string("button"), "context": .object(["value": .bool(true), "nested": .object(["count": .integer(2)])])
         ]))
+    }
+
+    func testRequiredVersionDeletedAndInputBinding() throws {
+        guard case let .object(fields) = try payload() else { return XCTFail("object") }
+        for key in ["request_id", "surface_id", "surface_version", "deleted", "container", "awaiting_input", "messages", "task_id", "question_id"] {
+            var invalid = fields
+            invalid.removeValue(forKey: key)
+            XCTAssertNil(UISurfaceEvent.decode(.object(invalid)), key)
+        }
+        for version in [JSONValue.integer(0), .integer(-1), .number(1.5), .string("1")] {
+            var invalid = fields
+            invalid["surface_version"] = version
+            XCTAssertNil(UISurfaceEvent.decode(.object(invalid)))
+        }
+        guard case var .object(tombstone) = try payload(deletion: true) else { return XCTFail("object") }
+        tombstone["task_id"] = .string("t1")
+        XCTAssertNil(UISurfaceEvent.decode(.object(tombstone)))
+    }
+
+    func testStaleReplayDeletionAndFailedACKState() throws {
+        var state = UISurfaceRequests()
+        let first = try XCTUnwrap(UISurfaceEvent.decode(payload(version: 2)))
+        XCTAssertTrue(state.apply(first))
+        state.recordRender(first, success: false)
+        XCTAssertFalse(state.apply(first))
+        XCTAssertEqual(state.outcomes[first.binding], false)
+        XCTAssertFalse(state.apply(try XCTUnwrap(UISurfaceEvent.decode(payload()))))
+        let deleted = try XCTUnwrap(UISurfaceEvent.decode(payload(deletion: true, version: 3)))
+        XCTAssertTrue(state.apply(deleted))
+        state.recordRender(deleted, success: true)
+        XCTAssertTrue(state.requestIDs.isEmpty)
+        XCTAssertFalse(state.apply(first))
+        XCTAssertFalse(state.apply(deleted))
+        XCTAssertEqual(state.outcomes[deleted.binding], true)
+        XCTAssertEqual(deleted.renderedPayload(success: true), .object([
+            "request_id": .string("r1"), "surface_id": .string("s1"), "surface_version": .integer(3), "success": .bool(true)
+        ]))
+    }
+
+    func testSnapshotValidationAndRepairOrdering() throws {
+        guard case var .object(fields) = try payload(version: 2) else { return XCTFail("object") }
+        fields["render_status"] = .string("generated")
+        let value: JSONValue = .object(["cursor": .integer(20), "surfaces": .array([.object(fields)])])
+        let snapshot = try JSONDecoder().decode(UISnapshot.self, from: JSONEncoder().encode(value))
+        XCTAssertEqual(snapshot.cursor, 20)
+        var state = UISurfaceRequests()
+        XCTAssertTrue(state.apply(try XCTUnwrap(UISurfaceEvent.decode(payload()))))
+        XCTAssertTrue(state.reconcile(snapshot).isEmpty)
+        XCTAssertTrue(state.apply(snapshot.surfaces[0].event))
+        // A commit racing the snapshot is delivered after cursor 20, not discarded as a replay.
+        XCTAssertTrue(state.apply(try XCTUnwrap(UISurfaceEvent.decode(payload(version: 3)))))
+        XCTAssertFalse(state.apply(snapshot.surfaces[0].event))
+        fields.removeValue(forKey: "render_status")
+        let invalid: JSONValue = .object(["cursor": .integer(99), "surfaces": .array([.object(fields)])])
+        XCTAssertThrowsError(try JSONDecoder().decode(UISnapshot.self, from: JSONEncoder().encode(invalid)))
+        XCTAssertEqual(state.versions["s1"], 3)
+    }
+
+    func testActionUsesImmutableRenderedBinding() throws {
+        var state = UISurfaceRequests()
+        let old = try XCTUnwrap(UISurfaceEvent.decode(payload()))
+        state.apply(old)
+        let clickedBinding = old.binding
+        state.apply(try XCTUnwrap(UISurfaceEvent.decode(payload(request: "r2", version: 2))))
+        let action = ResolvedAction(name: "answer", sourceComponentId: "submit", context: ["value": .string("full answer")])
+        guard case let .object(fields) = try uiActionPayload(binding: clickedBinding, action: action) else { return XCTFail("object") }
+        XCTAssertEqual(fields["request_id"], .string("r1"))
+        XCTAssertEqual(fields["surface_version"], .integer(1))
+        XCTAssertEqual(fields["context"], .object(["value": .string("full answer")]))
     }
 
     @MainActor func testMainActorDeliveryRejectsStaleGenerationAndMalformedEvents() async throws {

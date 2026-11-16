@@ -245,6 +245,8 @@ type RegisterLayers struct {
 }
 type registerTurn struct {
 	at         time.Time
+	received   time.Time
+	eligible   bool
 	session    string
 	seq        int64
 	role, text string
@@ -293,25 +295,50 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 	if err != nil {
 		return s, err
 	}
-	// The stored boundary is build provenance, never an independently advanced M.
-	if used != s.MemoryBoundary.UTC().Format(time.RFC3339Nano) {
-		s.Compact, s.hash = "", ""
-		s.CompactThrough = s.MemoryBoundary
-	}
-	if s.CompactThrough.Before(s.MemoryBoundary) {
-		s.CompactThrough = s.MemoryBoundary
-	}
+	// M is current ingestion state, not permission to discard retained coverage.
 	s.CompactFrom = s.MemoryBoundary
+	if s.Version > 0 {
+		s.CompactFrom, err = time.Parse(time.RFC3339Nano, used)
+		if err != nil {
+			return s, err
+		}
+	} else {
+		s.CompactThrough = s.MemoryBoundary
+	}
 	s.RawFrom = s.CompactThrough
-	rows, err := tx.QueryContext(ctx, `SELECT t.at,t.session_id,t.seq,t.role,t.text FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id AND v.workspace_id=t.workspace_id WHERE v.workspace_id=? AND v.owner_id=?`, o.WorkspaceID, o.OwnerSubjectID)
+	consumed := map[string]bool{}
+	var membership bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_ingest_members')`).Scan(&membership); err != nil {
+		return s, err
+	}
+	if membership {
+		members, err := tx.QueryContext(ctx, `SELECT m.source_id FROM memory_ingest_members m JOIN memory_ingest_batches b ON b.id=m.batch_id AND b.workspace_id=m.workspace_id AND b.principal_id=m.principal_id WHERE m.workspace_id=? AND m.principal_id=? AND b.until_ns<=?`, o.WorkspaceID, o.OwnerSubjectID, s.MemoryBoundary.UnixNano())
+		if err != nil {
+			return s, err
+		}
+		for members.Next() {
+			var id string
+			if err := members.Scan(&id); err != nil {
+				members.Close()
+				return s, err
+			}
+			consumed[id] = true
+		}
+		err = members.Err()
+		members.Close()
+		if err != nil {
+			return s, err
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT t.at,t.received_at,t.session_id,t.seq,t.role,t.text FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id AND v.workspace_id=t.workspace_id WHERE v.workspace_id=? AND v.owner_id=?`, o.WorkspaceID, o.OwnerSubjectID)
 	if err != nil {
 		return s, err
 	}
 	for rows.Next() {
 		s.sourceCount++
 		var t registerTurn
-		var at string
-		if err = rows.Scan(&at, &t.session, &t.seq, &t.role, &t.text); err != nil {
+		var at, received string
+		if err = rows.Scan(&at, &received, &t.session, &t.seq, &t.role, &t.text); err != nil {
 			rows.Close()
 			return s, err
 		}
@@ -320,7 +347,16 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 			rows.Close()
 			return s, err
 		}
-		if !t.at.Before(s.MemoryBoundary) && !t.at.After(now) {
+		t.received, err = time.Parse(time.RFC3339Nano, received)
+		if err != nil {
+			rows.Close()
+			return s, err
+		}
+		// Keep all raw coverage after the retained edge, and late un-ingested
+		// records even when their semantic timestamp precedes M.
+		unseen := membership && !consumed[fmt.Sprintf("turn:%q:%d", t.session, t.seq)]
+		t.eligible = !t.at.Before(s.MemoryBoundary) || unseen
+		if (!t.at.Before(s.MemoryBoundary) || !t.at.Before(s.RawFrom) || unseen) && !t.at.After(now) {
 			s.turns = append(s.turns, t)
 		}
 	}
@@ -343,7 +379,7 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 		return a.seq < b.seq
 	})
 	for _, t := range s.turns {
-		if !t.at.Before(s.RawFrom) {
+		if !t.at.Before(s.RawFrom) || t.received.After(s.BuiltAt) || (s.Version == 0 && t.at.Before(s.MemoryBoundary)) {
 			s.Raw += registerLine(t)
 		}
 	}

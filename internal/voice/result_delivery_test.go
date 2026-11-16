@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,9 +41,7 @@ func newDeliveryRig(t *testing.T) *deliveryRig {
 	r.code.Store(200)
 	gw := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		body, _ := io.ReadAll(req.Body)
-		var p struct {
-			Text string `json:"text"`
-		}
+		var p ResultChunkRequest
 		_ = json.Unmarshal(body, &p)
 		r.posts.Add(1)
 		r.mu.Lock()
@@ -51,11 +50,21 @@ func newDeliveryRig(t *testing.T) *deliveryRig {
 		r.texts = append(r.texts, p.Text)
 		r.mu.Unlock()
 		w.WriteHeader(int(r.code.Load()))
+		if r.code.Load() == 200 {
+			_ = json.NewEncoder(w).Encode(ResultChunkReceipt{MediaGeneration: p.MediaGeneration, DeliveryID: p.DeliveryID, ContentHash: p.ContentHash, State: "applied"})
+		}
 	}))
 	t.Cleanup(gw.Close)
 	store, svc := newVoiceTestService(t, Config{GatewayURL: gw.URL, GatewayAPIKey: "gw-key", HTTPClient: gw.Client(), Now: r.now})
 	r.store, r.svc = store, svc
 	return r
+}
+
+// enableReceiptFixture explicitly opts this isolated fixture into the exact API.
+func (r *deliveryRig) enableReceiptFixture(t *testing.T) {
+	t.Helper()
+	r.exec(t, `UPDATE voice_sessions SET gateway_media_generation=1`)
+	r.svc.resultReceiptAdapter = NewGatewayResultReceiptAdapter(r.svc)
 }
 
 func (r *deliveryRig) exec(t *testing.T, q string, args ...any) {
@@ -115,11 +124,13 @@ func TestResultDeliveryLiveCallSendsOneBoundedMessage(t *testing.T) {
 	r := newDeliveryRig(t)
 	r.setup(t, "Tokyo will be rainy today.")
 	r.seedCall(t, "s1", "user-1", 1)
+	r.exec(t, `UPDATE voice_sessions SET gateway_media_generation=1 WHERE id='s1'`)
+	r.svc.resultReceiptAdapter = NewGatewayResultReceiptAdapter(r.svc)
 	r.run(t)
 	if got := r.posts.Load(); got != 1 {
 		t.Fatalf("gateway posts=%d, want 1", got)
 	}
-	if r.paths[0] != "/v1/voice/sessions/gw-s1/context" || r.auth[0] != "Bearer gw-key" {
+	if r.paths[0] != "/v1/voice/sessions/gw-s1/result-deliveries" || r.auth[0] != "Bearer gw-key" {
 		t.Fatalf("path=%q auth=%q", r.paths[0], r.auth[0])
 	}
 	if want := "Tokyo will be rainy today."; r.texts[0] != want {
@@ -134,14 +145,14 @@ func TestResultDeliveryLiveCallSendsOneBoundedMessage(t *testing.T) {
 	}
 }
 
-func TestResultDeliveryNoLiveCallIsSkipped(t *testing.T) {
+func TestResultDeliveryNoLiveCallRemainsPending(t *testing.T) {
 	r := newDeliveryRig(t)
 	r.setup(t, "hello")
 	r.run(t)
 	if r.posts.Load() != 0 {
 		t.Fatal("no call must not reach the gateway")
 	}
-	if status, _, _ := r.row(t, "entry-1"); status != "skipped_no_call" {
+	if status, _, _ := r.row(t, "entry-1"); status != "pending" {
 		t.Fatalf("status=%s", status)
 	}
 }
@@ -154,7 +165,7 @@ func TestResultDeliveryIgnoresAnotherOwnersCall(t *testing.T) {
 	if r.posts.Load() != 0 {
 		t.Fatal("another owner's call must never receive the result")
 	}
-	if status, _, _ := r.row(t, "entry-1"); status != "skipped_no_call" {
+	if status, _, _ := r.row(t, "entry-1"); status != "pending" {
 		t.Fatalf("status=%s", status)
 	}
 }
@@ -205,6 +216,7 @@ func TestResultDeliveryDuplicateEventSendsOnce(t *testing.T) {
 	r := newDeliveryRig(t)
 	r.setup(t, "hello")
 	r.seedCall(t, "s1", "user-1", 1)
+	r.enableReceiptFixture(t)
 	r.run(t)
 	r.exec(t, `UPDATE voice_result_cursor SET last_cursor=0 WHERE id=1`)
 	r.run(t)
@@ -264,7 +276,7 @@ func TestResultDeliverySessionEndedBeforeSendIsNotSentToANewerCall(t *testing.T)
 	if r.posts.Load() != 0 {
 		t.Fatal("a result must not be sent once its call has ended")
 	}
-	if status, _, _ := r.row(t, "entry-1"); status != "skipped_no_call" {
+	if status, _, _ := r.row(t, "entry-1"); status != "pending" {
 		t.Fatalf("status=%s", status)
 	}
 }
@@ -293,6 +305,7 @@ func TestResultDeliveryTextIsPreserved(t *testing.T) {
 	text := "  line one\n\nline\ttwo\x00\x07 end " + strings.Repeat("天", 700) + " \n"
 	r.setup(t, text)
 	r.seedCall(t, "s1", "user-1", 1)
+	r.enableReceiptFixture(t)
 	r.run(t)
 	if r.posts.Load() != 1 {
 		t.Fatalf("posts=%d", r.posts.Load())
@@ -307,6 +320,7 @@ func TestResultDeliveryLongTextChunks(t *testing.T) {
 		r := newDeliveryRig(t)
 		r.setup(t, text)
 		r.seedCall(t, "s1", "user-1", 1)
+		r.enableReceiptFixture(t)
 		r.run(t)
 		assertContextChunks(t, r.texts, text)
 		if status, _, attempts := r.row(t, "entry-1"); status != "delivered" || attempts != 1 {
@@ -330,6 +344,7 @@ func assertContextChunks(t *testing.T, chunks []string, want string) {
 func TestFastReplyLongTextChunks(t *testing.T) {
 	r := newDeliveryRig(t)
 	r.seedCall(t, "s1", "user-1", 1)
+	r.enableReceiptFixture(t)
 	text := " \n\t" + strings.Repeat("界🙂", 10000) + "\x00\n "
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('reply','default','s1',1,'turn',?,'pending',?,?,?)`, text, at, at, at)
@@ -345,20 +360,24 @@ func TestAppendContextStopsOnChunkFailure(t *testing.T) {
 	for _, code := range []int{http.StatusBadGateway, http.StatusNotImplemented} {
 		var chunks []string
 		gw := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			var p struct{ Text string }
+			var p ResultChunkRequest
 			_ = json.NewDecoder(req.Body).Decode(&p)
 			chunks = append(chunks, p.Text)
 			if len(chunks) == 2 {
 				w.WriteHeader(code)
+				return
 			}
+			_ = json.NewEncoder(w).Encode(ResultChunkReceipt{DeliveryID: p.DeliveryID, ContentHash: p.ContentHash, MediaGeneration: p.MediaGeneration, State: "applied"})
 		}))
-		_, svc := newVoiceTestService(t, Config{GatewayURL: gw.URL, GatewayAPIKey: "gw-key", HTTPClient: gw.Client()})
-		ok, got := svc.appendContext(context.Background(), "gw-session", strings.Repeat("x", 20000))
+		r := newDeliveryRig(t)
+		r.seedCall(t, "chunk-call", "user-1", 1)
+		r.exec(t, `UPDATE voice_sessions SET gateway_media_generation=1 WHERE id='chunk-call'`)
+		r.svc.base, _ = url.Parse(gw.URL)
+		r.svc.client = gw.Client()
+		r.svc.resultReceiptAdapter = NewGatewayResultReceiptAdapter(r.svc)
+		ok, got := r.svc.deliverDurableText(context.Background(), "default", "user-1", "fast_reply", "chunk-source", "chunk-call", 1, strings.Repeat("x", 20000))
 		gw.Close()
-		want := "gateway_failed"
-		if code == http.StatusNotImplemented {
-			want = "route_unsupported"
-		}
+		want := "receipt_transport_unknown"
 		if ok || got != want || len(chunks) != 2 {
 			t.Fatalf("ok=%v code=%s chunks=%d", ok, got, len(chunks))
 		}
@@ -367,8 +386,10 @@ func TestAppendContextStopsOnChunkFailure(t *testing.T) {
 
 func TestAppendContextRejectsInvalidOrEmptyText(t *testing.T) {
 	r := newDeliveryRig(t)
+	r.seedCall(t, "invalid-call", "user-1", 1)
+	r.enableReceiptFixture(t)
 	for _, text := range []string{"", " \n\t", string([]byte{0xff})} {
-		if ok, _ := r.svc.appendContext(context.Background(), "gw-session", text); ok {
+		if ok, _ := r.svc.deliverDurableText(context.Background(), "default", "user-1", "fast_reply", "invalid-source", "invalid-call", 1, text); ok {
 			t.Fatal("invalid or empty text accepted")
 		}
 	}
@@ -491,7 +512,7 @@ func TestRegisterIsNeverCalledInsideATransaction(t *testing.T) {
 		if _, err := r.store.DB().Exec(`UPDATE voice_turns SET content=content WHERE id='turn-lock'`); err != nil {
 			t.Error(err)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"routes":["recall"],"restatement":"Retrieve the user's saved personal information."}`})
+		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"routes":["recall"],"request":"Retrieve the user's saved personal information."}`})
 	}))
 	defer model.Close()
 	register, err := NewRegister(r.store.DB(), RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "compact-fixture", APIKey: "fixture"}, CompactCharacters: 1000})

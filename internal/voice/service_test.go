@@ -346,12 +346,10 @@ func handoffHTTPServerWithScopes(t *testing.T, voiceCfg Config, scopes []string)
 	t.Helper()
 	if voiceCfg.RegisterConfig == nil && voiceCfg.ContextRegister == nil {
 		model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			route := "task"
-			restatement := "none"
-			if route != "task" {
-				restatement = ""
-			}
-			out, _ := json.Marshal(map[string]any{"routes": []string{route}, "restatement": restatement})
+			var body struct{ Input string }
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			_, request, _ := strings.Cut(body.Input, "Current sentence:\n")
+			out, _ := json.Marshal(map[string]any{"routes": []string{"task"}, "request": request})
 			_ = json.NewEncoder(w).Encode(map[string]string{"output_text": string(out)})
 		}))
 		t.Cleanup(model.Close)

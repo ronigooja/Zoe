@@ -42,6 +42,7 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 				defer mu.Unlock()
 				return choice, nil
 			})})
+			uiTargetSchema(t, store.DB())
 			target := ""
 			if strings.HasPrefix(name, "attach_") || strings.HasPrefix(name, "complete_") {
 				target = commitAndHandoff(t, ts, key, "seed", "research the lunar mission").ResourceID
@@ -104,12 +105,12 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 				return
 			}
 			if withUI {
-				var requestTask, utterance, restatement string
-				if err := store.DB().QueryRow(`SELECT task_id,utterance,restatement FROM ui_requests WHERE voice_turn_id=(SELECT id FROM voice_turns WHERE turn_id='display')`).Scan(&requestTask, &utterance, &restatement); err != nil {
+				var requestTask, request string
+				if err := store.DB().QueryRow(`SELECT task_id,request FROM ui_requests WHERE voice_turn_id=(SELECT id FROM voice_turns WHERE turn_id='display')`).Scan(&requestTask, &request); err != nil {
 					t.Fatal(err)
 				}
-				if requestTask != r.ResourceID || utterance != "show the lunar mission information" || restatement != "none" {
-					t.Fatalf("request task=%s utterance=%q restatement=%q", requestTask, utterance, restatement)
+				if requestTask != r.ResourceID || request != "Research and show the lunar mission information." {
+					t.Fatalf("request task=%s request=%q", requestTask, request)
 				}
 				var jobs int
 				_ = store.DB().QueryRow(`SELECT count(*) FROM ui_jobs`).Scan(&jobs)
@@ -130,19 +131,19 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 					t.Fatal("attach created another task")
 				}
 				var entries int
-				if err := store.DB().QueryRow(`SELECT count(*) FROM task_entries WHERE task_id=? AND instr(content,?)>0`, target, TaskUIDisplayInstruction).Scan(&entries); err != nil || (entries > 0) != withUI {
+				if err := store.DB().QueryRow(`SELECT count(*) FROM task_entries WHERE task_id=? AND instr(content,?)>0`, target, TaskUIDisplayInstruction).Scan(&entries); err != nil || entries != 0 {
 					t.Fatalf("append display definition entries=%d err=%v", entries, err)
 				}
 			} else {
-				if strings.Contains(goal, TaskUIDisplayInstruction) != wantFlag {
+				if strings.Contains(goal, TaskUIDisplayInstruction) {
 					t.Fatalf("display definition missing or leaked: %q", goal)
 				}
 				var initial string
-				if err := store.DB().QueryRow(`SELECT content FROM task_entries WHERE task_id=? AND kind='user_message'`, r.ResourceID).Scan(&initial); err != nil || strings.Contains(initial, TaskUIDisplayInstruction) != wantFlag {
+				if err := store.DB().QueryRow(`SELECT content FROM task_entries WHERE task_id=? AND kind='user_message'`, r.ResourceID).Scan(&initial); err != nil || strings.Contains(initial, TaskUIDisplayInstruction) {
 					t.Fatalf("initial display definition missing or leaked err=%v", err)
 				}
-				if strings.HasPrefix(name, "complete_") && (r.ResourceID == target || !strings.Contains(goal, "previous result")) {
-					t.Fatal("complete attach did not create follow-up with previous result")
+				if strings.HasPrefix(name, "complete_") && (r.ResourceID == target || strings.Contains(goal, "previous result")) {
+					t.Fatal("continue failed distinct task or polluted full goal")
 				}
 			}
 		})
@@ -219,6 +220,7 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 				}
 				return choice, nil
 			})})
+			uiTargetSchema(t, store.DB())
 			target := commitAndHandoff(t, ts, key, "seed", "research the lunar mission").ResourceID
 			status := "complete"
 			if mode == "running_none" {
@@ -270,25 +272,16 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 				t.Fatal("redisplay admitted work or left handoff unhandled")
 			}
 			wantEntries := before
-			if mode == "running_none" {
-				wantEntries++
-			}
 			if count(`SELECT count(*) FROM task_entries`) != wantEntries {
 				t.Fatal("incorrect task append behavior")
 			}
-			if mode == "show" || mode == "running_none" {
-				if count(`SELECT ui_handled FROM voice_turns WHERE turn_id='display'`) != 1 || count(`SELECT count(*) FROM ui_requests WHERE source='task' AND utterance='show the earlier result' AND restatement='resolved result'`) != 1 {
+			if mode == "show" || mode == "running_none" || mode == "no_entry" || mode == "no_ui" {
+				if count(`SELECT ui_handled FROM voice_turns WHERE turn_id='display'`) != 1 || count(`SELECT count(*) FROM ui_requests WHERE source='task' AND request='Show the earlier lunar mission result.'`) != 1 {
 					t.Fatal("missing UI receipt or handled marker")
 				}
-				if mode == "running_none" {
-					if count(`SELECT count(*) FROM ui_jobs`) != 0 {
-						t.Fatal("running task scheduled completed result")
-					}
-					return
-				}
 				commitAndHandoff(t, ts, key, "display-again", "show the earlier result")
-				if count(`SELECT count(*) FROM ui_jobs WHERE kind='task_entry' AND dedupe_key LIKE 'task_entry:latest#%'`) != 2 || count(`SELECT ui_display FROM tasks`) != 1 {
-					t.Fatal("redisplays deduplicated or latest result not selected")
+				if count(`SELECT count(*) FROM ui_jobs WHERE kind='task_entry'`) != 2 || count(`SELECT ui_display FROM tasks`) != 1 {
+					t.Fatal("redisplays deduplicated or authoritative result not selected")
 				}
 			} else {
 				want := stewardErrorSpeech

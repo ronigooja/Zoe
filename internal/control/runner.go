@@ -1,12 +1,14 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -215,19 +217,16 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claim := contracts.JobClaim{RunID: runID, TaskID: chosen.id, AttemptID: attemptID, WorkspaceID: chosen.workspace, TaskVersion: newVersion, Goal: chosen.goal, ProfileID: profile.ID, Harness: chosen.harness, RuntimeRouteID: profile.RuntimeRouteID, ModelRouteID: profile.ModelRouteID, IsolationPolicy: profile.IsolationPolicy, Role: profile.Role, Agent: profile.Agent, PermissionTier: profile.PermissionTier, PermissionRules: rules, ImpactLevel: impact, Authorization: authorization, Fence: fence, LineageRootTaskID: chosen.root, LineageParentTaskID: chosen.parent, LineageDepth: chosen.depth, PregrantCapabilityIDs: append([]string{}, pregrant...), Budget: budget}
-	if chosen.interactionExpiredKind != "" {
-		claim.ResumeQuestion = chosen.interactionQuestion
-		if chosen.interactionExpiredKind == "question" && chosen.version > chosen.interactionExpectedVersion {
-			_ = tx.QueryRowContext(r.Context(), `SELECT coalesce(content,'') FROM task_entries WHERE task_id=? AND kind='user_message' ORDER BY created_at DESC,id DESC LIMIT 1`, chosen.id).Scan(&claim.ResumeAnswer)
-		}
-	}
 	initialEntries, err := orderedRunEntries(r.Context(), tx, runID, false)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	for _, entry := range initialEntries {
-		claim.Instructions = append(claim.Instructions, entry.Content)
+	claim.Entries = initialEntries
+	claim.PriorContexts, err = loadPriorContexts(r.Context(), tx, claim.TaskID)
+	if err != nil {
+		writeError(w, err)
+		return
 	}
 	if err = markRunEntries(r.Context(), tx, runID, "initial", initialEntries); err != nil {
 		writeError(w, err)
@@ -290,28 +289,13 @@ func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	const limit = 12000
-	var all []string
-	total := 0
-	for _, entry := range entries {
-		all = append(all, entry.Content)
-		total += len(entry.Content) + 1
+	prior, err := loadPriorContexts(r.Context(), tx, taskID)
+	if err != nil {
+		writeError(w, err)
+		return
 	}
+	snapshot := contracts.RotationContext{SchemaVersion: 1, Entries: entries, PriorContexts: prior}
 	selected := entries
-	if total > limit {
-		kept := []string{}
-		used := 0
-		for i := len(all) - 1; i >= 0; i-- {
-			n := len(all[i]) + 1
-			if used+n > limit-64 {
-				break
-			}
-			kept = append([]string{all[i]}, kept...)
-			used += n
-		}
-		all = append([]string{"[Earlier user instructions omitted: rotation context capped; newest instructions retained.]"}, kept...)
-		selected = entries[len(entries)-len(kept):]
-	}
 	if snapshotID := r.URL.Query().Get("snapshot_id"); snapshotID != "" {
 		if len(snapshotID) > 64 {
 			writeError(w, apiError(400, "invalid_request", "snapshot id too long", nil))
@@ -320,12 +304,17 @@ func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
 		var stored []byte
 		err = tx.QueryRowContext(r.Context(), `SELECT instructions_json FROM run_rotation_snapshots WHERE run_id=? AND snapshot_id=?`, runID, snapshotID).Scan(&stored)
 		if err == nil {
-			if err = json.Unmarshal(stored, &all); err != nil {
-				writeError(w, err)
+			snapshot, err = decodeRotationSnapshot(stored)
+			if err != nil {
+				writeError(w, apiError(409, "unsupported_snapshot_schema", "rotation snapshot must use structured schema version 1", nil))
+				return
+			}
+			if snapshot.SchemaVersion != 1 || len(snapshot.Instructions) != 0 {
+				writeError(w, apiError(409, "unsupported_snapshot_schema", "rotation snapshot must use structured schema version 1", nil))
 				return
 			}
 		} else if errors.Is(err, sql.ErrNoRows) {
-			stored, err = json.Marshal(all)
+			stored, err = json.Marshal(snapshot)
 			if err == nil {
 				_, err = tx.ExecContext(r.Context(), `INSERT INTO run_rotation_snapshots(run_id,snapshot_id,instructions_json) VALUES(?,?,?)`, runID, snapshotID, stored)
 			}
@@ -345,7 +334,37 @@ func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, contracts.RotationContext{Instructions: all})
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func decodeRotationSnapshot(body []byte) (contracts.RotationContext, error) {
+	var zero contracts.RotationContext
+	var wire struct {
+		Version      *int            `json:"schema_version"`
+		Instructions json.RawMessage `json:"instructions"`
+		Entries      json.RawMessage `json:"entries"`
+		Prior        json.RawMessage `json:"task_prior_contexts"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&wire); err != nil {
+		return zero, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return zero, errors.New("snapshot contains trailing data")
+	}
+	if wire.Version == nil || *wire.Version != 1 || wire.Instructions == nil || wire.Entries == nil || wire.Prior == nil {
+		return zero, errors.New("snapshot requires schema_version, instructions, entries and task_prior_contexts")
+	}
+	strict := json.NewDecoder(bytes.NewReader(body))
+	strict.DisallowUnknownFields()
+	if err := strict.Decode(&zero); err != nil {
+		return contracts.RotationContext{}, err
+	}
+	if len(zero.Instructions) != 0 {
+		return contracts.RotationContext{}, errors.New("legacy instructions are unsupported")
+	}
+	return zero, nil
 }
 
 func runnerHasAnyWorkspaceScope(p contracts.RunnerPrincipal, scope string) bool {
@@ -399,45 +418,27 @@ func loadClaim(ctx context.Context, tx *sql.Tx, runID string, cfg Config) (contr
 	} else {
 		c.PregrantCapabilityIDs = []string{}
 	}
-	var interaction string
-	if err := tx.QueryRowContext(ctx, `SELECT interaction_state FROM tasks WHERE id=?`, c.TaskID).Scan(&interaction); err != nil {
-		return c, err
-	}
-	var expiredKind string
-	if err := tx.QueryRowContext(ctx, `SELECT interaction_expired_kind FROM tasks WHERE id=?`, c.TaskID).Scan(&expiredKind); err != nil {
-		return c, err
-	}
-	if expiredKind != "" {
-		var expected, current int64
-		if err := tx.QueryRowContext(ctx, `SELECT coalesce(interaction_question,''),interaction_expected_version,version FROM tasks WHERE id=?`, c.TaskID).Scan(&c.ResumeQuestion, &expected, &current); err != nil {
-			return c, err
-		}
-		if current > expected {
-			if err := tx.QueryRowContext(ctx, `SELECT coalesce(content,'') FROM task_entries WHERE task_id=? AND kind='user_message' ORDER BY created_at DESC,id DESC LIMIT 1`, c.TaskID).Scan(&c.ResumeAnswer); err != nil {
-				return c, err
-			}
-		}
-		if len(c.ResumeQuestion) > 4000 {
-			c.ResumeQuestion = c.ResumeQuestion[:4000]
-		}
-		if len(c.ResumeAnswer) > 20000 {
-			c.ResumeAnswer = c.ResumeAnswer[:20000]
-		}
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT e.content FROM run_entry_deliveries d JOIN task_entries e ON e.id=d.entry_id WHERE d.run_id=? AND d.prompt_kind='initial' ORDER BY e.created_at,e.id`, runID)
+	entries, err := orderedRunEntries(ctx, tx, runID, false)
 	if err != nil {
 		return c, err
 	}
-	for rows.Next() {
-		var content string
-		if err = rows.Scan(&content); err != nil {
-			rows.Close()
+	for _, entry := range entries {
+		var kind string
+		err = tx.QueryRowContext(ctx, `SELECT prompt_kind FROM run_entry_deliveries WHERE run_id=? AND entry_id=?`, runID, entry.ID).Scan(&kind)
+		if errors.Is(err, sql.ErrNoRows) {
+			if c.RuntimeSessionID != "" {
+				c.Entries = append(c.Entries, entry)
+			}
+			continue
+		}
+		if err != nil {
 			return c, err
 		}
-		c.Instructions = append(c.Instructions, content)
+		if kind == "initial" || c.RuntimeSessionID != "" {
+			c.Entries = append(c.Entries, entry)
+		}
 	}
-	err = rows.Err()
-	rows.Close()
+	c.PriorContexts, err = loadPriorContexts(ctx, tx, c.TaskID)
 	if err != nil {
 		return c, err
 	}
@@ -517,15 +518,21 @@ func (s *Server) handleCurrentClaims(w http.ResponseWriter, r *http.Request) {
 				txErr = tx.QueryRowContext(r.Context(), `SELECT prompt_kind FROM run_entry_deliveries WHERE run_id=? AND entry_id=?`, id, entry.ID).Scan(&kind)
 				if errors.Is(txErr, sql.ErrNoRows) {
 					txErr = nil
+					if claim.RuntimeSessionID != "" {
+						claim.Entries = append(claim.Entries, entry)
+					}
 					continue
 				}
 				if txErr != nil {
 					break
 				}
-				if kind == "initial" {
-					claim.Instructions = append(claim.Instructions, entry.Content)
+				if kind == "initial" || claim.RuntimeSessionID != "" {
+					claim.Entries = append(claim.Entries, entry)
 				}
 			}
+		}
+		if txErr == nil {
+			claim.PriorContexts, txErr = loadPriorContexts(r.Context(), tx, claim.TaskID)
 		}
 		tx.Rollback()
 		if txErr != nil {
@@ -598,7 +605,7 @@ func (s *Server) handleRuntimeAuthorization(w http.ResponseWriter, r *http.Reque
 	var out contracts.RuntimeAuthorization
 	var used int
 	var expires string
-	query := `SELECT a.run_id,a.request_id,a.fence,a.decision,a.expires_at,a.authorization_used,a.message FROM pending_runtime_actions a JOIN runs r ON r.id=a.run_id WHERE a.run_id=? AND a.fence=? AND r.runner_id=?`
+	query := `SELECT a.run_id,a.request_id,a.fence,a.decision,a.expires_at,a.authorization_used,a.message,a.action_digest FROM pending_runtime_actions a JOIN runs r ON r.id=a.run_id JOIN tasks t ON t.id=a.task_id AND t.workspace_id=a.workspace_id WHERE a.run_id=? AND a.fence=? AND r.runner_id=? AND r.fence=a.fence AND r.status IN ('dispatching','active','uncertain') AND (a.kind<>'worker_question' OR (a.decision='answer' AND t.interaction_run_id=a.run_id AND t.interaction_action_digest=a.action_digest AND EXISTS (SELECT 1 FROM task_question_answers b JOIN task_entries e ON e.id=b.entry_id WHERE b.question_id=a.id AND b.task_id=a.task_id AND b.workspace_id=a.workspace_id AND e.content=a.message)))`
 	args := []any{runID, fence, p.RunnerID}
 	if requestID != "" {
 		query += ` AND a.request_id=?`
@@ -608,7 +615,7 @@ func (s *Server) handleRuntimeAuthorization(w http.ResponseWriter, r *http.Reque
 	}
 	query += ` ORDER BY a.created_at LIMIT 1`
 	var message string
-	err = s.store.DB().QueryRowContext(r.Context(), query, args...).Scan(&out.RunID, &out.RequestID, &out.Fence, &out.Decision, &expires, &used, &message)
+	err = s.store.DB().QueryRowContext(r.Context(), query, args...).Scan(&out.RunID, &out.RequestID, &out.Fence, &out.Decision, &expires, &used, &message, &out.ActionDigest)
 	out.Message = message
 	if errors.Is(err, sql.ErrNoRows) {
 		w.WriteHeader(http.StatusNoContent)
@@ -616,6 +623,20 @@ func (s *Server) handleRuntimeAuthorization(w http.ResponseWriter, r *http.Reque
 	}
 	if err != nil {
 		writeError(w, err)
+		return
+	}
+	if out.Decision == "answer" {
+		err = s.store.DB().QueryRowContext(r.Context(), `SELECT b.entry_id,b.question_id FROM task_question_answers b JOIN pending_runtime_actions a ON a.id=b.question_id WHERE a.run_id=? AND a.request_id=? AND a.fence=? AND b.delivery_state='pending'`, runID, out.RequestID, fence).Scan(&out.EntryID, &out.QuestionID)
+		if errors.Is(err, sql.ErrNoRows) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		// Accepted bound answers are repeatable reads, not expiring capabilities.
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	if used != 0 || out.Decision == "" || time.Now().UTC().After(parseTime(expires)) {
@@ -896,7 +917,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		requestID, _ := payload["request_id"].(string)
-		if requestID == "" {
+		if requestID == "" || len(requestID) > 128 {
 			writeError(w, apiError(400, "invalid_request", "pending action request id is required", nil))
 			return
 		}
@@ -1120,6 +1141,16 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		nextTaskStatus = "failed"
 	case "effect_unknown":
 		nextRunStatus = "uncertain"
+		var uncertainty struct {
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal(observation.Result, &uncertainty) == nil && uncertainty.Reason == "answer_delivery_uncertain" {
+			nextTaskStatus = "paused"
+			if _, err = tx.ExecContext(r.Context(), `UPDATE tasks SET error=? WHERE id=? AND workspace_id=?`, "The accepted answer delivery is uncertain; automatic replay is paused pending runtime reconciliation.", taskID, workspace); err != nil {
+				writeError(w, err)
+				return
+			}
+		}
 	case "stop_confirmed":
 		if desired != "stop" {
 			writeError(w, apiError(409, "state_conflict", "stop confirmation requires requested stop", nil))

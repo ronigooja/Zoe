@@ -167,17 +167,22 @@ func TestApply(t *testing.T) {
 }
 
 func TestBuildInput(t *testing.T) {
-	b, err := BuildInput(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), nil, nil, "", nil, nil)
+	b, err := BuildInput(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(b) != `{"now":"2026-01-02T03:04:05Z","utterances":[],"restatements":[],"task_message":"","surfaces":[]}` {
+	if string(b) != `{"now":"2026-01-02T03:04:05Z","requests":[],"task":null,"surfaces":[]}` {
 		t.Fatal(string(b))
 	}
-	if _, err = BuildInput(time.Now(), nil, nil, "", make([]Surface, 65), nil); err == nil {
+	if _, err = BuildInput(time.Now(), nil, nil, make([]Surface, 65), nil); err == nil {
 		t.Fatal("accepted too many surfaces")
 	}
-	if _, err = BuildInput(time.Now(), nil, nil, strings.Repeat("x", 16*MaxState+1), nil, nil); err == nil {
+	if _, err = BuildInput(time.Now(), []string{strings.Repeat("x", 16*MaxState+1)}, nil, nil, nil); err == nil {
 		t.Fatal("accepted oversized input")
+	}
+	for _, request := range []string{"", "  ", "none"} {
+		if _, err = BuildInput(time.Now(), []string{request}, nil, nil, nil); err == nil {
+			t.Fatalf("accepted incomplete request %q", request)
+		}
 	}
 }

@@ -228,39 +228,53 @@ type JobAuthorization struct {
 }
 
 type JobClaim struct {
-	Instructions          []string          `json:"instructions,omitempty"`
-	RunID                 string            `json:"run_id"`
-	TaskID                string            `json:"task_id"`
-	AttemptID             string            `json:"attempt_id"`
-	WorkspaceID           string            `json:"workspace_id"`
-	TaskVersion           int64             `json:"task_version"`
-	Goal                  string            `json:"goal"`
-	ProfileID             string            `json:"profile_id"`
-	Harness               string            `json:"harness"`
-	RuntimeRouteID        string            `json:"runtime_route_id"`
-	ModelRouteID          string            `json:"model_route_id"`
-	IsolationPolicy       string            `json:"isolation_policy"`
-	Role                  string            `json:"role"`
-	RuntimeSessionID      string            `json:"runtime_session_id,omitempty"`
-	Authorization         JobAuthorization  `json:"authorization"`
-	Fence                 uint64            `json:"fence"`
-	LineageRootTaskID     string            `json:"lineage_root_task_id,omitempty"`
-	LineageParentTaskID   string            `json:"lineage_parent_task_id,omitempty"`
-	LineageDepth          int               `json:"lineage_depth"`
-	PregrantCapabilityIDs []string          `json:"pregrant_capability_ids"`
-	Budget                RunBudgetSnapshot `json:"budget"`
-	Agent                 string            `json:"agent,omitempty"`
-	PermissionTier        string            `json:"permission_tier,omitempty"`
-	PermissionRules       []PermissionRule  `json:"permission_rules,omitempty"`
-	ImpactLevel           string            `json:"impact_level,omitempty"`
-	ResumeQuestion        string            `json:"resume_question,omitempty"`
-	ResumeAnswer          string            `json:"resume_answer,omitempty"`
+	Entries               []RunEntry         `json:"entries,omitempty"`
+	PriorContexts         []TaskPriorContext `json:"task_prior_contexts,omitempty"`
+	Instructions          []string           `json:"instructions,omitempty"`
+	RunID                 string             `json:"run_id"`
+	TaskID                string             `json:"task_id"`
+	AttemptID             string             `json:"attempt_id"`
+	WorkspaceID           string             `json:"workspace_id"`
+	TaskVersion           int64              `json:"task_version"`
+	Goal                  string             `json:"goal"`
+	ProfileID             string             `json:"profile_id"`
+	Harness               string             `json:"harness"`
+	RuntimeRouteID        string             `json:"runtime_route_id"`
+	ModelRouteID          string             `json:"model_route_id"`
+	IsolationPolicy       string             `json:"isolation_policy"`
+	Role                  string             `json:"role"`
+	RuntimeSessionID      string             `json:"runtime_session_id,omitempty"`
+	Authorization         JobAuthorization   `json:"authorization"`
+	Fence                 uint64             `json:"fence"`
+	LineageRootTaskID     string             `json:"lineage_root_task_id,omitempty"`
+	LineageParentTaskID   string             `json:"lineage_parent_task_id,omitempty"`
+	LineageDepth          int                `json:"lineage_depth"`
+	PregrantCapabilityIDs []string           `json:"pregrant_capability_ids"`
+	Budget                RunBudgetSnapshot  `json:"budget"`
+	Agent                 string             `json:"agent,omitempty"`
+	PermissionTier        string             `json:"permission_tier,omitempty"`
+	PermissionRules       []PermissionRule   `json:"permission_rules,omitempty"`
+	ImpactLevel           string             `json:"impact_level,omitempty"`
+	ResumeQuestion        string             `json:"resume_question,omitempty"`
+	ResumeAnswer          string             `json:"resume_answer,omitempty"`
 }
 
 // RotationContext is the server-authoritative context refreshed immediately
 // before a runner starts a replacement session.
 type RotationContext struct {
-	Instructions []string `json:"instructions"`
+	SchemaVersion int                `json:"schema_version"`
+	Instructions  []string           `json:"instructions"`
+	Entries       []RunEntry         `json:"entries"`
+	PriorContexts []TaskPriorContext `json:"task_prior_contexts"`
+}
+
+// TaskPriorContext carries a continuation's source facts without changing its goal.
+type TaskPriorContext struct {
+	TaskID    string   `json:"task_id"`
+	Goal      string   `json:"goal"`
+	Status    string   `json:"status"`
+	Result    *string  `json:"result"`
+	Additions []string `json:"additions"`
 }
 
 // RunBudgetSnapshot is immutable for a run and is copied into its claim. Usage
@@ -312,15 +326,29 @@ type RunControl struct {
 }
 
 type RunEntry struct {
-	ID        string    `json:"id"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"created_at"`
+	Question  *RunQuestionBinding `json:"question,omitempty"`
+	ID        string              `json:"id"`
+	Content   string              `json:"content"`
+	CreatedAt time.Time           `json:"created_at"`
+}
+
+// RunQuestionBinding identifies the exact server-owned question and runtime action.
+type RunQuestionBinding struct {
+	QuestionID   string `json:"question_id"`
+	RunID        string `json:"run_id"`
+	RequestID    string `json:"request_id"`
+	ActionDigest string `json:"action_digest"`
+	Text         string `json:"text"`
 }
 
 type EntryDelivery struct {
-	AttemptID string `json:"attempt_id"`
-	Fence     uint64 `json:"fence"`
-	EntryID   string `json:"entry_id"`
+	// Context is true only for an original question carried in a later run's prompt.
+	Context      bool   `json:"context,omitempty"`
+	QuestionID   string `json:"question_id,omitempty"`
+	ActionDigest string `json:"action_digest,omitempty"`
+	AttemptID    string `json:"attempt_id"`
+	Fence        uint64 `json:"fence"`
+	EntryID      string `json:"entry_id"`
 }
 
 type ExternalEffect struct {
@@ -362,12 +390,15 @@ type PendingAction struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 type RuntimeAuthorization struct {
-	RequestID string `json:"request_id"`
-	RunID     string `json:"run_id"`
-	Fence     uint64 `json:"fence"`
-	Decision  string `json:"decision"`
-	Message   string `json:"message,omitempty"`
-	Question  string `json:"question,omitempty"`
+	EntryID      string `json:"entry_id,omitempty"`
+	QuestionID   string `json:"question_id,omitempty"`
+	ActionDigest string `json:"action_digest,omitempty"`
+	RequestID    string `json:"request_id"`
+	RunID        string `json:"run_id"`
+	Fence        uint64 `json:"fence"`
+	Decision     string `json:"decision"`
+	Message      string `json:"message,omitempty"`
+	Question     string `json:"question,omitempty"`
 }
 
 // CreateRejectionProof proves a local deterministic failure before an external

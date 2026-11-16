@@ -62,7 +62,8 @@ func TestMemoryBatchDisabled(t *testing.T) {
 
 func ingestFixture(t *testing.T) (*sql.DB, *Repository, time.Time) {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	path := filepath.Join(t.TempDir(), "ingest.sqlite")
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +71,10 @@ func ingestFixture(t *testing.T) (*sql.DB, *Repository, time.Time) {
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(`CREATE TABLE voice_sessions(id TEXT PRIMARY KEY,workspace_id TEXT,owner_id TEXT);
 CREATE TABLE voice_transcript_turns(workspace_id TEXT,session_id TEXT,seq INTEGER,role TEXT,text TEXT,at TEXT);
-CREATE TABLE tasks(id TEXT,workspace_id TEXT,owner_subject_id TEXT,status TEXT,finished_at TEXT,title TEXT,result TEXT);
+CREATE TABLE tasks(id TEXT,workspace_id TEXT,owner_subject_id TEXT,status TEXT,finished_at TEXT,goal TEXT,result TEXT);
+CREATE TABLE memory_ingest_batches(id TEXT PRIMARY KEY,workspace_id TEXT,principal_id TEXT,from_ns INTEGER,until_ns INTEGER,UNIQUE(workspace_id,principal_id,from_ns));
+CREATE TABLE memory_ingest_chunks(batch_id TEXT,position INTEGER,id TEXT UNIQUE,text TEXT,done INTEGER DEFAULT 0,PRIMARY KEY(batch_id,position));
+CREATE TABLE memory_ingest_members(workspace_id TEXT,principal_id TEXT,source_id TEXT,batch_id TEXT,PRIMARY KEY(workspace_id,principal_id,source_id));
 CREATE TABLE memory_ingest_state(workspace_id TEXT,principal_id TEXT,boundary_ns INTEGER NOT NULL,next_attempt_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(workspace_id,principal_id));
 INSERT INTO voice_sessions VALUES('session','workspace','owner'),('other','workspace','other');`)
 	if err != nil {
@@ -116,7 +120,7 @@ func TestMemoryIngestTranscriptTasksWindowAndCadence(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	want := "[2026-11-13T11:00:00Z] user: original words\n[2026-11-13T12:00:00Z] assistant: answer\n[2026-11-13T12:00:00Z] completed task:\nuser: original task sentence\nresult: result text\n"
+	want := "[2026-11-13T11:00:00Z] user: original words\n[2026-11-13T12:00:00Z] completed task done:\nrequest: original task sentence\nresult: result text\n[2026-11-13T12:00:00Z] assistant: answer\n"
 	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var input map[string]string
@@ -168,7 +172,7 @@ func TestMemoryIngestTranscriptTasksWindowAndCadence(t *testing.T) {
 	}
 }
 
-func TestMemoryIngestFailureRetriesAllChunksAndSuccessOnlyCAS(t *testing.T) {
+func TestMemoryIngestFailureResumesPendingChunksAndSuccessOnlyCAS(t *testing.T) {
 	db, repo, now := ingestFixture(t)
 	for seq := 0; seq < 2; seq++ {
 		if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',?,'user',?,?)`, seq, strings.Repeat("a", 150*1024), now.Format(time.RFC3339Nano)); err != nil {
@@ -176,10 +180,23 @@ func TestMemoryIngestFailureRetriesAllChunksAndSuccessOnlyCAS(t *testing.T) {
 		}
 	}
 	calls, fail := 0, true
+	var batchID, secondChunkID string
 	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var input map[string]string
 		json.NewDecoder(r.Body).Decode(&input)
+		if calls == 1 {
+			batchID = input["batch_id"]
+		}
+		if calls == 2 {
+			secondChunkID = input["chunk_id"]
+		}
+		if input["batch_id"] != batchID || len(batchID) != 64 || len(input["chunk_id"]) != 64 {
+			t.Error("missing or changed deterministic identity")
+		}
+		if calls == 3 && input["chunk_id"] != secondChunkID {
+			t.Error("retried a different chunk")
+		}
 		if len(input["text"]) > ingestChunkBytes {
 			t.Error("oversized")
 		}
@@ -201,13 +218,25 @@ func TestMemoryIngestFailureRetriesAllChunksAndSuccessOnlyCAS(t *testing.T) {
 		t.Fatalf("failed state changed: %d %d %v", boundary, next, err)
 	}
 	fail = false
+	// Close and reopen the disk database, not just the repository wrapper.
+	var path string
+	if err := db.QueryRow(`SELECT file FROM pragma_database_list WHERE name='main'`).Scan(&path); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, _ = sql.Open("sqlite", path)
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { db.Close() })
+	repo = NewRepository(db)
 	if err := repo.batchStep(context.Background(), client, time.Hour, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 4 {
-		t.Fatalf("did not retry all chunks: %d", calls)
+	if calls != 3 {
+		t.Fatalf("did not resume pending chunk: %d", calls)
 	}
-	if err := db.QueryRow(`SELECT boundary_ns FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary); err != nil || boundary != now.Add(time.Minute).UnixNano() {
+	if err := db.QueryRow(`SELECT boundary_ns FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary); err != nil || boundary != now.UnixNano() {
 		t.Fatalf("boundary=%d err=%v", boundary, err)
 	}
 }
@@ -229,6 +258,37 @@ func TestMemoryIngestCASRejectsConcurrentAdvance(t *testing.T) {
 	var boundary int64
 	if err := db.QueryRow(`SELECT boundary_ns FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary); err != nil || boundary != 42 {
 		t.Fatalf("overwrote concurrent boundary: %d %v", boundary, err)
+	}
+}
+
+func TestMemoryIngestLateBackdatedSourceAfterSnapshot(t *testing.T) {
+	db, repo, now := ingestFixture(t)
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','first',?)`, now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var input map[string]string
+		json.NewDecoder(r.Body).Decode(&input)
+		if calls == 1 {
+			// This independent insert proves HTTP happens outside snapshot tx.
+			if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',2,'assistant','late backdated',?)`, now.Add(-time.Hour).Format(time.RFC3339Nano)); err != nil {
+				t.Error(err)
+			}
+		} else if !strings.Contains(input["text"], "late backdated") || strings.Contains(input["text"], "user: first") {
+			t.Error("unseen source dropped or completed source repeated")
+		}
+		w.Write([]byte(`{"added":1,"updated":0}`))
+	})
+	if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now.Add(time.Hour), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls=%d", calls)
 	}
 }
 

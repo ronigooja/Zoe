@@ -4,11 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"net/http"
-	"net/url"
-	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 const resultDeliveryMaxAttempts = 3
@@ -17,34 +13,10 @@ const fastReplyLease = 30 * time.Second
 // resultDeliveryLease bounds how long a claimed delivery is hidden from other dispatchers.
 const resultDeliveryLease = 30 * time.Second
 
-// appendContext preserves text and sends consecutive gateway-sized UTF-8 chunks.
-// A failed attempt stops immediately; the existing delivery retry resends all text.
+// appendContext is an explicit unsupported legacy boundary. Persisted callers
+// must use deliverDurableText with a stable source identity.
 func (s *Service) appendContext(ctx context.Context, gateway, text string) (bool, string) {
-	if !utf8.ValidString(text) {
-		return false, "invalid_utf8"
-	}
-	if strings.TrimSpace(text) == "" {
-		return false, "empty_result"
-	}
-	for len(text) > 0 {
-		n := min(len(text), 8000)
-		for n < len(text) && !utf8.RuneStart(text[n]) {
-			n--
-		}
-		body, _ := json.Marshal(map[string]string{"text": text[:n]})
-		resp, _, err := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions/"+url.PathEscape(gateway)+"/context", body)
-		if resp != nil {
-			resp.Body.Close()
-		}
-		if resp != nil && resp.StatusCode == http.StatusNotImplemented {
-			return false, "route_unsupported"
-		}
-		if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return false, "gateway_failed"
-		}
-		text = text[n:]
-	}
-	return true, ""
+	return false, "receipt_identity_required"
 }
 
 func (s *Service) resultDispatcher() {
@@ -174,7 +146,7 @@ func (s *Service) consumeResultEvents(ctx context.Context) {
 
 func (s *Service) dispatchResults(ctx context.Context) {
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT entry_id,workspace_id,task_id,run_id,subject_id,attempts FROM voice_result_deliveries WHERE status='pending' AND next_attempt_at<=? ORDER BY next_attempt_at LIMIT 25`, now)
+	rows, err := s.db.QueryContext(ctx, `SELECT entry_id,workspace_id,task_id,run_id,subject_id,attempts FROM voice_result_deliveries WHERE status='pending' AND last_error_code!='awaiting_context' AND next_attempt_at<=? ORDER BY next_attempt_at LIMIT 25`, now)
 	if err != nil {
 		return
 	}
@@ -237,7 +209,7 @@ func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session s
 	var current int64
 	err = s.db.QueryRowContext(ctx, `SELECT gateway_session_id,generation FROM voice_sessions WHERE id=? AND workspace_id=? AND owner_id=(SELECT owner_id FROM voice_sessions WHERE id=?) AND state='active'`, session, workspace, session).Scan(&gateway, &current)
 	if err == sql.ErrNoRows || gateway == "" {
-		s.finishFastReply(id, "skipped", "")
+		_, _ = s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET attempts=attempts-1,next_attempt_at=?,last_error_code='awaiting_context' WHERE id=? AND status='pending'`, now.Add(fastReplyLease).Format(time.RFC3339Nano), id)
 		return
 	}
 	if err != nil || current != generation || gateway == "" {
@@ -248,16 +220,16 @@ func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session s
 		}
 		return
 	}
-	ok, code := s.appendContext(ctx, gateway, text)
+	var owner string
+	if err := s.db.QueryRowContext(ctx, `SELECT owner_id FROM voice_sessions WHERE id=? AND workspace_id=?`, session, workspace).Scan(&owner); err != nil {
+		return
+	}
+	ok, code := s.deliverDurableText(ctx, workspace, owner, "fast_reply", id, session, generation, text)
 	if ok {
 		_, _ = s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET status='delivered',voice_session_id=?,voice_generation=?,updated_at=? WHERE id=? AND status='pending'`, session, generation, s.now().UTC().Format(time.RFC3339Nano), id)
 		return
 	}
-	if code != "gateway_failed" {
-		s.finishFastReply(id, "failed", code)
-		return
-	}
-	s.retryFastReply(id, attempts+1, code)
+	_, _ = s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET attempts=attempts-1,next_attempt_at=?,last_error_code=?,updated_at=? WHERE id=? AND status='pending'`, now.Add(fastReplyLease).Format(time.RFC3339Nano), code, now.Format(time.RFC3339Nano), id)
 }
 
 func (s *Service) finishFastReply(id, status, code string) {
@@ -273,58 +245,11 @@ func (s *Service) retryFastReply(id string, attempt int, code string) {
 }
 
 func (s *Service) deliverResult(ctx context.Context, id, workspace, task, run, subject string, attempts int) {
-	// Claim the row with a short lease: attempts is the compare-and-set token and
-	// next_attempt_at moves into the future, so a concurrent dispatcher that
-	// already read this row can no longer win it and, if this process dies mid
-	// send, the row becomes due again after the lease.
-	now := s.now().UTC()
-	res, err := s.db.ExecContext(ctx, `UPDATE voice_result_deliveries SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE entry_id=? AND status='pending' AND attempts=? AND next_attempt_at<=?`, now.Add(resultDeliveryLease).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts, now.Format(time.RFC3339Nano))
-	if err != nil {
+	if s.resultReceiptAdapter == nil {
+		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries SET last_error_code=CASE WHEN last_error_code='awaiting_context' THEN last_error_code ELSE 'receipt_capability_disabled' END,next_attempt_at=?,updated_at=? WHERE entry_id=? AND status='pending'`, s.now().Add(resultDeliveryLease).UTC().Format(time.RFC3339Nano), s.now().UTC().Format(time.RFC3339Nano), id)
 		return
 	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
-		return
-	}
-	attempt := attempts + 1
-	var text string
-	if err := s.db.QueryRowContext(ctx, `SELECT content FROM task_entries WHERE id=? AND workspace_id=? AND task_id=? AND kind='assistant_message'`, id, workspace, task).Scan(&text); err != nil {
-		s.retryResult(id, attempt, "entry_missing")
-		return
-	}
-	if strings.TrimSpace(text) == "" {
-		s.finishResult(id, "failed", "empty_result")
-		return
-	}
-	if !utf8.ValidString(text) {
-		s.finishResult(id, "failed", "invalid_utf8")
-		return
-	}
-	var session, gateway string
-	var generation, current int64
-	err = s.db.QueryRowContext(ctx, `SELECT id,gateway_session_id,generation FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND state='active' LIMIT 1`, workspace, subject).Scan(&session, &gateway, &generation)
-	if err == sql.ErrNoRows {
-		s.finishResult(id, "skipped_no_call", "")
-		return
-	}
-	if err != nil {
-		s.retryResult(id, attempt, "session_lookup")
-		return
-	}
-	if err = s.db.QueryRowContext(ctx, `SELECT generation FROM voice_sessions WHERE id=? AND state='active'`, session).Scan(&current); err != nil || current != generation {
-		s.finishResult(id, "skipped_stale", "stale_generation")
-		return
-	}
-	ok, code := s.appendContext(ctx, gateway, text)
-	if ok {
-		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries SET status='delivered',voice_session_id=?,generation=?,updated_at=? WHERE entry_id=? AND status='pending'`, session, generation, s.now().UTC().Format(time.RFC3339Nano), id)
-		return
-	}
-	if code != "gateway_failed" {
-		s.finishResult(id, "failed", code)
-		return
-	}
-	s.retryResult(id, attempt, code)
+	s.deliverCheckpointedResult(ctx, id, workspace, task, run, subject, attempts, s.resultReceiptAdapter)
 }
 
 func (s *Service) finishResult(id, status, code string) {

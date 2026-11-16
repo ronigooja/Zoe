@@ -40,7 +40,7 @@ func TestRecallWorkerUnmodifiedContext(t *testing.T) {
 					calls++
 					var body map[string]string
 					_ = json.NewDecoder(req.Body).Decode(&body)
-					if req.URL.Path != "/v1/memory/search" || body["query"] != "register restatement" || body["user"] != memoryUser("default", "owner") {
+					if req.URL.Path != "/v1/memory/search" || body["request"] != "register restatement" || body["user"] != memoryUser("default", "owner") {
 						t.Errorf("request=%v path=%s", body, req.URL.Path)
 					}
 					if mode == "failure" {

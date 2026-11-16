@@ -119,8 +119,8 @@ func TestRegisterContiguousLayersAndMemoryBoundary(t *testing.T) {
 	m := f.now.Add(-2 * time.Hour)
 	f.boundary = m
 	s = f.layers(f.now)
-	if !s.CompactFrom.Equal(m) || !s.RawFrom.Equal(m) || s.Compact != "" || strings.Contains(s.Raw, "old") {
-		t.Fatalf("memory did not move left edge: %+v", s)
+	if !s.CompactFrom.IsZero() || !s.RawFrom.Equal(edge) || s.Compact == "" || strings.Contains(s.Raw, "old") {
+		t.Fatalf("memory advancement discarded retained coverage: %+v", s)
 	}
 	f.turn("handoff-session", 3, "user", "between", f.now.Add(-90*time.Minute))
 	if !f.rebuild(f.now) {
@@ -154,7 +154,7 @@ func TestRegisterCrossCallStableOrderingAndOwnerIsolation(t *testing.T) {
 	if strings.Index(input, "user: first") > strings.Index(input, "assistant: second") || strings.Index(input, "assistant: second") > strings.Index(input, "assistant: third") || strings.Contains(input, "SECRET_") {
 		t.Fatal("source order/isolation violated")
 	}
-	f.output = `{"routes":["task"],"restatement":"It refers to first."}`
+	f.output = `{"routes":["task"],"request":"It refers to first."}`
 	if _, err := f.r.Route(context.Background(), f.owner, "that", f.now); err != nil {
 		t.Fatal(err)
 	}
@@ -222,69 +222,69 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 		out   string
 		valid bool
 	}{
-		{`{"routes":["task"],"restatement":"none"}`, true},
-		{`{"routes":["task"],"restatement":"It refers to the user's trip."}`, true},
-		{`{"routes":["memory_write"],"restatement":"Save the user's travel preference."}`, true},
-		{`{"routes":["recall"],"restatement":"Retrieve the user's travel preference."}`, true},
-		{`{"routes":["memory_write"],"restatement":""}`, false},
-		{`{"routes":["recall"],"restatement":""}`, false},
-		{`{"routes":["chat"],"restatement":""}`, true},
-		{`{"routes":["chat"],"restatement":"none"}`, false},
-		{`{"routes":["chat"],"restatement":" "}`, false},
+		{`{"routes":["task"],"request":"Perform the complete request."}`, true},
+		{`{"routes":["task"],"request":"It refers to the user's trip."}`, true},
+		{`{"routes":["memory_write"],"request":"Save the user's travel preference."}`, true},
+		{`{"routes":["recall"],"request":"Retrieve the user's travel preference."}`, true},
+		{`{"routes":["memory_write"],"request":""}`, false},
+		{`{"routes":["recall"],"request":""}`, false},
+		{`{"routes":["chat"],"request":null}`, true},
+		{`{"routes":["chat"],"request":"none"}`, false},
+		{`{"routes":["chat"],"request":" "}`, false},
 		{`{"routes":["chat"]}`, false},
-		{`{"routes":["ui"],"restatement":"none"}`, true},
-		{`{"routes":["task","ui"],"restatement":"none"}`, true},
-		{`{"routes":["ui","task"],"restatement":"none"}`, true},
-		{`{"routes":[],"restatement":"none"}`, false},
-		{`{"routes":null,"restatement":"none"}`, false},
-		{`{"routes":"task","restatement":"none"}`, false},
-		{`{"routes":[1],"restatement":"none"}`, false},
-		{`{"routes":[null],"restatement":"none"}`, false},
-		{`{"routes":["ui","ui"],"restatement":"none"}`, false},
-		{`{"routes":["task","task"],"restatement":"none"}`, false},
-		{`{"routes":["chat","ui"],"restatement":""}`, false},
-		{`{"routes":["chat","task"],"restatement":""}`, false},
-		{`{"routes":["memory_write","ui"],"restatement":"Store it."}`, false},
-		{`{"routes":["recall","ui"],"restatement":"Retrieve it."}`, false},
-		{`{"routes":["memory_write","task"],"restatement":"Store it."}`, false},
-		{`{"routes":["recall","task"],"restatement":"Retrieve it."}`, false},
-		{`{"routes":["memory_write","recall"],"restatement":"Store it."}`, false},
-		{`{"routes":["ui"],"restatement":""}`, false},
-		{`{"routes":["task","ui"],"restatement":""}`, false},
-		{`{"routes":["unknown"],"restatement":"none"}`, false},
-		{`{"routes":["task"],"restatement":null}`, false},
-		{`{"routes":["task"],"restatement":1}`, false},
-		{`{"routes":["task"],"restatement":"none","extra":"x"}`, false},
-		{`{"routes":["task"],"routes":["ui"],"restatement":"none"}`, false},
-		{`{"routes":["task"],"restatement":"none","restatement":"none"}`, false},
-		{`{"routes":["task"],"restatement":"none"} {}`, false},
-		{`{"routes":["task"],"restatement":"none"} extra`, false},
+		{`{"routes":["ui"],"request":"Show the complete requested content."}`, true},
+		{`{"routes":["task","ui"],"request":"Show the complete requested content."}`, true},
+		{`{"routes":["ui","task"],"request":"Show the complete requested content."}`, true},
+		{`{"routes":[],"request":"none"}`, false},
+		{`{"routes":null,"request":"none"}`, false},
+		{`{"routes":"task","request":"none"}`, false},
+		{`{"routes":[1],"request":"none"}`, false},
+		{`{"routes":[null],"request":"none"}`, false},
+		{`{"routes":["ui","ui"],"request":"none"}`, false},
+		{`{"routes":["task","task"],"request":"none"}`, false},
+		{`{"routes":["chat","ui"],"request":""}`, false},
+		{`{"routes":["chat","task"],"request":""}`, false},
+		{`{"routes":["memory_write","ui"],"request":"Store it."}`, false},
+		{`{"routes":["recall","ui"],"request":"Retrieve it."}`, false},
+		{`{"routes":["memory_write","task"],"request":"Store it."}`, false},
+		{`{"routes":["recall","task"],"request":"Retrieve it."}`, false},
+		{`{"routes":["memory_write","recall"],"request":"Store it."}`, false},
+		{`{"routes":["ui"],"request":""}`, false},
+		{`{"routes":["task","ui"],"request":""}`, false},
+		{`{"routes":["unknown"],"request":"none"}`, false},
+		{`{"routes":["task"],"request":null}`, false},
+		{`{"routes":["task"],"request":1}`, false},
+		{`{"routes":["task"],"request":"none","extra":"x"}`, false},
+		{`{"routes":["task"],"routes":["ui"],"request":"none"}`, false},
+		{`{"routes":["task"],"request":"none","request":"none"}`, false},
+		{`{"routes":["task"],"request":"none"} {}`, false},
+		{`{"routes":["task"],"request":"none"} extra`, false},
 		{`{"memory_key":"trip"}`, false},
-		{`{"routes":["confirm"],"restatement":"none"}`, false},
-		{`{"routes":["decline"],"restatement":"none"}`, false},
-		{`{"routes":["cancel"],"restatement":"none"}`, false},
-		{`{"routes":["progress"],"restatement":"none"}`, false},
-		{`{"routes":["task"],"restatement":""}`, false},
+		{`{"routes":["confirm"],"request":"none"}`, false},
+		{`{"routes":["decline"],"request":"none"}`, false},
+		{`{"routes":["cancel"],"request":"none"}`, false},
+		{`{"routes":["progress"],"request":"none"}`, false},
+		{`{"routes":["task"],"request":""}`, false},
 		{`{"routes":["task"]}`, false},
 		{`{"routes":["recall"]}`, false},
-		{`{"routes":["memory_write"],"restatement":"none"}`, false},
-		{`{"routes":["recall"],"restatement":"none"}`, false},
-		{`{"routes":["task"],"restatement":null}`, false},
-		{`{"routes":["task"],"restatement":1}`, false},
-		{`{"routes":["task"],"restatement":" none"}`, false},
-		{`{"routes":["task"],"restatement":"one\ntwo"}`, false},
-		{`{"routes":["task"],"restatement":"- none"}`, false},
-		{`{"routes":["task"],"restatement":"none","extra":"x"}`, false},
-		{`{"route":"task","restatement":"none"}`, false},
+		{`{"routes":["memory_write"],"request":"none"}`, false},
+		{`{"routes":["recall"],"request":"none"}`, false},
+		{`{"routes":["task"],"request":null}`, false},
+		{`{"routes":["task"],"request":1}`, false},
+		{`{"routes":["task"],"request":" none"}`, false},
+		{`{"routes":["task"],"request":"First complete instruction.\nSecond complete instruction."}`, true},
+		{`{"routes":["task"],"request":"- Preserve the complete structured request."}`, true},
+		{`{"routes":["task"],"request":"none","extra":"x"}`, false},
+		{`{"route":"task","request":"none"}`, false},
 		{`{"memory_key":"absent"}`, false},
 		{`{"memory_key":"travel"}`, false},
 		{`{"memory_key":""}`, false},
 		{`{"memory_key":null}`, false},
-		{`{"memory_key":"trip","route":"task","restatement":"none"}`, false},
+		{`{"memory_key":"trip","route":"task","request":"none"}`, false},
 		{`{"memory_key":"trip","extra":"x"}`, false},
-		{`{"route":"task","restatement":"none"} {}`, false},
-		{`{"route":"task","restatement":"none"} extra`, false},
-		{`prefix {"route":"task","restatement":"none"}`, false},
+		{`{"route":"task","request":"none"} {}`, false},
+		{`{"route":"task","request":"none"} extra`, false},
+		{`prefix {"route":"task","request":"none"}`, false},
 		{`[]`, false}, {`null`, false}, {`none`, false}, {`memory trip`, false}, {``, false},
 	} {
 		t.Run(tc.out, func(t *testing.T) {
@@ -305,13 +305,13 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 
 func TestRegisterAttributionInstructionChat(t *testing.T) {
 	for _, required := range []string{
-		"Route chat means the sentence is conversation addressed to the assistant that asks for no work, no memory operation, and no screen interaction:",
-		"Route task means requests for work, changes or cancellation of work, or questions about the state of work.",
-		"Route ui means the sentence asks to show content to the user on their Mac screen, or asks the user to provide input through their Mac screen.",
-		"For chat, restatement is empty.",
-		"For every non-chat result, restatement is required and non-empty:",
-		"For memory_write and recall, restatement is never the literal none.",
-		`{"routes":["<exit>"],"restatement":"<text>"}`,
+		"Route chat means conversation requiring no execution, screen action or memory operation.",
+		"Route task means perform, modify, answer, continue, inspect, cancel or redisplay work.",
+		"Route ui means present content or collect input on the screen.",
+		"For chat, request must be null.",
+		"For every other route, request must be a nonempty complete self-contained statement",
+		"Never output the literal none",
+		"only routes and request",
 	} {
 		if !strings.Contains(RegisterAttributionInstruction, required) {
 			t.Errorf("missing instruction: %s", required)
@@ -332,15 +332,15 @@ func TestRegisterAttributionInstructionChat(t *testing.T) {
 	}
 }
 
-func TestRegisterRestatementTextValidation(t *testing.T) {
+func TestRegisterRequestTextValidation(t *testing.T) {
 	for _, route := range []string{"task", "memory_write", "recall", "ui"} {
-		for _, text := range []string{"", " leading", "trailing ", "one\ntwo", "one\ttwo", "{text}", "[text]", "`text`", `"quoted"`, "- text", "#text"} {
-			output, err := json.Marshal(map[string]any{"routes": []string{route}, "restatement": text})
+		for _, text := range []string{"", "none", " NONE ", "  "} {
+			output, err := json.Marshal(map[string]any{"routes": []string{route}, "request": text})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if _, err := parseRegisterRoute(string(output)); err == nil {
-				t.Errorf("accepted route=%s restatement=%q", route, text)
+				t.Errorf("accepted route=%s request=%q", route, text)
 			}
 		}
 	}
@@ -426,13 +426,13 @@ func TestRegisterRouteSingleCall(t *testing.T) {
 		name, output string
 		valid        bool
 	}{
-		{"task", `{"routes":["task"],"restatement":"none"}`, true},
-		{"memory_write", `{"routes":["memory_write"],"restatement":"Save the user's travel preference."}`, true},
-		{"recall", `{"routes":["recall"],"restatement":"Retrieve the user's travel preference."}`, true},
-		{"chat", `{"routes":["chat"],"restatement":""}`, true},
-		{"empty_memory_write", `{"routes":["memory_write"],"restatement":""}`, false},
-		{"empty_recall", `{"routes":["recall"],"restatement":""}`, false},
-		{"nonempty_chat", `{"routes":["chat"],"restatement":"Hello."}`, false},
+		{"task", `{"routes":["task"],"request":"Perform the complete request."}`, true},
+		{"memory_write", `{"routes":["memory_write"],"request":"Save the user's travel preference."}`, true},
+		{"recall", `{"routes":["recall"],"request":"Retrieve the user's travel preference."}`, true},
+		{"chat", `{"routes":["chat"],"request":null}`, true},
+		{"empty_memory_write", `{"routes":["memory_write"],"request":""}`, false},
+		{"empty_recall", `{"routes":["recall"],"request":""}`, false},
+		{"nonempty_chat", `{"routes":["chat"],"request":"Hello."}`, false},
 		{"old_memory_key", `{"memory_key":"x"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -111,8 +111,9 @@ public actor CommandCoordinator {
             expectedResourceType: nil,
             expectedResourceID: nil
         )
+        let alreadyPending = try await journal.all().contains { $0.idempotencyKey == command.idempotencyKey }
         try await journal.append(command)
-        return try await deliver(command, checkReceiptFirst: false)
+        return try await deliver(command, checkReceiptFirst: alreadyPending)
     }
 
     public func recoverPending() async throws -> [CommandOutcome] {
@@ -134,7 +135,7 @@ public actor CommandCoordinator {
     ) async throws -> [CommandOutcome] {
         let commands = try await journal.all()
         var outcomes: [CommandOutcome] = []
-        for command in commands where command.kind == "voice.turn.commit" || command.kind == "voice.turn.handoff" {
+        for command in commands where command.kind == "voice.turn.commit" || command.kind == "voice.turn.handoff" || command.kind == "ui.rendered" || command.kind == "ui.action" {
             guard !enforceWorkspace || (command.workspaceID != nil && currentWorkspaceID != nil && command.workspaceID == currentWorkspaceID) else {
                 await onWorkspaceMismatch(command)
                 continue

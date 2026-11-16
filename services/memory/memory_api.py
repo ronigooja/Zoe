@@ -105,24 +105,26 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
         body = self._body()
         user = _required_text(body, "user")
         if self.path.endswith("/ingest"):
-            if set(body) != {"user", "text"}:
+            if set(body) != {"user", "text", "batch_id", "chunk_id"}:
                 raise MemoryAPIError(400, "request_invalid")
             text = _required_text(body, "text")
-            return self.server.backend.ingest(user, text, self.deadline)
+            batch_id = _required_text(body, "batch_id")
+            chunk_id = _required_text(body, "chunk_id")
+            return self.server.backend.ingest(user, batch_id, chunk_id, text, self.deadline)
         if self.path.endswith("/search"):
-            if set(body) - {"user", "query", "top_k"}:
+            if set(body) - {"user", "request", "top_k"}:
                 raise MemoryAPIError(400, "request_invalid")
-            query = _required_text(body, "query")
+            request = _required_text(body, "request")
             top_k = body.get("top_k", 8)
             if type(top_k) is not int or not 1 <= top_k <= 20:
                 raise MemoryAPIError(400, "request_invalid")
-            return self.server.backend.search(user, query, top_k, self.deadline)
+            return self.server.backend.search(user, request, top_k, self.deadline)
         if self.path.endswith("/write"):
-            if set(body) != {"user", "sentence", "restatement"}:
+            if set(body) != {"user", "op_id", "request"}:
                 raise MemoryAPIError(400, "request_invalid")
-            sentence = _required_text(body, "sentence")
-            restatement = _required_text(body, "restatement")
-            return self.server.backend.write(user, sentence, restatement, self.deadline)
+            request = _required_text(body, "request")
+            op_id = _required_text(body, "op_id")
+            return self.server.backend.write(user, op_id, request, self.deadline)
         if set(body) != {"user"}:
             raise MemoryAPIError(400, "request_invalid")
         return self.server.backend.delete_all(user, self.deadline)

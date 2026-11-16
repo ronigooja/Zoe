@@ -142,8 +142,7 @@ class MemoryAPITests(unittest.TestCase):
 
     def write(self, operations):
         self.memory.llm.generate_response.return_value = json.dumps({"operations": operations})
-        return self.request("/v1/memory/write", {"user": "workspace/owner", "sentence": "private-sentence",
-                                                "restatement": "private-query"})
+        return self.request("/v1/memory/write", {"user": "workspace/owner", "request": "private-query", "op_id": str(time.monotonic_ns())})
 
     def test_auth_required_even_health(self):
         for token in (None, "wrong-token"):
@@ -152,12 +151,18 @@ class MemoryAPITests(unittest.TestCase):
         self.assertEqual(self.request("/healthz", method="GET")[0], 200)
 
     def test_body_limit_and_request_validation(self):
-        self.assertEqual(self.request("/v1/memory/search", {"user": "u", "query": "a" * 65536})[0], 413)
+        for route, old in (
+            ("write", {"user": "u", "sentence": "s", "restatement": "r"}),
+            ("search", {"user": "u", "query": "q"}),
+            ("ingest", {"user": "u", "text": "t"}),
+        ):
+            self.assertEqual(self.request("/v1/memory/" + route, old)[0], 400)
+        self.assertEqual(self.request("/v1/memory/search", {"user": "u", "request": "a" * 65536})[0], 413)
         for top_k in (0, 21, True, "8"):
-            self.assertEqual(self.request("/v1/memory/search", {"user": "u", "query": "q", "top_k": top_k})[0], 400)
+            self.assertEqual(self.request("/v1/memory/search", {"user": "u", "request": "q", "top_k": top_k})[0], 400)
 
     def test_ingest_auth_validation_and_empty_extraction(self):
-        body = {"user": "u", "text": "transcript"}
+        body = {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": "transcript"}
         for token in (None, "wrong-token"):
             self.assertEqual(self.request("/v1/memory/ingest", body, token=token),
                              (401, {"error_kind": "unauthorized"}))
@@ -172,15 +177,15 @@ class MemoryAPITests(unittest.TestCase):
         self.assertEqual(self.memory.add_calls, [("transcript", person_user_id("u"), True)])
 
     def test_ingest_body_limit_is_route_specific(self):
-        body = {"user": "u", "text": ""}
+        body = {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": ""}
         overhead = len(json.dumps(body).encode())
         body["text"] = "x" * (256 * 1024 - overhead)
         self.assertEqual(self.request("/v1/memory/ingest", body)[0], 200)
         body["text"] += "x"
         self.assertEqual(self.request("/v1/memory/ingest", body), (413, {"error_kind": "body_too_large"}))
         for path, body in (
-            ("search", {"user": "u", "query": "x" * 65536}),
-            ("write", {"user": "u", "sentence": "x" * 65536, "restatement": "r"}),
+            ("search", {"user": "u", "request": "x" * 65536}),
+            ("write", {"user": "u", "request": "x" * 65536}),
             ("delete-all", {"user": "x" * 65536}),
         ):
             self.assertEqual(self.request("/v1/memory/" + path, body)[0], 413)
@@ -188,7 +193,7 @@ class MemoryAPITests(unittest.TestCase):
     def test_ingest_counts_events_and_calls_add_once(self):
         result = {"results": [{"event": event} for event in ("ADD", "UPDATE", "ADD", "DELETE", "NONE")]}
         with patch.object(self.memory, "add", return_value=result) as add:
-            self.assertEqual(self.request("/v1/memory/ingest", {"user": "u", "text": "transcript"}),
+            self.assertEqual(self.request("/v1/memory/ingest", {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": "transcript"}),
                              (200, {"added": 2, "updated": 1}))
         add.assert_called_once_with("transcript", user_id=person_user_id("u"), infer=True,
                                     prompt=INGEST_INSTRUCTIONS)
@@ -196,11 +201,11 @@ class MemoryAPITests(unittest.TestCase):
     def test_ingest_person_isolation_and_ownership_history(self):
         self.memory.llm.generate_response.return_value = '{"memory":[{"text":"private-fact"}]}'
         for user in ("a", "b"):
-            self.assertEqual(self.request("/v1/memory/ingest", {"user": user, "text": "transcript"}),
+            self.assertEqual(self.request("/v1/memory/ingest", {"user": user, "batch_id": "batch", "chunk_id": "chunk", "text": "transcript"}),
                              (200, {"added": 1, "updated": 0}))
-        self.assertEqual(self.request("/v1/memory/search", {"user": "c", "query": "q"})[1], {"items": []})
-        self.assertEqual(self.request("/v1/memory/search", {"user": "a", "query": "q"})[1]["items"][0]["id"], "m1")
-        self.assertEqual(self.request("/v1/memory/search", {"user": "b", "query": "q"})[1]["items"][0]["id"], "m2")
+        self.assertEqual(self.request("/v1/memory/search", {"user": "c", "request": "q"})[1], {"items": []})
+        self.assertEqual(self.request("/v1/memory/search", {"user": "a", "request": "q"})[1]["items"][0]["id"], "m1")
+        self.assertEqual(self.request("/v1/memory/search", {"user": "b", "request": "q"})[1]["items"][0]["id"], "m2")
         self.assertEqual(self.request("/v1/memory/delete-all", {"user": "a"}), (200, {"deleted": True}))
         self.assertEqual(list(self.memory.records), ["m2"])
         self.assertEqual(self.memory.db.connection.execute("SELECT memory_id FROM history").fetchall(), [("m2",)])
@@ -210,7 +215,7 @@ class MemoryAPITests(unittest.TestCase):
     def test_ingest_production_adapter_timeout_and_failure_cleanup(self):
         client = _ResponsesClient(SimpleNamespace(output_text='{"memory":[{"text":"private-fact"}]}'))
         self.memory.llm = _adapter(client)
-        body = {"user": "u", "text": "transcript"}
+        body = {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": "transcript"}
         self.assertEqual(self.request("/v1/memory/ingest", body,
                                       headers={"X-Zoe-Memory-Job-ID": "ignored", "X-Zoe-Memory-Job-Attempt": "invalid"}),
                          (200, {"added": 1, "updated": 0}))
@@ -220,6 +225,7 @@ class MemoryAPITests(unittest.TestCase):
         self.assertLessEqual(client.last_request["timeout"], 2)
         self.memory.llm.generate_response([])
         self.assertNotIn("timeout", client.last_request)
+        body["chunk_id"] = "next-chunk"
         client.error = RuntimeError("private-error secret-marker")
         with self.assertLogs("zoe.memory.api", level="INFO") as logs:
             self.assertEqual(self.request("/v1/memory/ingest", body), (502, {"error_kind": "backend_unavailable"}))
@@ -242,13 +248,13 @@ class MemoryAPITests(unittest.TestCase):
         for level in ("INFO", "DEBUG"):
             request_logged.clear()
             with self.assertLogs("zoe.memory.api", level=level) as logs, patch.object(LOG, "info", side_effect=log_request):
-                self.assertEqual(self.request("/v1/memory/ingest", {"user": "workspace/owner", "text": "private-transcript"})[0], 200)
+                self.assertEqual(self.request("/v1/memory/ingest", {"user": "workspace/owner", "batch_id": "batch", "chunk_id": level, "text": "private-transcript"})[0], 200)
                 # The handler logs after sending the response body; keep capture
                 # active until that server thread has emitted the request log.
                 self.assertTrue(request_logged.wait(2), "request log was not emitted")
             output = "\n".join(logs.output)
             for content in ("private-transcript", "private-fact", INGEST_INSTRUCTIONS):
-                self.assertEqual(content in output, level == "DEBUG")
+                self.assertEqual(content in output, level.lower() == "debug")
             for private in ("secret-marker", "workspace/owner"):
                 self.assertNotIn(private, output)
             self.assertIn("memory_api request kind=ingest status=200 elapsed_ms=", output)
@@ -258,17 +264,17 @@ class MemoryAPITests(unittest.TestCase):
             time.sleep(.15)
             return {"results": []}
         with patch.object(self.memory, "add", side_effect=slow):
-            self.assertEqual(self.request("/v1/memory/ingest", {"user": "u", "text": "transcript"}),
+            self.assertEqual(self.request("/v1/memory/ingest", {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": "transcript"}),
                              (504, {"error_kind": "deadline_exceeded"}))
             time.sleep(.2)
 
     def test_search_no_llm_and_person_isolation(self):
         self.memory.add("private-fact", user_id=person_user_id("workspace/owner"), infer=False)
-        status, result = self.request("/v1/memory/search", {"user": "workspace/owner", "query": "private-query"})
+        status, result = self.request("/v1/memory/search", {"user": "workspace/owner", "request": "private-query"})
         self.assertEqual(status, 200)
         self.assertEqual(result["items"], [{"id": "m1", "text": "private-fact", "score": .8}])
         self.assertEqual(self.memory.search_calls[-1][2:], (8, False))
-        self.assertEqual(self.request("/v1/memory/search", {"user": "workspace/other", "query": "q"})[1], {"items": []})
+        self.assertEqual(self.request("/v1/memory/search", {"user": "workspace/other", "request": "q"})[1], {"items": []})
         self.memory.llm.generate_response.assert_not_called()
         self.assertNotEqual(person_user_id("workspace/owner"), person_user_id("other/owner"))
 
@@ -296,7 +302,7 @@ class MemoryAPITests(unittest.TestCase):
         ]
         for raw in bad_outputs:
             self.memory.llm.generate_response.return_value = raw
-            self.assertEqual(self.request("/v1/memory/write", {"user": "u", "sentence": "s", "restatement": "r"}),
+            self.assertEqual(self.request("/v1/memory/write", {"user": "u", "request": "r", "op_id": str(time.monotonic_ns())}),
                              (502, {"error_kind": "output_invalid"}))
         self.assertEqual(self.memory.add_calls, [])
         self.assertEqual(self.memory.update_calls, [])
@@ -304,14 +310,14 @@ class MemoryAPITests(unittest.TestCase):
     def test_production_adapter_sync_write_needs_no_job_headers(self):
         client = _ResponsesClient(SimpleNamespace(output_text='{"operations":[{"op":"add","text":"private-fact"}]}'))
         self.memory.llm = _adapter(client)
-        self.assertEqual(self.request("/v1/memory/write", {"user": "u", "sentence": "s", "restatement": "r"}),
+        self.assertEqual(self.request("/v1/memory/write", {"user": "u", "request": "r", "op_id": str(time.monotonic_ns())}),
                          (200, {"operations": [{"op": "add", "text": "private-fact", "id": "m1"}]}))
         self.assertEqual(client.calls, 1)
         self.assertEqual(client.retry_values, [0])
         self.assertGreater(client.last_request["timeout"], 0)
         # Obsolete job headers have no effect on HTTP requests.
         client.response.output_text = '{"operations":[]}'
-        self.assertEqual(self.request("/v1/memory/write", {"user": "u", "sentence": "s", "restatement": "r"},
+        self.assertEqual(self.request("/v1/memory/write", {"user": "u", "request": "r", "op_id": str(time.monotonic_ns())},
                                       headers={"X-Zoe-Memory-Job-ID": "ignored", "X-Zoe-Memory-Job-Attempt": "invalid"}),
                          (200, {"operations": []}))
         self.assertEqual(self.memory.llm.generate_response([]), '{"operations":[]}')
@@ -322,7 +328,7 @@ class MemoryAPITests(unittest.TestCase):
         client = _ResponsesClient(error=RuntimeError("private-error secret-marker workspace/owner"))
         self.memory.llm = _adapter(client)
         with self.assertLogs("zoe.memory.api", level="INFO") as logs:
-            self.assertEqual(self.request("/v1/memory/write", {"user": "u", "sentence": "s", "restatement": "r"}),
+            self.assertEqual(self.request("/v1/memory/write", {"user": "u", "request": "r", "op_id": str(time.monotonic_ns())}),
                              (502, {"error_kind": "backend_unavailable"}))
         output = "\n".join(logs.output)
         self.assertIn("llm_call component=memory_write status=error error_kind=backend_unavailable elapsed_ms=", output)
@@ -355,13 +361,12 @@ class MemoryAPITests(unittest.TestCase):
                 stream.truncate()
                 with patch.dict("os.environ", {"ZOE_LOG_LEVEL": level}):
                     configure_logging()
-                self.assertEqual(self.request("/v1/memory/write", {"user": "workspace/owner", "sentence": "private-sentence",
-                                                                        "restatement": "private-query"})[0], 200)
+                self.assertEqual(self.request("/v1/memory/write", {"user": "workspace/owner", "request": "private-query", "op_id": str(time.monotonic_ns())})[0], 200)
                 logging.getLogger("mem0.memory.main").info("private-mem0")
                 self.request("/healthz", token="wrong-token", method="GET")
                 output = stream.getvalue()
-                for content in ("private-sentence", "private-query", "private-fact", "private-mem0"):
-                    self.assertEqual(content in output, level == "debug", output)
+                for content in ("private-query", "private-fact"):
+                    self.assertEqual(content in output, level.lower() == "debug")
                 self.assertNotIn("secret-marker", output)
                 self.assertNotIn("wrong-token", output)
                 self.assertNotIn("workspace/owner", output)
@@ -385,7 +390,7 @@ class MemoryAPITests(unittest.TestCase):
             return {"items": []}
         self.server.request_timeout = .05
         with patch.object(self.backend, "search", side_effect=slow):
-            self.assertEqual(self.request("/v1/memory/search", {"user": "u", "query": "q"}),
+            self.assertEqual(self.request("/v1/memory/search", {"user": "u", "request": "q"}),
                              (504, {"error_kind": "deadline_exceeded"}))
         time.sleep(.2)
 

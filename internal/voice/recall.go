@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -9,7 +10,7 @@ import (
 	"github.com/ronigooja/Zoe/internal/memoryapi"
 )
 
-// memoryWriteHolding identifies at-most-once writes in the shared durable queue.
+// memoryWriteHolding identifies receiver-reconciled writes in the durable queue.
 const memoryWriteHolding = "memory_write_holding"
 
 // recallWorkerLimit bounds model work per service, including persistence retries.
@@ -49,9 +50,15 @@ func (s *Service) recoverRecall(ctx context.Context, startup bool) {
 	}
 	rows.Close()
 	for _, id := range ids {
-		// A running write may already have reached Mem0. Finalize with one
-		// idempotent error receipt, never reset to pending or call the worker.
-		// Recall recovery retains its existing fallback behavior as well.
+		// Reconcile writes using the same receiver operation identity. Completed
+		// operations are returned, ready plans resume, uncertain effects fence.
+		res, err := s.db.ExecContext(ctx, `UPDATE voice_recall_jobs SET status='pending' WHERE id=? AND status='running' AND holding_id IN (SELECT id FROM voice_fast_replies WHERE intent_kind=?)`, id, memoryWriteHolding)
+		if err != nil {
+			continue
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			continue
+		}
 		s.persistRecallRetry(ctx, id, s.recallFallback(ctx, id))
 	}
 }
@@ -174,14 +181,32 @@ func (s *Service) runRecall(id string) {
 	if kind == memoryWriteHolding {
 		// The CAS claim is already committed and this read is closed before
 		// calling the worker, so slow writes hold no SQLite transaction.
-		var sentence string
-		err := s.db.QueryRowContext(ctx, `SELECT v.content FROM voice_turns v JOIN voice_recall_jobs j ON j.holding_id=v.id WHERE j.id=? AND v.workspace_id=j.workspace_id AND v.session_id=j.session_id AND v.generation=j.generation AND v.turn_id=j.turn_id AND v.handoff_handled=1`, id).Scan(&sentence)
-		if err == nil {
-			err = s.recall.MemoryAPI.Write(ctx, memoryUser(workspace, owner), sentence, question)
+		// The retained register request is the sole execution input. The turn
+		// linkage remains provenance; do not reread its original utterance.
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO memory_write_outcomes(op_id,status) VALUES(?,'running') ON CONFLICT(op_id) DO UPDATE SET status='running'`, id); err != nil {
+			return
 		}
+		err := s.recall.MemoryAPI.Write(ctx, memoryUser(workspace, owner), id, question)
 		status = "write_ok"
 		if err != nil {
 			text, status = stewardErrorSpeech, "write_error"
+			var failure *memoryapi.Error
+			if errors.As(err, &failure) {
+				switch failure.Kind {
+				case "write_uncertain", "transport", "deadline_exceeded", "response_read", "response_invalid", "http_status", "backend_unavailable":
+					status = "write_uncertain"
+				}
+			}
+		}
+		errorKind := ""
+		var failure *memoryapi.Error
+		if errors.As(err, &failure) {
+			errorKind = failure.Kind
+		}
+		outcomeCtx, outcomeCancel := context.WithTimeout(s.recallCtx, time.Second)
+		defer outcomeCancel()
+		if _, e := s.db.ExecContext(outcomeCtx, `INSERT INTO memory_write_outcomes(op_id,status,error_kind) VALUES(?,?,?) ON CONFLICT(op_id) DO UPDATE SET status=excluded.status,error_kind=excluded.error_kind`, id, status, errorKind); e != nil {
+			return
 		}
 	} else {
 		text, count, status = s.recallAnswer(ctx, workspace, owner, question)

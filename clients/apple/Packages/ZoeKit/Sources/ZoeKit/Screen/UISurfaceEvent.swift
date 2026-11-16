@@ -5,6 +5,10 @@ import A2UISwiftCore
 public struct UISurfaceEvent: Decodable, Sendable {
     public let requestID: String
     public let surfaceID: String
+    public let surfaceVersion: Int64
+    public let deleted: Bool
+    public let taskID: String?
+    public let questionID: String?
     public let container: SurfaceKind
     public let awaitingInput: Bool
     public let messages: [A2uiMessage]
@@ -12,12 +16,12 @@ public struct UISurfaceEvent: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case requestID = "request_id", surfaceID = "surface_id", container
+        case surfaceVersion = "surface_version", deleted, taskID = "task_id", questionID = "question_id"
         case awaitingInput = "awaiting_input", messages, size
     }
 
     public var isDeletion: Bool {
-        if messages.count == 1, case .deleteSurface = messages[0] { return true }
-        return false
+        deleted
     }
 
     public static func decode(_ payload: JSONValue) -> UISurfaceEvent? {
@@ -29,6 +33,12 @@ public struct UISurfaceEvent: Decodable, Sendable {
               let event = try? JSONDecoder().decode(Self.self, from: data) else { return (nil, "payload_decode") }
         guard !event.requestID.isEmpty else { return (nil, "request_id") }
         guard !event.surfaceID.isEmpty else { return (nil, "surface_id") }
+        guard event.surfaceVersion > 0 else { return (nil, "surface_version") }
+        guard !event.awaitingInput || (event.taskID?.isEmpty == false && event.questionID?.isEmpty == false) else { return (nil, "input_binding") }
+        if event.deleted {
+            guard !event.awaitingInput, event.taskID == nil, event.questionID == nil,
+                  event.messages.count == 1, case .deleteSurface = event.messages[0] else { return (nil, "deletion") }
+        }
         guard !event.messages.isEmpty else { return (nil, "messages_empty") }
         if !event.isDeletion {
             guard case .createSurface = event.messages[0] else { return (nil, "first_not_createSurface") }
@@ -52,7 +62,14 @@ public struct UISurfaceEvent: Decodable, Sendable {
         return (event, nil)
     }
 
-    public var renderedPayload: JSONValue { .object(["request_id": .string(requestID)]) }
+    public var binding: UISurfaceBinding {
+        UISurfaceBinding(requestID: requestID, surfaceID: surfaceID, surfaceVersion: surfaceVersion)
+    }
+
+    public func renderedPayload(success: Bool) -> JSONValue {
+        .object(["request_id": .string(requestID), "surface_id": .string(surfaceID),
+                 "surface_version": .integer(surfaceVersion), "success": .bool(success)])
+    }
 
     public var diagnosticSummary: String {
         return "container=\(container.rawValue);messages=\(messages.count);awaiting_input=\(awaitingInput ? 1 : 0)"
@@ -73,8 +90,8 @@ public struct UISurfaceEvent: Decodable, Sendable {
         return "container=\(container);messages=\(count);awaiting_input=\(awaiting);cursor=\(safeCursor)"
     }
 
-    public func renderedIdempotencyKey(cursor: String, version: Int64) -> String {
-        let identity = Data([requestID, cursor, String(version)].map { "\($0.utf8.count):\($0)" }.joined().utf8)
+    public var renderedIdempotencyKey: String {
+        let identity = Data([requestID, surfaceID, String(surfaceVersion)].map { "\($0.utf8.count):\($0)" }.joined().utf8)
         return "ui-rendered-" + SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
     }
 }
@@ -82,19 +99,67 @@ public struct UISurfaceEvent: Decodable, Sendable {
 /// Tracks server ownership independently of whether the user dismissed a native container.
 public struct UISurfaceRequests {
     public private(set) var requestIDs: [String: String] = [:]
+    public private(set) var versions: [String: Int64] = [:]
+    public private(set) var outcomes: [UISurfaceBinding: Bool] = [:]
     public init() {}
-    public mutating func apply(_ event: UISurfaceEvent) {
+    /// Reserve before rendering or suspending. Equal revisions never reopen dismissed containers.
+    @discardableResult public mutating func apply(_ event: UISurfaceEvent) -> Bool {
+        guard event.surfaceVersion > (versions[event.surfaceID] ?? 0) else { return false }
+        versions[event.surfaceID] = event.surfaceVersion
         if event.isDeletion { requestIDs.removeValue(forKey: event.surfaceID) }
         else { requestIDs[event.surfaceID] = event.requestID }
+        return true
     }
-    public mutating func removeAll() { requestIDs.removeAll() }
+    public mutating func recordRender(_ event: UISurfaceEvent, success: Bool) { outcomes[event.binding] = success }
+    public mutating func reconcile(_ snapshot: UISnapshot) -> [String] {
+        let current = Set(snapshot.surfaces.filter { !$0.event.deleted }.map { $0.event.surfaceID })
+        let removed = requestIDs.keys.filter { !current.contains($0) }
+        for id in removed { requestIDs.removeValue(forKey: id) }
+        return removed
+    }
+    public mutating func removeAll() { requestIDs.removeAll(); versions.removeAll(); outcomes.removeAll() }
 }
 
-public func uiActionPayload(requestID: String, surfaceID: String, action: ResolvedAction) throws -> JSONValue {
+public struct UISurfaceBinding: Hashable, Sendable {
+    public let requestID: String
+    public let surfaceID: String
+    public let surfaceVersion: Int64
+    public init(requestID: String, surfaceID: String, surfaceVersion: Int64) {
+        self.requestID = requestID; self.surfaceID = surfaceID; self.surfaceVersion = surfaceVersion
+    }
+}
+
+public func uiActionPayload(binding: UISurfaceBinding, action: ResolvedAction) throws -> JSONValue {
     let context = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(action.context))
     return .object([
-        "request_id": .string(requestID), "surface_id": .string(surfaceID),
+        "request_id": .string(binding.requestID), "surface_id": .string(binding.surfaceID),
+        "surface_version": .integer(binding.surfaceVersion),
         "name": .string(action.name), "source_component_id": .string(action.sourceComponentId),
         "context": context
     ])
+}
+
+/// The cursor and all surfaces are decoded/validated before any native state is changed.
+public struct UISnapshot: Decodable, Sendable {
+    public let cursor: Int64
+    public let surfaces: [Surface]
+    public struct Surface: Sendable {
+        public let event: UISurfaceEvent
+        public let renderStatus: String
+    }
+    private enum CodingKeys: String, CodingKey { case cursor, surfaces }
+    public init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        cursor = try fields.decode(Int64.self, forKey: .cursor)
+        guard cursor >= 0 else { throw ZoeError.invalidResponse }
+        let values = try fields.decode([JSONValue].self, forKey: .surfaces)
+        var ids = Set<String>()
+        surfaces = try values.map { value in
+            guard case let .object(object) = value,
+                  case let .string(status) = object["render_status"],
+                  ["generated", "rendered", "input_received", "failed"].contains(status),
+                  let event = UISurfaceEvent.decode(value), ids.insert(event.surfaceID).inserted else { throw ZoeError.invalidResponse }
+            return Surface(event: event, renderStatus: status)
+        }
+    }
 }

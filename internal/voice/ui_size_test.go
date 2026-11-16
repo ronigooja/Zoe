@@ -62,13 +62,13 @@ func TestUIScreenScope(t *testing.T) {
 }
 
 func TestUIJobSize(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := uiTargetRig(t)
 	uiFlowServer(t, r)
 	var mu sync.Mutex
 	output := strings.Replace(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false), `"container":"window"`, `"container":"window","size":{"width":500,"height":400}`, 1)
 	r.svc.uiController = uiFlowModel(t, &output, &mu)
 	r.seedTask(t, "task", "owner")
-	r.exec(t, `UPDATE tasks SET ui_display=1 WHERE id='task'`)
+	r.exec(t, `UPDATE tasks SET ui_display=1,result='result' WHERE id='task'`)
 	for i, entry := range []string{"one", "two"} {
 		r.seedEntry(t, "task", entry, "result")
 		r.seedEvent(t, int64(i*2+1), "task", "run", entry)
@@ -112,7 +112,7 @@ func TestUIJobSize(t *testing.T) {
 }
 
 func TestUIJobSizeExceedsScreen(t *testing.T) {
-	r := newDeliveryRig(t)
+	r := uiTargetRig(t)
 	uiFlowServer(t, r)
 	r.exec(t, `INSERT INTO ui_screens(workspace_id,owner_subject_id,width,height,updated_at) VALUES('default','owner',400,300,?)`, r.now().Format(time.RFC3339Nano))
 	var mu sync.Mutex
