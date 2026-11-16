@@ -4,13 +4,15 @@ When producing server or runner diagnostics, follow the [logging standard](opera
 
 This document records the current architecture and its boundaries. It describes responsibility and required behavior; it is not an implementation or delivery claim—see the [acceptance evidence register](acceptance/evidence.md) and [master plan](master-plan.md). [Product requirements](product.md) define the full scope. Archived research is historical provenance rather than a competing current design.
 
+For field-level producers, transformations, consumers and recovery boundaries, use the [approved target data-flow contract](design/data-flows.md). When implementing these flows, its 2026-11-16 requirements supersede older conflicting descriptions below and linked local-only UI composition decisions; approval is not source conformance or acceptance evidence.
+
 ## Result delivery
 
-Assistant task results are durably recorded with their authoritative event. When voice account media is enabled, the voice package consumes those events with a durable cursor, creates idempotent delivery rows, and dispatches the full original text to the owner's active voice session under the [context delivery contract](architecture/decisions/0013-context-register.md#6-reports-and-latency). Without a live call they remain available through the existing notification path. Whether the voice model actually SPEAKS the appended text is UNVERIFIED pending a live-call experiment.
+The [target result-delivery contract](design/data-flows.md#3-authoritative-results-voice-and-ui) defines durable authoritative results shared by voice/UI, pending contextual next-call delivery, checkpointed chunk dedupe and render-ACK-gated UI feedback. Notification availability alone is not next-call delivery; context append alone is not spoken acceptance. Deployment and end-to-end conformance remain unverified.
 
 ## System and authority
 
-For delegated task admission on main, [ADR 0013](architecture/decisions/0013-context-register.md) uses register routing and alias-free Steward `Choose`, separate from resident OpenCode Worker execution. The [roster-aware contract](architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager) is historical: deployed on `bb07671`, removed on main. Replacement deployment and live acceptance remain unverified.
+For delegated task admission, [ADR 0013](architecture/decisions/0013-context-register.md) selects register routing and stable-ID Steward decisions, separate from resident OpenCode Worker execution. The [roster-aware contract](architecture/decisions/0012-voice-conversation-layer.md#deployed-roster-aware-task-manager) is historical: deployed on `bb07671`, removed on main. Target source conformance, deployment and live acceptance remain unverified.
 
 Zoe is a private, self-hosted Linux Go control server with an independent Linux runner, SQLite WAL with `synchronous=FULL`, and native SwiftUI clients for macOS, iPhone, and iPad. The first release is single-instance and multi-project with one fixed owner principal. User/workspace boundaries remain explicit for future evolution.
 
@@ -71,7 +73,7 @@ Client behavior follows [product chapter 3](product.md#client-behavior-boundarie
 
 ### Ambient macOS screen and client-tools boundary
 
-On macOS the client builds A2UI messages locally from authoritative tasks, approvals, and notifications, using the basic catalog through the pinned a2ui-swift renderer. Zoe retains the outer surfaces and window controls; A2UI handles their inner content. Actions submit opaque intents for server validation; the client never fabricates content or decides business outcomes. Surface, settings, voice, and text-input tools and the presence floors are defined in the [A2UI screen contract](design/screen-document.md). The server no longer generates UI documents; [delivery](design/screen-document.md#local-composition-and-delivery) stays on the existing event, snapshot, and notification paths. [ADR 0008](architecture/decisions/0008-ambient-screen-client.md) records the design accepted 2026-11-14; Go contract and Swift renderer changes remain pending.
+On macOS the pinned a2ui-swift renderer/basic catalog and platform shell remain defined in the [A2UI screen contract](design/screen-document.md). The [approved UI_Controller target](design/data-flows.md#3-authoritative-results-voice-and-ui) supersedes its older local-only composition/server-document prohibition: full requests and authoritative task facts produce A2UI presentations, direct bound input and feedback only after render ACK. Clients do not fabricate content or business outcomes. Platform settings, presence floors and tools remain under [ADR 0008](architecture/decisions/0008-ambient-screen-client.md), subject to that override; implementation and acceptance remain pending.
 
 ## Voice and business work
 
@@ -81,7 +83,7 @@ Zoe-compatible `ronigooja/chatgpt-web-voice` fork is the selected gateway/accoun
 
 When gateway transcript ingestion is enabled, full call-text authority and its independent service credential follow the [transcript lifecycle contract](operations/data-lifecycle.md#voice-transcript-authority-and-ingestion); transcript storage is separate from command-authorizing committed delegation turns.
 
-When the register routes `recall`, the server searches the memory worker using the register restatement and appends retrieved text to the upstream voice model. The whole-call summary pipeline deployed on `bb07671` is removed on main; migration 220 removes its jobs, summaries and triggers. Transcript export and destruction coverage remains. Migration 221 removes unused legacy decision/confirmation columns and the instruction-delivery table, preserving active turn state. See [ADR 0013](architecture/decisions/0013-context-register.md#3-memory-cadence) for historical context; implementation does not establish deployment acceptance.
+Recall uses the full register request under the [target memory flow](design/data-flows.md#4-memory-and-continuous-conversation-coverage). The whole-call summary pipeline deployed on `bb07671` is removed on main; migration 220 removes its jobs, summaries and triggers. Transcript export and destruction coverage remains. Migration 221 removes unused legacy decision/confirmation columns and the instruction-delivery table, preserving active turn state. These historical migrations do not establish target conformance or deployment acceptance.
 
 The selected gateway-relayed media topology and `AccountMedia` mode are specified in [ADR 0005](architecture/decisions/0005-voice-task-and-lease-boundaries.md); this architecture retains only that boundary rather than duplicating its rationale.
 
@@ -105,7 +107,7 @@ Memory lives in Mem0/Qdrant behind the Python worker. The Go scheduler performs 
 
 The Python worker owns embeddings, Mem0 history, and Qdrant vectors; [ADR 0006](architecture/decisions/0006-memory-authority-and-derived-stores.md) defines the storage boundary. Go has no SQLite memory authority or fallback index. Exact versions, model hashes and worker configuration belong in [config.py](../services/memory/config.py). Durable Qdrant storage and shared HTTP credentials are specified in [deployment](operations/deployment.md#server-and-worker-settings).
 
-Explicit `memory_write` uses a durable at-most-once job, then worker search plus one LLM call deciding add/replace/none; success is silent. Recall searches using the register restatement and appends retrieved texts unmodified to the upstream voice model. No answer model exists. [ADR 0013](architecture/decisions/0013-context-register.md#3-memory-cadence) owns routing, crash handling and delivery semantics.
+Explicit write and recall use the full register request under the [target memory flow](design/data-flows.md#4-memory-and-continuous-conversation-coverage): worker search and add/replace/none for writes, unchanged retrieved texts for recall, no answer model. Its durable idempotent progress requirements supersede earlier at-most-once/crash-finalized and repeated-successful-chunk behavior; source implementation does not establish target conformance.
 
 The Go client exposes synchronous worker `delete-all`, returning failures without durable retry, but no user-facing entry point invokes it today ([client.go](../internal/memoryapi/client.go)). Logical exports omit memory explicitly because the worker has no export endpoint ([export.go](../internal/control/export.go)). Complete instance destruction must still inventory and remove Mem0 and Qdrant resources. Historical ADR deletion/rebuild semantics are superseded for memory.
 
@@ -142,5 +144,5 @@ These records capture selected decisions, not new scope or acceptance claims:
 - [0009 — Voice front desk, steward routing, and impact-level authorization](architecture/decisions/0009-voice-steward-impact-policy.md)
 - [0011 — Profiles, per-run permissions, waiting runs, and bounded context](architecture/decisions/0011-profiles-permissions-and-context-hygiene.md)
 - [0012 — Zoe-owned conversation layer for real-time voice (proposed)](architecture/decisions/0012-voice-conversation-layer.md)
-- [0013 — Persistent conversation context register (Accepted, not implemented)](architecture/decisions/0013-context-register.md)
+- [0013 — Persistent conversation context register (approved target; conformance unverified)](architecture/decisions/0013-context-register.md)
 Scrapling is an optional web-access MCP dependency configured as remote HTTP or host-local stdio; its token remains a deployment secret reference.
