@@ -217,6 +217,7 @@ func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspac
 	}
 	var batchID string
 	var until int64
+	var batchStatus, blockedReason string
 	// The source snapshot and membership assignment are one SQLite transaction.
 	// Inserts after this snapshot remain unassigned even if their event time < M.
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -224,7 +225,10 @@ func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspac
 		return 0, err
 	}
 	defer tx.Rollback()
-	err = tx.QueryRowContext(ctx, `SELECT id,until_ns FROM memory_ingest_batches WHERE workspace_id=? AND principal_id=? AND from_ns=?`, workspace, principal, boundary).Scan(&batchID, &until)
+	err = tx.QueryRowContext(ctx, `SELECT id,until_ns,status,error_kind FROM memory_ingest_batches WHERE workspace_id=? AND principal_id=? AND from_ns=?`, workspace, principal, boundary).Scan(&batchID, &until, &batchStatus, &blockedReason)
+	if err == nil && batchStatus == "blocked" {
+		return 0, &memoryapi.Error{Kind: blockedReason}
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		entries, e := batchSources(ctx, tx, workspace, principal, time.Time{}, now, true)
 		if e != nil {
@@ -240,7 +244,7 @@ func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspac
 		chunks := ingestChunks(blocks, user)
 		until = now.UnixNano()
 		batchID = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%d", user, boundary, until))))
-		if _, e = tx.ExecContext(ctx, `INSERT INTO memory_ingest_batches VALUES(?,?,?,?,?)`, batchID, workspace, principal, boundary, until); e != nil {
+		if _, e = tx.ExecContext(ctx, `INSERT INTO memory_ingest_batches(id,workspace_id,principal_id,from_ns,until_ns) VALUES(?,?,?,?,?)`, batchID, workspace, principal, boundary, until); e != nil {
 			return 0, e
 		}
 		for _, entry := range entries {
@@ -284,6 +288,13 @@ func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspac
 	}
 	for i, c := range pending {
 		if _, _, err = client.IngestChunk(ctx, user, batchID, c.id, c.text); err != nil {
+			if memoryapi.Quarantined(err) {
+				var failure *memoryapi.Error
+				errors.As(err, &failure)
+				if _, e := r.db.ExecContext(ctx, `UPDATE memory_ingest_batches SET status='blocked',error_kind=? WHERE id=?`, failure.Kind, batchID); e != nil {
+					return i, e
+				}
+			}
 			return i, err
 		}
 		if _, err = r.db.ExecContext(ctx, `UPDATE memory_ingest_chunks SET done=1 WHERE id=?`, c.id); err != nil {

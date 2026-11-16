@@ -28,6 +28,12 @@ type Error struct{ Kind string }
 
 func (e *Error) Error() string { return "memory API: " + e.Kind }
 
+// Quarantined reports a durable receiver conflict, not a transient unknown effect.
+func Quarantined(err error) bool {
+	var failure *Error
+	return errors.As(err, &failure) && (failure.Kind == "ingest_quarantined" || failure.Kind == "write_quarantined")
+}
+
 func New(base, tokenFile string, timeout time.Duration) (*Client, error) {
 	u, err := url.Parse(base)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -83,7 +89,7 @@ func (c *Client) call(ctx context.Context, kind string, input, output any) error
 		_ = json.Unmarshal(data, &failure)
 		// Only allow protocol labels, never arbitrary server text, into errors.
 		switch failure.Kind {
-		case "unauthorized", "busy", "request_invalid", "body_too_large", "not_found", "deadline_exceeded", "backend_unavailable", "ingest_uncertain", "write_uncertain", "idempotency_conflict":
+		case "unauthorized", "busy", "request_invalid", "body_too_large", "not_found", "deadline_exceeded", "backend_unavailable", "ingest_uncertain", "write_uncertain", "idempotency_conflict", "ingest_quarantined", "write_quarantined":
 			return &Error{failure.Kind}
 		}
 		return &Error{"http_status"}

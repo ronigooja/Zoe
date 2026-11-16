@@ -36,7 +36,7 @@ func TestRegisterBackdatedUnconsumedSourceAndOwnerScope(t *testing.T) {
 	f.rebuild(f.now)
 	before := f.layers(f.now)
 	f.boundary = f.now.Add(-30 * time.Minute)
-	f.exec(`INSERT INTO memory_ingest_batches VALUES('covered','default','owner',0,?)`, f.boundary.UnixNano())
+	f.exec(`INSERT INTO memory_ingest_batches(id,workspace_id,principal_id,from_ns,until_ns) VALUES('covered','default','owner',0,?)`, f.boundary.UnixNano())
 	f.exec(`INSERT INTO memory_ingest_members VALUES('default','owner',?,'covered')`, `turn:"handoff-session":0`)
 	f.turn("handoff-session", 1, "user", "BACKDATED_UNSEEN", f.now.Add(-2*time.Hour))
 	f.exec(`UPDATE voice_transcript_turns SET received_at=? WHERE session_id='handoff-session' AND seq=1`, f.now.Add(time.Minute).Format(time.RFC3339Nano))

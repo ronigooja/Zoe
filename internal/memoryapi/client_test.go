@@ -78,6 +78,18 @@ func TestClientProtocolAndLogging(t *testing.T) {
 	}
 }
 
+func TestQuarantinedClassification(t *testing.T) {
+	for _, kind := range []string{"ingest_quarantined", "write_quarantined", "write_uncertain", "backend_unavailable"} {
+		want := kind == "ingest_quarantined" || kind == "write_quarantined"
+		if Quarantined(&Error{Kind: kind}) != want {
+			t.Fatalf("classification %s", kind)
+		}
+	}
+	if Quarantined(errors.New("write_quarantined")) || Quarantined(nil) {
+		t.Fatal("untyped error treated as quarantine")
+	}
+}
+
 func TestClientFailures(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {

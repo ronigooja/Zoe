@@ -17,6 +17,8 @@ PRIMARY KEY(workspace_id,principal_id));
 CREATE TABLE memory_ingest_batches (
 id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, principal_id TEXT NOT NULL,
 from_ns INTEGER NOT NULL, until_ns INTEGER NOT NULL,
+status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','blocked')),
+error_kind TEXT NOT NULL DEFAULT '',
 UNIQUE(workspace_id,principal_id,from_ns));
 CREATE TABLE memory_ingest_chunks (
 batch_id TEXT NOT NULL REFERENCES memory_ingest_batches(id), position INTEGER NOT NULL,

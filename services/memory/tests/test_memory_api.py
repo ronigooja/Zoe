@@ -50,24 +50,28 @@ class FakeMemory:
     def __init__(self):
         connection = sqlite3.connect(":memory:", check_same_thread=False)
         connection.executescript(
-            "CREATE TABLE history(memory_id TEXT, text TEXT);"
-            "CREATE TABLE messages(session_scope TEXT, content TEXT);"
+            "CREATE TABLE history(id TEXT PRIMARY KEY,memory_id TEXT,old_memory TEXT,new_memory TEXT,event TEXT,created_at TEXT,is_deleted INTEGER);"
+            "CREATE TABLE messages(id TEXT PRIMARY KEY,session_scope TEXT,role TEXT,content TEXT,created_at TEXT);"
         )
         self.db = SimpleNamespace(connection=connection, _lock=threading.Lock())
+        self.db.save_messages = Mock()
         self.records = {}
         self.llm = Mock()
         self.llm.generate_response.return_value = '{"operations":[]}'
         self.search_calls = []
         self.add_calls = []
         self.update_calls = []
-        self.vector_store = SimpleNamespace(insert=self.insert, get=self.get, list=self.list)
+        self.vector_store = SimpleNamespace(insert=self.insert, update=self.vector_update, get=self.get, list=self.list, search=lambda *a, **k: [])
+
+    def vector_update(self, *, vector_id, vector, payload):
+        self.records[vector_id] = payload
 
     def insert(self, *, vectors, ids, payloads):
         for memory_id, payload in zip(ids, payloads):
             self.records[memory_id] = payload
 
     def get(self, *, vector_id):
-        return SimpleNamespace(payload=self.records[vector_id])
+        return SimpleNamespace(payload=self.records[vector_id]) if vector_id in self.records else None
 
     def list(self, *, filters, top_k):
         return ([SimpleNamespace(id=k, payload=v) for k, v in self.records.items()
@@ -85,27 +89,32 @@ class FakeMemory:
                 {"role": "system", "content": prompt}, {"role": "user", "content": text},
             ], response_format={"type": "json_object"})
             results = []
-            for item in json.loads(raw).get("memory", []):
-                memory_id = f"m{len(self.records) + 1}"
-                self.vector_store.insert(vectors=[[]], ids=[memory_id],
-                                         payloads=[{"user_id": user_id, "data": item["text"]}])
-                self.db.connection.execute("INSERT INTO history VALUES (?,?)", (memory_id, item["text"]))
-                results.append({"id": memory_id, "memory": item["text"], "event": "ADD"})
+            import hashlib
+            facts = json.loads(raw).get("memory", [])
+            ids = [f"m{len(self.records) + i + 1}" for i in range(len(facts))]
+            if facts:
+                self.vector_store.insert(vectors=[[] for _ in facts], ids=ids,
+                                         payloads=[{"user_id": user_id, "data": item["text"],
+                                                    "hash": hashlib.md5(item["text"].encode()).hexdigest()} for item in facts])
             self.db.connection.commit()
             return {"results": results}
         memory_id = f"m{len(self.add_calls)}"
-        self.vector_store.insert(vectors=[[]], ids=[memory_id], payloads=[{"user_id": user_id, "data": text}])
-        self.db.connection.execute("INSERT INTO history VALUES (?,?)", (memory_id, text))
+        import hashlib
+        self.vector_store.insert(vectors=[[]], ids=[memory_id], payloads=[{"user_id": user_id, "data": text,
+            "hash": hashlib.md5(text.encode()).hexdigest()}])
+        self.db.connection.execute("INSERT INTO history(memory_id,new_memory) VALUES (?,?)", (memory_id, text))
         self.db.connection.commit()
         return {"results": [{"id": memory_id}]}
 
     def update(self, memory_id, text):
+        import hashlib
         self.update_calls.append((memory_id, text))
-        self.records[memory_id]["data"] = text
+        self.vector_store.update(vector_id=memory_id, vector=[], payload=dict(self.records[memory_id], data=text,
+            hash=hashlib.md5(text.encode()).hexdigest()))
 
     def _delete_memory(self, memory_id, existing_memory=None):
         del self.records[memory_id]
-        self.db.connection.execute("INSERT INTO history VALUES (?,?)", (memory_id, "deleted"))
+        self.db.connection.execute("INSERT INTO history(memory_id,new_memory) VALUES (?,?)", (memory_id, "deleted"))
         self.db.connection.commit()
 
     def delete_all(self, *, user_id):
@@ -173,10 +182,12 @@ class MemoryAPITests(unittest.TestCase):
             self.assertEqual(self.request("/v1/memory/ingest", invalid)[0], 400)
         self.assertEqual(self.memory.add_calls, [])
         self.memory.llm.generate_response.assert_not_called()
+        self.memory.llm.generate_response.return_value = '{"memory":[]}'
         self.assertEqual(self.request("/v1/memory/ingest", body), (200, {"added": 0, "updated": 0}))
         self.assertEqual(self.memory.add_calls, [("transcript", person_user_id("u"), True)])
 
     def test_ingest_body_limit_is_route_specific(self):
+        self.memory.llm.generate_response.return_value = '{"memory":[]}'
         body = {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": ""}
         overhead = len(json.dumps(body).encode())
         body["text"] = "x" * (256 * 1024 - overhead)
@@ -190,11 +201,11 @@ class MemoryAPITests(unittest.TestCase):
         ):
             self.assertEqual(self.request("/v1/memory/" + path, body)[0], 413)
 
-    def test_ingest_counts_events_and_calls_add_once(self):
+    def test_ingest_does_not_trust_unplanned_returned_events(self):
         result = {"results": [{"event": event} for event in ("ADD", "UPDATE", "ADD", "DELETE", "NONE")]}
         with patch.object(self.memory, "add", return_value=result) as add:
             self.assertEqual(self.request("/v1/memory/ingest", {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": "transcript"}),
-                             (200, {"added": 2, "updated": 1}))
+                             (502, {"error_kind": "ingest_unplanned"}))
         add.assert_called_once_with("transcript", user_id=person_user_id("u"), infer=True,
                                     prompt=INGEST_INSTRUCTIONS)
 
@@ -339,7 +350,7 @@ class MemoryAPITests(unittest.TestCase):
     def test_delete_all_purges_only_person_history_messages(self):
         for user in ("a", "b"):
             self.memory.add(user, user_id=person_user_id(user), infer=False)
-            self.memory.db.connection.execute("INSERT INTO messages VALUES (?,?)", (f"user_id={person_user_id(user)}", user))
+            self.memory.db.connection.execute("INSERT INTO messages(session_scope,content) VALUES (?,?)", (f"user_id={person_user_id(user)}", user))
         self.memory.db.connection.commit()
         self.assertEqual(self.request("/v1/memory/delete-all", {"user": "a"}), (200, {"deleted": True}))
         self.assertEqual(list(self.memory.records), ["m2"])

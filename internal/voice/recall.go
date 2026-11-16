@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"time"
@@ -68,6 +69,10 @@ func (s *Service) recallFallback(ctx context.Context, id string) string {
 }
 
 func (s *Service) persistRecall(ctx context.Context, id, text string) error {
+	return s.persistRecallStatus(ctx, id, text, "done")
+}
+
+func (s *Service) persistRecallStatus(ctx context.Context, id, text, terminal string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -75,7 +80,7 @@ func (s *Service) persistRecall(ctx context.Context, id, text string) error {
 	defer tx.Rollback()
 	at := s.now().UTC().Format(time.RFC3339Nano)
 	if text == "" {
-		_, err = tx.ExecContext(ctx, `UPDATE voice_recall_jobs SET status='done' WHERE id=? AND status='running'`, id)
+		_, err = tx.ExecContext(ctx, `UPDATE voice_recall_jobs SET status=? WHERE id=? AND status='running'`, terminal, id)
 		if err != nil {
 			return err
 		}
@@ -85,19 +90,23 @@ func (s *Service) persistRecall(ctx context.Context, id, text string) error {
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE voice_recall_jobs SET status='done' WHERE id=? AND status='running'`, id); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE voice_recall_jobs SET status=? WHERE id=? AND status='running'`, terminal, id); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Service) persistRecallRetry(ctx context.Context, id, text string) bool {
+	return s.persistRecallRetryStatus(ctx, id, text, "done")
+}
+
+func (s *Service) persistRecallRetryStatus(ctx context.Context, id, text, terminal string) bool {
 	for attempt := 0; attempt < recallPersistAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return false
 		}
 		call, cancel := context.WithTimeout(ctx, time.Second)
-		err := s.persistRecall(call, id, text)
+		err := s.persistRecallStatus(call, id, text, terminal)
 		cancel()
 		if err == nil {
 			return true
@@ -179,6 +188,25 @@ func (s *Service) runRecall(id string) {
 	var text, status string
 	var count int
 	if kind == memoryWriteHolding {
+		// A crash after saving a terminal receiver outcome must not dispatch again.
+		var prior string
+		err := s.db.QueryRowContext(ctx, `SELECT status FROM memory_write_outcomes WHERE op_id=?`, id).Scan(&prior)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return
+		}
+		if err == nil && (prior == "write_blocked" || prior == "write_error" || prior == "write_ok") {
+			text = ""
+			if prior != "write_ok" {
+				text = stewardErrorSpeech
+			}
+			terminal := "done"
+			if prior == "write_blocked" {
+				terminal = "blocked"
+			}
+			s.persistRecallRetryStatus(ctx, id, text, terminal)
+			s.dispatchFastReplies(ctx)
+			return
+		}
 		// The CAS claim is already committed and this read is closed before
 		// calling the worker, so slow writes hold no SQLite transaction.
 		// The retained register request is the sole execution input. The turn
@@ -186,13 +214,15 @@ func (s *Service) runRecall(id string) {
 		if _, err := s.db.ExecContext(ctx, `INSERT INTO memory_write_outcomes(op_id,status) VALUES(?,'running') ON CONFLICT(op_id) DO UPDATE SET status='running'`, id); err != nil {
 			return
 		}
-		err := s.recall.MemoryAPI.Write(ctx, memoryUser(workspace, owner), id, question)
+		err = s.recall.MemoryAPI.Write(ctx, memoryUser(workspace, owner), id, question)
 		status = "write_ok"
 		if err != nil {
 			text, status = stewardErrorSpeech, "write_error"
 			var failure *memoryapi.Error
 			if errors.As(err, &failure) {
 				switch failure.Kind {
+				case "write_quarantined", "ingest_quarantined":
+					status = "write_blocked"
 				case "write_uncertain", "transport", "deadline_exceeded", "response_read", "response_invalid", "http_status", "backend_unavailable":
 					status = "write_uncertain"
 				}
@@ -208,6 +238,12 @@ func (s *Service) runRecall(id string) {
 		if _, e := s.db.ExecContext(outcomeCtx, `INSERT INTO memory_write_outcomes(op_id,status,error_kind) VALUES(?,?,?) ON CONFLICT(op_id) DO UPDATE SET status=excluded.status,error_kind=excluded.error_kind`, id, status, errorKind); e != nil {
 			return
 		}
+		if status == "write_uncertain" {
+			// No failure feedback for a recoverable unknown. Preserve the job ID
+			// and request so the next dispatcher round reconciles the same plan.
+			_, _ = s.db.ExecContext(outcomeCtx, `UPDATE voice_recall_jobs SET status='pending' WHERE id=? AND status='running'`, id)
+			return
+		}
 	} else {
 		text, count, status = s.recallAnswer(ctx, workspace, owner, question)
 	}
@@ -218,8 +254,12 @@ func (s *Service) runRecall(id string) {
 	}
 	persist, done := context.WithTimeout(s.recallCtx, 8*time.Second)
 	defer done()
-	if !s.persistRecallRetry(persist, id, text) {
-		if !s.persistRecallRetry(persist, id, s.recallFallback(persist, id)) {
+	terminal := "done"
+	if status == "write_blocked" {
+		terminal = "blocked"
+	}
+	if !s.persistRecallRetryStatus(persist, id, text, terminal) {
+		if !s.persistRecallRetryStatus(persist, id, s.recallFallback(persist, id), terminal) {
 			return
 		}
 		status = "persist_fallback"

@@ -60,6 +60,90 @@ func TestMemoryBatchDisabled(t *testing.T) {
 	}
 }
 
+func TestMemoryBatchQuarantineRetainsSourcesAndAllowsOtherOwners(t *testing.T) {
+	db, repo, now := ingestFixture(t)
+	for _, session := range []string{"session", "other"} {
+		if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace',?,1,'user','fact',?)`, session, now.Format(time.RFC3339Nano)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := 0
+	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var input map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&input)
+		if input["user"] == memoryapi.User("workspace", "owner") {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error_kind":"ingest_quarantined"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"added":1,"updated":0}`))
+	})
+	for i := 0; i < 3; i++ {
+		if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now.Add(time.Duration(i)*time.Hour), time.Hour); !memoryapi.Quarantined(err) {
+			t.Fatalf("error=%v", err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("blocked calls=%d", calls)
+	}
+	var boundary, members, chunks int
+	var status, reason string
+	if err := db.QueryRow(`SELECT boundary_ns FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT status,error_kind FROM memory_ingest_batches WHERE principal_id='owner'`).Scan(&status, &reason); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.QueryRow(`SELECT count(*) FROM memory_ingest_members WHERE principal_id='owner'`).Scan(&members)
+	_ = db.QueryRow(`SELECT count(*) FROM memory_ingest_chunks WHERE done=0`).Scan(&chunks)
+	if boundary != 0 || status != "blocked" || reason != "ingest_quarantined" || members != 1 || chunks != 1 {
+		t.Fatalf("state=%d %s %s members=%d chunks=%d", boundary, status, reason, members, chunks)
+	}
+	if _, err := repo.runBatch(context.Background(), client, "workspace", "other", now, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("other owner calls=%d", calls)
+	}
+}
+
+func TestMemoryBatchTransientReconcilesSameIdentity(t *testing.T) {
+	db, repo, now := ingestFixture(t)
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','fact',?)`, now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	var first map[string]string
+	calls := 0
+	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var input map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&input)
+		if calls == 1 {
+			first = input
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error_kind":"backend_unavailable"}`))
+			return
+		}
+		for _, key := range []string{"batch_id", "chunk_id", "text", "user"} {
+			if input[key] != first[key] {
+				t.Errorf("changed %s", key)
+			}
+		}
+		_, _ = w.Write([]byte(`{"added":1,"updated":0}`))
+	})
+	if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now, time.Hour); err == nil {
+		t.Fatal("missing transient error")
+	}
+	if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now.Add(time.Minute), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	boundary, err := repo.BoundaryAt(context.Background(), "workspace", "owner")
+	if err != nil || !boundary.Equal(now) || calls != 2 {
+		t.Fatalf("boundary=%v calls=%d err=%v", boundary, calls, err)
+	}
+}
+
 func ingestFixture(t *testing.T) (*sql.DB, *Repository, time.Time) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "ingest.sqlite")
@@ -72,7 +156,7 @@ func ingestFixture(t *testing.T) (*sql.DB, *Repository, time.Time) {
 	_, err = db.Exec(`CREATE TABLE voice_sessions(id TEXT PRIMARY KEY,workspace_id TEXT,owner_id TEXT);
 CREATE TABLE voice_transcript_turns(workspace_id TEXT,session_id TEXT,seq INTEGER,role TEXT,text TEXT,at TEXT);
 CREATE TABLE tasks(id TEXT,workspace_id TEXT,owner_subject_id TEXT,status TEXT,finished_at TEXT,goal TEXT,result TEXT);
-CREATE TABLE memory_ingest_batches(id TEXT PRIMARY KEY,workspace_id TEXT,principal_id TEXT,from_ns INTEGER,until_ns INTEGER,UNIQUE(workspace_id,principal_id,from_ns));
+CREATE TABLE memory_ingest_batches(id TEXT PRIMARY KEY,workspace_id TEXT,principal_id TEXT,from_ns INTEGER,until_ns INTEGER,status TEXT NOT NULL DEFAULT 'pending',error_kind TEXT NOT NULL DEFAULT '',UNIQUE(workspace_id,principal_id,from_ns));
 CREATE TABLE memory_ingest_chunks(batch_id TEXT,position INTEGER,id TEXT UNIQUE,text TEXT,done INTEGER DEFAULT 0,PRIMARY KEY(batch_id,position));
 CREATE TABLE memory_ingest_members(workspace_id TEXT,principal_id TEXT,source_id TEXT,batch_id TEXT,PRIMARY KEY(workspace_id,principal_id,source_id));
 CREATE TABLE memory_ingest_state(workspace_id TEXT,principal_id TEXT,boundary_ns INTEGER NOT NULL,next_attempt_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(workspace_id,principal_id));

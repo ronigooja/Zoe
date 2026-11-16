@@ -61,7 +61,7 @@ func writeJobCount(t *testing.T, store *storage.Store, query string, args ...any
 }
 
 func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
-	for _, mode := range []string{"success", "failure", "disabled", "timeout", "uncertain"} {
+	for _, mode := range []string{"success", "disabled", "blocked"} {
 		t.Run(mode, func(t *testing.T) {
 			store, svc, handoff := memoryWriteJobFixture(t)
 			var calls atomic.Int32
@@ -95,6 +95,11 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 						_, _ = w.Write([]byte(`{"error_kind":"write_uncertain"}`))
 						return
 					}
+					if mode == "blocked" {
+						w.WriteHeader(http.StatusConflict)
+						_, _ = w.Write([]byte(`{"error_kind":"write_quarantined"}`))
+						return
+					}
 					_, _ = w.Write([]byte(`{"operations":[]}`))
 				})
 			}
@@ -116,7 +121,7 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 			}
 			svc.dispatchRecall(context.Background())
 			waitRecall(t, func() bool {
-				return writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='done'`) == 1
+				return writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status IN ('done','blocked')`) == 1
 			})
 			var outcome string
 			if err := store.DB().QueryRow(`SELECT status FROM memory_write_outcomes`).Scan(&outcome); err != nil {
@@ -125,6 +130,12 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 			wantOutcome := "write_error"
 			if mode == "success" {
 				wantOutcome = "write_ok"
+			}
+			if mode == "blocked" {
+				wantOutcome = "write_blocked"
+				if writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='blocked'`) != 1 {
+					t.Fatal("quarantine not persisted as blocked")
+				}
 			}
 			if mode == "uncertain" || mode == "timeout" || mode == "failure" {
 				wantOutcome = "write_uncertain"
@@ -182,5 +193,36 @@ func TestMemoryWriteRunningRecoveryReconcilesStableOperation(t *testing.T) {
 				t.Fatal("recovery resent write or failed to persist exactly one error")
 			}
 		})
+	}
+}
+
+func TestMemoryWriteTransientRetriesSameOperation(t *testing.T) {
+	store, svc, handoff := memoryWriteJobFixture(t)
+	var calls atomic.Int32
+	var first string
+	svc.recall.MemoryAPI = workerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var input map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&input)
+		if calls.Add(1) == 1 {
+			first = input["op_id"]
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error_kind":"write_uncertain"}`))
+			return
+		}
+		if input["op_id"] != first || input["request"] != writeRestatement {
+			t.Errorf("changed identity/request: %v", input)
+		}
+		_, _ = w.Write([]byte(`{"operations":[]}`))
+	})
+	handoff()
+	svc.dispatchRecall(context.Background())
+	svc.workers.Wait()
+	if writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='pending'`) != 1 || writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE text<>''`) != 0 {
+		t.Fatal("transient finalized or announced failure")
+	}
+	svc.dispatchRecall(context.Background())
+	svc.workers.Wait()
+	if calls.Load() != 2 || writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='done'`) != 1 || writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE text<>''`) != 0 {
+		t.Fatal("retry did not reconcile silently")
 	}
 }
