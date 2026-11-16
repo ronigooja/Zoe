@@ -63,6 +63,16 @@ class PinnedWriteRecoveryTests(unittest.TestCase):
             writes = memory.db.connection.execute("SELECT count(*) FROM zoe_person_write_effects").fetchone()[0]
             ingests = memory.db.connection.execute("SELECT count(*) FROM zoe_person_ingest_manifests").fetchone()[0]
             self.assertGreater(writes + ingests, 0)
+            for memory_id, payload, vector in zip(ids, payloads, vectors):
+                if "zoe_write_token" in payload:
+                    intents = [json.loads(row[0]) for row in memory.db.connection.execute(
+                        "SELECT intent FROM zoe_person_write_effects")]
+                    matching = [intent for intent in intents if intent["id"] == memory_id]
+                    self.assertEqual(len(matching), 1)
+                    self.assertEqual(matching[0]["payload"], payload)
+                    self.assertEqual(matching[0]["vector"], vector)
+                    self.assertEqual(memory.db.connection.execute(
+                        "SELECT status FROM zoe_person_write_receipts WHERE op_id='op'").fetchone()[0], "applying")
             self.calls.append(list(ids))
             for memory_id, payload, vector in zip(ids, payloads, vectors):
                 self.vector_db.execute("INSERT OR REPLACE INTO vectors VALUES(?,?,?)", (memory_id, json.dumps(payload), json.dumps(vector)))
@@ -91,6 +101,9 @@ class PinnedWriteRecoveryTests(unittest.TestCase):
                 self.memory.db.connection.execute("DELETE FROM zoe_person_write_receipts")
                 self.memory.db.connection.execute("DELETE FROM zoe_person_write_effects")
                 self.memory.db.connection.commit()
+                # Each subcase starts a NEW operation; the prior subcase's
+                # recovery guard must not prohibit this initial planning call.
+                self.memory.llm.generate_response = Mock()
                 self.memory.llm.generate_response.return_value = '{"operations":[{"op":"add","text":"new"}]}'
                 existing = []
                 if replace:
@@ -102,6 +115,14 @@ class PinnedWriteRecoveryTests(unittest.TestCase):
                 self.raise_after = True
                 with self.assertRaises(RuntimeError):
                     self.write()
+                self.memory.llm.generate_response.assert_called_once()
+                intent = json.loads(self.memory.db.connection.execute(
+                    "SELECT intent FROM zoe_person_write_effects WHERE op_id='op' AND position=0").fetchone()[0])
+                actual = json.loads(self.vector_db.execute(
+                    "SELECT payload FROM vectors WHERE id=?", (intent["id"],)).fetchone()[0])
+                self.assertEqual(actual, intent["payload"])
+                self.assertEqual(intent["preimage"]["data"] if replace else intent["preimage"],
+                                 "new" if replace else None)
                 messages = self.memory.llm.generate_response.call_args.args[0]
                 self.assertEqual(messages[0]["content"], WRITE_INSTRUCTIONS)
                 self.assertEqual(json.loads(messages[1]["content"])["request"], "request")
@@ -110,6 +131,7 @@ class PinnedWriteRecoveryTests(unittest.TestCase):
                 self.raise_after = False
                 self.memory.llm.generate_response.side_effect = AssertionError("must not replan")
                 result = self.write()
+                self.memory.llm.generate_response.assert_not_called()
                 self.assertEqual(result["operations"][0]["text"], "updated" if replace else "new")
                 self.assertEqual(len(self.calls), calls)
                 self.assertEqual(self.vector_db.execute("SELECT count(*) FROM vectors").fetchone()[0], 1)

@@ -290,12 +290,18 @@ class MemoryAPITests(unittest.TestCase):
         self.assertNotEqual(person_user_id("workspace/owner"), person_user_id("other/owner"))
 
     def test_write_add_replace_none_exact_text(self):
-        self.assertEqual(self.write([{"op": "add", "text": "private-fact"}])[0], 200)
+        status, added = self.write([{"op": "add", "text": "private-fact"}])
+        self.assertEqual(status, 200)
+        memory_id = added["operations"][0]["id"]
+        self.assertEqual(set(self.memory.records), {memory_id})
+        self.assertEqual(self.memory.records[memory_id]["data"], "private-fact")
         self.assertEqual(self.write([{"op": "replace", "existing": "private-fact", "text": "new-fact"}])[1],
-                         {"operations": [{"op": "replace", "id": "m1", "text": "new-fact"}]})
-        self.assertEqual(self.memory.update_calls, [("m1", "new-fact")])
+                         {"operations": [{"op": "replace", "id": memory_id, "text": "new-fact"}]})
+        self.assertEqual(self.memory.update_calls, [(memory_id, "new-fact")])
+        self.assertEqual(set(self.memory.records), {memory_id})
+        self.assertEqual(self.memory.records[memory_id]["data"], "new-fact")
         messages = self.memory.llm.generate_response.call_args.args[0]
-        self.assertNotIn('"m1"', json.dumps(messages))
+        self.assertNotIn(memory_id, json.dumps(messages))
         self.assertEqual(self.write([{"op": "replace", "existing": "NEW-fact", "text": "another"}])[1]["operations"][0]["op"], "add")
         before = len(self.memory.add_calls)
         self.assertEqual(self.write([{"op": "none", "text": "not durable"}])[0], 200)
@@ -321,8 +327,16 @@ class MemoryAPITests(unittest.TestCase):
     def test_production_adapter_sync_write_needs_no_job_headers(self):
         client = _ResponsesClient(SimpleNamespace(output_text='{"operations":[{"op":"add","text":"private-fact"}]}'))
         self.memory.llm = _adapter(client)
-        self.assertEqual(self.request("/v1/memory/write", {"user": "u", "request": "r", "op_id": str(time.monotonic_ns())}),
-                         (200, {"operations": [{"op": "add", "text": "private-fact", "id": "m1"}]}))
+        import uuid
+        op_id = str(time.monotonic_ns())
+        expected_id = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(
+            [person_user_id("u"), op_id, 0], sort_keys=True, separators=(",", ":"))))
+        body = {"user": "u", "request": "r", "op_id": op_id}
+        expected = (200, {"operations": [{"op": "add", "text": "private-fact", "id": expected_id}]})
+        self.assertEqual(self.request("/v1/memory/write", body), expected)
+        self.assertEqual(self.request("/v1/memory/write", body), expected)
+        self.assertEqual(set(self.memory.records), {expected_id})
+        self.assertEqual(self.memory.records[expected_id]["data"], "private-fact")
         self.assertEqual(client.calls, 1)
         self.assertEqual(client.retry_values, [0])
         self.assertGreater(client.last_request["timeout"], 0)
