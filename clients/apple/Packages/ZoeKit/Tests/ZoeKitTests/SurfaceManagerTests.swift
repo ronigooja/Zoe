@@ -32,6 +32,41 @@ final class SurfaceManagerTests: XCTestCase {
         XCTAssertTrue(manager.display(try event(version: 1)))
     }
 
+    func testActualNativePresentationFailureRetriesExactRevisionAndKeepsTombstone() throws {
+        _ = NSApplication.shared
+        let manager = SurfaceManager(popoverAnchor: { nil })
+        defer { manager.reset() }
+        var attempts = 0
+        manager.presentationAcceptedForTesting = { attempts += 1; return attempts > 1 }
+        XCTAssertFalse(manager.display(try event(version: 1)))
+        XCTAssertNil(manager.presentationVersionForTesting("versioned"))
+        XCTAssertNil(manager.viewModel(for: "versioned"))
+        XCTAssertTrue(manager.display(try event(version: 1)))
+        XCTAssertEqual(manager.presentationVersionForTesting("versioned"), 1)
+        XCTAssertNotNil(manager.viewModel(for: "versioned"))
+        XCTAssertTrue(manager.display(try event(version: 2, deleted: true)))
+        XCTAssertEqual(manager.presentationVersionForTesting("versioned"), 2)
+        XCTAssertFalse(manager.display(try event(version: 1)))
+        XCTAssertNil(manager.viewModel(for: "versioned"))
+    }
+
+    func testPhysicalEvidenceInvalidatedByFailedAndSuccessfulReplacements() throws {
+        _ = NSApplication.shared
+        let manager = SurfaceManager(popoverAnchor: { nil })
+        defer { manager.reset() }
+        let old = try event(version: 1)
+        XCTAssertTrue(manager.display(old))
+        XCTAssertTrue(manager.isCurrentPresentation(old))
+        manager.presentationAcceptedForTesting = { false }
+        XCTAssertFalse(manager.display(try event(version: 2)))
+        XCTAssertFalse(manager.isCurrentPresentation(old), "Partial failed replacement cannot justify old ACK")
+        manager.presentationAcceptedForTesting = { true }
+        let newer = try event(version: 2)
+        XCTAssertTrue(manager.display(newer))
+        XCTAssertTrue(manager.isCurrentPresentation(newer))
+        XCTAssertFalse(manager.isCurrentPresentation(old))
+    }
+
     func testActualRendererActionClosureKeepsCapturedRevisionAfterReplacement() async throws {
         _ = NSApplication.shared
         let manager = SurfaceManager(popoverAnchor: { nil })

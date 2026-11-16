@@ -12,9 +12,14 @@ import AppKit
 public final class ZoeAppModel: ObservableObject {
     /// Returns true only once the native host has displayed the replacement surface.
     public var onUISurface: ((UISurfaceEvent) -> Bool)?
+    public var isCurrentUIPresentation: ((UISurfaceEvent) -> Bool)?
     public var onUISurfacesClosed: (([String]) -> Void)?
     public var onUISurfacesReset: (() -> Void)?
     private var uiSurfaceRequests = UISurfaceRequests()
+    // Physical render evidence survives failed recovery, not connection changes.
+    // It is separate from the committed authoritative model and never reserves failures.
+    private var recoveryRendered: [UISurfaceBinding: UISurfaceEvent] = [:]
+    private var recoveryACKTask: Task<Void, Never>?
     #if os(macOS)
     public var screenVisibleSize: () -> NSSize? = { NSScreen.main?.visibleFrame.size }
     private var lastReportedScreenSize: SurfaceSize?
@@ -25,6 +30,8 @@ public final class ZoeAppModel: ObservableObject {
     @Published public private(set) var isBusy = false
     @Published public private(set) var authentication: InstanceConnectionState = .checking
     @Published public private(set) var eventRecoveryRequired = false
+    @Published public private(set) var authoritativeControlSnapshot: RecoveryControlSnapshot?
+    @Published public private(set) var recoveredVoicePool: RecoveryVoice.Pool?
     @Published public private(set) var pendingConnectionImport: InstallationConnection?
     @Published public private(set) var connectionImportError: String?
     private let installationID: String
@@ -63,6 +70,15 @@ public final class ZoeAppModel: ObservableObject {
         await handle(.event(envelope), expectedGeneration: expectedConnectionEpoch ?? connectionGeneration.value, sourceAPI: nil)
     }
     var eventCursorForTesting: String? { eventCursor }
+    var recoveryApplicationGateForTesting: (() async -> Void)?
+    var recoveryCommitGateForTesting: (() async -> Void)?
+    func recoverGlobalStateForTesting(api: APIClient) async throws {
+        try await recoverGlobalState(using: api, generation: connectionGeneration.value)
+    }
+    func installRecoveryCoordinatorForTesting(_ coordinator: CommandCoordinator) {
+        self.coordinator = coordinator
+    }
+    func advanceConnectionForTesting() { recoveryACKTask?.cancel(); connectionGeneration.advance() }
     var consumedEventObserverForTesting: ((String) -> Void)?
     func receiveEventConnectionForTesting(api: APIClient) async throws {
         let generation = connectionGeneration.value
@@ -464,6 +480,7 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     private func lockWorkspace(clearDrafts: Bool) {
+        recoveryACKTask?.cancel()
         closeUISurfaces()
         connectionGeneration.advance()
         connectionEpoch = connectionGeneration.value
@@ -473,6 +490,8 @@ public final class ZoeAppModel: ObservableObject {
         syncLoop = nil
         workspaceID = nil
         eventCursor = nil
+        authoritativeControlSnapshot = nil
+        recoveredVoicePool = nil
         eventRecoveryRequired = false
         voiceConfig = nil
         voicePoolStatus = nil
@@ -1329,7 +1348,6 @@ public final class ZoeAppModel: ObservableObject {
                 diagnostics.report(api: api, force: true)
                 api.recordDiagnostic(phase: "events_stream", requestPath: "/v1/events", errorSummary: "ended;dur=\(DiagnosticSummaries.seconds(Date().timeIntervalSince(started)))", level: .info)
                 if Task.isCancelled || !isCurrentConnection(generation, sourceAPI: api) { return }
-                if eventRecoveryRequired { return }
                 streamBackoff = 1
             } catch {
                 streamReportTask.cancel()
@@ -1355,24 +1373,134 @@ public final class ZoeAppModel: ObservableObject {
     /// UI repair never advances global delivery. Replaying from the last consumed global
     /// cursor preserves non-UI events; surface revisions suppress obsolete UI presentations.
     private func receiveEventConnection(using api: APIClient, generation: UInt64,
-                                        onPush: @escaping @Sendable (ServerPush) async -> Void) async throws {
-        let snapshot = try await api.uiSnapshot()
+                                         onPush: @escaping @Sendable (ServerPush) async -> Void) async throws {
+        let needsRecovery = eventCursor == nil || eventCursor == "0" || eventRecoveryRequired
+        if needsRecovery {
+            do {
+                try await recoverGlobalState(using: api, generation: generation)
+            } catch {
+                guard generation == connectionGeneration.value else { return }
+                eventRecoveryRequired = true
+                authentication = .unavailable
+                notice = uiText("Event history recovery is unavailable. Retrying without skipping events.")
+                throw error
+            }
+        }
         guard !Task.isCancelled, generation == connectionGeneration.value else { return }
-        let removed = uiSurfaceRequests.reconcile(snapshot)
-        onUISurfacesClosed?(removed)
-        for surface in snapshot.surfaces {
-            await applyUISurface(surface.event)
+        if !needsRecovery {
+            let snapshot = try await api.uiSnapshot()
+            guard !Task.isCancelled, generation == connectionGeneration.value else { return }
+            let removed = uiSurfaceRequests.reconcile(snapshot)
+            onUISurfacesClosed?(removed)
+            for surface in snapshot.surfaces {
+                await applyUISurface(surface.event)
+                guard !Task.isCancelled, generation == connectionGeneration.value else { return }
+            }
+            if let coordinator {
+                let workspace = workspaceID
+                _ = try? await coordinator.recoverPending(currentWorkspaceID: workspace, onOutcome: { _ in }, isValid: { [weak self] in
+                    guard let self else { return false }
+                    return generation == self.connectionGeneration.value && self.workspaceID == workspace
+                })
+            }
             guard !Task.isCancelled, generation == connectionGeneration.value else { return }
         }
-        if let coordinator {
-            _ = try? await coordinator.recoverPending(currentWorkspaceID: workspaceID, onOutcome: { _ in })
-        }
-        guard !Task.isCancelled, generation == connectionGeneration.value else { return }
-        // A fresh installation conservatively requests all retained history, as supported
-        // by handleEvents (cursor zero). It does not claim a complete full-state baseline.
+        // Only actual events or the complete recovery baseline advance this cursor.
         _ = try await EventStreamClient(api: api).run(after: eventCursor ?? "0", onConnected: {
             await api.recordDiagnosticAndWait(phase: "events_stream", requestPath: "/v1/events", errorSummary: "connected", level: .info)
         }, onPush: onPush)
+    }
+
+    private func recoverGlobalState(using api: APIClient, generation: UInt64) async throws {
+        let recovery = try await api.recovery()
+        guard !Task.isCancelled, generation == connectionGeneration.value else { throw CancellationError() }
+        #if DEBUG
+        await recoveryApplicationGateForTesting?()
+        #endif
+        guard !Task.isCancelled, generation == connectionGeneration.value else { throw CancellationError() }
+        var staged = uiSurfaceRequests
+        let removed = staged.reconcile(recovery.ui)
+        for surface in recovery.ui.surfaces {
+            let event = surface.event
+            if staged.apply(event) {
+                if recoveryRendered[event.binding] == nil || isCurrentUIPresentation?(event) == false {
+                    // An attempted replacement can change native content even if it
+                    // fails. Previous physical evidence is no longer usable for ACKs.
+                    recoveryRendered = recoveryRendered.filter { $0.key.surfaceID != event.surfaceID }
+                    let displayed = onUISurface?(event) ?? false
+                    guard generation == connectionGeneration.value, !Task.isCancelled else { throw CancellationError() }
+                    guard displayed else { throw ZoeError.invalidResponse }
+                    recoveryRendered = recoveryRendered.filter { $0.key.surfaceID != event.surfaceID }
+                    recoveryRendered[event.binding] = event
+                }
+                staged.recordRender(event, success: true)
+            }
+        }
+        if let local = voiceSession {
+            let current = recovery.voice.currentSession
+            if current?.id != local.voiceSessionId || current?.generation != local.generation || current?.state != "active" {
+                // The snapshot already proves this local call is no longer current.
+                // Close only local media; never hang up the replacement server call.
+                // Audio cannot be rolled back: publish stopped truthfully before awaiting.
+                let epoch = voiceSessionMediaEpoch
+                voiceSession = nil
+                voiceSessionMediaEpoch = nil
+                voiceSessionMediaClosed = false
+                voiceAPI = nil
+                voiceStatus = .stopped
+                if let epoch { await closeVoiceLocalMedia(mediaEpoch: epoch) }
+                guard !Task.isCancelled, generation == connectionGeneration.value else { throw CancellationError() }
+            }
+        }
+        guard !Task.isCancelled, generation == connectionGeneration.value else { throw CancellationError() }
+        #if DEBUG
+        await recoveryCommitGateForTesting?()
+        guard !Task.isCancelled, generation == connectionGeneration.value else { throw CancellationError() }
+        #endif
+        // Commit boundary: no throwing or suspension between these assignments and
+        // checkpoint adoption. Native displays are not physically transactional.
+        workspaceID = recovery.snapshot.workspaceID
+        authoritativeControlSnapshot = recovery.snapshot
+        recoveredVoicePool = recovery.voice.pool
+        uiSurfaceRequests = staged
+        if var status = voicePoolStatus {
+            status.blocked = recovery.voice.pool.blocked
+            status.reasonCode = recovery.voice.pool.reasonCode
+            voicePoolStatus = status
+        }
+        eventCursor = recovery.cursor
+        eventRecoveryRequired = false
+        authentication = .connected
+        // Tombstones were already applied natively. Closing them again erases the
+        // exact deletion evidence needed by the ACK validity predicate.
+        let tombstones = Set(recovery.ui.surfaces.filter { $0.event.deleted }.map { $0.event.surfaceID })
+        onUISurfacesClosed?(removed.filter { !tombstones.contains($0) })
+        let events = recovery.ui.surfaces.map(\.event)
+        let workspace = recovery.snapshot.workspaceID
+        let coordinator = coordinator
+        // ACK transport/receipt lookup is independent of authoritative recovery.
+        // Coordinator persists uncertain submissions; later connections retry them.
+        recoveryACKTask?.cancel()
+        recoveryACKTask = Task { @MainActor [weak self] in
+            guard let self, generation == self.connectionGeneration.value else { return }
+            if let coordinator {
+                for event in events {
+                    guard generation == self.connectionGeneration.value, !Task.isCancelled else { return }
+                    guard self.isCurrentUIPresentation?(event) != false else { continue }
+                    _ = try? await coordinator.submit(kind: "ui.rendered", payload: event.renderedPayload(success: true), workspaceID: workspace, idempotencyKey: event.renderedIdempotencyKey, isValid: { [weak self] in
+                        guard let self else { return false }
+                        return generation == self.connectionGeneration.value && self.workspaceID == workspace && self.isCurrentUIPresentation?(event) != false
+                    })
+                    guard generation == self.connectionGeneration.value, !Task.isCancelled else { return }
+                }
+                _ = try? await coordinator.recoverPending(currentWorkspaceID: workspace, onOutcome: { _ in }, isValid: { [weak self] in
+                    guard let self else { return false }
+                    return generation == self.connectionGeneration.value && self.workspaceID == workspace &&
+                        events.allSatisfy { self.isCurrentUIPresentation?($0) != false }
+                })
+                guard generation == self.connectionGeneration.value, !Task.isCancelled else { return }
+            }
+        }
     }
 
     private func receiveStreamPush(_ push: ServerPush, diagnostics: StreamDiagnostics, generation: UInt64, api: APIClient) async {
@@ -1427,13 +1555,9 @@ public final class ZoeAppModel: ObservableObject {
             }
             if envelope.type == "voice.end" { await endVoiceSession(reason: .voiceEndEvent) }
         case .snapshotRequired:
-            // /v1/snapshot repairs tasks/projects but omits voice/control state; the
-            // per-session GET is not a complete global-event checkpoint. Stop, retaining
-            // the consumed cursor, rather than silently jumping over missing history.
             eventRecoveryRequired = true
-            authentication = .unavailable
-            notice = uiText("Event history is unavailable. Full-state recovery is required before reconnecting.")
-            api?.recordDiagnostic(phase: "events_recovery_required", requestPath: "/v1/events", errorType: "global_history_unavailable", errorSummary: "non_ui_recovery_endpoint_required", level: .error)
+            // The stream ends at this marker. The next connection first obtains a
+            // complete checkpoint, retaining the old cursor on every failure.
         }
     }
 
@@ -1447,6 +1571,7 @@ public final class ZoeAppModel: ObservableObject {
             }
             return
         }
+        recoveryRendered = recoveryRendered.filter { $0.key.surfaceID != event.surfaceID }
         let displayed = onUISurface?(event) ?? false
         uiSurfaceRequests.recordRender(event, success: displayed)
         recordUITrace(phase: displayed ? "ui_surface_displayed" : "ui_surface_display_failed", summary: event.diagnosticSummary, level: displayed ? .info : .warn, upload: !displayed)
@@ -1458,6 +1583,7 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     private func closeUISurfaces() {
+        recoveryRendered.removeAll()
         let ids = Array(uiSurfaceRequests.requestIDs.keys)
         for _ in ids { recordUITrace(phase: "ui_surface_closed", summary: "disconnect", level: .info) }
         uiSurfaceRequests.removeAll()

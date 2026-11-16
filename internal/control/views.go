@@ -36,6 +36,15 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, snapshot)
 }
 
+// LoadSnapshotTx is for authenticated composite reads. The caller owns the read
+// transaction; credential generation and all snapshot fields share its snapshot.
+func (s *Server) LoadSnapshotTx(ctx context.Context, tx *sql.Tx, p contracts.Principal) (contracts.Snapshot, error) {
+	if err := requireOwnerSessionTx(ctx, tx, p); err != nil {
+		return contracts.Snapshot{}, err
+	}
+	return loadSnapshot(ctx, tx, p.WorkspaceID, p.SubjectID, s.cfg.MaxRuns)
+}
+
 func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, maxRuns int) (contracts.Snapshot, error) {
 	out := contracts.Snapshot{WorkspaceID: workspace, SubjectID: subject, ServerVersion: "1", Projects: []contracts.Project{}, Tasks: []contracts.Task{}, Approvals: []contracts.Approval{}, Runs: []contracts.Run{}}
 	var cursor int64

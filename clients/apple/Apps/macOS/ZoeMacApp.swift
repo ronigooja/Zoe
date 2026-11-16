@@ -52,6 +52,9 @@ struct ZoeMacApp {
             guard let self else { return false }
             return self.surfaces.display(event)
         }
+        model.isCurrentUIPresentation = { [weak self] event in
+            self?.surfaces.isCurrentPresentation(event) == true
+        }
         model.onUISurfacesClosed = { [weak self] ids in
             for id in ids { self?.surfaces.close(id: id) }
         }

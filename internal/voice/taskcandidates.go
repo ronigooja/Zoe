@@ -72,7 +72,7 @@ func (s *Service) taskCandidates(ctx context.Context, q rosterQueryer, workspace
 JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id
 WHERE t.workspace_id=? AND t.owner_subject_id=?
 AND l.session_id=(SELECT id FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND julianday(created_at)<=julianday(?) ORDER BY julianday(created_at) DESC,id DESC LIMIT 1)
-AND t.status IN ('queued','active','waiting','awaiting_user')
+AND t.status IN ('queued','active','waiting','awaiting_user','paused')
 AND julianday(t.created_at) BETWEEN julianday(?) AND julianday(?)
 ORDER BY julianday(t.created_at) DESC,t.id DESC LIMIT 5`, workspace, owner, workspace, owner, stamp(now), stamp(now.Add(-time.Hour)), stamp(now))
 	if err != nil {
@@ -100,7 +100,7 @@ CASE WHEN lower(t.goal) LIKE p.value ESCAPE '\' THEN 2 ELSE 0 END +
 CASE WHEN lower(coalesce(t.result,'')) LIKE p.value ESCAPE '\' THEN 1 ELSE 0 END)
 FROM json_each(?) p) AS score
 FROM tasks t WHERE t.workspace_id=? AND t.owner_subject_id=?
-AND t.status IN ('queued','active','waiting','awaiting_user','complete')
+AND t.status IN ('queued','active','waiting','awaiting_user','paused','complete')
 AND julianday(t.created_at)<=julianday(?)), ranked AS (
 SELECT id,score FROM scored WHERE score>0
 ORDER BY score DESC,julianday(created_at) DESC,id DESC LIMIT ?)

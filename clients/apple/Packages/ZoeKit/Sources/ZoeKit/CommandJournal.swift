@@ -100,7 +100,8 @@ public actor CommandCoordinator {
     }
 
     /// A command is journaled before POST. A retry first checks the durable receipt by key.
-    public func submit(kind: String, expectedVersion: Int64? = nil, payload: JSONValue, workspaceID: String? = nil, idempotencyKey: String? = nil) async throws -> CommandOutcome {
+    public func submit(kind: String, expectedVersion: Int64? = nil, payload: JSONValue, workspaceID: String? = nil, idempotencyKey: String? = nil,
+                       isValid: @MainActor @Sendable () -> Bool = { true }) async throws -> CommandOutcome {
         let command = PendingCommand(
             idempotencyKey: idempotencyKey ?? UUID().uuidString.lowercased(),
             kind: kind,
@@ -112,8 +113,10 @@ public actor CommandCoordinator {
             expectedResourceID: nil
         )
         let alreadyPending = try await journal.all().contains { $0.idempotencyKey == command.idempotencyKey }
+        try await requireValidity(isValid)
         try await journal.append(command)
-        return try await deliver(command, checkReceiptFirst: alreadyPending)
+        try await requireValidity(isValid)
+        return try await deliver(command, checkReceiptFirst: alreadyPending, isValid: isValid)
     }
 
     public func recoverPending() async throws -> [CommandOutcome] {
@@ -131,23 +134,31 @@ public actor CommandCoordinator {
         enforceWorkspace: Bool = true,
         onOutcome: @MainActor @Sendable (CommandOutcome) async -> Void,
         onWorkspaceMismatch: @MainActor @Sendable (PendingCommand) async -> Void = { _ in },
-        onFailure: @MainActor @Sendable (PendingCommand, ZoeError?) async -> Void = { _, _ in }
+        onFailure: @MainActor @Sendable (PendingCommand, ZoeError?) async -> Void = { _, _ in },
+        isValid: @MainActor @Sendable () -> Bool = { true }
     ) async throws -> [CommandOutcome] {
         let commands = try await journal.all()
+        try await requireValidity(isValid)
         var outcomes: [CommandOutcome] = []
         for command in commands where command.kind == "voice.turn.commit" || command.kind == "voice.turn.handoff" || command.kind == "ui.rendered" || command.kind == "ui.action" {
+            try await requireValidity(isValid)
             guard !enforceWorkspace || (command.workspaceID != nil && currentWorkspaceID != nil && command.workspaceID == currentWorkspaceID) else {
                 await onWorkspaceMismatch(command)
+                try await requireValidity(isValid)
                 continue
             }
             let outcome: CommandOutcome
-            do { outcome = try await deliver(command, checkReceiptFirst: true) }
+            do { outcome = try await deliver(command, checkReceiptFirst: true, isValid: isValid) }
             catch {
+                try await requireValidity(isValid)
                 await onFailure(command, error as? ZoeError)
+                try await requireValidity(isValid)
                 throw error
             }
+            try await requireValidity(isValid)
             outcomes.append(outcome)
             await onOutcome(outcome)
+            try await requireValidity(isValid)
         }
         return outcomes
     }
@@ -162,29 +173,43 @@ public actor CommandCoordinator {
         return try await deliver(command, checkReceiptFirst: true)
     }
 
-    private func deliver(_ command: PendingCommand, checkReceiptFirst: Bool) async throws -> CommandOutcome {
+    @MainActor private func requireValidity(_ isValid: @MainActor @Sendable () -> Bool) throws {
+        guard !Task.isCancelled, isValid() else { throw CancellationError() }
+    }
+
+    private func deliver(_ command: PendingCommand, checkReceiptFirst: Bool,
+                         isValid: @MainActor @Sendable () -> Bool = { true }) async throws -> CommandOutcome {
+        try await requireValidity(isValid)
         if checkReceiptFirst {
             do {
                 let receipt = try await api.receipt(idempotencyKey: command.idempotencyKey)
+                try await requireValidity(isValid)
                 try validate(receipt, command: command)
                 try await journal.remove(idempotencyKey: command.idempotencyKey)
+                try await requireValidity(isValid)
                 return CommandOutcome(receipt: receipt, recovered: true, command: command)
             } catch let error as ZoeError {
+                try await requireValidity(isValid)
                 guard case let .http(status, _, _, _) = error, status == 404 else { throw error }
             }
         }
 
         do {
+            try await requireValidity(isValid)
             let receipt = try await api.submit(kind: command.kind, expectedVersion: command.expectedVersion, payload: command.payload, idempotencyKey: command.idempotencyKey)
+            try await requireValidity(isValid)
             try validate(receipt, command: command)
             try await journal.remove(idempotencyKey: command.idempotencyKey)
+            try await requireValidity(isValid)
             return CommandOutcome(receipt: receipt, recovered: false, command: command)
         } catch {
+            try await requireValidity(isValid)
             // Keep the exact key and payload. The next attempt resolves a lost response first.
             if let error = error as? ZoeError,
                case let .http(status, _, _, _) = error,
                [400, 401, 403, 404, 409, 410, 413].contains(status) {
                 try? await journal.remove(idempotencyKey: command.idempotencyKey)
+                try await requireValidity(isValid)
             }
             throw error
         }

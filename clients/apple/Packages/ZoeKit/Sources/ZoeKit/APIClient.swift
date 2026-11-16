@@ -39,6 +39,17 @@ public final class APIClient: @unchecked Sendable {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
     }
 
+    public func recovery() async throws -> RecoverySnapshot {
+        let value: JSONValue = try await request(path: ["v1", "recovery"], method: "GET", authenticated: true)
+        let result = try JSONDecoder().decode(RecoverySnapshot.self, from: JSONEncoder().encode(value))
+        guard let cursor = Int64(result.cursor), cursor >= 0,
+              result.snapshot.eventCursor == result.cursor, result.ui.cursor == cursor,
+              result.snapshot.workspaceID == "default", result.snapshot.subjectID == "owner" else {
+            throw ZoeError.invalidResponse
+        }
+        return result
+    }
+
     public func uiSnapshot() async throws -> UISnapshot {
         // A2UI message keys and the strict UI contract must not undergo snake-case conversion.
         let value: JSONValue = try await request(path: ["v1", "ui", "snapshot"], method: "GET", authenticated: true)

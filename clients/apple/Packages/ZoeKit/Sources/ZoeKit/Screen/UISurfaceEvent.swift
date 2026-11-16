@@ -102,9 +102,12 @@ public struct UISurfaceRequests {
     public private(set) var versions: [String: Int64] = [:]
     public private(set) var outcomes: [UISurfaceBinding: Bool] = [:]
     public init() {}
-    /// Reserve before rendering or suspending. Equal revisions never reopen dismissed containers.
+    /// Reserve before rendering or suspending. A failed render may retry its exact
+    /// revision; successful equal revisions never reopen dismissed containers.
     @discardableResult public mutating func apply(_ event: UISurfaceEvent) -> Bool {
-        guard event.surfaceVersion > (versions[event.surfaceID] ?? 0) else { return false }
+        let previous = versions[event.surfaceID] ?? 0
+        guard event.surfaceVersion > previous ||
+                (event.surfaceVersion == previous && outcomes[event.binding] == false) else { return false }
         versions[event.surfaceID] = event.surfaceVersion
         if event.isDeletion { requestIDs.removeValue(forKey: event.surfaceID) }
         else { requestIDs[event.surfaceID] = event.requestID }

@@ -19,7 +19,15 @@ import A2UISwiftUI
     public var onBoundAction: ((UISurfaceBinding, ResolvedAction) -> Void)?
     private var bindings: [String: UISurfaceBinding] = [:]
     private var revisions: [String: Int64] = [:]
+    private var physicalBindings: [String: UISurfaceBinding] = [:]
+    public func isCurrentPresentation(_ event: UISurfaceEvent) -> Bool {
+        physicalBindings[event.surfaceID] == event.binding &&
+            (event.deleted ? entries[event.surfaceID] == nil : entries[event.surfaceID] != nil)
+    }
     private var renderFailed = Set<String>()
+    // Test seam at the native presentation boundary, after real message processing.
+    var presentationAcceptedForTesting: (() -> Bool)?
+    func presentationVersionForTesting(_ id: String) -> Int64? { revisions[id] }
     private let popoverAnchor: () -> NSView?
     public var onUserClosed: (() -> Void)?
     public var onRenderError: ((String, [Error]) -> Void)?
@@ -98,16 +106,27 @@ import A2UISwiftUI
     /// Only a newer server revision presents a dismissed surface again.
     @discardableResult public func display(_ event: UISurfaceEvent) -> Bool {
         guard event.surfaceVersion > (revisions[event.surfaceID] ?? 0) else { return false }
-        revisions[event.surfaceID] = event.surfaceVersion
         if event.deleted {
             close(id: event.surfaceID)
-            return entries[event.surfaceID] == nil
+            guard entries[event.surfaceID] == nil else { return false }
+            revisions[event.surfaceID] = event.surfaceVersion
+            physicalBindings[event.surfaceID] = event.binding
+            bindings.removeValue(forKey: event.surfaceID)
+            return true
         }
+        let previousBinding = bindings[event.surfaceID]
         bindings[event.surfaceID] = event.binding
-        return display(SurfaceSpec(id: event.surfaceID, kind: event.container, messages: event.messages, size: event.size))
+        guard display(SurfaceSpec(id: event.surfaceID, kind: event.container, messages: event.messages, size: event.size)) else {
+            bindings[event.surfaceID] = previousBinding
+            return false
+        }
+        revisions[event.surfaceID] = event.surfaceVersion
+        physicalBindings[event.surfaceID] = event.binding
+        return true
     }
 
     @discardableResult public func display(_ spec: SurfaceSpec) -> Bool {
+        physicalBindings.removeValue(forKey: spec.id)
         renderFailed.remove(spec.id)
         if entries[spec.id] != nil, store.surfaces[spec.id]?.kind == spec.kind {
             update(id: spec.id, messages: spec.messages, size: spec.size)
@@ -116,6 +135,10 @@ import A2UISwiftUI
         }
         guard let entry = entries[spec.id] else { return false }
         guard !renderFailed.contains(spec.id) else {
+            close(id: spec.id)
+            return false
+        }
+        if presentationAcceptedForTesting?() == false {
             close(id: spec.id)
             return false
         }
@@ -136,6 +159,7 @@ import A2UISwiftUI
     }
 
     public func close(id: String) {
+        physicalBindings.removeValue(forKey: id)
         store.close(id: id)
         guard let entry = entries.removeValue(forKey: id) else { return }
         entry.window?.delegate = nil
@@ -149,6 +173,7 @@ import A2UISwiftUI
         for id in Array(entries.keys) { close(id: id) }
         bindings.removeAll()
         revisions.removeAll()
+        physicalBindings.removeAll()
     }
 
     public func windowWillClose(_ notification: Notification) {

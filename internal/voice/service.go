@@ -435,6 +435,7 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 		}
 	}
 	return server.RegisterAuthenticatedRoutes(func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /v1/recovery", svc.handleRecovery)
 		mux.HandleFunc("GET /v1/ui/snapshot", svc.handleUISnapshot)
 		mux.HandleFunc("GET /v1/voice/pool/status", svc.handlePoolStatus)
 		mux.HandleFunc("GET /v1/voice/config", svc.handleVoiceConfig)

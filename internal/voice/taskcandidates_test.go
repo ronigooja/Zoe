@@ -112,7 +112,7 @@ func TestCandidatesOwnerStatusAndNoAgeLimit(t *testing.T) {
 		candidateSeed(t, db, now, seed, "budget "+seed.id)
 	}
 	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 20)
-	if err != nil || len(got) != 6 {
+	if err != nil || len(got) != 7 {
 		t.Fatalf("filters got=%+v err=%v", got, err)
 	}
 	for _, c := range got {
@@ -122,6 +122,30 @@ func TestCandidatesOwnerStatusAndNoAgeLimit(t *testing.T) {
 	}
 	if got[len(got)-1].Goal != "budget old" {
 		t.Fatalf("year-old match missing: %+v", got)
+	}
+}
+
+func TestCandidatesPausedLatestSessionAndCrossSession(t *testing.T) {
+	db, svc, now := rosterFixture(t)
+	rosterExec(t, db, `UPDATE voice_sessions SET created_at=? WHERE id='other-call'`, now.Add(-time.Hour).Format(time.RFC3339Nano))
+	candidateSeed(t, db, now, rosterSeed{id: "paused-latest", status: "paused", created: now.Add(-time.Minute)}, "unrelated latest task")
+	candidateSeed(t, db, now, rosterSeed{id: "paused-older", status: "paused", session: "other-call", created: now.Add(-24 * time.Hour)}, "budget research")
+	for _, tc := range []struct {
+		text string
+		want []string
+	}{
+		{"", []string{"unrelated latest task"}},
+		{"budget", []string{"unrelated latest task", "budget research"}},
+	} {
+		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", tc.text, now, 8)
+		if err != nil || !reflect.DeepEqual(candidateRequests(got), tc.want) {
+			t.Fatalf("text=%q paused candidates=%+v err=%v", tc.text, got, err)
+		}
+		for _, c := range got {
+			if c.Status != "paused" || c.Result != "" || len(c.PendingQuestions) != 0 {
+				t.Fatalf("paused facts changed: %+v", c)
+			}
+		}
 	}
 }
 

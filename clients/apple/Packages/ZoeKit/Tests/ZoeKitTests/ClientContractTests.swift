@@ -4,15 +4,25 @@ import XCTest
 import Foundation
 import CryptoKit
 import WebRTC
+#if os(macOS)
+import AppKit
+#endif
 
 private final class ContractURLProtocol: URLProtocol {
     static var responseHandler: ((URLRequest) -> (Int, [String: String], Data))?
     static var failureHandler: ((URLRequest) -> Error?)?
     static var capturedRequest: URLRequest?
+    static var responseGate: ((URLRequest) async -> Void)?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        Task {
+            await Self.responseGate?(request)
+            finishLoading()
+        }
+    }
+    private func finishLoading() {
         Self.capturedRequest = request
         if let error = Self.failureHandler?(request) {
             client?.urlProtocol(self, didFailWithError: error)
@@ -57,8 +67,15 @@ private actor AsyncTestGate {
 }
 
 final class ClientContractTests: XCTestCase {
+    private static func recoveryBody(cursor: String) -> Data {
+        Data("""
+        {"cursor":"\(cursor)","snapshot":{"workspace_id":"default","subject_id":"owner","server_version":"1","event_cursor":"\(cursor)","authority":{"instance_lineage_id":"lineage","generation":1,"deletion_sequence":"0"},"projects":[],"tasks":[{"id":"authoritative-task","status":"complete"}],"approvals":[],"runs":[],"execution_capacity":{}},"ui":{"cursor":\(cursor),"surfaces":[]},"voice":{"current_session":null,"pool":{"blocked":false,"reason_code":""}}}
+        """.utf8)
+    }
+
     private func session() -> URLSession {
         ContractURLProtocol.failureHandler = nil
+        ContractURLProtocol.responseGate = nil
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ContractURLProtocol.self]
         return URLSession(configuration: configuration)
@@ -96,7 +113,16 @@ final class ClientContractTests: XCTestCase {
     @MainActor func testReconnectTransportReplaysNonUIEventsDespiteNewerUISnapshotAndFetchFailure() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let model = ZoeAppModel()
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "1"))
         model.setAuthenticationForTesting(.connected)
+        _ = model.installVoiceSessionForTesting(VoiceSessionResponse(voiceSessionId: "replayed-call", generation: 1, state: "active", answerSdp: ""), api: api)
+        var mediaStops = 0
+        var hangups = 0
+        model.voiceLocalMediaStopObserverForTesting = { mediaStops += 1 }
+        model.voiceHangupOverrideForTesting = { _ in
+            hangups += 1
+            return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
+        }
         func envelope(_ cursor: Int64, _ type: String, payload: String = "{}", version: Int64 = 1) -> String {
             "{\"schema_version\":1,\"event_id\":\"e\(cursor)\",\"cursor\":\"\(cursor)\",\"type\":\"\(type)\",\"occurred_at\":\"\",\"workspace_id\":\"default\",\"aggregate_type\":\"ui_surface\",\"aggregate_id\":\"s1\",\"aggregate_version\":\(version),\"payload\":\(payload)}"
         }
@@ -112,6 +138,9 @@ final class ClientContractTests: XCTestCase {
         var attempt = 0
         var streamCursors: [String?] = []
         ContractURLProtocol.responseHandler = { request in
+            if request.url?.path == "/v1/recovery" {
+                return (200, ["Content-Type": "application/json"], Self.recoveryBody(cursor: "0"))
+            }
             if request.url?.path == "/v1/ui/snapshot" {
                 attempt += 1
                 if attempt == 2 { return (503, [:], Data()) }
@@ -132,9 +161,11 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(model.eventCursorForTesting, "10")
         XCTAssertEqual(streamCursors.count, 1)
         try await model.receiveEventConnectionForTesting(api: api)
-        XCTAssertEqual(streamCursors, ["0", "10"])
+        XCTAssertEqual(streamCursors, ["1", "10"])
         XCTAssertEqual(consumed, ["task.updated", "voice.end", "ui.surface", "task.updated"])
-        guard case .stopped = model.voiceStatus else { return XCTFail("Replayed voice.end must run the voice shutdown handler") }
+        XCTAssertEqual(mediaStops, 1, "Replayed voice.end must close actual local media")
+        XCTAssertEqual(hangups, 1, "Replayed voice.end must run the voice shutdown handler")
+        guard case .idle = model.voiceStatus else { return XCTFail("Confirmed voice shutdown must finish idle") }
         XCTAssertEqual(renderCount, 1, "Snapshot revision must suppress its obsolete SSE replay")
         XCTAssertEqual(model.eventCursorForTesting, "13", "Event racing snapshot12 remains consumed")
     }
@@ -145,6 +176,7 @@ final class ClientContractTests: XCTestCase {
         model.setAuthenticationForTesting(.connected)
         model.setSnapshotForTesting(Snapshot(serverVersion: "test", eventCursor: "10"))
         ContractURLProtocol.responseHandler = { request in
+            if request.url?.path == "/v1/recovery" { return (503, [:], Data()) }
             if request.url?.path == "/v1/ui/snapshot" {
                 return (200, ["Content-Type": "application/json"], Data(#"{"cursor":99,"surfaces":[]}"#.utf8))
             }
@@ -152,9 +184,275 @@ final class ClientContractTests: XCTestCase {
             return (200, ["Content-Type": "text/event-stream"], Data("event: snapshot_required\ndata: {\"reason\":\"cursor_expired\"}\n\n".utf8))
         }
         try await model.receiveEventConnectionForTesting(api: api)
+        do {
+            try await model.receiveEventConnectionForTesting(api: api)
+            XCTFail("Unavailable recovery must fail and retain the consumed cursor")
+        } catch { }
         XCTAssertTrue(model.eventRecoveryRequired)
         XCTAssertEqual(model.authentication, .unavailable)
         XCTAssertEqual(model.eventCursorForTesting, "10")
+    }
+
+    @MainActor func testExpiredHistoryRecoveryThenPostCheckpointVoiceEnd() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let model = ZoeAppModel()
+        model.setAuthenticationForTesting(.connected)
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10"))
+        var paths: [String] = []
+        var streams = 0
+        ContractURLProtocol.responseHandler = { request in
+            let path = request.url!.path
+            paths.append(path)
+            if path == "/v1/recovery" { return (200, [:], Self.recoveryBody(cursor: "20")) }
+            if path == "/v1/ui/snapshot" { return (200, [:], Data(#"{"cursor":20,"surfaces":[]}"#.utf8)) }
+            streams += 1
+            if streams == 1 {
+                return (200, ["Content-Type": "text/event-stream"], Data("event: snapshot_required\ndata: {\"reason\":\"cursor_expired\"}\n\n".utf8))
+            }
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Last-Event-ID"), "20")
+            let event = #"{"schema_version":1,"event_id":"end","cursor":"21","type":"voice.end","occurred_at":"","workspace_id":"default","aggregate_type":"voice_session","aggregate_id":"old","aggregate_version":1,"payload":{}}"#
+            return (200, ["Content-Type": "text/event-stream"], Data("id: 21\nevent: voice.end\ndata: \(event)\n\n".utf8))
+        }
+        try await model.receiveEventConnectionForTesting(api: api)
+        XCTAssertEqual(model.eventCursorForTesting, "10")
+        try await model.receiveEventConnectionForTesting(api: api)
+        XCTAssertFalse(model.eventRecoveryRequired)
+        XCTAssertEqual(model.eventCursorForTesting, "21")
+        XCTAssertEqual(model.authoritativeControlSnapshot?.tasks.count, 1)
+        guard case .stopped = model.voiceStatus else { return XCTFail("Post-checkpoint end was not applied") }
+        XCTAssertTrue(paths.contains("/v1/recovery"))
+    }
+
+    @MainActor func testInitialZeroHistoryUsesAuthoritativeBaselineBeforeSSE() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let model = ZoeAppModel()
+        model.setAuthenticationForTesting(.connected)
+        var paths: [String] = []
+        ContractURLProtocol.responseHandler = { request in
+            let path = request.url!.path
+            paths.append(path)
+            if path == "/v1/recovery" { return (200, [:], Self.recoveryBody(cursor: "99")) }
+            if path == "/v1/ui/snapshot" { return (200, [:], Data(#"{"cursor":100,"surfaces":[]}"#.utf8)) }
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Last-Event-ID"), "99")
+            return (200, ["Content-Type": "text/event-stream"], Data())
+        }
+        try await model.receiveEventConnectionForTesting(api: api)
+        XCTAssertEqual(paths.first, "/v1/recovery")
+        XCTAssertEqual(model.eventCursorForTesting, "99")
+        XCTAssertEqual(model.authoritativeControlSnapshot?.tasks.count, 1)
+    }
+
+    @MainActor func testRecoveryResponseFromOldConnectionCannotAdoptCheckpoint() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let model = ZoeAppModel()
+        model.setAuthenticationForTesting(.connected)
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "0"))
+        let gate = AsyncTestGate()
+        model.recoveryApplicationGateForTesting = { await gate.pause() }
+        ContractURLProtocol.responseHandler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/recovery")
+            return (200, [:], Self.recoveryBody(cursor: "99"))
+        }
+        let pending = Task { try await model.receiveEventConnectionForTesting(api: api) }
+        await gate.waitUntilStarted()
+        model.advanceConnectionForTesting() // Same-origin credential rotation also advances this fence.
+        await gate.resume()
+        try await pending.value
+        XCTAssertEqual(model.eventCursorForTesting, "0")
+        XCTAssertNil(model.authoritativeControlSnapshot)
+    }
+
+    @MainActor func testRecoveryPreservesOnlyExactActiveLocalVoiceIdentity() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let model = ZoeAppModel()
+        model.setAuthenticationForTesting(.connected)
+        _ = model.installVoiceSessionForTesting(VoiceSessionResponse(voiceSessionId: "local", generation: 3, state: "active", answerSdp: ""), api: api)
+        var hangups = 0
+        model.voiceHangupOverrideForTesting = { _ in
+            hangups += 1
+            return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
+        }
+        ContractURLProtocol.responseHandler = { request in
+            if request.url?.path == "/v1/recovery" {
+                let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!
+                    .replacingOccurrences(of: "\"current_session\":null", with: "\"current_session\":{\"id\":\"local\",\"generation\":3,\"state\":\"active\"}")
+                return (200, [:], Data(body.utf8))
+            }
+            if request.url?.path == "/v1/ui/snapshot" { return (200, [:], Data(#"{"cursor":20,"surfaces":[]}"#.utf8)) }
+            return (200, ["Content-Type": "text/event-stream"], Data())
+        }
+        try await model.receiveEventConnectionForTesting(api: api)
+        XCTAssertEqual(hangups, 0)
+        guard case .active = model.voiceStatus else { return XCTFail("Exact active session must survive recovery") }
+        XCTAssertEqual(model.eventCursorForTesting, "20")
+    }
+
+    @MainActor func testRecoveryFailedRenderRetriesSameRevisionWithoutModelCommit() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let model = ZoeAppModel()
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10"))
+        var renders = 0
+        model.onUISurface = { _ in renders += 1; return renders > 1 }
+        let surface = #"{"request_id":"delete","surface_id":"s1","surface_version":2,"deleted":true,"container":"window","awaiting_input":false,"render_status":"rendered","messages":[{"version":"v0.9","deleteSurface":{"surfaceId":"s1"}}]}"#
+        let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!
+            .replacingOccurrences(of: "\"surfaces\":[]", with: "\"surfaces\":[\(surface)]")
+        ContractURLProtocol.responseHandler = { request in
+            if request.url?.path == "/v1/recovery" { return (200, [:], Data(body.utf8)) }
+            // Pending ACK lookup failure must not roll back or poison recovery.
+            return (503, [:], Data())
+        }
+        do { try await model.recoverGlobalStateForTesting(api: api); XCTFail("First render must fail") } catch { }
+        XCTAssertEqual(model.eventCursorForTesting, "10")
+        XCTAssertNil(model.authoritativeControlSnapshot)
+        XCTAssertNil(model.recoveredVoicePool)
+        try await model.recoverGlobalStateForTesting(api: api)
+        XCTAssertEqual(renders, 2)
+        XCTAssertEqual(model.eventCursorForTesting, "20")
+        try await model.recoverGlobalStateForTesting(api: api)
+        XCTAssertEqual(renders, 2, "Successful tombstone revision is not rendered twice")
+    }
+
+    #if os(macOS)
+    @MainActor func testActiveNativeSurfaceRecoveryTombstoneReachesACKTransport() async throws {
+        _ = NSApplication.shared
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("journal.json"))
+        let model = ZoeAppModel()
+        let manager = SurfaceManager(popoverAnchor: { nil })
+        defer { manager.reset() }
+        model.installRecoveryCoordinatorForTesting(CommandCoordinator(api: api, journal: journal))
+        model.setAuthenticationForTesting(.connected)
+        model.onUISurface = { manager.display($0) }
+        model.isCurrentUIPresentation = { manager.isCurrentPresentation($0) }
+        model.onUISurfacesClosed = { ids in ids.forEach { manager.close(id: $0) } }
+        let live = #"{"request_id":"live","surface_id":"s1","surface_version":1,"deleted":false,"container":"window","awaiting_input":false,"messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"s1","components":[{"id":"root","component":"Text","text":"Before deletion"}]}}]}"#
+        let payload = try JSONDecoder().decode(JSONValue.self, from: Data(live.utf8))
+        await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "live", cursor: "10", type: "ui.surface", occurredAt: "", workspaceId: "default", aggregateType: "ui_surface", aggregateId: "s1", aggregateVersion: 1, payload: payload))
+        XCTAssertNotNil(manager.viewModel(for: "s1"))
+        let deleted = #"{"request_id":"delete","surface_id":"s1","surface_version":2,"deleted":true,"container":"window","awaiting_input":false,"render_status":"rendered","messages":[{"version":"v0.9","deleteSurface":{"surfaceId":"s1"}}]}"#
+        let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!.replacingOccurrences(of: "\"surfaces\":[]", with: "\"surfaces\":[\(deleted)]")
+        let ack = expectation(description: "Native deletion ACK reaches transport")
+        ContractURLProtocol.responseHandler = { request in
+            if request.url?.path == "/v1/recovery" { return (200, [:], Data(body.utf8)) }
+            if request.httpMethod == "POST" {
+                ack.fulfill()
+            }
+            return (503, [:], Data())
+        }
+        try await model.recoverGlobalStateForTesting(api: api)
+        XCTAssertNil(manager.viewModel(for: "s1"))
+        XCTAssertEqual(manager.presentationVersionForTesting("s1"), 2)
+        await fulfillment(of: [ack], timeout: 3)
+        XCTAssertEqual(model.eventCursorForTesting, "20")
+    }
+    #endif
+
+    @MainActor func testGenerationSwitchAfterRenderingCannotCommitStagedModel() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let model = ZoeAppModel()
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10"))
+        let gate = AsyncTestGate()
+        model.recoveryCommitGateForTesting = { await gate.pause() }
+        ContractURLProtocol.responseHandler = { _ in (200, [:], Self.recoveryBody(cursor: "20")) }
+        let pending = Task { try await model.recoverGlobalStateForTesting(api: api) }
+        await gate.waitUntilStarted()
+        model.advanceConnectionForTesting()
+        await gate.resume()
+        do { try await pending.value; XCTFail("Stale commit must fail") } catch { }
+        XCTAssertEqual(model.eventCursorForTesting, "10")
+        XCTAssertNil(model.authoritativeControlSnapshot)
+        XCTAssertNil(model.recoveredVoicePool)
+    }
+
+    @MainActor func testPendingACKLookupFailureDoesNotGateRecoveryOrNextRecovery() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
+        let coordinator = CommandCoordinator(api: api, journal: journal)
+        ContractURLProtocol.responseHandler = { _ in (503, [:], Data()) }
+        do {
+            _ = try await coordinator.submit(kind: "ui.rendered", payload: JSONValue.object([:]), workspaceID: "default", idempotencyKey: "pending-render")
+        } catch { }
+        let model = ZoeAppModel()
+        model.installRecoveryCoordinatorForTesting(coordinator)
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10"))
+        ContractURLProtocol.responseHandler = { request in
+            if request.url?.path == "/v1/recovery" { return (200, [:], Self.recoveryBody(cursor: "20")) }
+            return (503, [:], Data())
+        }
+        try await model.recoverGlobalStateForTesting(api: api)
+        XCTAssertEqual(model.eventCursorForTesting, "20")
+        try await model.recoverGlobalStateForTesting(api: api)
+        XCTAssertEqual(model.authoritativeControlSnapshot?.tasks.count, 1)
+        let pending = try await journal.all()
+        XCTAssertTrue(pending.contains { $0.idempotencyKey == "pending-render" })
+    }
+
+    @MainActor func testRecoveryStopsEndedReplacedAndGenerationMismatchedVoice() async throws {
+        for current in ["null", #"{"id":"local","generation":3,"state":"ended"}"#, #"{"id":"replacement","generation":3,"state":"active"}"#, #"{"id":"local","generation":4,"state":"active"}"#] {
+            let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+            let model = ZoeAppModel()
+            model.setAuthenticationForTesting(.connected)
+            _ = model.installVoiceSessionForTesting(VoiceSessionResponse(voiceSessionId: "local", generation: 3, state: "active", answerSdp: ""), api: api)
+            var stops = 0
+            model.voiceLocalMediaStopObserverForTesting = { stops += 1 }
+            let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!
+                .replacingOccurrences(of: "\"current_session\":null", with: "\"current_session\":\(current)")
+            ContractURLProtocol.responseHandler = { _ in (200, [:], Data(body.utf8)) }
+            try await model.recoverGlobalStateForTesting(api: api)
+            XCTAssertEqual(stops, 1)
+            guard case .stopped = model.voiceStatus else { return XCTFail("Obsolete local audio must stop") }
+            XCTAssertEqual(model.eventCursorForTesting, "20")
+        }
+    }
+
+    @MainActor func testRecoveryRejectsRotatedCredentialWithoutCursorAdvance() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let model = ZoeAppModel()
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "0"))
+        ContractURLProtocol.responseHandler = { _ in
+            (401, [:], Data(#"{"error":{"code":"unauthenticated","message":"rotated"}}"#.utf8))
+        }
+        do { try await model.receiveEventConnectionForTesting(api: api); XCTFail("Expected rejection") } catch { }
+        XCTAssertEqual(model.eventCursorForTesting, "0")
+        XCTAssertTrue(model.eventRecoveryRequired)
+        XCTAssertEqual(model.authentication, .unavailable)
+    }
+
+    @MainActor func testConnectionSwitchDuringBlockedReceiptNeverResubmits() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory); ContractURLProtocol.responseGate = nil }
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("journal.json"))
+        let coordinator = CommandCoordinator(api: api, journal: journal)
+        ContractURLProtocol.responseHandler = { _ in (503, [:], Data()) }
+        do { _ = try await coordinator.submit(kind: "ui.rendered", payload: .object([:]), workspaceID: "default", idempotencyKey: "old") } catch { }
+        let gate = AsyncTestGate()
+        var valid = true
+        var posts = 0
+        ContractURLProtocol.responseGate = { request in
+            if request.httpMethod == "GET" { await gate.pause() }
+        }
+        ContractURLProtocol.responseHandler = { request in
+            if request.httpMethod == "POST" { posts += 1 }
+            return (404, [:], Data(#"{"error":{"code":"not_found","message":"missing"}}"#.utf8))
+        }
+        let recovery = Task {
+            try await coordinator.recoverPending(currentWorkspaceID: "default", onOutcome: { _ in }, isValid: { valid })
+        }
+        await gate.waitUntilStarted()
+        valid = false
+        await gate.resume()
+        do { _ = try await recovery.value; XCTFail("Expected cancellation") } catch { }
+        XCTAssertEqual(posts, 0)
+        let pending = try await journal.all()
+        XCTAssertEqual(pending.first?.idempotencyKey, "old")
     }
 
     func testUIACKAndActionUnknownAcceptanceRecoverOriginalReceipt() async throws {
