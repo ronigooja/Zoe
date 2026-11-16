@@ -7,354 +7,222 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/ronigooja/Zoe/internal/logging"
 )
 
-func choiceReply(action, request string) string {
-	fields := map[string]string{"action": action, "task": request}
-	if action == "attach" {
-		fields["work"] = "new_work"
+func text(s string) *string { return &s }
+
+func validChoice(action Action) Choice {
+	choice := Choice{Action: action}
+	switch action {
+	case ActionAppend, ActionContinue, ActionCancel, ActionRedisplay, ActionAnswer, ActionReport:
+		choice.TaskID = text("stable-task-2")
 	}
-	if action == "report" {
-		fields["reply"] = "The task is active."
+	if action == ActionAnswer {
+		choice.QuestionID = text("stable-question-2")
 	}
-	data, _ := json.Marshal(fields)
+	if action == ActionReport || action == ActionClarify {
+		choice.Reply = text("  完整回复🙂\n")
+	}
+	return choice
+}
+
+func encoded(value any) string {
+	data, _ := json.Marshal(value)
 	return string(data)
 }
 
-const choiceNow = "2026-11-12T12:34:56Z"
+func facts() Input {
+	return Input{Request: "full retained request", Tasks: []Candidate{
+		{TaskID: "stable-task-1", Goal: "duplicate goal", Status: "active", PendingQuestions: []Question{{QuestionID: "stable-question-1", Text: "Which?"}}},
+		{TaskID: "stable-task-2", Goal: "duplicate goal", Status: "completed", PendingQuestions: []Question{{QuestionID: "stable-question-2", Text: "Which?"}}, Result: text("full result")},
+	}}
+}
 
-func TestParseChoiceWork(t *testing.T) {
-	for _, work := range []string{"new_work", "none"} {
-		action, task, reply, got, err := parseChoice(`{"action":"attach","task":"request","work":"` + work + `"}`)
-		if err != nil || action != ActionAttach || task != "request" || reply != "" || got != work {
-			t.Fatalf("work=%q got=%q err=%v", work, got, err)
+func TestChooseAllActionsStableIDs(t *testing.T) {
+	for _, action := range []Action{ActionNew, ActionAppend, ActionAnswer, ActionContinue, ActionReport, ActionCancel, ActionRedisplay, ActionClarify} {
+		t.Run(string(action), func(t *testing.T) {
+			want := validChoice(action)
+			s := choiceServer(t, encoded(want), nil)
+			defer s.Close()
+			got, err := configured(t, s.URL, "").Choose(context.Background(), facts())
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("choice=%+v err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestParseChoiceExactNullability(t *testing.T) {
+	for _, action := range []Action{ActionNew, ActionAppend, ActionAnswer, ActionContinue, ActionReport, ActionCancel, ActionRedisplay, ActionClarify} {
+		want := validChoice(action)
+		for _, field := range []string{"task_id", "question_id", "reply"} {
+			var fields map[string]any
+			_ = json.Unmarshal([]byte(encoded(want)), &fields)
+			if fields[field] == nil {
+				fields[field] = "unexpected"
+			} else {
+				fields[field] = nil
+			}
+			if _, err := parseChoice(encoded(fields)); err == nil {
+				t.Fatalf("accepted wrong nullability %s/%s", action, field)
+			}
+		}
+		var fields map[string]any
+		_ = json.Unmarshal([]byte(encoded(want)), &fields)
+		for _, field := range []string{"action", "task_id", "question_id", "reply"} {
+			copy := make(map[string]any)
+			for key, value := range fields {
+				if key != field {
+					copy[key] = value
+				}
+			}
+			if _, err := parseChoice(encoded(copy)); err == nil {
+				t.Fatalf("accepted missing %s/%s", action, field)
+			}
 		}
 	}
+}
+
+func TestParseChoiceRejectsMalformed(t *testing.T) {
+	valid := encoded(validChoice(ActionNew))
 	for _, output := range []string{
-		`{"action":"attach","task":"request"}`, `{"action":"attach","task":"request","work":""}`,
-		`{"action":"attach","task":"request","work":"invalid"}`, `{"action":"attach","task":"request","work":null}`,
-		`{"action":"attach","task":"request","work":1}`, `{"action":"attach","task":"request","work":"none","work":"none"}`,
-		`{"action":"attach","task":"request","work":"none"} {}`, `{"action":"attach","task":"request","work":"none","extra":""}`,
+		"", "not JSON", "[]", "null", valid + " {}", valid + " trailing", strings.TrimSuffix(valid, "}") + `,"action":"new"}`,
+		`{"action":"new","task_id":null,"question_id":null,"reply":null,"extra":null}`,
+		`{"Action":"new","task_id":null,"question_id":null,"reply":null}`,
+		`{"action":null,"task_id":null,"question_id":null,"reply":null}`,
+		`{"action":"NEW","task_id":null,"question_id":null,"reply":null}`,
+		`{"action":"attach","task_id":"stable-task-2","question_id":null,"reply":null}`,
+		`{"action":"none","task_id":null,"question_id":null,"reply":null}`,
+		`{"action":"report","task_id":"stable-task-2","question_id":null,"reply":" \n"}`,
+		`{"action":"cancel","task_id":"","question_id":null,"reply":null}`,
+		`{"action":"answer","task_id":"stable-task-2","question_id":3,"reply":null}`,
+		`{"action":"clarify","task_id":null,"question_id":null,"reply":{}}`,
 	} {
-		if _, _, _, _, err := parseChoice(output); err == nil {
+		if _, err := parseChoice(output); err == nil {
 			t.Fatalf("accepted %s", output)
 		}
 	}
-	for _, action := range []string{"new", "none", "answer", "cancel", "report"} {
-		for _, work := range []string{"", "new_work", "none"} {
-			fields := map[string]string{"action": action, "task": "", "work": work}
-			if action == "report" {
-				fields["reply"] = "State."
-			}
-			data, _ := json.Marshal(fields)
-			if _, _, _, _, err := parseChoice(string(data)); (err == nil) != (work == "") {
-				t.Fatalf("action=%s work=%q err=%v", action, work, err)
-			}
-		}
-	}
 }
 
-// Old Choose rejects the reply field, cannot report without a task, and omits now.
-// These HTTP-backed cases exercise the model wire contract, not a parser stub.
-func TestChooseReportFullReplyAndNoTask(t *testing.T) {
-	for _, request := range []string{"", "Original request"} {
-		for _, text := range []string{"  No such task was found. \n", " \t" + strings.Repeat("🙂é", 350) + "\n"} {
-			data, _ := json.Marshal(map[string]string{"action": "report", "task": request, "reply": text})
-			s := choiceServer(t, string(data), nil)
-			got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, []Candidate{{Request: "Original request"}})
-			s.Close()
-			want := strings.TrimSpace(text)
-			if err != nil || got != (Choice{Action: ActionReport, Request: request, Reply: want}) || !utf8.ValidString(got.Reply) {
-				t.Fatalf("choice=%+v err=%v", got, err)
-			}
-		}
-	}
-}
-
-// Old Choose rejects cancel as an unknown action; exact-match and empty-reply
-// success cases, ErrNoMatch checks, and the instruction assertion regress it.
-func TestChooseNonReportReply(t *testing.T) {
-	for _, action := range []string{"new", "none", "attach", "answer", "cancel"} {
-		for _, reply := range []string{"", "state", " "} {
-			request := ""
-			if action == "attach" || action == "answer" || action == "cancel" {
-				request = "Original request"
-			}
-			fields := map[string]string{"action": action, "task": request, "reply": reply}
-			if action == "attach" {
-				fields["work"] = "new_work"
-			}
-			data, _ := json.Marshal(fields)
-			s := choiceServer(t, string(data), nil)
-			_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, []Candidate{{Request: "Original request", Question: "Which?"}})
-			s.Close()
-			if (err == nil) != (reply == "") {
-				t.Fatalf("action=%s reply=%q err=%v", action, reply, err)
-			}
-		}
-	}
-}
-
-func TestChooseValidReplies(t *testing.T) {
-	candidates := []Candidate{{Request: " Original request 🙂\n", Question: "Which?"}}
-	for _, action := range []Action{ActionNew, ActionNone, ActionAttach, ActionAnswer, ActionCancel, ActionReport} {
-		t.Run(string(action), func(t *testing.T) {
-			request := candidates[0].Request
-			if action == ActionNew || action == ActionNone {
-				request = ""
-			}
-			s := choiceServer(t, choiceReply(string(action), request), nil)
-			defer s.Close()
-			got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, candidates)
-			want := Choice{Action: action, Request: request}
-			if action == ActionAttach {
-				want.Work = "new_work"
-			}
-			if action == ActionReport {
-				want.Reply = "The task is active."
-			}
-			if err != nil || got != want {
-				t.Fatalf("choice=%+v err=%v", got, err)
-			}
-		})
-	}
-}
-
-func TestChooseExactMatchAndNoMatch(t *testing.T) {
-	request := " Original Request\n"
-	for _, action := range []Action{ActionAttach, ActionAnswer, ActionCancel, ActionReport} {
-		for _, quote := range []string{"Original Request\n", " Original Request", " original request\n", "unknown", ""} {
-			if action == ActionReport && quote == "" {
-				continue // An unmatched report intentionally has no task.
-			}
-			t.Run(string(action)+"/"+quote, func(t *testing.T) {
-				s := choiceServer(t, choiceReply(string(action), quote), nil)
-				defer s.Close()
-				got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, []Candidate{{Request: request, Question: "Which?"}})
-				if !errors.Is(err, ErrNoMatch) || got.Action != action || got.Request != quote {
-					t.Fatalf("choice=%+v err=%v", got, err)
-				}
-			})
-		}
-	}
-}
-
-func TestChooseRejectsInvalidReplies(t *testing.T) {
-	for _, reply := range []string{
-		"", " \n", "not JSON", `[]`, `null`, `{"action":"new","task":""} extra`,
-		`{"action":"new","task":""}{"action":"none","task":""}`,
-		`{"action":"new","task":"","extra":""}`, `{"action":"unknown","task":""}`,
-		`{"action":"NEW","task":""}`, `{"action":"new"}`, `{"task":""}`,
-		`{"action":"new","task":null}`, `{"action":"new","task":4}`,
-		`{"Action":"new","task":""}`, `{"action":"new","task":"","task":""}`,
-		`{"action":"new","task":"request"}`, `{"action":"none","task":"request"}`,
-		`{"action":"cancel"}`, `{"action":"cancel","task":""}`,
-		`{"action":"answer","task":"request"}`, `{"action":"new","task":"",}`,
-		`{"action":"report","task":"request"}`, `{"action":"report","task":"","reply":""}`,
-		`{"action":"report","task":"request","reply":" \n\t"}`,
-		`{"action":"report","task":"request","reply":null}`,
-		`{"action":"report","task":"request","reply":3}`,
-		`{"action":"report","task":"request","reply":"state","reply":"state"}`,
-		`{"action":"report","task":"request","reply":"state","id":"1"}`,
+func TestChooseIdentityAndQuestionMembership(t *testing.T) {
+	for _, tc := range []struct {
+		task, question string
+		want           error
+	}{
+		{"duplicate goal", "stable-question-2", ErrNoMatch},
+		{"t2", "stable-question-2", ErrNoMatch},
+		{"STABLE-task-2", "stable-question-2", ErrNoMatch},
+		{"stable-task-2 ", "stable-question-2", ErrNoMatch},
+		{"stable-task-2", "stable-question-1", ErrNoQuestion},
+		{"stable-task-2", "Which?", ErrNoQuestion},
 	} {
-		t.Run(reply, func(t *testing.T) {
-			s := choiceServer(t, reply, nil)
-			defer s.Close()
-			_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, []Candidate{{Request: "request"}})
-			if err == nil {
-				t.Fatal("invalid reply accepted")
-			}
-		})
-	}
-}
-
-func TestChooseDuplicateRequestsUseNewest(t *testing.T) {
-	for _, newestHasQuestion := range []bool{false, true} {
-		candidates := []Candidate{{Request: "same", CreatedAt: "newest"}, {Request: "same", CreatedAt: "older", Question: "Older question?"}}
-		if newestHasQuestion {
-			candidates[0].Question = "Newest question?"
-			candidates[1].Question = ""
-		}
-		s := choiceServer(t, choiceReply("answer", "same"), nil)
-		_, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, candidates)
+		choice := validChoice(ActionAnswer)
+		choice.TaskID, choice.QuestionID = text(tc.task), text(tc.question)
+		s := choiceServer(t, encoded(choice), nil)
+		got, err := configured(t, s.URL, "").Choose(context.Background(), facts())
 		s.Close()
-		if (err == nil) != newestHasQuestion {
-			t.Fatalf("newest has question=%v err=%v", newestHasQuestion, err)
+		if !errors.Is(err, tc.want) || !reflect.DeepEqual(got, Choice{}) {
+			t.Fatalf("choice=%+v err=%v", got, err)
 		}
 	}
 }
 
-func TestChooseCancelDuplicateRequestsPreserveNewestFirstInput(t *testing.T) {
-	candidates := []Candidate{
-		{Request: "same", Status: "active", CreatedAt: "newest"},
-		{Request: "same", Status: "done", CreatedAt: "older"},
-	}
-	s := choiceServer(t, choiceReply("cancel", "same"), func(body []byte) {
-		var outer map[string]json.RawMessage
-		if err := json.Unmarshal(body, &outer); err != nil {
-			t.Error(err)
-			return
-		}
-		var input, instructions string
-		if err := json.Unmarshal(outer["input"], &input); err != nil {
-			t.Error(err)
-		}
-		if err := json.Unmarshal(outer["instructions"], &instructions); err != nil {
-			t.Error(err)
-		}
-		want := `{"sentence":"stop that work","restatement":"withdraw the same task","now":"2026-11-12T12:34:56Z","screen_display":false,"tasks":[{"request":"same","status":"active","created_at":"newest","finished_at":"","question":"","result":"","additions":[]},{"request":"same","status":"done","created_at":"older","finished_at":"","question":"","result":"","additions":[]}]}`
-		if input != want || instructions != chooseInstructions {
-			t.Error("cancel changed the input contract or newest-first order")
-		}
-	})
-	defer s.Close()
-	got, err := configured(t, s.URL, "").Choose(context.Background(), "stop that work", "withdraw the same task", choiceNow, false, candidates)
-	if err != nil || got != (Choice{Action: ActionCancel, Request: "same"}) {
-		t.Fatalf("choice=%+v err=%v", got, err)
-	}
-}
-
-func TestChooseInputNoAliasesFullFieldsAndOrder(t *testing.T) {
-	var candidates []Candidate
+func TestChooseFullInputNoTruncationOrAliases(t *testing.T) {
+	input := Input{Request: strings.Repeat("request🙂\n", 2000), DisplayRequested: true}
 	for i := 0; i < 12; i++ {
-		candidates = append(candidates, Candidate{
-			Request: strconv.Itoa(i) + strings.Repeat("界🙂", 150), Status: "active",
-			CreatedAt: "created-" + strconv.Itoa(i), FinishedAt: "finished-" + strconv.Itoa(i),
-			Question: strings.Repeat("问🙂", 70), Result: strings.Repeat("果🙂", 170),
-			Additions: []string{strings.Repeat("加🙂", 120), "second", "third", "fourth", "fifth", "sixth"},
-		})
+		input.Tasks = append(input.Tasks, Candidate{TaskID: "real-" + strconv.Itoa(i), Goal: strings.Repeat("goal🙂", 500), Status: "arbitrary-authoritative-state", Result: text(strings.Repeat("result", 500)), Additions: []string{"first", "second", "third", "fourth", "fifth", "sixth"}})
 	}
-	// Requests longer than the old exclusion threshold remain usable verbatim.
-	candidates[1].Request = strings.Repeat("界🙂", 10000)
-	sentence, restatement := "private original sentence", "private restatement"
-	s := choiceServer(t, choiceReply("attach", candidates[1].Request), func(body []byte) {
+	before := encoded(input)
+	want, _, err := prepareInput(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := choiceServer(t, encoded(Choice{Action: ActionContinue, TaskID: text("real-11")}), func(body []byte) {
 		var outer struct{ Input, Instructions string }
 		if err := json.Unmarshal(body, &outer); err != nil {
 			t.Error(err)
 			return
 		}
-		if outer.Instructions != chooseInstructions {
-			t.Error("missing choice instructions")
-		}
-		for _, forbidden := range []string{`"ref"`, `"id"`, `"alias"`, `"key"`, `"t1"`, `"t10"`} {
-			if strings.Contains(outer.Input, forbidden) {
-				t.Errorf("model input contains generated reference %s", forbidden)
-			}
-		}
-		var input struct {
-			Sentence, Restatement, Now string
-			ScreenDisplay              bool `json:"screen_display"`
-			Tasks                      []map[string]json.RawMessage
-		}
-		if err := json.Unmarshal([]byte(outer.Input), &input); err != nil {
-			t.Error(err)
-			return
-		}
-		if input.Sentence != sentence || input.Restatement != restatement || input.Now != choiceNow || !input.ScreenDisplay || len(input.Tasks) != 10 {
-			t.Errorf("incorrect sentence/restatement or count=%d", len(input.Tasks))
-			return
-		}
-		for i, task := range input.Tasks {
-			if len(task) != 7 {
-				t.Errorf("unexpected candidate fields=%d", len(task))
-			}
-			for field, want := range map[string]string{
-				"request": candidates[i].Request, "status": "active", "created_at": candidates[i].CreatedAt, "finished_at": candidates[i].FinishedAt,
-				"question": candidates[i].Question, "result": candidates[i].Result,
-			} {
-				var got string
-				if err := json.Unmarshal(task[field], &got); err != nil || got != want || !utf8.ValidString(got) {
-					t.Errorf("candidate %d field %s not preserved", i, field)
-				}
-			}
-			var additions []string
-			if err := json.Unmarshal(task["additions"], &additions); err != nil || len(additions) != 5 || additions[0] != candidates[i].Additions[0] || !utf8.ValidString(additions[0]) || additions[4] != "fifth" {
-				t.Errorf("candidate %d additions not capped correctly", i)
-			}
+		if outer.Input != encoded(want) || outer.Instructions != chooseInstructions {
+			t.Error("wire input differs from complete canonical facts")
 		}
 	})
 	defer s.Close()
-	got, err := configured(t, s.URL, "").Choose(context.Background(), sentence, restatement, choiceNow, true, candidates)
-	if err != nil || got != (Choice{Action: ActionAttach, Request: candidates[1].Request, Work: "new_work", Dropped: 2}) {
-		t.Fatalf("choice=%+v err=%v", got, err)
-	}
-	if len(candidates[1].Additions) != 6 || utf8.RuneCountInString(candidates[1].Question) != 140 {
-		t.Fatal("caller candidates mutated")
-	}
-}
-
-func TestChooseDroppedCandidatesCannotMatch(t *testing.T) {
-	overlong := strings.Repeat("🙂", 401)
-	for _, request := range []string{"9", "excluded", strings.Repeat("🙂", 400)} {
-		candidates := []Candidate{{Request: overlong}}
-		for i := 0; i < 10; i++ {
-			candidates = append(candidates, Candidate{Request: strconv.Itoa(i)})
-		}
-		candidates = append(candidates, Candidate{Request: "excluded"})
-		s := choiceServer(t, choiceReply("attach", request), nil)
-		got, err := configured(t, s.URL, "").Choose(context.Background(), "sentence", "none", choiceNow, false, candidates)
-		s.Close()
-		if !errors.Is(err, ErrNoMatch) || got.Dropped != 2 {
-			t.Fatalf("dropped=%d err=%v", got.Dropped, err)
-		}
-	}
-}
-
-func TestChooseEmptyCandidatesAndInstructionLanguage(t *testing.T) {
-	const none = "none = asks for no work."
-	if !strings.Contains(chooseInstructions, none) {
-		t.Error("none definition must be the task-only exit, without duplicating register chat")
-	}
-	for _, removed := range []string{"asks for no new work", "including a sentence that tells running work to continue", "sentences that only ask about state are report", "withdrawals of work are cancel"} {
-		if strings.Contains(chooseInstructions, removed) {
-			t.Errorf("instruction retains removed none wording %q", removed)
-		}
-	}
-	for _, chatOnly := range []string{"conversation", "thanks", "acknowledgement"} {
-		if strings.Contains(chooseInstructions, chatOnly) {
-			t.Errorf("Steward duplicates register chat: %s", chatOnly)
-		}
-	}
-	for _, required := range []string{"screen_display is true when the sentence asks to show content on the user's screen", "work none = the sentence asks only to present again what that task already produced", "work new_work = the sentence asks for further work building on its result", "For attach on a task that is not completed, work is new_work", "screen_display is false, the action is report rather than attach with work none", "not a report when screen_display is true; it is attach", "cancel = the sentence withdraws or stops the work of one listed task", "For attach, answer, cancel, and a matched report", "report", "newest", "current time", "reply language follows the input"} {
-		if !strings.Contains(chooseInstructions, required) {
-			t.Errorf("instruction missing %q", required)
-		}
-	}
-	for _, forbidden := range []string{"for example", "e.g.", "such as", "Example:"} {
-		if strings.Contains(chooseInstructions, forbidden) {
-			t.Errorf("instructions contain example marker %q", forbidden)
-		}
-	}
-	for _, r := range chooseInstructions {
-		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r) {
-			t.Fatal("CJK in choice instructions")
-		}
-	}
-	s := choiceServer(t, choiceReply("none", ""), func(body []byte) {
-		var outer struct{ Input string }
-		if err := json.Unmarshal(body, &outer); err != nil {
-			t.Error(err)
-		}
-		if outer.Input != `{"sentence":"keep going","restatement":"none","now":"2026-11-12T12:34:56Z","screen_display":false,"tasks":[]}` {
-			t.Error("incorrect empty candidate input")
-		}
-	})
-	defer s.Close()
-	if _, err := configured(t, s.URL, "").Choose(context.Background(), "keep going", "none", choiceNow, false, nil); err != nil {
+	if _, err := configured(t, s.URL, "").Choose(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}
+	if encoded(input) != before {
+		t.Fatal("mutated caller facts")
+	}
 }
 
-func TestChooseLogsExcludePrivateData(t *testing.T) {
+func TestChooseEmptyCandidatesDoesNotDecideOrFallback(t *testing.T) {
+	for _, action := range []Action{ActionNew, ActionClarify, ActionReport} {
+		s := choiceServer(t, encoded(validChoice(action)), func(body []byte) {
+			var outer struct{ Input string }
+			_ = json.Unmarshal(body, &outer)
+			if outer.Input != `{"request":"unresolved request","display_requested":false,"tasks":[]}` {
+				t.Error("wrong empty input")
+			}
+		})
+		got, err := configured(t, s.URL, "").Choose(context.Background(), Input{Request: "unresolved request"})
+		s.Close()
+		if action == ActionReport {
+			if !errors.Is(err, ErrNoMatch) || got.Action != "" {
+				t.Fatalf("invented report/fallback: %+v %v", got, err)
+			}
+		} else if err != nil || got.Action != action {
+			t.Fatalf("code overrode model: %+v %v", got, err)
+		}
+	}
+}
+
+func TestPrepareInputRejectsMalformedFacts(t *testing.T) {
+	for _, mutate := range []func(*Input){
+		func(i *Input) { i.Request = " " },
+		func(i *Input) { i.Tasks[0].TaskID = "" },
+		func(i *Input) { i.Tasks[0].Goal = "" },
+		func(i *Input) { i.Tasks[0].Status = "" },
+		func(i *Input) { i.Tasks[1].TaskID = i.Tasks[0].TaskID },
+		func(i *Input) { i.Tasks[0].PendingQuestions[0].QuestionID = "" },
+		func(i *Input) { i.Tasks[0].PendingQuestions[0].Text = "" },
+		func(i *Input) {
+			i.Tasks[0].PendingQuestions = append(i.Tasks[0].PendingQuestions, i.Tasks[0].PendingQuestions[0])
+		},
+	} {
+		input := facts()
+		mutate(&input)
+		if _, _, err := prepareInput(input); err == nil {
+			t.Fatal("accepted malformed facts")
+		}
+	}
+	input := facts()
+	input.Tasks[1].PendingQuestions[0].QuestionID = input.Tasks[0].PendingQuestions[0].QuestionID
+	if _, _, err := prepareInput(input); err != nil {
+		t.Fatal("question IDs may be scoped per task", err)
+	}
+}
+
+func TestChooseInstructionsDefinitionOnly(t *testing.T) {
+	for _, forbidden := range []string{"for example", "e.g.", "such as", "newest listed task", "keyword rules", "restatement", "screen_display"} {
+		if strings.Contains(chooseInstructions, forbidden) {
+			t.Fatalf("legacy/example instruction %q", forbidden)
+		}
+	}
+	for _, required := range []string{"new:", "append:", "answer:", "continue:", "report:", "cancel:", "redisplay:", "clarify:", "empty task list does not imply new", "Ambiguity requires clarify", "Replies follow the request's language"} {
+		if !strings.Contains(chooseInstructions, required) {
+			t.Fatalf("missing definition %q", required)
+		}
+	}
+}
+
+func TestChooseFailuresAndPrivateDiagnostics(t *testing.T) {
 	previousLevel := logging.CurrentLevel()
 	logging.SetLevel(logging.Info)
 	t.Cleanup(func() { logging.SetLevel(previousLevel) })
@@ -363,79 +231,34 @@ func TestChooseLogsExcludePrivateData(t *testing.T) {
 	log.SetOutput(&logs)
 	defer log.SetOutput(previous)
 	s := choiceServer(t, "private-model-output", nil)
-	defer s.Close()
-	_, err := configured(t, s.URL, "").Choose(context.Background(), "private-sentence", "private-restatement", choiceNow, false, []Candidate{{Request: "private-request", Question: "private-question", Result: "private-result", Additions: []string{"private-addition"}}})
-	if err == nil {
-		t.Fatal("expected invalid choice error")
-	}
-	for _, private := range []string{"private-sentence", "private-restatement", "private-request", "private-question", "private-result", "private-addition", "private-model-output"} {
-		if strings.Contains(logs.String(), private) || strings.Contains(err.Error(), private) {
-			t.Fatal("private data in diagnostic output")
-		}
-	}
-	for _, field := range []string{"steward_call configured_ms=30000", "effective_ms=", "elapsed_ms=", "error_kind="} {
-		if !strings.Contains(logs.String(), field) {
-			t.Errorf("missing log field %q", field)
-		}
-	}
-}
-
-func TestChooseDebugFullModelCalls(t *testing.T) {
-	previousLevel := logging.CurrentLevel()
-	logging.SetLevel(logging.Debug)
-	t.Cleanup(func() { logging.SetLevel(previousLevel) })
-	var logs bytes.Buffer
-	previous := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(previous) })
-	output := choiceReply("new", "")
-	var sent string
-	s := choiceServer(t, output, func(data []byte) {
-		var request struct{ Instructions, Input string }
-		if err := json.Unmarshal(data, &request); err != nil {
-			t.Error(err)
-		}
-		sent = request.Input
-	})
-	defer s.Close()
-	sentence := strings.Repeat("x", 20000)
-	ctx := logging.WithUserHash(context.Background(), logging.UserHash("private-owner"))
-	if _, err := configured(t, s.URL, "").Choose(ctx, sentence, "private-restatement", choiceNow, false, nil); err != nil {
-		t.Fatal(err)
-	}
-	for _, text := range []string{"instructions=" + strconv.Quote(chooseInstructions), "input=" + strconv.Quote(sent), "output=" + strconv.Quote(output), "model_call_input", "model_call_output", "model_call_result", sentence} {
-		if !strings.Contains(logs.String(), text) {
-			t.Errorf("missing debug field (%d characters)", len(text))
-		}
-	}
-	for _, secret := range []string{s.URL, "Authorization", "Bearer", "private-owner"} {
-		if strings.Contains(logs.String(), secret) {
-			t.Errorf("forbidden debug metadata %q", secret)
-		}
-	}
-}
-
-func TestChooseTimeoutTransportDisabledAndDeadline(t *testing.T) {
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(50 * time.Millisecond)
-	}))
-	defer s.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	if _, err := configured(t, s.URL, "200").Choose(ctx, "sentence", "none", choiceNow, false, nil); err == nil {
-		t.Fatal("timeout accepted")
+	c := configured(t, s.URL, "200")
+	got, err := c.Choose(context.Background(), Input{Request: "private-request"})
+	if err == nil || got.Action != "" {
+		t.Fatal("invalid output became work")
 	}
 	s.Close()
-	if _, err := configured(t, s.URL, "200").Choose(context.Background(), "sentence", "none", choiceNow, false, nil); err == nil {
-		t.Fatal("transport failure accepted")
+	got, err = c.Choose(context.Background(), Input{Request: "private-request"})
+	if err == nil || got.Action != "" {
+		t.Fatal("transport failure became work")
 	}
 	var disabled *Client
-	if _, err := disabled.Choose(context.Background(), "sentence", "none", choiceNow, false, nil); err == nil {
+	if _, err := disabled.Choose(context.Background(), Input{Request: "request"}); err == nil {
 		t.Fatal("disabled client accepted")
 	}
-	c := configured(t, "http://localhost", "200")
-	c.SetHTTPClient(&http.Client{Transport: stewardDeadlineTransport{t: t, want: 200 * time.Millisecond}})
-	if _, err := c.Choose(context.Background(), "sentence", "none", choiceNow, false, nil); err == nil {
-		t.Fatal("expected transport error")
+	for _, private := range []string{"private-request", "private-model-output", s.URL} {
+		if strings.Contains(logs.String(), private) || strings.Contains(err.Error(), private) {
+			t.Fatal("private diagnostics")
+		}
+	}
+	for _, field := range []string{"configured_ms=200", "effective_ms=", "elapsed_ms=", "error_kind="} {
+		if !strings.Contains(logs.String(), field) {
+			t.Fatalf("missing %s", field)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c.SetHTTPClient(&http.Client{})
+	if _, err := c.Choose(ctx, Input{Request: "request"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation lost: %v", err)
 	}
 }

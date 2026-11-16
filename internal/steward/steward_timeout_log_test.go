@@ -46,7 +46,7 @@ func TestStewardTimeoutLogBudgets(t *testing.T) {
 			defer log.SetOutput(old)
 			ctx, cancel := context.WithTimeout(context.Background(), tc.parent)
 			defer cancel()
-			_, err := client.Choose(ctx, "private utterance", "none", "", false, nil)
+			_, err := client.Choose(ctx, Input{Request: "private utterance"})
 			if !errors.Is(err, context.DeadlineExceeded) || errorKind(err) != "deadline_exceeded" {
 				t.Fatalf("timeout identity lost: %v", err)
 			}

@@ -7,12 +7,16 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/ronigooja/Zoe/internal/steward"
 )
 
-// taskCandidate contains task facts, not a model-facing identifier or a semantic match.
+// taskCandidate contains scoped authoritative facts; IDs, never titles, select tasks.
 type taskCandidate struct {
-	Request, Status, CreatedAt, FinishedAt, Question, Result string
-	Additions                                                []string
+	Version                                                       int64
+	TaskID, Goal, Status, CreatedAt, FinishedAt, Question, Result string
+	PendingQuestions                                              []steward.Question
+	Additions                                                     []string
 }
 
 type scoredTaskCandidate struct {
@@ -22,9 +26,9 @@ type scoredTaskCandidate struct {
 	created time.Time
 }
 
-const candidateColumns = `t.id,coalesce(t.title,''),t.status,t.created_at,coalesce(t.finished_at,''),
+const candidateColumns = `t.id,t.goal,t.status,t.created_at,coalesce(t.finished_at,''),
 CASE WHEN t.status IN ('waiting','awaiting_user') AND t.interaction_state IN ('awaiting_message','explicit_confirmation') THEN coalesce(t.interaction_question,'') ELSE '' END,
-coalesce(t.result,'')`
+coalesce(t.result,''),t.version`
 
 // taskCandidates retrieves bounded lexical candidates across calls. Ranking chooses
 // membership; the final facts are newest first. It performs no writes or inference.
@@ -45,7 +49,7 @@ func (s *Service) taskCandidates(ctx context.Context, q rosterQueryer, workspace
 		var out []scoredTaskCandidate
 		for rows.Next() {
 			var c scoredTaskCandidate
-			if err := rows.Scan(&c.id, &c.Request, &c.Status, &c.CreatedAt, &c.FinishedAt, &c.Question, &c.Result, &c.score); err != nil {
+			if err := rows.Scan(&c.id, &c.Goal, &c.Status, &c.CreatedAt, &c.FinishedAt, &c.Question, &c.Result, &c.Version, &c.score); err != nil {
 				return nil, err
 			}
 			c.created, err = time.Parse(time.RFC3339Nano, c.CreatedAt)
@@ -92,7 +96,7 @@ ORDER BY julianday(t.created_at) DESC,t.id DESC LIMIT 5`, workspace, owner, work
 		// Reserve enough rows to allow for overlap with the always-include set.
 		matches, err := read(`WITH scored AS MATERIALIZED (
 SELECT t.id,t.created_at,(SELECT sum(
-CASE WHEN lower(t.title) LIKE p.value ESCAPE '\' THEN 2 ELSE 0 END +
+CASE WHEN lower(t.goal) LIKE p.value ESCAPE '\' THEN 2 ELSE 0 END +
 CASE WHEN lower(coalesce(t.result,'')) LIKE p.value ESCAPE '\' THEN 1 ELSE 0 END)
 FROM json_each(?) p) AS score
 FROM tasks t WHERE t.workspace_id=? AND t.owner_subject_id=?
@@ -124,10 +128,34 @@ ORDER BY r.score DESC,julianday(t.created_at) DESC,t.id DESC`, string(encodedPat
 	})
 	var out []taskCandidate
 	for _, c := range selected {
+		c.TaskID = c.id
+		questions, err := q.QueryContext(ctx, `SELECT p.id,p.question FROM pending_runtime_actions p JOIN tasks t ON t.id=p.task_id AND t.workspace_id=p.workspace_id
+WHERE p.workspace_id=? AND p.task_id=? AND t.owner_subject_id=?
+AND t.status IN ('waiting','awaiting_user') AND t.interaction_state='awaiting_message'
+AND p.run_id=t.interaction_run_id AND p.action_digest=t.interaction_action_digest
+AND p.decision='' AND p.authorization_used=0 AND julianday(p.expires_at)>julianday(?)
+ORDER BY p.created_at,p.id`, workspace, c.id, owner, stamp(now))
+		if err != nil {
+			return nil, err
+		}
+		c.PendingQuestions = make([]steward.Question, 0)
+		for questions.Next() {
+			var question steward.Question
+			if err := questions.Scan(&question.QuestionID, &question.Text); err != nil {
+				questions.Close()
+				return nil, err
+			}
+			c.PendingQuestions = append(c.PendingQuestions, question)
+		}
+		err = questions.Err()
+		questions.Close()
+		if err != nil {
+			return nil, err
+		}
 		rows, err := q.QueryContext(ctx, `SELECT coalesce(content,'') FROM task_entries
 WHERE workspace_id=? AND task_id=? AND kind='user_message'
 AND julianday(created_at)>julianday(?) AND julianday(created_at)<=julianday(?)
-ORDER BY julianday(created_at) DESC,id DESC LIMIT 3`, workspace, c.id, c.CreatedAt, stamp(now))
+ORDER BY julianday(created_at),id`, workspace, c.id, c.CreatedAt, stamp(now))
 		if err != nil {
 			return nil, err
 		}
@@ -146,10 +174,6 @@ ORDER BY julianday(created_at) DESC,id DESC LIMIT 3`, workspace, c.id, c.Created
 		}
 		if closeErr != nil {
 			return nil, closeErr
-		}
-		// Present the last three additions in conversational order.
-		for i, j := 0, len(c.Additions)-1; i < j; i, j = i+1, j-1 {
-			c.Additions[i], c.Additions[j] = c.Additions[j], c.Additions[i]
 		}
 		out = append(out, c.taskCandidate)
 	}

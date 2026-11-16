@@ -15,10 +15,10 @@ import (
 	"github.com/ronigooja/Zoe/internal/steward"
 )
 
-type classificationStewardFunc func(context.Context, string, string, string, bool, []steward.Candidate) (steward.Choice, error)
+type classificationStewardFunc func(context.Context, steward.Input) (steward.Choice, error)
 
-func (f classificationStewardFunc) Choose(ctx context.Context, text, restatement, now string, screenDisplay bool, candidates []steward.Candidate) (steward.Choice, error) {
-	return f(ctx, text, restatement, now, screenDisplay, candidates)
+func (f classificationStewardFunc) Choose(ctx context.Context, input steward.Input) (steward.Choice, error) {
+	return f(ctx, input)
 }
 
 type classificationRig struct {
@@ -35,7 +35,7 @@ func newClassificationRig(t *testing.T, routeHook func()) *classificationRig {
 		if routeHook != nil {
 			routeHook()
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"routes":["task"],"restatement":"none"}`})
+		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"routes":["task"],"request":"Perform the private requested work."}`})
 	}))
 	t.Cleanup(model.Close)
 	register, err := NewRegister(r.store.DB(), RegisterConfig{
@@ -47,7 +47,7 @@ func newClassificationRig(t *testing.T, routeHook func()) *classificationRig {
 		t.Fatal(err)
 	}
 	r.svc = newService(r.store.DB(), Config{ContextRegister: register, Now: r.now,
-		Steward: classificationStewardFunc(func(context.Context, string, string, string, bool, []steward.Candidate) (steward.Choice, error) {
+		Steward: classificationStewardFunc(func(context.Context, steward.Input) (steward.Choice, error) {
 			r.choices.Add(1)
 			return steward.Choice{Action: "new"}, nil
 		}),
@@ -196,7 +196,7 @@ func TestClassificationSingleFlightDiscardedLogs(t *testing.T) {
 	r := newClassificationRig(t, nil)
 	logs := captureRegisterLogs(t)
 	r.seedTurn(t, "discard-row")
-	r.svc.steward = classificationStewardFunc(func(context.Context, string, string, string, bool, []steward.Candidate) (steward.Choice, error) {
+	r.svc.steward = classificationStewardFunc(func(context.Context, steward.Input) (steward.Choice, error) {
 		// Simulate another process persisting after our SELECT but before UPDATE.
 		r.exec(t, `UPDATE voice_turns SET exits='chat',steward_action='' WHERE id='discard-row'`)
 		return steward.Choice{Action: "new"}, nil
@@ -212,7 +212,7 @@ func TestClassificationSingleFlightDiscardedLogs(t *testing.T) {
 	r.assertResult(t, "discard-row", "chat", "")
 	logs.Reset()
 	r.seedTurn(t, "winning-row")
-	r.svc.steward = classificationStewardFunc(func(context.Context, string, string, string, bool, []steward.Candidate) (steward.Choice, error) {
+	r.svc.steward = classificationStewardFunc(func(context.Context, steward.Input) (steward.Choice, error) {
 		return steward.Choice{Action: "new"}, nil
 	})
 	r.svc.classifyCommittedTurn("winning-row")

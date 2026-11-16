@@ -32,8 +32,9 @@ type taskIDPayload struct {
 	Reason string `json:"reason,omitempty"`
 }
 type appendPayload struct {
-	TaskID  string `json:"task_id"`
-	Content string `json:"content"`
+	TaskID     string  `json:"task_id"`
+	Content    string  `json:"content"`
+	QuestionID *string `json:"question_id"`
 }
 
 var explicitConfirmationPhrases = map[string]bool{
@@ -44,19 +45,6 @@ var explicitConfirmationPhrases = map[string]bool{
 // IsExplicitConfirmation applies to exact server-owned confirmation phrases.
 func IsExplicitConfirmation(text string) bool {
 	return explicitConfirmationPhrases[strings.ToLower(strings.TrimSpace(text))]
-}
-
-// AppendTaskTx lets authenticated voice replies reuse task.append semantics.
-func (s *Server) AppendTaskTx(ctx context.Context, tx *sql.Tx, c CommandContext, taskID, content string) (contracts.CommandResult, []contracts.Event, error) {
-	payload, err := json.Marshal(appendPayload{TaskID: taskID, Content: content})
-	if err != nil {
-		return contracts.CommandResult{}, nil, err
-	}
-	var version int64
-	if err := tx.QueryRowContext(ctx, `SELECT version FROM tasks WHERE id=? AND workspace_id=? AND owner_subject_id=?`, taskID, c.Principal.WorkspaceID, c.Principal.SubjectID).Scan(&version); err != nil {
-		return contracts.CommandResult{}, nil, err
-	}
-	return s.commandTaskAppend(ctx, tx, c, contracts.CommandRequest{Payload: payload, ExpectedVersion: &version})
 }
 
 // StopTaskTx applies the normal task.stop policy to authenticated voice controls.
@@ -250,125 +238,14 @@ func (s *Server) commandTaskAppend(ctx context.Context, tx *sql.Tx, c CommandCon
 	if err := decodePayload(req.Payload, &p); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
-	if p.TaskID == "" || strings.TrimSpace(p.Content) == "" || len(p.Content) > 20000 {
-		return contracts.CommandResult{}, nil, apiError(400, "invalid_request", "task_id and content are required", nil)
-	}
-	version, status, err := taskVersionStatus(ctx, tx, c.Principal, p.TaskID)
+	version, _, err := taskVersionStatus(ctx, tx, c.Principal, p.TaskID)
 	if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
-	if err = checkVersion(req.ExpectedVersion, version); err != nil {
+	if err := checkVersion(req.ExpectedVersion, version); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
-	if status == "complete" || status == "failed" || status == "canceled" {
-		return contracts.CommandResult{}, nil, apiError(409, "state_conflict", "terminal task cannot accept entries", map[string]any{"status": status})
-	}
-	var interaction, expiredKind, scope, interactionRun, actionDigest, expires string
-	var interactionVersion int64
-	if err = tx.QueryRowContext(ctx, `SELECT interaction_state,interaction_expired_kind,interaction_scope,interaction_run_id,interaction_action_digest,coalesce(interaction_expires_at,''),interaction_expected_version FROM tasks WHERE id=? AND workspace_id=?`, p.TaskID, c.Principal.WorkspaceID).Scan(&interaction, &expiredKind, &scope, &interactionRun, &actionDigest, &expires, &interactionVersion); err != nil {
-		return contracts.CommandResult{}, nil, err
-	}
-	if (status == "waiting" || status == "awaiting_user") && interaction == "none" {
-		interaction = "awaiting_message"
-	}
-	liveInteractionRun := false
-	if interactionRun != "" {
-		var runStatus string
-		err = tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE id=? AND task_id=? AND workspace_id=?`, interactionRun, p.TaskID, c.Principal.WorkspaceID).Scan(&runStatus)
-		if err == nil {
-			liveInteractionRun = runStatus == "dispatching" || runStatus == "active" || runStatus == "uncertain"
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return contracts.CommandResult{}, nil, err
-		}
-	}
-	confirmed := false
-	if interaction == "explicit_confirmation" {
-		if interactionVersion != version || scope == "" || interactionRun == "" || actionDigest == "" || expires == "" {
-			return contracts.CommandResult{}, nil, apiError(409, "confirmation_invalid", "confirmation context is incomplete or stale", nil)
-		}
-		deadline, parseErr := time.Parse(time.RFC3339Nano, expires)
-		if parseErr != nil || !c.AcceptedAt.Before(deadline) {
-			return contracts.CommandResult{}, nil, apiError(409, "confirmation_expired", "confirmation has expired", nil)
-		}
-		if scope == "task:admit" {
-			if req.ExpectedVersion == nil || *req.ExpectedVersion != interactionVersion {
-				return contracts.CommandResult{}, nil, apiError(409, "confirmation_invalid", "admission confirmation requires the scoped expected version", nil)
-			}
-			var goal, question, source string
-			if err = tx.QueryRowContext(ctx, `SELECT goal,interaction_question,source FROM tasks WHERE id=? AND workspace_id=?`, p.TaskID, c.Principal.WorkspaceID).Scan(&goal, &question, &source); err != nil {
-				return contracts.CommandResult{}, nil, err
-			}
-			if source != "voice" || interactionRun != "admission:"+p.TaskID || actionDigest != AdmissionConfirmationDigest(p.TaskID, goal, question, version, expires) || liveInteractionRun {
-				return contracts.CommandResult{}, nil, apiError(409, "confirmation_invalid", "admission confirmation does not match the pending request", nil)
-			}
-		}
-		confirmed = explicitConfirmationPhrases[strings.ToLower(strings.TrimSpace(p.Content))]
-		if !confirmed {
-			if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='reject' WHERE task_id=? AND run_id=? AND action_digest=? AND authorization_used=0`, p.TaskID, interactionRun, actionDigest); err != nil {
-				return contracts.CommandResult{}, nil, err
-			}
-		}
-	}
-	id, err := randomID()
-	if err != nil {
-		return contracts.CommandResult{}, nil, err
-	}
-	at := c.AcceptedAt.Format(time.RFC3339Nano)
-	_, err = tx.ExecContext(ctx, `INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,?,?,'user_message',?,?,?)`, id, p.TaskID, c.Principal.WorkspaceID, p.Content, c.Principal.DeviceID, at)
-	if err != nil {
-		return contracts.CommandResult{}, nil, err
-	}
-	version++
-	nextStatus := status
-	expiredInteraction := expiredKind == "question" || expiredKind == "permission"
-	if (status == "waiting" || status == "awaiting_user") && (interaction == "awaiting_message" || expiredInteraction) && !liveInteractionRun {
-		nextStatus = "queued"
-	}
-	// An expired permission is not an authorization to retry. Keep it
-	// answerable until the user supplies a typed answer, then queue the new run.
-	if expiredKind == "permission" && strings.TrimSpace(p.Content) != "" {
-		if !liveInteractionRun {
-			nextStatus = "queued"
-		}
-	}
-	if interaction == "awaiting_message" && interactionRun != "" && actionDigest != "" {
-		if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='answer',message=? WHERE task_id=? AND run_id=? AND action_digest=? AND authorization_used=0`, p.Content, p.TaskID, interactionRun, actionDigest); err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-		if liveInteractionRun {
-			if err = markRunEntries(ctx, tx, interactionRun, "answer", []contracts.RunEntry{{ID: id}}); err != nil {
-				return contracts.CommandResult{}, nil, err
-			}
-		}
-	}
-	if interaction == "explicit_confirmation" && !expiredInteraction && confirmed {
-		nextStatus = "queued"
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status=?,interaction_state=?,version=?,updated_at=? WHERE id=? AND workspace_id=?`, nextStatus, interaction, version, at, p.TaskID, c.Principal.WorkspaceID); err != nil {
-		return contracts.CommandResult{}, nil, err
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE approvals SET status='canceled',version=version+1 WHERE task_id=? AND workspace_id=? AND status='pending'`, p.TaskID, c.Principal.WorkspaceID); err != nil {
-		return contracts.CommandResult{}, nil, err
-	}
-	entry := contracts.TaskEntry{ID: id, Kind: "user_message", Content: p.Content, AuthorDeviceID: c.Principal.DeviceID, CreatedAt: c.AcceptedAt}
-	events := []contracts.Event{event("task.entry_appended", "task", p.TaskID, version, map[string]any{"task_id": p.TaskID, "entry": entry, "interaction_state": interaction, "status": nextStatus})}
-	if interaction == "explicit_confirmation" && !expiredInteraction && confirmed {
-		confirmationID, genErr := randomID()
-		if genErr != nil {
-			return contracts.CommandResult{}, nil, genErr
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO task_confirmations(id,workspace_id,task_id,run_id,action_digest,task_version,scope,confirmed_text,device_id,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, confirmationID, c.Principal.WorkspaceID, p.TaskID, interactionRun, actionDigest, version, scope, p.Content, c.Principal.DeviceID, at, expires); err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET interaction_state='none',interaction_expired_kind='',interaction_scope='',interaction_run_id='',interaction_action_digest='',interaction_expires_at=NULL,interaction_expected_version=0 WHERE id=? AND workspace_id=?`, p.TaskID, c.Principal.WorkspaceID); err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-		if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='once' WHERE task_id=? AND run_id=? AND action_digest=? AND authorization_used=0`, p.TaskID, interactionRun, actionDigest); err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-		events = append(events, event("task.confirmation_recorded", "task", p.TaskID, version, map[string]any{"task_id": p.TaskID, "run_id": interactionRun, "action_digest": actionDigest, "scope": scope, "confirmed_text": p.Content, "device_id": c.Principal.DeviceID, "expires_at": expires}))
-	}
-	return contracts.CommandResult{ResourceType: "task", ResourceID: p.TaskID, ResourceVersion: version}, events, nil
+	return s.AppendTaskInputTx(ctx, tx, c, p.TaskID, TaskInput{Content: p.Content, QuestionID: p.QuestionID})
 }
 
 func (s *Server) commandTaskStop(ctx context.Context, tx *sql.Tx, c CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {

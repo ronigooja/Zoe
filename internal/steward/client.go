@@ -14,10 +14,14 @@ import (
 type Action string
 
 const (
-	ActionNew    Action = "new"
-	ActionAttach Action = "attach"
-	ActionAnswer Action = "answer"
-	ActionNone   Action = "none"
+	ActionNew       Action = "new"
+	ActionAppend    Action = "append"
+	ActionAnswer    Action = "answer"
+	ActionContinue  Action = "continue"
+	ActionReport    Action = "report"
+	ActionCancel    Action = "cancel"
+	ActionRedisplay Action = "redisplay"
+	ActionClarify   Action = "clarify"
 )
 
 type Client struct {

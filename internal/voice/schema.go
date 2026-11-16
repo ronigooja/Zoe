@@ -52,8 +52,15 @@ CREATE TABLE voice_turns (
   content TEXT NOT NULL,
   content_hash BLOB NOT NULL,
   confirmed_at TEXT NOT NULL,
-  command_id TEXT NOT NULL, resumed_task_id TEXT NOT NULL DEFAULT '', handoff_handled INTEGER NOT NULL DEFAULT 0, steward_action TEXT NOT NULL DEFAULT '', steward_task_id TEXT NOT NULL DEFAULT '', report_text TEXT NOT NULL DEFAULT '', exits TEXT, ui_handled INTEGER NOT NULL DEFAULT 0 CHECK(ui_handled IN (0,1)), restatement TEXT,
+  command_id TEXT NOT NULL, resumed_task_id TEXT NOT NULL DEFAULT '', handoff_handled INTEGER NOT NULL DEFAULT 0, steward_action TEXT NOT NULL DEFAULT '', steward_task_id TEXT NOT NULL DEFAULT '', report_text TEXT NOT NULL DEFAULT '', exits TEXT, ui_handled INTEGER NOT NULL DEFAULT 0 CHECK(ui_handled IN (0,1)), request TEXT, steward_question_id TEXT NOT NULL DEFAULT '', steward_task_version INTEGER NOT NULL DEFAULT 0, steward_snapshot TEXT NOT NULL DEFAULT '',
   UNIQUE(session_id,generation,turn_id,revision)
+);
+CREATE TABLE voice_task_inputs (
+ session_id TEXT NOT NULL REFERENCES voice_sessions(id), generation INTEGER NOT NULL, turn_id TEXT NOT NULL,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id), turn_revision INTEGER NOT NULL,
+ task_id TEXT NOT NULL REFERENCES tasks(id), entry_id TEXT NOT NULL REFERENCES task_entries(id),
+ question_id TEXT REFERENCES pending_runtime_actions(id), content_hash BLOB NOT NULL,
+ PRIMARY KEY(session_id,generation,turn_id)
 );
 CREATE INDEX voice_turns_session ON voice_turns(session_id,generation,confirmed_at);
 CREATE TABLE voice_task_links (

@@ -13,13 +13,13 @@ import (
 func candidateSeed(t *testing.T, db *sql.DB, now time.Time, seed rosterSeed, title string) {
 	t.Helper()
 	seedRosterTask(t, db, now, seed)
-	rosterExec(t, db, `UPDATE tasks SET title=? WHERE id=?`, title, seed.id)
+	rosterExec(t, db, `UPDATE tasks SET goal=?,title='duplicate display title' WHERE id=?`, title, seed.id)
 }
 
 func candidateRequests(got []taskCandidate) []string {
 	var out []string
 	for _, c := range got {
-		out = append(out, c.Request)
+		out = append(out, c.Goal)
 	}
 	return out
 }
@@ -71,7 +71,7 @@ func TestCandidatesChineseEnglishAndCrossSession(t *testing.T) {
 	candidateSeed(t, db, now, rosterSeed{id: "english", status: "complete", result: "BUDGET report available"}, "other")
 	for _, tc := range []struct{ text, want string }{{"项目研究", "调查项目研究进展"}, {"Please report the budget", "other"}} {
 		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", tc.text, now, 8)
-		if err != nil || len(got) != 1 || got[0].Request != tc.want {
+		if err != nil || len(got) != 1 || got[0].Goal != tc.want {
 			t.Fatalf("%q got=%+v err=%v", tc.text, got, err)
 		}
 	}
@@ -82,7 +82,7 @@ func TestCandidatesTitleWeightRankingAndNewestPresentation(t *testing.T) {
 	candidateSeed(t, db, now, rosterSeed{id: "title", status: "complete", created: now.Add(-4 * time.Hour)}, "budget")
 	candidateSeed(t, db, now, rosterSeed{id: "result", status: "complete", result: "budget", created: now.Add(-2 * time.Hour)}, "unrelated")
 	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 1)
-	if err != nil || len(got) != 1 || got[0].Request != "budget" {
+	if err != nil || len(got) != 1 || got[0].Goal != "budget" {
 		t.Fatalf("title weight got=%+v err=%v", got, err)
 	}
 	got, err = svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 2)
@@ -91,7 +91,7 @@ func TestCandidatesTitleWeightRankingAndNewestPresentation(t *testing.T) {
 	}
 	candidateSeed(t, db, now, rosterSeed{id: "new-title", status: "complete", created: now.Add(-3 * time.Hour)}, "budget latest")
 	got, err = svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 1)
-	if err != nil || len(got) != 1 || got[0].Request != "budget latest" {
+	if err != nil || len(got) != 1 || got[0].Goal != "budget latest" {
 		t.Fatalf("score tie recency got=%+v err=%v", got, err)
 	}
 }
@@ -116,11 +116,11 @@ func TestCandidatesOwnerStatusAndNoAgeLimit(t *testing.T) {
 		t.Fatalf("filters got=%+v err=%v", got, err)
 	}
 	for _, c := range got {
-		if strings.Contains(c.Request, "other") || c.Request == "budget future" {
+		if strings.Contains(c.Goal, "other") || c.Goal == "budget future" {
 			t.Fatalf("unexpected candidate=%+v", c)
 		}
 	}
-	if got[len(got)-1].Request != "budget old" {
+	if got[len(got)-1].Goal != "budget old" {
 		t.Fatalf("year-old match missing: %+v", got)
 	}
 }
@@ -240,15 +240,15 @@ func TestCandidatesFieldsAdditionsAndNullHandling(t *testing.T) {
 		if _, err := time.Parse(time.RFC3339, c.CreatedAt); err != nil {
 			t.Fatal(err)
 		}
-		if c.Request == "budget waiting" {
+		if c.Goal == "budget waiting" {
 			if c.Question != "Which budget?" || c.Result != strings.Repeat("中", 650) || len(c.Additions) != 3 || c.Additions[0] != "2"+strings.Repeat("文", 350) || c.Additions[2] != "4"+strings.Repeat("文", 350) {
 				t.Fatalf("waiting facts=%+v", c)
 			}
-		} else if c.Request == "budget confirmation" {
+		} else if c.Goal == "budget confirmation" {
 			if c.Question != "Confirm?" {
 				t.Fatalf("confirmation facts=%+v", c)
 			}
-		} else if c.Request == "budget complete" {
+		} else if c.Goal == "budget complete" {
 			if c.FinishedAt != finished.Format(time.RFC3339Nano) {
 				t.Fatalf("finished facts=%+v", c)
 			}

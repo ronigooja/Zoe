@@ -32,12 +32,12 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
-				out, _ := json.Marshal(map[string]any{"routes": routes, "restatement": "none"})
+				out, _ := json.Marshal(map[string]any{"routes": routes, "request": "Research and show the lunar mission information."})
 				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": string(out)})
 			}))
 			defer model.Close()
 			cfg := RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
-			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(context.Context, string, string, string, bool, []steward.Candidate) (steward.Choice, error) {
+			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(context.Context, steward.Input) (steward.Choice, error) {
 				mu.Lock()
 				defer mu.Unlock()
 				return choice, nil
@@ -59,7 +59,10 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 					t.Fatal(err)
 				}
 				mu.Lock()
-				choice = steward.Choice{Action: steward.ActionAttach, Request: "research the lunar mission", Work: "new_work"}
+				choice = steward.Choice{Action: steward.ActionAppend, TaskID: &target}
+				if strings.HasPrefix(name, "complete_") {
+					choice.Action = steward.ActionContinue
+				}
 				mu.Unlock()
 			}
 			withUI := name == "task_ui" || name == "attach_sets" || name == "complete_sets" || name == "attach_queued" || name == "attach_waiting" || name == "attach_awaiting_user"
@@ -203,15 +206,15 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
-				out, _ := json.Marshal(map[string]any{"routes": routes, "restatement": "resolved result"})
+				out, _ := json.Marshal(map[string]any{"routes": routes, "request": "Show the earlier lunar mission result."})
 				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": string(out)})
 			}))
 			defer model.Close()
 			cfg := RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
-			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(_ context.Context, _, _, _ string, screen bool, _ []steward.Candidate) (steward.Choice, error) {
+			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(_ context.Context, input steward.Input) (steward.Choice, error) {
 				mu.Lock()
 				defer mu.Unlock()
-				if screen != (len(routes) == 2) {
+				if input.DisplayRequested != (len(routes) == 2) {
 					t.Error("screen_display does not reflect register exits")
 				}
 				return choice, nil
@@ -241,13 +244,14 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 			}
 			before := count(`SELECT count(*) FROM task_entries`)
 			mu.Lock()
-			choice = steward.Choice{Action: steward.ActionAttach, Work: "none", Request: "research the lunar mission"}
+			choice = steward.Choice{Action: steward.ActionRedisplay, TaskID: &target}
 			routes = []string{"task", "ui"}
 			if mode == "no_ui" {
 				routes = []string{"task"}
 			}
 			if mode == "report" {
-				choice = steward.Choice{Action: steward.ActionReport, Request: "research the lunar mission", Reply: "The work is complete."}
+				reply := "The work is complete."
+				choice = steward.Choice{Action: steward.ActionReport, TaskID: &target, Reply: &reply}
 			}
 			mu.Unlock()
 			commitAndHandoff(t, ts, key, "display", "show the earlier result")
@@ -255,7 +259,7 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 			if err := store.DB().QueryRow(`SELECT steward_action FROM voice_turns WHERE turn_id='display'`).Scan(&storedAction); err != nil {
 				t.Fatal(err)
 			}
-			wantAction := stewardAttachShow
+			wantAction := string(steward.ActionRedisplay)
 			if mode == "report" {
 				wantAction = string(steward.ActionReport)
 			}

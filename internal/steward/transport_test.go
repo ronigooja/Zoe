@@ -33,7 +33,7 @@ func TestChooseStatelessAutoStyleAndIgnoredLegacyEnv(t *testing.T) {
 			return
 		}
 		inputs = append(inputs, messages[1]["content"])
-		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]string{"content": `{"action":"new","task":""}`}}}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]string{"content": `{"action":"new","task_id":null,"question_id":null,"reply":null}`}}}})
 	}))
 	defer server.Close()
 	env := map[string]string{"ZOE_STEWARD_BASE_URL": server.URL, "ZOE_STEWARD_MODEL": "fixture", "ZOE_STEWARD_API_KEY_FILE": "fixture-reference", "ZOE_TRIAGE_BASE_URL": "invalid", "ZOE_TRIAGE_TIMEOUT_MS": "invalid"}
@@ -47,7 +47,7 @@ func TestChooseStatelessAutoStyleAndIgnoredLegacyEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, sentence := range []string{"first sentence", "second sentence"} {
-		choice, err := c.Choose(context.Background(), sentence, "none", "", false, nil)
+		choice, err := c.Choose(context.Background(), Input{Request: sentence})
 		if err != nil || choice.Action != ActionNew {
 			t.Fatalf("choice=%+v error=%v", choice, err)
 		}
@@ -82,7 +82,7 @@ func TestStewardExplicitStyle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := c.Choose(context.Background(), "sentence", "none", "", false, nil); err == nil || errorKind(err) != "http_status" {
+			if _, err := c.Choose(context.Background(), Input{Request: "sentence"}); err == nil || errorKind(err) != "http_status" {
 				t.Fatalf("error=%v", err)
 			}
 			if c.Style() != style {

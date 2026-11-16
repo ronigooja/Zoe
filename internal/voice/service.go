@@ -52,7 +52,7 @@ type Config struct {
 }
 
 type TaskSteward interface {
-	Choose(context.Context, string, string, string, bool, []steward.Candidate) (steward.Choice, error)
+	Choose(context.Context, steward.Input) (steward.Choice, error)
 }
 
 type Service struct {

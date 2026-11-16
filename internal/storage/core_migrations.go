@@ -79,6 +79,16 @@ CREATE TABLE task_entries (
   author_device_id TEXT NOT NULL REFERENCES actors(id),
   created_at TEXT NOT NULL
 );
+CREATE TABLE task_prior_contexts (
+ task_id TEXT PRIMARY KEY REFERENCES tasks(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+ prior_task_id TEXT NOT NULL REFERENCES tasks(id), goal TEXT NOT NULL, status TEXT NOT NULL,
+ result TEXT, additions_json BLOB NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE task_question_answers (
+ entry_id TEXT PRIMARY KEY REFERENCES task_entries(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+ task_id TEXT NOT NULL REFERENCES tasks(id), question_id TEXT NOT NULL REFERENCES pending_runtime_actions(id),
+ UNIQUE(workspace_id,task_id,question_id)
+);
 CREATE TABLE approvals (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
