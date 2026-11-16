@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,30 @@ import (
 
 const uiFlowCreate = `{"version":"v0.9.1","createSurface":{"surfaceId":"screen","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}`
 const uiFlowRoot = `{"version":"v0.9.1","updateComponents":{"surfaceId":"screen","components":[{"id":"root","component":"Text","text":"Title"}]}}`
+
+// uiFlowRun supplies the authoritative run required by task-result UI events.
+func uiFlowRun(t *testing.T, db *sql.DB, task, run string) {
+	t.Helper()
+	_, err := db.Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) SELECT ?,workspace_id,id,'ui-attempt','stopped',1,'runner',created_by_device_id,command_id,goal,profile_id,'runtime','model','worker','opencode',created_at FROM tasks WHERE id=?`, run, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+type uiFlowReceiptObserver struct {
+	ResultReceiptAdapter
+	submits, lookups int
+}
+
+func (a *uiFlowReceiptObserver) Submit(ctx context.Context, gateway string, p ResultChunkRequest) (ResultChunkReceipt, error) {
+	a.submits++
+	return a.ResultReceiptAdapter.Submit(ctx, gateway, p)
+}
+
+func (a *uiFlowReceiptObserver) Lookup(ctx context.Context, gateway string, p ResultChunkRequest) (ResultChunkReceipt, error) {
+	a.lookups++
+	return a.ResultReceiptAdapter.Lookup(ctx, gateway, p)
+}
 
 func uiFlowOutput(messages string, await bool) string {
 	feedback, note := "Shown.", ""
@@ -107,6 +132,7 @@ func TestUITaskJobsAccumulate(t *testing.T) {
 	output := uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false)
 	r.svc.uiController = uiFlowModel(t, &output, &mu)
 	r.seedTask(t, "task", "owner")
+	uiFlowRun(t, r.store.DB(), "task", "run")
 	r.exec(t, `UPDATE tasks SET ui_display=1,result='first result' WHERE id='task'`)
 	r.seedEntry(t, "task", "entry-one", "first result")
 	r.seedEvent(t, 1, "task", "run", "entry-one")
@@ -134,6 +160,10 @@ func TestUITaskJobsAccumulate(t *testing.T) {
 	if events != 2 || feedback != 0 || jobs != 2 || len(messages) != 3 {
 		t.Fatalf("events=%d feedback=%d jobs=%d messages=%d", events, feedback, jobs, len(messages))
 	}
+	var pins int
+	if err := r.store.DB().QueryRow(`SELECT count(*) FROM ui_result_sources WHERE run_id='run' AND ((entry_id='entry-one' AND event_cursor=1) OR (entry_id='entry-two' AND event_cursor=3))`).Scan(&pins); err != nil || pins != 2 {
+		t.Fatalf("authoritative per-job pins=%d err=%v", pins, err)
+	}
 }
 
 func TestUIInputRedisplayKey(t *testing.T) {
@@ -142,9 +172,23 @@ func TestUIInputRedisplayKey(t *testing.T) {
 	r.seedEntry(t, "task", "entry", "existing result")
 	r.exec(t, `UPDATE tasks SET result='existing result' WHERE id='task'`)
 	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,request,created_at,updated_at) VALUES('request','default','owner','task','task','Show the existing task result.',?,?)`, r.now().Format(time.RFC3339Nano), r.now().Format(time.RFC3339Nano))
+	uiFlowRun(t, r.store.DB(), "task", "run")
+	r.seedEvent(t, 1, "task", "run", "entry")
+	tx, err := r.store.DB().BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := pinUIResultTx(context.Background(), tx, "default", "owner", "task", "request", "entry", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	r.exec(t, `UPDATE tasks SET result='mutable decoy' WHERE id='task'`)
 	for _, key := range []string{"task_entry:entry", "task_entry:entry#turn-one", "task_entry:entry#turn-two"} {
 		input, err := r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", kind: "task_entry", key: key, request: "request"})
-		if err != nil || !strings.Contains(string(input), "existing result") {
+		if err != nil || !strings.Contains(string(input), "existing result") || strings.Contains(string(input), "mutable decoy") {
 			t.Fatalf("key=%s input=%s err=%v", key, input, err)
 		}
 	}
@@ -263,6 +307,7 @@ func TestUIFeedbackContinuity(t *testing.T) {
 		t.Fatalf("%s/%d", status, attempts)
 	}
 	r.seedCall(t, "call", "owner", 1)
+	r.enableReceiptFixture(t)
 	r.advance(31 * time.Second)
 	r.svc.dispatchUIFeedback(context.Background())
 	_ = r.store.DB().QueryRow(`SELECT status,attempts FROM ui_feedback_deliveries`).Scan(&status, &attempts)
@@ -279,19 +324,30 @@ func TestUIFeedbackGatewayRetries(t *testing.T) {
 	r := uiTargetRig(t)
 	at := r.now().Format(time.RFC3339Nano)
 	r.seedCall(t, "call", "owner", 1)
+	r.enableReceiptFixture(t)
+	adapter := &uiFlowReceiptObserver{ResultReceiptAdapter: r.svc.resultReceiptAdapter}
+	r.svc.resultReceiptAdapter = adapter
 	r.code.Store(503)
 	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES('request','default','owner','register',?,?)`, at, at)
 	r.exec(t, `UPDATE ui_requests SET status='failed' WHERE id='request'`)
 	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('request','default','owner','Shown text',?,?)`, at, at)
 	for i := 0; i < 3; i++ {
 		r.svc.dispatchUIFeedback(context.Background())
-		r.advance(5 * time.Second)
+		r.advance(31 * time.Second)
 	}
 	var status string
 	var attempts int
 	_ = r.store.DB().QueryRow(`SELECT status,attempts FROM ui_feedback_deliveries`).Scan(&status, &attempts)
-	if status != "failed" || attempts != 3 || r.posts.Load() != 3 {
-		t.Fatalf("%s/%d posts=%d", status, attempts, r.posts.Load())
+	// Ambiguous submission stays pending and subsequent attempts reconcile only.
+	var chunkState, code string
+	if err := r.store.DB().QueryRow(`SELECT state FROM voice_text_chunks WHERE source_kind='ui_feedback' AND source_id='request'`).Scan(&chunkState); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.DB().QueryRow(`SELECT last_error FROM ui_feedback_deliveries`).Scan(&code); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" || attempts != 0 || adapter.submits != 1 || adapter.lookups != 2 || chunkState != "unknown" || code != "receipt_lookup_unavailable" {
+		t.Fatalf("%s/%d submits=%d lookups=%d chunk=%s code=%s", status, attempts, adapter.submits, adapter.lookups, chunkState, code)
 	}
 }
 

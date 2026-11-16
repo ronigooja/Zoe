@@ -308,6 +308,7 @@ func TestUITargetReplacedAfterFeedbackSelection(t *testing.T) {
 func TestUITargetFailureEvidenceSurvivesFeedback(t *testing.T) {
 	r := uiTargetRig(t)
 	r.seedCall(t, "call", "owner", 1)
+	r.enableReceiptFixture(t)
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,status,created_at,updated_at) VALUES('failure','default','owner','register','failed',?,?)`, at, at)
 	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('failure','default','owner','Failed.',?,?)`, at, at)

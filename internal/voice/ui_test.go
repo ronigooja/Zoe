@@ -235,6 +235,14 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+				uiFlowRun(t, store.DB(), target, "redisplay-run")
+				payload, _ := json.Marshal(map[string]any{"payload": map[string]string{"task_id": target, "run_id": "redisplay-run", "entry_id": "older"}})
+				if _, err := store.DB().Exec(`INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) SELECT 'redisplay-result',workspace_id,current_cursor+1,1,'task.assistant_message','2026-01-01T00:00:00Z','task',?,1,? FROM event_counters WHERE workspace_id='default'`, target, payload); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.DB().Exec(`UPDATE event_counters SET current_cursor=current_cursor+1 WHERE workspace_id='default'`); err != nil {
+					t.Fatal(err)
+				}
 			}
 			count := func(query string) int {
 				t.Helper()
@@ -275,13 +283,16 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 			if count(`SELECT count(*) FROM task_entries`) != wantEntries {
 				t.Fatal("incorrect task append behavior")
 			}
-			if mode == "show" || mode == "running_none" || mode == "no_entry" || mode == "no_ui" {
+			if mode == "show" || mode == "running_none" || mode == "no_ui" {
 				if count(`SELECT ui_handled FROM voice_turns WHERE turn_id='display'`) != 1 || count(`SELECT count(*) FROM ui_requests WHERE source='task' AND request='Show the earlier lunar mission result.'`) != 1 {
 					t.Fatal("missing UI receipt or handled marker")
 				}
 				commitAndHandoff(t, ts, key, "display-again", "show the earlier result")
 				if count(`SELECT count(*) FROM ui_jobs WHERE kind='task_entry'`) != 2 || count(`SELECT ui_display FROM tasks`) != 1 {
 					t.Fatal("redisplays deduplicated or authoritative result not selected")
+				}
+				if count(`SELECT count(*) FROM ui_result_sources WHERE entry_id='older' AND run_id='redisplay-run'`) != 2 {
+					t.Fatal("redisplays did not pin authoritative event instead of latest assistant entry or tasks.result")
 				}
 			} else {
 				want := stewardErrorSpeech

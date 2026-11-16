@@ -68,6 +68,7 @@ func TestUIJobSize(t *testing.T) {
 	output := strings.Replace(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false), `"container":"window"`, `"container":"window","size":{"width":500,"height":400}`, 1)
 	r.svc.uiController = uiFlowModel(t, &output, &mu)
 	r.seedTask(t, "task", "owner")
+	uiFlowRun(t, r.store.DB(), "task", "run")
 	r.exec(t, `UPDATE tasks SET ui_display=1,result='result' WHERE id='task'`)
 	for i, entry := range []string{"one", "two"} {
 		r.seedEntry(t, "task", entry, "result")
