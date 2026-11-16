@@ -197,39 +197,34 @@ func (s *Service) dispatchFastReplies(ctx context.Context) {
 
 func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session string, generation int64, text, intent string, attempts int) {
 	now := s.now().UTC()
-	res, err := s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=? AND next_attempt_at<=?`, now.Add(fastReplyLease).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts, now.Format(time.RFC3339Nano))
+	// Reserve dispatch without spending a retry before a validated external attempt.
+	// The checkpoint claim fences network work; this token fences scheduler updates.
+	token := now.Add(fastReplyLease).Format(time.RFC3339Nano)
+	res, err := s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET next_attempt_at=?,updated_at=? WHERE id=? AND workspace_id=? AND session_id=? AND generation=? AND status='pending' AND attempts=? AND next_attempt_at<=?`, token, now.Format(time.RFC3339Nano), id, workspace, session, generation, attempts, now.Format(time.RFC3339Nano))
 	if err != nil {
 		return
 	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
-		return
-	}
-	var gateway string
-	var current int64
-	err = s.db.QueryRowContext(ctx, `SELECT gateway_session_id,generation FROM voice_sessions WHERE id=? AND workspace_id=? AND owner_id=(SELECT owner_id FROM voice_sessions WHERE id=?) AND state='active'`, session, workspace, session).Scan(&gateway, &current)
-	if err == sql.ErrNoRows || gateway == "" {
-		_, _ = s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET attempts=attempts-1,next_attempt_at=?,last_error_code='awaiting_context' WHERE id=? AND status='pending'`, now.Add(fastReplyLease).Format(time.RFC3339Nano), id)
-		return
-	}
-	if err != nil || current != generation || gateway == "" {
-		if attempts+1 >= resultDeliveryMaxAttempts {
-			s.finishFastReply(id, "failed", "session_lookup")
-		} else {
-			s.retryFastReply(id, attempts+1, "session_lookup")
-		}
+	n, err := res.RowsAffected()
+	if err != nil || n != 1 {
 		return
 	}
 	var owner string
-	if err := s.db.QueryRowContext(ctx, `SELECT owner_id FROM voice_sessions WHERE id=? AND workspace_id=?`, session, workspace).Scan(&owner); err != nil {
-		return
+	err = s.db.QueryRowContext(ctx, `SELECT owner_id FROM voice_sessions v WHERE v.id=? AND v.workspace_id=? AND v.generation=? AND v.state='active' AND v.gateway_session_id!='' AND v.gateway_media_generation>0 AND NOT EXISTS(SELECT 1 FROM voice_text_checkpoints c WHERE c.workspace_id=v.workspace_id AND c.source_kind='fast_reply' AND c.source_id=? AND c.owner_id!=v.owner_id)`, session, workspace, generation, id).Scan(&owner)
+	ok, code := false, "awaiting_context"
+	if err == nil {
+		ok, code = s.deliverDurableText(ctx, workspace, owner, "fast_reply", id, session, generation, text)
+	} else if err != sql.ErrNoRows {
+		code = "session_lookup"
 	}
-	ok, code := s.deliverDurableText(ctx, workspace, owner, "fast_reply", id, session, generation, text)
+	status := "pending"
 	if ok {
-		_, _ = s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET status='delivered',voice_session_id=?,voice_generation=?,updated_at=? WHERE id=? AND status='pending'`, session, generation, s.now().UTC().Format(time.RFC3339Nano), id)
-		return
+		status = "delivered"
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET attempts=attempts-1,next_attempt_at=?,last_error_code=?,updated_at=? WHERE id=? AND status='pending'`, now.Add(fastReplyLease).Format(time.RFC3339Nano), code, now.Format(time.RFC3339Nano), id)
+	if code == "receipt_rejected" {
+		status = "failed"
+	}
+	_, _ = s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET status=?,voice_session_id=CASE WHEN ? THEN ? ELSE voice_session_id END,voice_generation=CASE WHEN ? THEN ? ELSE voice_generation END,last_error_code=?,updated_at=? WHERE id=? AND workspace_id=? AND session_id=? AND generation=? AND status='pending' AND attempts=? AND next_attempt_at=?`, status, ok, session, ok, generation, code, s.now().UTC().Format(time.RFC3339Nano), id, workspace, session, generation, attempts, token)
+
 }
 
 func (s *Service) finishFastReply(id, status, code string) {

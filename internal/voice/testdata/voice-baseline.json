@@ -382,7 +382,7 @@
       "table",
       "voice_text_chunks",
       "voice_text_chunks",
-      "CREATE TABLE voice_text_chunks (\n workspace_id TEXT NOT NULL,owner_id TEXT NOT NULL,source_kind TEXT NOT NULL,source_id TEXT NOT NULL,ordinal INTEGER NOT NULL,\n delivery_id TEXT NOT NULL UNIQUE,content_hash TEXT NOT NULL,text TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','attempted','confirmed','unknown')),\n PRIMARY KEY(workspace_id,owner_id,source_kind,source_id,ordinal),\n FOREIGN KEY(workspace_id,owner_id,source_kind,source_id) REFERENCES voice_text_checkpoints(workspace_id,owner_id,source_kind,source_id))"
+      "CREATE TABLE voice_text_chunks (\n workspace_id TEXT NOT NULL,owner_id TEXT NOT NULL,source_kind TEXT NOT NULL,source_id TEXT NOT NULL,ordinal INTEGER NOT NULL,\n delivery_id TEXT NOT NULL UNIQUE,content_hash TEXT NOT NULL,text TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','attempted','confirmed','unknown','rejected')),\n PRIMARY KEY(workspace_id,owner_id,source_kind,source_id,ordinal),\n FOREIGN KEY(workspace_id,owner_id,source_kind,source_id) REFERENCES voice_text_checkpoints(workspace_id,owner_id,source_kind,source_id))"
     ],
     "sqlite_autoindex_voice_text_chunks_1": [
       "index",

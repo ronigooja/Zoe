@@ -29,7 +29,7 @@ CREATE TABLE voice_text_checkpoints (
  PRIMARY KEY(workspace_id,owner_id,source_kind,source_id));
 CREATE TABLE voice_text_chunks (
  workspace_id TEXT NOT NULL,owner_id TEXT NOT NULL,source_kind TEXT NOT NULL,source_id TEXT NOT NULL,ordinal INTEGER NOT NULL,
- delivery_id TEXT NOT NULL UNIQUE,content_hash TEXT NOT NULL,text TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','attempted','confirmed','unknown')),
+ delivery_id TEXT NOT NULL UNIQUE,content_hash TEXT NOT NULL,text TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','attempted','confirmed','unknown','rejected')),
  PRIMARY KEY(workspace_id,owner_id,source_kind,source_id,ordinal),
  FOREIGN KEY(workspace_id,owner_id,source_kind,source_id) REFERENCES voice_text_checkpoints(workspace_id,owner_id,source_kind,source_id));`
 
@@ -108,6 +108,9 @@ func (s *Service) deliverDurableText(ctx context.Context, workspace, owner, kind
 		if state == "confirmed" {
 			continue
 		}
+		if state == "rejected" {
+			return false, "receipt_rejected"
+		}
 		var receipt ResultChunkReceipt
 		// Persist a fenced attempt before Submit, including a checked row count.
 		// Existing attempted/unknown chunks stay lookup-only, even after takeover.
@@ -133,9 +136,8 @@ func (s *Service) deliverDurableText(ctx context.Context, workspace, owner, kind
 			} else {
 				var rejected TextSubmissionRejection
 				if errors.As(err, &rejected) && rejected.RejectedBeforeWrite() {
-					// The shared schema has no rejected state. Preserve the no-replay
-					// boundary until a rejected state is installed by its owner.
-					code = "receipt_rejected"
+					// Requires the shared baseline/migration to allow rejected.
+					next, code = "rejected", "receipt_rejected"
 				}
 			}
 		} else if !receiptApplied(request, receipt) {
