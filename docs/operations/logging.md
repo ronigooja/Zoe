@@ -2,6 +2,8 @@
 
 Applies to Zoe server and runner process diagnostics, not client diagnostic storage.
 
+When diagnosing prompt overrides or UI retry decisions, use the safe INFO fields defined in [deployment configuration](deployment.md#model-prompt-files). Prompt contents remain in existing DEBUG model-call logs only; loading errors must never include file contents.
+
 ## Levels and fields
 
 Set `ZOE_LOG_LEVEL=debug|info|warn|error`; the default is **debug**. Values are case-insensitive. An invalid value emits `logging status=invalid_level default=debug error_kind=config` at WARN and uses debug without echoing the value. Output remains on stderr through the standard Go logger. Lines prepend `level=<name>` before the existing event text; existing metadata event names, field order and substring matches remain intact.

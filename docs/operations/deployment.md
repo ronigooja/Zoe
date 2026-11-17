@@ -1,5 +1,41 @@
 # Deployment operations
 
+## Model prompt files
+
+When starting `zoe-server`, `internal/prompts/defaults/*.txt` supplies release-versioned defaults (one terminal newline is removed from embedded defaults to preserve baseline bytes). `ZOE_PROMPT_DIR` selects an optional operator directory: matching filenames replace individual defaults verbatim; missing files retain defaults. Restart the server after changes. Voice precedence is `ZOE_VOICE_INSTRUCTION_TEXT` (including `off`, managed by the `zoe` menu), then `voice_instruction.txt`, then the embedded default.
+
+When loading overrides, known files must be regular, non-symlink UTF-8 files, nonblank, without NUL, and at most 65536 bytes. Invalid known overrides stop startup with filename and reason, never content. Unknown files warn and are ignored. The directory cannot be a symlink; keep it and its ancestors inaccessible to untrusted writers. Active overrides emit INFO `prompt_override name=<name> sha256=<first 12 hex> bytes=<count>`; prompt content remains confined to existing DEBUG model-call logging.
+
+When deploying, optional `deploy.sh --prompts-dir DIR` validates only the six known `.txt` filenames, rejecting unknown files, directories, symlinks and invalid text, then atomically replaces each named file under `/etc/zoe/prompts` (root:root 0755; installed files 0644). Unnamed files persist. Without the flag, existing overrides stay untouched; an absent directory is created empty. Compose mounts this directory read-only into `zoe-server` only and sets `ZOE_PROMPT_DIR=/etc/zoe/prompts`. Dry-run validates without installation. Failure stops deployment; there is no rollback or directory-wide transaction.
+
+For UI-controller overrides, only free text is replaceable. Code-owned `requiredDefinitions`, `OptionalProperties`, and `RenderingEnvironment` are always appended after it. Overrides must remain consistent with the authoritative `internal/uictl` validator and those facts; see the [screen contract](../design/screen-document.md).
+
+### Prompt inventory
+
+Baseline references below are from `origin/main` (`a23baad`), before externalization. Only the six named Go server prompts become files.
+
+| Baseline source | Name | Previously overridable? | Override filename |
+| --- | --- | --- | --- |
+| `internal/uictl/controller.go:21` | `Prompt` | No | `ui_controller.txt` |
+| `internal/uictl/controller.go:29,27,35` | `requiredDefinitions`, `OptionalProperties`, `RenderingEnvironment` | No; remain code-owned | None |
+| `internal/steward/choose.go:49` | `chooseInstructions` | No | `steward_choose.txt` |
+| `internal/voice/register.go:21` | `RegisterAttributionInstruction` | No | `register_attribution.txt` |
+| `internal/voice/register_compact.go:18` | `RegisterCompactInstruction` | No | `register_compact.txt` |
+| `internal/voice/handlers.go:859` | `TaskUIDisplayInstruction` | No | `task_ui_display.txt` |
+| `internal/voice/instruction.go:8` | `DefaultInstructionText` | Yes: env/menu | `voice_instruction.txt` |
+| `services/memory/person_memory.py:23,30` | `INGEST_INSTRUCTIONS`, `WRITE_INSTRUCTIONS` | No; unchanged Python policy | None |
+| `services/memory/mem0_backend.py:62` | Mem0 `custom_instructions` | No; unchanged Python policy | None |
+| `internal/ops/opencode_service.go:87,93` | Profile system prompts; rotation summarizer | Profile selection, not text override; unchanged | None |
+| `internal/profiles/profiles.go:33-35` | Worker, Steward Worker, Super planner | No; written by ops; unchanged | None |
+| `internal/ops/menu_model.go:92` | Connectivity-test instruction/input | No; unchanged operator-only boundary | None |
+| `internal/runner/engine.go:843-866,1253-1267` | Rotation/claim composition and task context | Task instructions/data; unchanged runner boundary | None |
+
+### UI model-output retries
+
+When processing a UI job, `ZOE_UI_CONTROLLER_MAX_ATTEMPTS` is the number of EXTRA model calls allowed for the same UI job after a model-output validation failure (`validation_failed:*`). Default `0` keeps today's behaviour exactly. Values must be nonnegative integers below the platform integer maximum; invalid configuration stops startup naming the variable, not its value. Validation retries use durable total attempts: retry while `attempts <= N`; mixed infrastructure attempts consume that same budget. The total claim cap is `max(3, N+1)`, while infrastructure failures (`model_error`, `storage_error`, `snapshot_changed`) still retry only below attempt 3. Increasing N never increases infrastructure retries.
+
+When claiming, the existing 30-second `next_attempt_at` lease prevents concurrent claims. A retry decision replaces it with the existing exponential backoff (1, 2 seconds for infrastructure); extended validation retries use 4, 8, then at most 16 seconds. Scheduling resumes only after that timestamp. `last_error` stores the last failed attempt's safe code. Each retry decision emits INFO `ui_controller_retry error_kind=<safe code> attempt=<number> retry=<boolean>`, without content. See [logging](logging.md) for level controls.
+
 This runbook describes the local Linux installation and the macOS client on
 `zhuwei@macair`. For the distinction between documentation and acceptance, see
 the [evidence register](../acceptance/evidence.md).

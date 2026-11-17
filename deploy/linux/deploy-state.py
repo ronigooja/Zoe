@@ -20,6 +20,53 @@ def fail(message):
     raise SystemExit(message)
 
 
+PROMPT_NAMES = {'ui_controller', 'steward_choose', 'register_attribution',
+                'register_compact', 'task_ui_display', 'voice_instruction'}
+
+
+def prompt_files(directory):
+    root = Path(directory)
+    if root.is_symlink() or not root.is_dir():
+        fail('prompts directory: regular directory required')
+    result = {}
+    for path in sorted(root.iterdir()):
+        label = 'prompt override ' + path.name + ': '
+        if path.suffix != '.txt' or path.stem not in PROMPT_NAMES:
+            fail(label + 'unknown name')
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode):
+            fail(label + 'regular file required (symlinks forbidden)')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, 'rb') as stream:
+            after = os.fstat(stream.fileno())
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                fail(label + 'file changed while opening')
+            data = stream.read(65537)
+        if len(data) > 65536:
+            fail(label + 'exceeds 65536 bytes')
+        try:
+            text = data.decode('utf-8')
+        except UnicodeDecodeError:
+            fail(label + 'invalid UTF-8')
+        if not text.strip() or '\0' in text:
+            fail(label + 'empty or NUL prompt')
+        result[path.name] = text
+    return result
+
+
+def install_prompts(source, destination):
+    files = prompt_files(source) if source else {}
+    root = Path(destination)
+    if root.is_symlink() or (root.exists() and not root.is_dir()):
+        fail('prompts destination: regular directory required')
+    root.mkdir(mode=0o755, parents=True, exist_ok=True)
+    os.chown(root, 0, 0)
+    root.chmod(0o755)
+    # Each named file is atomically replaced; unrelated overrides persist.
+    for name, text in files.items():
+        atomic(root/name, text, 0o644)
+
+
 def read(path):
     return json.loads(Path(path).read_text())
 
@@ -534,6 +581,10 @@ try:
             fail('server listening log missing')
     elif command == 'compose':
         print(json.dumps(compose(*args)))
+    elif command == 'prompts-validate':
+        prompt_files(*args)
+    elif command == 'prompts-install':
+        install_prompts(*args)
     elif command == 'qdrant-storage':
         print(qdrant_storage(*args))
     else:

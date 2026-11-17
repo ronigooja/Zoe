@@ -4,14 +4,15 @@ set -euo pipefail
 umask 077
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helper="$script_dir/deploy-state.py"
-sha="" run_id="" cli_run_id="" artifact_dir="" from="" dry_run=false
-usage() { echo 'usage: deploy.sh --sha FULL_SHA [--run-id ID] [--cli-run-id ID] [--dry-run] | --sha FULL_SHA (--artifact-dir DIR | --from HOST_ALIAS:DIRNAME) [--dry-run]' >&2; exit 2; }
+sha="" run_id="" cli_run_id="" artifact_dir="" from="" prompts_dir="" dry_run=false
+usage() { echo 'usage: deploy.sh --sha FULL_SHA [--run-id ID] [--cli-run-id ID] [--dry-run] [--prompts-dir DIR] | --sha FULL_SHA (--artifact-dir DIR | --from HOST_ALIAS:DIRNAME) [--dry-run] [--prompts-dir DIR]' >&2; exit 2; }
 while (($#)); do
   case "$1" in
     --sha) [[ $# -ge 2 ]] || usage; sha="$2"; shift 2 ;;
     --run-id) [[ $# -ge 2 ]] || usage; run_id="$2"; shift 2 ;;
     --cli-run-id) [[ $# -ge 2 ]] || usage; cli_run_id="$2"; shift 2 ;;
     --dry-run) dry_run=true; shift ;;
+    --prompts-dir) [[ $# -ge 2 && -n "$2" ]] || usage; prompts_dir="$2"; shift 2 ;;
     --artifact-dir) [[ $# -ge 2 ]] || usage; artifact_dir="$2"; shift 2 ;;
     --from) [[ $# -ge 2 && -n "$2" ]] || usage; from="$2"; shift 2 ;;
     *) usage ;;
@@ -97,6 +98,7 @@ trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 state_op idle "$db"
+if [[ -n "$prompts_dir" ]]; then state_op prompts-validate "$prompts_dir"; fi
 health "$api"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/zoe-deploy.XXXXXX")"
 state_op snapshot "$db" > "$scratch/before.json"
@@ -210,6 +212,8 @@ fi
 ok
 step=memory-token
 state_op memory-token "$env_file"
+step=prompts
+state_op prompts-install "$prompts_dir" "${ZOE_PROMPTS_ROOT:-/etc/zoe/prompts}"
 step=images
 if [[ -n "$artifact_dir" ]]; then
   state_op staged-images "$dl/staged" "$releases/$sha" load

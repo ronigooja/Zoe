@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"strings"
 	"sync"
 	"time"
 
@@ -275,7 +276,7 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 		return
 	}
 	j.attempts++
-	if j.attempts > 3 {
+	if j.attempts > max(3, s.recall.UIControllerMaxAttempts+1) {
 		s.failUIJob(ctx, j, "model_error", false)
 		return
 	}
@@ -309,7 +310,7 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 	if err != nil {
 		code := "validation_failed:" + uictl.FailureCode(err)
 		call.Result(nil, code)
-		s.failUIJob(ctx, j, code, false)
+		s.failUIJob(ctx, j, code, j.attempts <= s.recall.UIControllerMaxAttempts)
 		return
 	}
 	call.Result(parsed, "")
@@ -499,8 +500,15 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 func (s *Service) failUIJob(ctx context.Context, j uiJob, code string, retry bool) {
 	logging.Warnf("ui_controller error_kind=%s", code)
 	at := s.now().UTC().Format(time.RFC3339Nano)
-	if retry && j.attempts < 3 {
-		_, _ = s.db.ExecContext(ctx, `UPDATE ui_jobs SET last_error=?,next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=?`, code, s.now().Add(time.Duration(1<<uint(j.attempts-1))*time.Second).UTC().Format(time.RFC3339Nano), at, j.id, j.attempts)
+	limit := 3
+	if strings.HasPrefix(code, "validation_failed:") {
+		limit = s.recall.UIControllerMaxAttempts + 1
+	}
+	willRetry := retry && j.attempts < limit
+	logging.Infof("ui_controller_retry error_kind=%s attempt=%d retry=%t", code, j.attempts, willRetry)
+	if willRetry {
+		delay := time.Duration(1<<uint(min(j.attempts-1, 4))) * time.Second
+		_, _ = s.db.ExecContext(ctx, `UPDATE ui_jobs SET last_error=?,next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=?`, code, s.now().Add(delay).UTC().Format(time.RFC3339Nano), at, j.id, j.attempts)
 		return
 	}
 	tx, err := s.db.BeginTx(ctx, nil)

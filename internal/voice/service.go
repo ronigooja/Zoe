@@ -42,16 +42,17 @@ type Config struct {
 	OpeningContextBudget   int
 	ContextCharBudget      int
 	// UpstreamRoute accepts only empty or avas; retained to reject legacy configuration.
-	UpstreamRoute          string
-	ResultDeliveryEnabled  bool
-	ResultDeliveryInterval time.Duration
-	ContextRegister        *ContextRegister
-	RegisterConfig         *RegisterConfig
-	ClassificationTimeout  time.Duration
-	Steward                TaskSteward
-	UIController           *modelclient.Client
-	RecallTimeout          time.Duration
-	RecallLease            time.Duration
+	UpstreamRoute           string
+	ResultDeliveryEnabled   bool
+	ResultDeliveryInterval  time.Duration
+	ContextRegister         *ContextRegister
+	RegisterConfig          *RegisterConfig
+	ClassificationTimeout   time.Duration
+	Steward                 TaskSteward
+	UIController            *modelclient.Client
+	UIControllerMaxAttempts int
+	RecallTimeout           time.Duration
+	RecallLease             time.Duration
 }
 
 type TaskSteward interface {

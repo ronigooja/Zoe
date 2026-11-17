@@ -856,7 +856,7 @@ type voiceTaskSourceReference struct {
 }
 
 // TaskUIDisplayInstruction applies only to tasks selected for Mac screen display.
-const TaskUIDisplayInstruction = "The task result will be rendered on the user's Mac screen by a separate UI controller. The final message of the task should be content suitable for display, structured with titles, items and links where applicable."
+var TaskUIDisplayInstruction = defaultPrompt("task_ui_display")
 
 // admitVoiceTask binds a confirmed stable turn to the task inside the same
 // transaction as task.create. Revision is provenance; it is deliberately not

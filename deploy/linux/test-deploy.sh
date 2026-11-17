@@ -43,6 +43,55 @@ print('deployment log severity fixtures passed')
 PY
 }
 check_log_rules
+# Prompt installation fixtures: run only on the authorized synthetic Linux host.
+python3 - "$repo_root/deploy/linux/deploy-state.py" "$repo_root/deploy/linux/docker-compose.yml" <<'PY'
+import os, pathlib, subprocess, sys, tempfile
+helper, compose = sys.argv[1:]
+script = (pathlib.Path(helper).parent/'deploy.sh').read_text()
+assert '--prompts-dir) [[ $# -ge 2 && -n "$2" ]] || usage; prompts_dir="$2"; shift 2 ;;' in script
+assert 'if [[ -n "$prompts_dir" ]]; then state_op prompts-validate "$prompts_dir"; fi' in script
+assert 'state_op prompts-install "$prompts_dir" "${ZOE_PROMPTS_ROOT:-/etc/zoe/prompts}"' in script
+text = pathlib.Path(compose).read_text()
+assert text.count('source: /etc/zoe/prompts') == 1
+assert 'target: /etc/zoe/prompts\n        read_only: true' in text
+assert 'ZOE_PROMPT_DIR: /etc/zoe/prompts' in text
+assert 'ZOE_UI_CONTROLLER_MAX_ATTEMPTS: ${ZOE_UI_CONTROLLER_MAX_ATTEMPTS:-0}' in text
+with tempfile.TemporaryDirectory() as directory:
+    root = pathlib.Path(directory); source = root/'source'; source.mkdir()
+    destination = root/'installed'
+    def run(*args):
+        return subprocess.run([sys.executable, helper, *map(str,args)], capture_output=True, text=True)
+    for case, data in [('empty',b''),('utf8',b'private-content\xff'),('nul',b'private-content\0'),('large',b'x'*65537)]:
+        path = source/'ui_controller.txt'; path.write_bytes(data)
+        result = run('prompts-validate',source)
+        assert result.returncode and 'ui_controller.txt' in result.stderr
+        assert 'private-content' not in result.stdout+result.stderr
+        path.unlink()
+    for name in ['unknown.txt','not-text.json']:
+        path = source/name; path.write_text('text')
+        assert run('prompts-validate',source).returncode
+        path.unlink()
+    path = source/'ui_controller.txt'; path.symlink_to(root/'outside')
+    assert run('prompts-validate',source).returncode
+    path.unlink(); path.mkdir()
+    assert run('prompts-validate',source).returncode
+    path.rmdir(); path.write_text('operator text\n')
+    assert run('prompts-validate',source).returncode == 0
+    # Validation works without root; installation intentionally enforces root ownership.
+    if os.geteuid() == 0:
+        assert run('prompts-install',source,destination).returncode == 0
+        assert (destination/path.name).read_bytes() == path.read_bytes()
+        assert destination.stat().st_mode & 0o777 == 0o755
+        assert (destination/path.name).stat().st_mode & 0o777 == 0o644
+        path.write_text('new text')
+        (destination/'voice_instruction.txt').write_text('preserved')
+        assert run('prompts-install','',destination).returncode == 0
+        assert (destination/path.name).read_text() == 'operator text\n'
+        assert run('prompts-install',source,destination).returncode == 0
+        assert (destination/path.name).read_text() == 'new text'
+        assert (destination/'voice_instruction.txt').read_text() == 'preserved'
+print('prompt validation, persistence, named atomic replacement and Compose fixtures passed')
+PY
 # Focused store-identity simulation; runnable without root or a Docker daemon.
 check_staged_identity() {
   python3 - "$repo_root/deploy/linux/deploy-state.py" <<'PY'
@@ -772,6 +821,7 @@ PY
   export ZOE_RELEASES_DIR="$FIXTURE/releases" ZOE_ENV_FILE="$FIXTURE/stack.env" ZOE_DB_PATH="$FIXTURE/db.sqlite"
   export ZOE_API_URL=http://local/healthz ZOE_UNITS_DIR="$FIXTURE/units" ZOE_BIN_DIR="$FIXTURE/bin"
   export ZOE_DEPLOY_LOG_DIR="$FIXTURE/logs" ZOE_DEPLOY_HEALTH_ATTEMPTS=1
+  export ZOE_PROMPTS_ROOT="$FIXTURE/prompts"
 }
 deploy() { PATH="$FIXTURE/shims:$PATH" bash "$repo_root/deploy/linux/deploy.sh" --sha "$new" "$@"; }
 unchanged() {

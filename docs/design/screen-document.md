@@ -4,6 +4,8 @@ Status: design accepted 2026-11-14; implementation pending. The Go contract and 
 
 ## Protocol and renderer
 
+When overriding the UI controller's free-text prompt, follow [prompt configuration](../operations/deployment.md#model-prompt-files); code-owned validator and rendering facts are always appended and cannot be replaced by that file.
+
 Zoe uses [A2UI](https://github.com/a2ui-project/a2ui) v0.9.1 with the community [a2ui-swift renderer](https://github.com/BBC6BAE9/a2ui-swift), pinned to revision `16476ba2cb3fcb4c4bcb141dfa4c2804adbdedb0`. That renderer decodes only `v0.9` and `v0.9.1`. The specification repository marks v1.0 as current, but the renderer does not support it; upgrading depends on renderer support.
 
 Only the A2UI basic catalog is used: `Text`, `Image`, `Icon`, `Video`, `AudioPlayer`, `Row`, `Column`, `List`, `Card`, `Tabs`, `Modal`, `Divider`, `Button`, `TextField`, `CheckBox`, `Slider`, `ChoicePicker`, `DateTimeInput`. Zoe defines no custom components; add them only when needed.

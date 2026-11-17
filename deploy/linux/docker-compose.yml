@@ -22,6 +22,7 @@ services:
       - "127.0.0.1:${ZOE_SERVER_PORT:-8787}:8787"
     environment:
       ZOE_LOG_LEVEL: ${ZOE_LOG_LEVEL:-debug}
+      ZOE_PROMPT_DIR: /etc/zoe/prompts
       ZOE_LISTEN_ADDR: 0.0.0.0:8787
       ZOE_DATABASE_PATH: /var/lib/zoe/server/data/zoe.sqlite
       ZOE_RUNTIME_PROFILES: ${ZOE_RUNTIME_PROFILES:?set server-selected runtime profiles}
@@ -75,12 +76,19 @@ services:
       ZOE_UI_CONTROLLER_REASONING_EFFORT: ${ZOE_UI_CONTROLLER_REASONING_EFFORT:-}
       ZOE_UI_CONTROLLER_THINKING: ${ZOE_UI_CONTROLLER_THINKING:-}
       ZOE_UI_CONTROLLER_TIMEOUT_MS: ${ZOE_UI_CONTROLLER_TIMEOUT_MS:-60000}
+      ZOE_UI_CONTROLLER_MAX_ATTEMPTS: ${ZOE_UI_CONTROLLER_MAX_ATTEMPTS:-0}
       ZOE_UI_CONTROLLER_API_KEY_FILE: ${ZOE_UI_CONTROLLER_API_KEY_FILE:+/run/secrets/ui_controller_api_key}
       ZOE_RECALL_HOLDING_TEXT: ${ZOE_RECALL_HOLDING_TEXT:-}
       ZOE_SECRET_FILE_MAP: ZOE_RUNNER_TOKEN=/run/secrets/runner_token${ZOE_VOICE_SECRET_MAP:-}
     entrypoint: ["/usr/local/bin/zoe-secret-entrypoint"]
     command: ["/usr/local/bin/zoe-server"]
     volumes:
+      - type: bind
+        source: /etc/zoe/prompts
+        target: /etc/zoe/prompts
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: ${ZOE_SERVER_DATA_ROOT:?set a private server authority root}
         target: /var/lib/zoe/server

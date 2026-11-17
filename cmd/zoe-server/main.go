@@ -20,8 +20,10 @@ import (
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/modelclient"
+	"github.com/ronigooja/Zoe/internal/prompts"
 	"github.com/ronigooja/Zoe/internal/steward"
 	"github.com/ronigooja/Zoe/internal/storage"
+	"github.com/ronigooja/Zoe/internal/uictl"
 	"github.com/ronigooja/Zoe/internal/voice"
 )
 
@@ -41,6 +43,14 @@ func main() {
 }
 
 func run() error {
+	loaded, err := prompts.Load(os.Getenv("ZOE_PROMPT_DIR"), logging.Infof, logging.Warnf)
+	if err != nil {
+		logging.Errorf("prompt configuration: %s", err)
+		return err
+	}
+	uictl.Prompt = loaded["ui_controller"]
+	steward.ConfigurePrompt(loaded["steward_choose"])
+	voice.ConfigurePrompts(loaded)
 	addr := env("ZOE_LISTEN_ADDR", "127.0.0.1:8787")
 	dbPath := strings.TrimSpace(os.Getenv("ZOE_DATABASE_PATH"))
 	if dbPath == "" {
@@ -117,7 +127,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	server, err := composeControlServer(store, cfg, voice.Config{DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	uiMaxAttempts, err := uiControllerMaxAttempts(os.Getenv)
+	if err != nil {
+		logging.Errorf("UI controller configuration: %s", err)
+		return err
+	}
+	server, err := composeControlServer(store, cfg, voice.Config{UIControllerMaxAttempts: uiMaxAttempts, DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	})
