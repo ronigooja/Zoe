@@ -45,7 +45,7 @@ import A2UISwiftUI
         let errors = model.processMessages(store.surfaces[spec.id]!.messages)
         model.a2uiStyle = Self.fixedStyle
         if !errors.isEmpty { renderFailed.insert(spec.id); onRenderError?(spec.id, errors) }
-        let controller = hostingController(model, id: spec.id)
+        let controller = hostingController(model, id: spec.id, kind: spec.kind)
         var entry = Entry(viewModel: model)
         switch spec.kind {
         case .window:
@@ -93,12 +93,12 @@ import A2UISwiftUI
         entries[id] = Entry(viewModel: model, window: entry.window, popover: entry.popover)
         if let window = entry.window {
             let contentSize = window.contentRect(forFrameRect: window.frame).size
-            window.contentViewController = hostingController(model, id: id)
+            window.contentViewController = hostingController(model, id: id, kind: .window)
             window.setContentSize(size.map { clampedSize($0, kind: .window) } ?? contentSize)
         }
         if let popover = entry.popover {
             let contentSize = popover.contentSize
-            popover.contentViewController = hostingController(model, id: id)
+            popover.contentViewController = hostingController(model, id: id, kind: .popover)
             popover.contentSize = size.map { clampedSize($0, kind: .popover) } ?? contentSize
         }
     }
@@ -194,7 +194,8 @@ import A2UISwiftUI
             "h3": .init(font: .system(size: 15), weight: .semibold),
             "body": .init(font: .system(size: 13)),
             "caption": .init(font: .system(size: 11), color: .secondary)
-        ], cardStyle: .init(padding: 16, cornerRadius: 12, backgroundColor: Color(nsColor: .controlBackgroundColor)))
+        ], cardStyle: .init(padding: 16, cornerRadius: 12, shadowRadius: 1,
+                           shadowColor: Color(nsColor: .separatorColor), shadowY: 0, backgroundColor: .clear))
     }
 
     func viewModel(for id: String) -> SurfaceViewModel? { entries[id]?.viewModel }
@@ -209,10 +210,15 @@ import A2UISwiftUI
                       height: min(max(desired.height, minimum.height), max(1, visible.height - 20)))
     }
 
-    private func hostingController(_ model: SurfaceViewModel, id: String) -> NSViewController {
+    private func hostingController(_ model: SurfaceViewModel, id: String, kind: SurfaceKind) -> NSViewController {
         let handler = capturedActionHandler(id: id)
         let controller = NSHostingController(rootView: A2UISurfaceView(viewModel: model, onAction: handler))
         controller.sizingOptions = []
+        if kind == .popover {
+            // Let NSPopover's system material show through; windows retain their normal background.
+            controller.view.wantsLayer = true
+            controller.view.layer?.backgroundColor = NSColor.clear.cgColor
+        }
         return controller
     }
 

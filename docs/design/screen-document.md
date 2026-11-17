@@ -8,6 +8,8 @@ Zoe uses [A2UI](https://github.com/a2ui-project/a2ui) v0.9.1 with the community 
 
 Only the A2UI basic catalog is used: `Text`, `Image`, `Icon`, `Video`, `AudioPlayer`, `Row`, `Column`, `List`, `Card`, `Tabs`, `Modal`, `Divider`, `Button`, `TextField`, `CheckBox`, `Slider`, `ChoicePicker`, `DateTimeInput`. Zoe defines no custom components; add them only when needed.
 
+For macOS A2UI surfaces, the host fixes card fill to transparent with padding 16, corner radius 12, and a subtle semantic separator shadow. Popover hosting layers are clear so the system popover material shows through; standalone windows retain their normal opaque background for readability. Text uses system semantic colors, including secondary captions. Colors and translucency are host-owned, not model-controlled; this styling does not change the protocol.
+
 The Zoe-specific document format is removed without backward compatibility. Node fields `emphasis`, `tone`, `ttlSeconds`, `transition`, and `bind`, binding to client data sources, and patching by old node ID are removed.
 
 ## Surfaces

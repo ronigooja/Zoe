@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import SwiftUI
 import XCTest
 import A2UISwiftCore
 import ZoeKit
@@ -7,6 +8,17 @@ import ZoeKit
 
 @MainActor
 final class SurfaceManagerTests: XCTestCase {
+    func testFixedStyleUsesTransparentCardsAndSemanticCaptionColor() {
+        let style = SurfaceManager.fixedStyle
+        XCTAssertEqual(style.cardStyle.backgroundColor, Color.clear)
+        XCTAssertEqual(style.cardStyle.padding, 16)
+        XCTAssertEqual(style.cardStyle.cornerRadius, 12)
+        XCTAssertEqual(style.cardStyle.shadowRadius, 1)
+        XCTAssertEqual(style.cardStyle.shadowColor, Color(nsColor: .separatorColor))
+        XCTAssertEqual(style.cardStyle.shadowY, 0)
+        XCTAssertEqual(style.textStyles["caption"]?.color, Color.secondary)
+    }
+
     private func event(version: Int64, deleted: Bool = false) throws -> UISurfaceEvent {
         let messages = deleted
             ? #"[{"version":"v0.9","deleteSurface":{"surfaceId":"versioned"}}]"#
@@ -116,6 +128,7 @@ final class SurfaceManagerTests: XCTestCase {
         manager.onRenderError = { _, errors in renderErrors.append(contentsOf: errors) }
         manager.open(SurfaceSpec(id: id, kind: .window, messages: batch))
         let window = try XCTUnwrap(NSApp.windows.first { $0.identifier?.rawValue == id })
+        XCTAssertTrue(window.isOpaque, "Transparent cards must not make standalone windows translucent")
         let initial = window.contentRect(forFrameRect: window.frame).size
         XCTAssertGreaterThanOrEqual(initial.width, 300)
         XCTAssertGreaterThanOrEqual(initial.height, 200)
@@ -166,10 +179,12 @@ final class SurfaceManagerTests: XCTestCase {
         let window = try XCTUnwrap(NSApp.windows.first { $0.identifier?.rawValue == id })
         XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size, NSSize(width: min(700, visible.width - 20), height: min(500, visible.height - 20)))
         XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle, SurfaceManager.fixedStyle)
+        XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle.cardStyle.backgroundColor, Color.clear)
         let before = window.contentRect(forFrameRect: window.frame).size
         XCTAssertTrue(manager.display(SurfaceSpec(id: id, kind: .window, messages: batch)))
         XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size, before)
         XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle.primaryColor, SurfaceManager.fixedStyle.primaryColor)
+        XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle.cardStyle.backgroundColor, Color.clear)
         XCTAssertTrue(manager.display(SurfaceSpec(id: id, kind: .window, messages: batch, size: .init(width: 600, height: 400))))
         XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size, NSSize(width: min(600, visible.width - 20), height: min(400, visible.height - 20)))
         XCTAssertTrue(manager.display(SurfaceSpec(id: id, kind: .window, messages: batch, size: .init(width: 5000, height: 5000))))
