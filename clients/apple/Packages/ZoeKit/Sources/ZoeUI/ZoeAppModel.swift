@@ -19,6 +19,8 @@ public final class ZoeAppModel: ObservableObject {
     // Physical render evidence survives failed recovery, not connection changes.
     // It is separate from the committed authoritative model and never reserves failures.
     private var recoveryRendered: [UISurfaceBinding: UISurfaceEvent] = [:]
+    private var sessionPresentedSurfaces: [String: UISurfaceEvent] = [:]
+    public var onUISurfaceInputState: ((UISurfaceEvent) -> Void)?
     private var recoveryACKTask: Task<Void, Never>?
     #if os(macOS)
     public var screenVisibleSize: () -> NSSize? = { NSScreen.main?.visibleFrame.size }
@@ -44,6 +46,8 @@ public final class ZoeAppModel: ObservableObject {
     @Published public private(set) var continuousVoiceEnabled: Bool
     @Published public private(set) var silenceHangupEnabled: Bool
     @Published public private(set) var silenceTimeoutSeconds: Double
+    @Published public private(set) var popoverCloseDelaySeconds: Double
+    @Published public private(set) var windowCloseDelaySeconds: Double
     @Published public var voiceDraft = ""
     @Published public private(set) var voiceDraftRevision: Int64 = 0
     private let defaults: UserDefaults
@@ -199,6 +203,8 @@ public final class ZoeAppModel: ObservableObject {
     private let voiceHeartbeat = VoiceHeartbeatLease()
     public init(defaults: UserDefaults = .standard, silenceClock: SilenceClock = SystemSilenceClock()) {
         self.defaults = defaults
+        popoverCloseDelaySeconds = SurfaceClosePolicy.validatedDelay((defaults.object(forKey: "zoe.ui.popoverCloseDelaySeconds") as? NSNumber)?.doubleValue ?? 60)
+        windowCloseDelaySeconds = SurfaceClosePolicy.validatedDelay((defaults.object(forKey: "zoe.ui.windowCloseDelaySeconds") as? NSNumber)?.doubleValue ?? 60)
         let savedEnabled = defaults.object(forKey: "zoe.voice.silenceHangupEnabled") == nil ? true : defaults.bool(forKey: "zoe.voice.silenceHangupEnabled")
         silenceHangupEnabled = savedEnabled
         let savedTimeout = (defaults.object(forKey: "zoe.voice.silenceTimeoutSeconds") as? NSNumber)?.doubleValue ?? 60
@@ -327,6 +333,18 @@ public final class ZoeAppModel: ObservableObject {
         defaults.set(silenceTimeoutSeconds, forKey: "zoe.voice.silenceTimeoutSeconds")
         silence.timeoutSeconds = silenceTimeoutSeconds
         recordSilenceSettingChange(from: before)
+    }
+
+    public func setPopoverCloseDelaySeconds(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        popoverCloseDelaySeconds = SurfaceClosePolicy.validatedDelay(seconds)
+        defaults.set(popoverCloseDelaySeconds, forKey: "zoe.ui.popoverCloseDelaySeconds")
+    }
+
+    public func setWindowCloseDelaySeconds(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        windowCloseDelaySeconds = SurfaceClosePolicy.validatedDelay(seconds)
+        defaults.set(windowCloseDelaySeconds, forKey: "zoe.ui.windowCloseDelaySeconds")
     }
 
     private var silenceSettings: String { DiagnosticSummaries.settings(enabled: silenceHangupEnabled, seconds: silenceTimeoutSeconds) }
@@ -1432,7 +1450,13 @@ public final class ZoeAppModel: ObservableObject {
             let removed = uiSurfaceRequests.reconcile(snapshot)
             onUISurfacesClosed?(removed)
             for surface in snapshot.surfaces {
-                await applyUISurface(surface.event)
+                onUISurfaceInputState?(surface.event)
+                if shouldReplaySurface(surface.event) {
+                    await applyUISurface(surface.event)
+                } else {
+                    // Reserve the recovered revision without claiming a native render.
+                    uiSurfaceRequests.apply(surface.event)
+                }
                 guard !Task.isCancelled, generation == connectionGeneration.value else { return }
             }
             if let coordinator {
@@ -1461,7 +1485,9 @@ public final class ZoeAppModel: ObservableObject {
         let removed = staged.reconcile(recovery.ui)
         for surface in recovery.ui.surfaces {
             let event = surface.event
+            onUISurfaceInputState?(event)
             if staged.apply(event) {
+                guard shouldReplaySurface(event) else { continue }
                 if recoveryRendered[event.binding] == nil || isCurrentUIPresentation?(event) == false {
                     // An attempted replacement can change native content even if it
                     // fails. Previous physical evidence is no longer usable for ACKs.
@@ -1471,6 +1497,7 @@ public final class ZoeAppModel: ObservableObject {
                     guard displayed else { throw ZoeError.invalidResponse }
                     recoveryRendered = recoveryRendered.filter { $0.key.surfaceID != event.surfaceID }
                     recoveryRendered[event.binding] = event
+                    sessionPresentedSurfaces[event.surfaceID] = event
                 }
                 staged.recordRender(event, success: true)
             }
@@ -1514,7 +1541,7 @@ public final class ZoeAppModel: ObservableObject {
         // exact deletion evidence needed by the ACK validity predicate.
         let tombstones = Set(recovery.ui.surfaces.filter { $0.event.deleted }.map { $0.event.surfaceID })
         onUISurfacesClosed?(removed.filter { !tombstones.contains($0) })
-        let events = recovery.ui.surfaces.map(\.event)
+        let events = recovery.ui.surfaces.map(\.event).filter { staged.outcomes[$0.binding] == true }
         let workspace = recovery.snapshot.workspaceID
         let coordinator = coordinator
         // ACK transport/receipt lookup is independent of authoritative recovery.
@@ -1600,6 +1627,11 @@ public final class ZoeAppModel: ObservableObject {
         }
     }
 
+    private func shouldReplaySurface(_ event: UISurfaceEvent) -> Bool {
+        let wasPresented = sessionPresentedSurfaces[event.surfaceID].map { isCurrentUIPresentation?($0) != false } ?? false
+        return SurfaceClosePolicy.shouldReplay(awaitingInput: event.awaitingInput, deleted: event.deleted, wasPresented: wasPresented)
+    }
+
     private func applyUISurface(_ event: UISurfaceEvent) async {
         guard uiSurfaceRequests.apply(event) else {
             if uiSurfaceRequests.outcomes[event.binding] != nil,
@@ -1612,6 +1644,7 @@ public final class ZoeAppModel: ObservableObject {
         }
         recoveryRendered = recoveryRendered.filter { $0.key.surfaceID != event.surfaceID }
         let displayed = onUISurface?(event) ?? false
+        if displayed { sessionPresentedSurfaces[event.surfaceID] = event }
         uiSurfaceRequests.recordRender(event, success: displayed)
         recordUITrace(phase: displayed ? "ui_surface_displayed" : "ui_surface_display_failed", summary: event.diagnosticSummary, level: displayed ? .info : .warn, upload: !displayed)
         await submitUICommand(kind: "ui.rendered", payload: event.renderedPayload(success: displayed), key: event.renderedIdempotencyKey)
@@ -1622,6 +1655,7 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     private func closeUISurfaces() {
+        sessionPresentedSurfaces.removeAll()
         recoveryRendered.removeAll()
         let ids = Array(uiSurfaceRequests.requestIDs.keys)
         for _ in ids { recordUITrace(phase: "ui_surface_closed", summary: "disconnect", level: .info) }

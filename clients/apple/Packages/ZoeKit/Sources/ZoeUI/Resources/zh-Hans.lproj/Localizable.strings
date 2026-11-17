@@ -36,3 +36,6 @@
 "The instance key could not be saved in local storage." = "实例密钥无法保存到本地存储。";
 "The previous instance key could not be restored in local storage. Reconnect with your server key." = "无法在本地存储中恢复先前的实例密钥。请使用服务器密钥重新连接。";
 "Something went wrong. Try again." = "出现问题，请重试。";
+"Popover close delay (seconds)" = "气泡关闭延迟（秒）";
+"Window close delay (seconds)" = "窗口关闭延迟（秒）";
+"After focus loss: 0 means never; maximum 3600 seconds. Pending questions never auto-close. Outside clicks and Esc close popovers immediately; the popover delay applies only to other focus loss." = "失去焦点后开始计时：0 表示不自动关闭，最大 3600 秒。等待回答的问题不会自动关闭。点击气泡外部或按 Esc 会立即关闭气泡；气泡延迟仅适用于其他失焦情况。";

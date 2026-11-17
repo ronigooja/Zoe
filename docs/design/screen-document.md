@@ -22,6 +22,12 @@ A2UI has no window, panel, menu-bar item, popover, or Dock concept. Zoe retains 
 
 Surface tools: `surface.open(spec)`, `surface.update(id, patch)`, `surface.close(id)`, `surface.list()`. `surface.update` replaces or updates A2UI components/data of a surface instead of patching old node IDs.
 
+### macOS dismissal and recovery
+
+For macOS popovers, an outside left/right click or Esc dismisses immediately, including pending-question popovers; this is a local dismissal, not an answer or server deletion. Other focus loss (app switching, Spaces, or another key window) starts the popover close delay. For standalone windows, resigning key or app deactivation starts the window close delay. Regaining focus cancels the applicable countdown. General settings persist separate delays in seconds, each defaulting to 60 and clamped to 0–3600; 0 disables timed closing. A surface marked `awaiting_input` never closes on a timer.
+
+During launch/reconnect snapshot recovery, present only `awaiting_input` surfaces with the server-validated task/question binding, plus updates to surfaces still presented in this connection scope. Always apply deletion tombstones; do not hide an already-visible surface solely because it is not pending. Suppressed snapshot revisions are tracked without reporting a successful native render. Live events retain normal presentation behavior. Local dismissal and recovery filtering leave server data intact.
+
 ## A2UI messages and actions
 
 For UI-controller output, each message contains exactly one operation below. `version` is server-owned: model output may omit it or supply any string, but non-string values are invalid. Before storage or event delivery, the server sets every message's `version` to `v0.9.1`. Other unknown message keys remain invalid.

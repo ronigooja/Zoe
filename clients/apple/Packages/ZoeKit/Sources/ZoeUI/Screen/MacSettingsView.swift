@@ -72,11 +72,19 @@ public struct MacSettingsView: View {
                         if !focused { applySilenceSeconds() }
                     }
                     .focused($secondsFocused)
+                TextField(uiText("Popover close delay (seconds)"), value: Binding(
+                    get: { model.popoverCloseDelaySeconds }, set: { model.setPopoverCloseDelaySeconds($0) }
+                ), format: .number)
+                TextField(uiText("Window close delay (seconds)"), value: Binding(
+                    get: { model.windowCloseDelaySeconds }, set: { model.setWindowCloseDelaySeconds($0) }
+                ), format: .number)
+                Text(uiText("After focus loss: 0 means never; maximum 3600 seconds. Pending questions never auto-close. Outside clicks and Esc close popovers immediately; the popover delay applies only to other focus loss."))
+                    .font(.caption).foregroundStyle(.secondary)
             }
             .padding(20)
             .tabItem { Text("General") }
         }
-        .frame(width: 520, height: 360)
+        .frame(width: 520, height: 480)
         .onAppear { address = model.serverAddress; refreshSilenceSeconds() }
         .onChange(of: model.silenceTimeoutSeconds) { _, _ in refreshSilenceSeconds() }
         .task(id: model.connectionEpoch) { await model.refreshVoiceReadiness() }

@@ -44,6 +44,8 @@ struct ZoeMacApp {
                 Task { @MainActor [weak self] in await self?.model.reportScreenSize() }
             }.store(in: &subscriptions)
         surfaces.onUserClosed = { [weak self] in self?.model.noteUISurfaceUserClosed() }
+        model.$popoverCloseDelaySeconds.sink { [weak self] in self?.surfaces.popoverCloseDelaySeconds = $0 }.store(in: &subscriptions)
+        model.$windowCloseDelaySeconds.sink { [weak self] in self?.surfaces.windowCloseDelaySeconds = $0 }.store(in: &subscriptions)
         surfaces.onRenderError = { [weak self] _, errors in self?.model.noteUISurfaceRenderErrors(errors) }
         surfaces.onBoundAction = { [weak self] binding, action in
             self?.model.sendUISurfaceAction(binding: binding, action: action)
@@ -52,6 +54,7 @@ struct ZoeMacApp {
             guard let self else { return false }
             return self.surfaces.display(event)
         }
+        model.onUISurfaceInputState = { [weak self] in self?.surfaces.updateInputState($0) }
         model.isCurrentUIPresentation = { [weak self] event in
             self?.surfaces.isCurrentPresentation(event) == true
         }
@@ -81,7 +84,7 @@ struct ZoeMacApp {
 
     @objc private func showSettings() {
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 360), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 480), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "Settings"
             window.isReleasedWhenClosed = false
             window.contentViewController = NSHostingController(rootView: MacSettingsView(model: model))

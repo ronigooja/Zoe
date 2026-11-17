@@ -36,3 +36,6 @@
 "The instance key could not be saved in local storage." = "The instance key could not be saved in local storage.";
 "The previous instance key could not be restored in local storage. Reconnect with your server key." = "The previous instance key could not be restored in local storage. Reconnect with your server key.";
 "Something went wrong. Try again." = "Something went wrong. Try again.";
+"Popover close delay (seconds)" = "Popover close delay (seconds)";
+"Window close delay (seconds)" = "Window close delay (seconds)";
+"After focus loss: 0 means never; maximum 3600 seconds. Pending questions never auto-close. Outside clicks and Esc close popovers immediately; the popover delay applies only to other focus loss." = "After focus loss: 0 means never; maximum 3600 seconds. Pending questions never auto-close. Outside clicks and Esc close popovers immediately; the popover delay applies only to other focus loss.";

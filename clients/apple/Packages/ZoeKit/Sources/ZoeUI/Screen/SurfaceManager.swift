@@ -15,6 +15,13 @@ import A2UISwiftUI
 
     private var store = SurfaceStore()
     private var entries: [String: Entry] = [:]
+    private var awaitingInput = Set<String>()
+    private var lostFocusAt: [String: Date] = [:]
+    private var closeTasks: [String: Task<Void, Never>] = [:]
+    private var localMonitor: Any?
+    private var globalMonitor: Any?
+    public var popoverCloseDelaySeconds: Double = 60 { didSet { rescheduleClosures() } }
+    public var windowCloseDelaySeconds: Double = 60 { didSet { rescheduleClosures() } }
     private let actionHandler: (String, ResolvedAction) -> Void
     public var onBoundAction: ((UISurfaceBinding, ResolvedAction) -> Void)?
     private var bindings: [String: UISurfaceBinding] = [:]
@@ -36,6 +43,11 @@ import A2UISwiftUI
         self.popoverAnchor = popoverAnchor
         self.actionHandler = actionHandler
         super.init()
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+                     NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(focusChanged), name: name, object: nil)
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(spaceChanged), name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
     }
 
     public func open(_ spec: SurfaceSpec) {
@@ -64,15 +76,21 @@ import A2UISwiftUI
         case .popover:
             let popover = NSPopover()
             popover.delegate = self
-            popover.behavior = .transient
+            // Explicit dismissal separates outside clicks from delayed non-click focus loss.
+            // Transient behavior cannot provide that distinction for an LSUIElement app.
+            popover.behavior = .applicationDefined
             popover.contentViewController = controller
             popover.contentSize = clampedSize(spec.size, kind: .popover)
             entry.popover = popover
         }
         entries[spec.id] = entry
         if spec.kind == .popover, let anchor = popoverAnchor() {
+            NSApp.activate(ignoringOtherApps: true)
             entry.popover?.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+            entry.popover?.contentViewController?.view.window?.makeKey()
         }
+        refreshEventMonitors()
+        focusChanged(Notification(name: NSWindow.didBecomeKeyNotification))
     }
 
     public func update(id: String, messages: [A2uiMessage]) {
@@ -122,7 +140,16 @@ import A2UISwiftUI
         }
         revisions[event.surfaceID] = event.surfaceVersion
         physicalBindings[event.surfaceID] = event.binding
+        updateInputState(event)
         return true
+    }
+
+    /// Snapshot input state can change without a new presentation revision (answer received).
+    public func updateInputState(_ event: UISurfaceEvent) {
+        guard entries[event.surfaceID] != nil else { return }
+        if event.awaitingInput { awaitingInput.insert(event.surfaceID) }
+        else { awaitingInput.remove(event.surfaceID) }
+        scheduleClosure(id: event.surfaceID)
     }
 
     @discardableResult public func display(_ spec: SurfaceSpec) -> Bool {
@@ -153,12 +180,17 @@ import A2UISwiftUI
             guard let anchor = popoverAnchor() else { return false }
             if entry.popover?.isShown != true {
                 entry.popover?.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+                entry.popover?.contentViewController?.view.window?.makeKey()
             }
+            refreshEventMonitors()
             return entry.popover?.isShown == true
         }
     }
 
     public func close(id: String) {
+        closeTasks.removeValue(forKey: id)?.cancel()
+        lostFocusAt.removeValue(forKey: id)
+        awaitingInput.remove(id)
         physicalBindings.removeValue(forKey: id)
         store.close(id: id)
         guard let entry = entries.removeValue(forKey: id) else { return }
@@ -166,6 +198,7 @@ import A2UISwiftUI
         entry.window?.close()
         entry.popover?.delegate = nil
         entry.popover?.performClose(nil)
+        refreshEventMonitors()
     }
 
     /// Clear revision fences only when the authenticated connection scope is discarded.
@@ -184,7 +217,81 @@ import A2UISwiftUI
     }
 
     public func popoverDidClose(_ notification: Notification) {
+        if let popover = notification.object as? NSPopover,
+           let id = entries.first(where: { $0.value.popover === popover })?.key {
+            close(id: id)
+        }
         onUserClosed?()
+    }
+
+    private func dismiss(id: String) {
+        guard let entry = entries[id] else { return }
+        if let popover = entry.popover, popover.isShown { popover.performClose(nil) }
+        else if let window = entry.window { window.performClose(nil) }
+    }
+
+    private func refreshEventMonitors() {
+        let needsMonitors = entries.values.contains { $0.popover?.isShown == true }
+        if !needsMonitors {
+            if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+            if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
+            localMonitor = nil
+            globalMonitor = nil
+        } else if localMonitor == nil {
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+                MainActor.assumeIsolated {
+                    let dismissed = self?.handleDismissal(event, global: false) ?? false
+                    return dismissed && event.type == .keyDown ? nil : event
+                }
+            }
+            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                MainActor.assumeIsolated { _ = self?.handleDismissal(event, global: true) }
+            }
+        }
+    }
+
+    private func handleDismissal(_ event: NSEvent, global: Bool) -> Bool {
+        var dismissed = false
+        for (id, entry) in Array(entries) where entry.popover?.isShown == true {
+            let inside = !global && event.window === entry.popover?.contentViewController?.view.window
+            if SurfaceClosePolicy.shouldDismissPopover(isEscape: event.type == .keyDown && event.keyCode == 53,
+                isMouseDown: event.type == .leftMouseDown || event.type == .rightMouseDown, isInside: inside) {
+                dismiss(id: id)
+                dismissed = true
+            }
+        }
+        return dismissed
+    }
+
+    @objc private func focusChanged(_ notification: Notification) {
+        for (id, entry) in entries {
+            let window = entry.window ?? entry.popover?.contentViewController?.view.window
+            let focused = NSApp.isActive && window?.isKeyWindow == true
+            if focused { lostFocusAt.removeValue(forKey: id) }
+            else if lostFocusAt[id] == nil { lostFocusAt[id] = Date() }
+            scheduleClosure(id: id)
+        }
+    }
+
+    @objc private func spaceChanged(_ notification: Notification) {
+        focusChanged(notification)
+    }
+
+    private func rescheduleClosures() {
+        for id in entries.keys { scheduleClosure(id: id) }
+    }
+
+    private func scheduleClosure(id: String) {
+        closeTasks.removeValue(forKey: id)?.cancel()
+        guard let entry = entries[id], let deadline = SurfaceClosePolicy.deadline(lostFocusAt: lostFocusAt[id],
+            delay: entry.popover == nil ? windowCloseDelaySeconds : popoverCloseDelaySeconds,
+            awaitingInput: awaitingInput.contains(id)) else { return }
+        let seconds = max(0, deadline.timeIntervalSinceNow)
+        closeTasks[id] = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
+            guard !Task.isCancelled, let self, !self.awaitingInput.contains(id), self.lostFocusAt[id] != nil else { return }
+            self.dismiss(id: id)
+        }
     }
 
     // Host-owned spacing in points; rendering facts in internal/uictl/controller.go

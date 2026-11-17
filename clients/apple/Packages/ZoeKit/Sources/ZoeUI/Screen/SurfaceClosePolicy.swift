@@ -1,0 +1,21 @@
+import Foundation
+
+/// Local presentation policy; it never changes server-owned task or surface data.
+struct SurfaceClosePolicy {
+    static func validatedDelay(_ seconds: Double) -> Double {
+        seconds.isFinite ? min(3600, max(0, seconds)) : 60
+    }
+
+    static func shouldDismissPopover(isEscape: Bool, isMouseDown: Bool, isInside: Bool) -> Bool {
+        isEscape || (isMouseDown && !isInside)
+    }
+
+    static func deadline(lostFocusAt: Date?, delay: Double, awaitingInput: Bool) -> Date? {
+        guard !awaitingInput, delay > 0, let lostFocusAt else { return nil }
+        return lostFocusAt.addingTimeInterval(delay)
+    }
+
+    static func shouldReplay(awaitingInput: Bool, deleted: Bool, wasPresented: Bool) -> Bool {
+        deleted || awaitingInput || wasPresented
+    }
+}
