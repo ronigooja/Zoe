@@ -16,6 +16,25 @@ func fixture(messages string) string {
 	return `{"messages":[` + messages + `],"container":"window","feedback":"Shown.","awaiting_input":false,"input_note":""}`
 }
 
+func TestRenderingEnvironmentDefinitions(t *testing.T) {
+	for _, fact := range []string{
+		"native macOS menu-bar popover with translucent system material or a native window",
+		"Cards have no fill", "card padding is 8 pt", "Surface padding is 8 pt", "leaf margins are 4 pt",
+		"h1 22 pt", "h2 18 pt", "h3 15 pt", "body 13 pt", "caption 11 pt with secondary color",
+		"unspecified text variant renders as default body text",
+		"adapt to light and dark appearance", "the model cannot set colors",
+		"scrolls vertically when content exceeds the container",
+		"rendered output is not shown back to the model",
+	} {
+		if !strings.Contains(RenderingEnvironment, fact) {
+			t.Errorf("missing rendering fact %q", fact)
+		}
+	}
+	if !strings.HasSuffix(SubsetDefinitions, "\n\n"+RenderingEnvironment) {
+		t.Fatal("controller subset definitions must include rendering environment")
+	}
+}
+
 func TestParse(t *testing.T) {
 	valid := fixture(create + "," + root)
 	for _, tc := range []struct {
