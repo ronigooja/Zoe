@@ -1,4 +1,5 @@
 import AVFAudio
+import AVFoundation
 import Foundation
 import WebRTC
 
@@ -223,8 +224,14 @@ extension LibWebRTCTransport: RTCDataChannelDelegate {
 
 public protocol VoiceAudioSessionAdapter: AnyObject {
     var onLifecycleEvent: (@Sendable (VoiceAudioLifecycleEvent) -> Void)? { get set }
-    func activate() throws
+    func activate() async throws
     func deactivate() throws
+}
+
+public enum MicrophoneAccessError: Error, LocalizedError, Sendable {
+    case denied
+
+    public var errorDescription: String? { "Microphone access is not allowed for Zoe." }
 }
 
 public enum VoiceAudioLifecycleEvent: Sendable {
@@ -236,7 +243,16 @@ public final class AppleDesktopAudioSessionAdapter: VoiceAudioSessionAdapter {
     public var onLifecycleEvent: (@Sendable (VoiceAudioLifecycleEvent) -> Void)?
     public init() {}
 
-    public func activate() throws {}
+    public func activate() async throws {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return
+        case .notDetermined:
+            guard await AVCaptureDevice.requestAccess(for: .audio) else { throw MicrophoneAccessError.denied }
+        default:
+            throw MicrophoneAccessError.denied
+        }
+    }
 
     public func deactivate() throws {}
 }

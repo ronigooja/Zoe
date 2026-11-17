@@ -604,7 +604,8 @@ public final class ZoeAppModel: ObservableObject {
                 }
             }
             diagnosticPhase = "audio_activate"
-            try audio?.activate()
+            try await audio?.activate()
+            guard generation == connectionGeneration.value, mediaEpoch == voiceMediaEpoch else { throw CancellationError() }
             let iceServers = config.webRTC.iceServers.map { RTCIceServer(urlStrings: $0.urls) }
             diagnosticPhase = "webrtc_offer"
             transport = try LibWebRTCTransport(iceServers: iceServers, dataChannelLabel: config.webRTC.dataChannel.label)
