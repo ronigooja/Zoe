@@ -198,6 +198,8 @@ import A2UISwiftUI
             "h1": .init(font: .system(size: 22), weight: .bold),
             "h2": .init(font: .system(size: 18), weight: .semibold),
             "h3": .init(font: .system(size: 15), weight: .semibold),
+            "h4": .init(font: .system(size: 14), weight: .semibold),
+            "h5": .init(font: .system(size: 13), weight: .semibold),
             "body": .init(font: .system(size: 13)),
             "caption": .init(font: .system(size: 11), color: .secondary)
         ], cardStyle: .init(padding: cardPadding, cornerRadius: 12, backgroundColor: .clear),
