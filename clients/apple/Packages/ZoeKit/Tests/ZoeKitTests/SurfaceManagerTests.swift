@@ -35,6 +35,11 @@ final class SurfaceManagerTests: XCTestCase {
         let style = SurfaceManager.fixedStyle
         XCTAssertEqual(style.cardStyle.backgroundColor, Color.primary.opacity(0.06))
         XCTAssertEqual(SurfaceManager.cardFillOpacity, 0.06)
+        XCTAssertEqual(style.buttonStyles["default"]?.horizontalPadding, 10)
+        XCTAssertEqual(style.buttonStyles["default"]?.verticalPadding, 2)
+        XCTAssertEqual(style.buttonStyles["default"]?.cornerRadius, 6)
+        XCTAssertNil(style.buttonStyles["primary"], "primary and borderless keep the library defaults")
+        XCTAssertNil(style.buttonStyles["borderless"])
         XCTAssertEqual(SurfaceManager.surfacePadding, 8)
         XCTAssertEqual(SurfaceManager.cardPadding, 8)
         XCTAssertEqual(SurfaceManager.leafMargin, 4)
