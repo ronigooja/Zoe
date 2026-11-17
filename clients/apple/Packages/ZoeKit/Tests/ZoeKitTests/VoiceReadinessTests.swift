@@ -77,9 +77,11 @@ final class VoiceReadinessTests: XCTestCase {
         let next = try fixture()
         model.voiceReadinessOverrideForTesting = { next }
         await model.refreshVoiceReadiness()
+        // The first refresh configures the connection, which publishes .stopped.
+        let before = model.voiceStatus
         model.voiceReadinessOverrideForTesting = { throw ZoeError.invalidResponse }
         await model.refreshVoiceReadiness()
-        XCTAssertEqual(model.voiceStatus, .idle)
+        XCTAssertEqual(model.voiceStatus, before)
         XCTAssertEqual(model.voiceConfig, next.0)
         XCTAssertEqual(model.voicePoolStatus, next.1)
     }
@@ -98,13 +100,14 @@ final class VoiceReadinessTests: XCTestCase {
             }
             let task = Task { await model.refreshVoiceReadiness() }
             await fulfillment(of: [started], timeout: 2)
+            let before = model.voiceStatus
             if cancel { task.cancel() }
             else { _ = model.beginVoiceAttemptForTesting() }
             continuation?.resume(returning: next)
             await task.value
             XCTAssertNil(model.voiceConfig)
             XCTAssertNil(model.voicePoolStatus)
-            XCTAssertEqual(model.voiceStatus, cancel ? .idle : .connecting)
+            XCTAssertEqual(model.voiceStatus, cancel ? before : .connecting)
         }
     }
 
