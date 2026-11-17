@@ -49,7 +49,7 @@ all existing check groups for the selected ref:
 gh workflow run ci.yml --ref main
 ```
 
-When unsigned Apple artifacts or Linux operator packages are needed, use the
+When Apple macOS artifacts or Linux operator packages are needed, use the
 corresponding workflow's manual `release` option. Each runs its complete relevant
 validation before publishing artifacts for the same source revision:
 
@@ -58,10 +58,10 @@ gh workflow run apple.yml --ref main -f release=true
 gh workflow run linux.yml --ref main -f release=true
 ```
 
-The Apple release packages `Zoe-unsigned.dmg` with `SHA256SUMS` as the single artifact `apple-unsigned-<full-sha>` (3-day retention). The macOS job runs after the Swift tests and uploads only when both pass.
+The Apple release packages `Zoe.dmg` with `SHA256SUMS` as the single artifact `apple-macos-<full-sha>` (3-day retention). The macOS job runs after the Swift tests and uploads only when both pass. The app is signed with the repository's self-signed identity (secrets `ZOE_SIGNING_P12`, `ZOE_SIGNING_P12_PASSWORD`; designated requirement `identifier "com.zoe.mac" and certificate leaf = <hash>`), which keeps macOS privacy grants across builds; it is not notarized, so Gatekeeper still asks for manual approval.
 
 Without `release=true`, those manual workflows perform full platform checks
-without release packages. Apple artifacts remain unsigned; artifact creation does
+without release packages. Apple artifacts are not notarized; artifact creation does
 not install or deploy. Server and OpenCode runtime artifact workflows remain separate; see
 [deployment operations](../operations/deployment.md).
 
@@ -74,7 +74,7 @@ for the authoritative evidence categories and acceptance boundary.
 Pull requests and ordinary pushes validate the affected scope; they do not publish
 release artifacts. A release tag on `main` is the only formal artifact entry point.
 After required verification succeeds, the release workflow records one manifest for
-the server, runner, operator CLI, memory worker, OpenCode runtime, and unsigned Apple artifacts.
+the server, runner, operator CLI, memory worker, OpenCode runtime, and Apple artifacts.
 The manifest includes the source revision, target architecture, image digests, and
 SHA-256 values. A failed job must not be treated as a complete release.
 

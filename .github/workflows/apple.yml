@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: Package unsigned apps after all checks pass
+        description: Package the locally signed macOS app after all checks pass
         type: boolean
         default: false
       platform:
@@ -152,7 +152,7 @@ jobs:
           codesign -d -r- "$app" >> "$CI_OUTPUT/logs/codesign.log" 2>&1
           grep 'designated =>' "$CI_OUTPUT/logs/codesign.log"
 
-      - name: Package unsigned macOS app
+      - name: Package macOS app
         if: github.event_name == 'workflow_dispatch' && inputs.release
         shell: bash
         run: |
@@ -164,14 +164,14 @@ jobs:
           ln -s /Applications "$CI_OUTPUT/dmg-root/Applications"
           hdiutil create -volname Zoe -srcfolder \
             "$CI_OUTPUT/dmg-root" \
-            -ov -format UDRO "$CI_OUTPUT/artifacts/Zoe-unsigned.dmg"
-          (cd "$CI_OUTPUT/artifacts" && shasum -a 256 Zoe-unsigned.dmg > SHA256SUMS)
+            -ov -format UDRO "$CI_OUTPUT/artifacts/Zoe.dmg"
+          (cd "$CI_OUTPUT/artifacts" && shasum -a 256 Zoe.dmg > SHA256SUMS)
 
-      - name: Upload unsigned macOS app
+      - name: Upload macOS app
         if: github.event_name == 'workflow_dispatch' && inputs.release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: apple-unsigned-${{ github.sha }}
+          name: apple-macos-${{ github.sha }}
           path: ${{ env.CI_OUTPUT }}/artifacts
           retention-days: 3
           if-no-files-found: error
