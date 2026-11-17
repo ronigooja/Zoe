@@ -141,7 +141,7 @@ jobs:
         with:
           name: apple-macos-build-${{ github.sha }}
           path: ${{ env.CI_OUTPUT }}/artifacts/Zoe-unsigned.dmg
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
           compression-level: 0
 
