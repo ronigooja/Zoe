@@ -4,6 +4,10 @@ services:
   zoe-server:
     image: ${ZOE_SERVER_IMAGE:?set ZOE_SERVER_IMAGE to an immutable release tag}
     user: "65532:65532"
+    logging:
+      driver: journald
+      options:
+        tag: "{{.Name}}"
     init: true
     restart: unless-stopped
     read_only: true
@@ -104,6 +108,10 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.19.1@sha256:12364fe851b9f17356fc88189fc06d1b521262e04659ec7345975b00c9246a10
+    logging:
+      driver: journald
+      options:
+        tag: "{{.Name}}"
     restart: unless-stopped
     read_only: true
     user: "1000:1000"
@@ -126,6 +134,10 @@ services:
   zoe-memory-worker:
     image: ${ZOE_MEMORY_WORKER_IMAGE:?set an immutable memory worker image tag}
     user: "65532:65532"
+    logging:
+      driver: journald
+      options:
+        tag: "{{.Name}}"
     init: true
     restart: unless-stopped
     read_only: true
