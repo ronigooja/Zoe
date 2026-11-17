@@ -580,9 +580,20 @@ but does not load images or change the deployment.
 On NB03HK (authorized Linux amd64 worker with Go, Git and Docker/buildx), build
 from an exact locally available full SHA in a clean detached worktree. Fetch the
 reviewed revision separately before building; the script does not fetch or push.
+For every build, the script resolves the repository containing itself (not the
+caller's working directory), verifies the commit, and checks out only `--sha`
+under umask 022 inside private scratch storage. It requires the checkout's
+`git write-tree` to equal `--sha^{tree}` before building; dirty/untracked caller
+files and caller file permissions are never build inputs.
 It builds the workflow's four binaries and three Dockerfiles with their pinned
 bases, uses task-local Go/BuildKit caches, and removes its temporary builder and
-checkout. Builds are not run on the controller or Zoe host.
+checkout. Before saving each non-root image, it exports filesystem metadata and
+rejects application files without world-read permission or directories without
+world-read/traverse permission under `/app`, `/usr/local/bin`, and Zoe binary
+paths; Zoe binaries must also remain world-executable. Temporary inspection
+containers are removed. The memory Dockerfile also normalizes copied services
+with `chmod -R a+rX`, independent of source modes. Builds are not run on the
+controller or Zoe host.
 
 ```sh
 bash deploy/linux/build-release.sh --sha FULL_SHA --artifact-dir /tmp/zoe-release-FULL_SHA
@@ -593,10 +604,12 @@ The flat artifact directory contains `server-linux-amd64.tar.gz`,
 `zoe-linux-amd64.tar.gz`, `SOURCE_REVISION`, `SHA256SUMS`,
 `build-machine-manifest.json`, and `zoe-server.tar`, `zoe-memory-worker.tar`,
 `zoe-runner.tar`. The build-machine manifest records schema 1, builder hostname,
-source SHA, Go/Docker versions, SHA-256 of every other file, and each image
+source SHA, Git tree ID (`source_tree`), Go/Docker versions, SHA-256 of every other file, and each image
 archive's hash and expected image ID. The manifest cannot hash itself; trust is
 the reviewed worker and restricted transfer, not an unsigned checksum alone.
 Both archives retain their own checksums and identical embedded CLI revision.
+The optional `source_tree` field does not change schema-1 staged verification or
+artifact layout; existing manifests without it remain accepted.
 
 When deploying staged images, the manifest image ID authenticates the saved
 config bytes, not the daemon's lookup key. After loading, archive `RepoTags`
