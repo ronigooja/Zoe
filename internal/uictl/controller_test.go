@@ -52,8 +52,17 @@ func TestParse(t *testing.T) {
 		{"empty_messages", fixture(""), false},
 		{"null_messages", strings.Replace(valid, `"messages":[`+create+","+root+`]`, `"messages":null`, 1), false},
 		{"many_messages", fixture(strings.TrimSuffix(strings.Repeat(update+",", 65), ",")), false},
-		{"version", strings.Replace(valid, `v0.9.1`, `v0.9`, 1), false},
-		{"missing_version", strings.Replace(valid, `"version":"v0.9.1",`, "", 1), false},
+		{"version", strings.Replace(valid, `v0.9.1`, `v0.9`, 1), true},
+		{"missing_version", strings.Replace(valid, `"version":"v0.9.1",`, "", 1), true},
+		{"numeric_version", strings.Replace(valid, `"version":"v0.9.1"`, `"version":9`, 1), false},
+		{"null_version", strings.Replace(valid, `"version":"v0.9.1"`, `"version":null`, 1), false},
+		{"bool_version", strings.Replace(valid, `"version":"v0.9.1"`, `"version":true`, 1), false},
+		{"object_version", strings.Replace(valid, `"version":"v0.9.1"`, `"version":{}`, 1), false},
+		{"array_version", strings.Replace(valid, `"version":"v0.9.1"`, `"version":[]`, 1), false},
+		{"version_only", fixture(`{"version":"v0.9"}`), false},
+		{"empty_message", fixture(`{}`), false},
+		{"unknown_message", fixture(`{"private content":{}}`), false},
+		{"multiple_without_version", fixture(`{"deleteSurface":{"surfaceId":"screen"},"updateDataModel":{"surfaceId":"screen"}}`), false},
 		{"multiple_operations", fixture(`{"version":"v0.9.1","deleteSurface":{"surfaceId":"screen"},"updateDataModel":{"surfaceId":"screen"}}`), false},
 		{"mixed_surfaces", fixture(create + "," + strings.ReplaceAll(root, `"screen"`, `"another"`)), false},
 		{"catalog", strings.Replace(valid, CatalogID, "other", 1), false},
@@ -86,6 +95,56 @@ func TestParseRejectsStatusItem(t *testing.T) {
 	text := strings.Replace(fixture(create+","+root), `"window"`, `"statusItem"`, 1)
 	if _, err := Parse(text, nil); err == nil || err.Error() != "container_invalid" {
 		t.Fatalf("expected container_invalid, got %v", err)
+	}
+}
+
+func TestServerOwnedMessageVersion(t *testing.T) {
+	for _, version := range []string{`"version":"v0.9",`, "", `"version":"arbitrary",`} {
+		t.Run(version, func(t *testing.T) {
+			messages := strings.ReplaceAll(create+","+root, `"version":"v0.9.1",`, version)
+			o, err := Parse(fixture(messages), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, err := Apply(nil, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Stored replay is normalized too, even when supplied without Parse.
+			var stored []json.RawMessage
+			if err := json.Unmarshal([]byte("["+messages+"]"), &stored); err != nil {
+				t.Fatal(err)
+			}
+			replayed, err := Apply(stored, Output{SurfaceID: "screen"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, batch := range [][]json.RawMessage{o.Messages, state.Messages, replayed.Messages} {
+				for _, raw := range batch {
+					var message map[string]json.RawMessage
+					_ = json.Unmarshal(raw, &message)
+					if string(message["version"]) != `"`+Version+`"` {
+						t.Fatalf("noncanonical version: %s", message["version"])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestValidationFailureCodeIsSafe(t *testing.T) {
+	for _, tc := range []struct{ text, code string }{
+		{strings.Replace(fixture(create+","+root), `"version":"v0.9.1"`, `"version":123`, 1), "string_required:version"},
+		{strings.Replace(fixture(create+","+root), `"text":"Title"`, `"text":123`, 1), "component_property:Text.text"},
+		{strings.Replace(fixture(create+","+root), `"text":"Title"`, `"private user text":123`, 1), "component_required_property:Text.text"},
+		{strings.Replace(fixture(create+","+root), `"text":"Title"`, `"text":"Title","private user text":123`, 1), "component_property:Text"},
+		{strings.Replace(fixture(create+","+root), `"container":"window"`, `"container":{"private user text":123}`, 1), "invalid_json"},
+		{fixture(`{"private user text":{}}`), "unknown_field"},
+	} {
+		_, err := Parse(tc.text, nil)
+		if err == nil || FailureCode(err) != tc.code {
+			t.Fatalf("want=%s err=%v", tc.code, err)
+		}
 	}
 }
 

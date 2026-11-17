@@ -124,7 +124,7 @@ func TestUIJobSizeExceedsScreen(t *testing.T) {
 	if err := r.store.DB().QueryRow(`SELECT status,last_error FROM ui_jobs`).Scan(&status, &code); err != nil {
 		t.Fatal(err)
 	}
-	if status != "failed" || code != "validation_failed" {
+	if status != "failed" || code != "validation_failed:size_invalid" {
 		t.Fatalf("status=%s code=%s", status, code)
 	}
 }

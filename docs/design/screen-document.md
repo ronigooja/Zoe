@@ -20,6 +20,8 @@ Surface tools: `surface.open(spec)`, `surface.update(id, patch)`, `surface.close
 
 ## A2UI messages and actions
 
+For UI-controller output, each message contains exactly one operation below. `version` is server-owned: model output may omit it or supply any string, but non-string values are invalid. Before storage or event delivery, the server sets every message's `version` to `v0.9.1`. Other unknown message keys remain invalid.
+
 - `createSurface{surfaceId, catalogId, theme?, sendDataModel}`
 - `updateComponents{surfaceId, components[]}`
 - `updateDataModel{surfaceId, path?, value?}`

@@ -307,8 +307,9 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 	}
 	parsed, err := uictl.Parse(output, controllerInput.Screen)
 	if err != nil {
-		call.Result(nil, "validation_failed")
-		s.failUIJob(ctx, j, "validation_failed", false)
+		code := "validation_failed:" + uictl.FailureCode(err)
+		call.Result(nil, code)
+		s.failUIJob(ctx, j, code, false)
 		return
 	}
 	call.Result(parsed, "")
