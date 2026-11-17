@@ -2,6 +2,7 @@ package uictl
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -18,13 +19,15 @@ func fixture(messages string) string {
 
 func TestRenderingEnvironmentDefinitions(t *testing.T) {
 	for _, fact := range []string{
-		"native macOS menu-bar popover with translucent system material or a native window",
-		"Cards have no fill", "card padding is 8 pt", "Surface padding is 8 pt", "leaf margins are 4 pt",
-		"h1 22 pt", "h2 18 pt", "h3 15 pt", "body 13 pt", "caption 11 pt with secondary color",
-		"unspecified text variant renders as default body text",
+		"anchored below the menu-bar icon", "closes when the user clicks elsewhere",
+		"opaque system background that stays open until closed",
+		"Cards have no fill", "8 pt of inner padding", "surface has 8 pt of padding",
+		"4 pt of space around them", "Row, Column and List have no outer margin",
+		"h1, h2, h3, h4, h5, body and caption render at 22, 18, 15, 14, 13, 13 and 11 pt",
+		"h1 is bold, h2 through h5 are semibold", "caption uses the secondary color",
+		"Text without a variant renders as body",
 		"adapt to light and dark appearance", "the model cannot set colors",
-		"scrolls vertically when content exceeds the container",
-		"rendered output is not shown back to the model",
+		"Content taller than the container scrolls vertically",
 	} {
 		if !strings.Contains(RenderingEnvironment, fact) {
 			t.Errorf("missing rendering fact %q", fact)
@@ -32,6 +35,94 @@ func TestRenderingEnvironmentDefinitions(t *testing.T) {
 	}
 	if !strings.HasSuffix(SubsetDefinitions, "\n\n"+RenderingEnvironment) {
 		t.Fatal("controller subset definitions must include rendering environment")
+	}
+	if !strings.Contains(Prompt, "The user reads the surface on the Mac screen beside other applications and can type into it when a question is pending.") {
+		t.Fatal("missing surface purpose")
+	}
+	if strings.Contains(RenderingEnvironment, "shown back to the model") {
+		t.Fatal("removed output-feedback sentence restored")
+	}
+}
+
+func TestOptionalPropertyDefinitionsAccepted(t *testing.T) {
+	// Parse the actual prompt notation, not a second hand-maintained enum list.
+	listed := regexp.MustCompile(`([A-Za-z]+)\.([A-Za-z]+)=([A-Za-z0-9|]+)`).FindAllStringSubmatch(OptionalProperties, -1)
+	if len(listed) == 0 {
+		t.Fatal("prompt documents no enum properties")
+	}
+	seen := map[string]bool{}
+	validate := func(name, property string, value json.RawMessage) {
+		t.Helper()
+		c := map[string]json.RawMessage{"id": json.RawMessage(`"root"`), "component": json.RawMessage(`"` + name + `"`)}
+		for _, key := range definitions[name].required {
+			switch definitions[name].properties[key] {
+			case "dynamicString", "string":
+				c[key] = json.RawMessage(`"value"`)
+			case "dynamicBool":
+				c[key] = json.RawMessage(`true`)
+			case "dynamicNumber", "number":
+				c[key] = json.RawMessage(`1`)
+			case "dynamicStrings", "children", "options":
+				c[key] = json.RawMessage(`[]`)
+			case "tabs":
+				c[key] = json.RawMessage(`[{"title":"Tab","child":"child"}]`)
+			case "action":
+				c[key] = json.RawMessage(`{"event":{"name":"submit"}}`)
+			default:
+				t.Fatalf("unhandled required property %s.%s", name, key)
+			}
+		}
+		c[property] = value
+		raw, err := json.Marshal(map[string]any{"updateComponents": map[string]any{"surfaceId": "screen", "components": []any{c}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := validateMessage(raw); err != nil {
+			t.Errorf("documented %s.%s=%s rejected: %v", name, property, value, err)
+		}
+	}
+	for _, entry := range listed {
+		key := entry[1] + "." + entry[2]
+		seen[key] = true
+		values := strings.Split(entry[3], "|")
+		if strings.Join(values, "|") != strings.Join(propertyEnums[key], "|") {
+			t.Errorf("%s enum differs from validator", key)
+		}
+		for _, value := range values {
+			raw, _ := json.Marshal(value)
+			validate(entry[1], entry[2], raw)
+		}
+	}
+	// The prompt documents a subset on purpose; every documented value must be accepted.
+	// Exercise every non-enum optional property, both literal and binding forms.
+	for name, definition := range definitions {
+		validate(name, "weight", json.RawMessage(`-0.5`))
+		for property, kind := range definition.properties {
+			if seen[name+"."+property] {
+				continue
+			}
+			required := false
+			for _, key := range definition.required {
+				required = required || key == property
+			}
+			if required {
+				continue
+			}
+			switch kind {
+			case "dynamicString":
+				validate(name, property, json.RawMessage(`"value"`))
+				validate(name, property, json.RawMessage(`{"path":"/value"}`))
+			case "string":
+				validate(name, property, json.RawMessage(`"value"`))
+			case "bool":
+				validate(name, property, json.RawMessage(`true`))
+				validate(name, property, json.RawMessage(`false`))
+			case "number":
+				validate(name, property, json.RawMessage(`0`))
+			default:
+				t.Fatalf("unhandled optional property %s.%s", name, property)
+			}
+		}
 	}
 }
 
