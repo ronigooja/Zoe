@@ -10,6 +10,26 @@ private final class SettingsSilenceClock: SilenceClock {
 
 @MainActor
 final class SilenceSettingsTests: XCTestCase {
+    func testSurfaceCloseDelayDefaultsValidationAndPersistence() {
+        let name = "SurfaceCloseSettingsTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let model = ZoeAppModel(defaults: defaults)
+        XCTAssertEqual(model.popoverCloseDelaySeconds, 60)
+        XCTAssertEqual(model.windowCloseDelaySeconds, 60)
+        model.setPopoverCloseDelaySeconds(-10)
+        model.setWindowCloseDelaySeconds(9999)
+        model.setPopoverCloseDelaySeconds(.nan)
+        model.setWindowCloseDelaySeconds(.infinity)
+        let restored = ZoeAppModel(defaults: defaults)
+        XCTAssertEqual(restored.popoverCloseDelaySeconds, 0)
+        XCTAssertEqual(restored.windowCloseDelaySeconds, 3600)
+        defaults.set(-5, forKey: "zoe.ui.windowCloseDelaySeconds")
+        defaults.set(4000, forKey: "zoe.ui.popoverCloseDelaySeconds")
+        XCTAssertEqual(ZoeAppModel(defaults: defaults).windowCloseDelaySeconds, 0)
+        XCTAssertEqual(ZoeAppModel(defaults: defaults).popoverCloseDelaySeconds, 3600)
+    }
+
     func testClassifierTypesAndOneSecondCoalescing() {
         for type in ["output_transcript.added", "user_audio_turn.final", "assistant.output"] {
             XCTAssertTrue(VoiceActivityClassifier.isActivity(type: type), type)

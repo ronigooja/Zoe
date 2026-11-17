@@ -20,6 +20,8 @@ Retain the surface, settings, voice, text-input, and silence-timeout tools, but 
 
 Implementation direction: a2ui-swift renders content; AppKit owns windows (`NSPanel`/`NSWindow` hosting `NSHostingView`, `NSStatusItem`, `NSPopover`, activation policy, `dockTile`) through a macOS-only `SurfaceManager`, because SwiftUI scenes cannot be created freely at runtime. Settings use the SwiftUI `Settings` scene. Models and the surface-host protocol stay in cross-platform ZoeKit; AppKit code is under `#if os(macOS)`. Window behavior cannot be unit tested; it needs a GitHub macOS runner build plus manual device checks and must not be reported as verified before then.
 
+For macOS surface lifetime and snapshot presentation, use the [dismissal and recovery contract](../../design/screen-document.md#macos-dismissal-and-recovery); `SurfaceManager` owns native focus/dismissal and the app model filters recovery, without changing server state or live-event delivery.
+
 ## Consequences
 
 The client remains responsible for presentation while the server controls authoritative content and business policy. Protocol upgrades depend on renderer support rather than a Zoe component library. High-impact actions still require server-validated scoped confirmation ([ADR 0009](0009-voice-steward-impact-policy.md)); the client never decides outcomes. Dependency compatibility, catalog registration, and licensing remain [open items](../../design/screen-document.md#open-items), not implementation or verification claims.

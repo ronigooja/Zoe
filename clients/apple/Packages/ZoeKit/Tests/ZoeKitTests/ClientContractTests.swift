@@ -329,6 +329,48 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(renders, 2, "Successful tombstone revision is not rendered twice")
     }
 
+    @MainActor func testRecoverySuppressesHistoricalSurfaceButLiveRevisionStillDisplays() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let model = ZoeAppModel()
+        model.setAuthenticationForTesting(.connected)
+        var renders = 0
+        model.onUISurface = { _ in renders += 1; return true }
+        let surface = #"{"request_id":"old","surface_id":"s1","surface_version":1,"deleted":false,"container":"window","awaiting_input":false,"render_status":"rendered","messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}]}"#
+        let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!
+            .replacingOccurrences(of: "\"surfaces\":[]", with: "\"surfaces\":[\(surface)]")
+        ContractURLProtocol.responseHandler = { _ in (200, [:], Data(body.utf8)) }
+        try await model.recoverGlobalStateForTesting(api: api)
+        XCTAssertEqual(renders, 0)
+        XCTAssertEqual(model.eventCursorForTesting, "20")
+        let live = surface.replacingOccurrences(of: "\"surface_version\":1", with: "\"surface_version\":2")
+        let payload = try JSONDecoder().decode(JSONValue.self, from: Data(live.utf8))
+        await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "live", cursor: "21", type: "ui.surface", occurredAt: "", workspaceId: "default", aggregateType: "ui_surface", aggregateId: "s1", aggregateVersion: 2, payload: payload))
+        XCTAssertEqual(renders, 1)
+        try await model.recoverGlobalStateForTesting(api: api)
+        XCTAssertEqual(renders, 1, "Reconnect must not hide or recreate the already-presented live surface")
+    }
+
+    @MainActor func testRecoveryPresentsPendingQuestionOnLaunch() async throws {
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let model = ZoeAppModel()
+        var renders = 0
+        model.onUISurface = { event in
+            XCTAssertTrue(event.awaitingInput)
+            XCTAssertEqual(event.taskID, "task")
+            XCTAssertEqual(event.questionID, "question")
+            renders += 1
+            return true
+        }
+        let surface = #"{"request_id":"pending","surface_id":"s1","surface_version":1,"deleted":false,"container":"popover","awaiting_input":true,"task_id":"task","question_id":"question","render_status":"rendered","messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}]}"#
+        let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!
+            .replacingOccurrences(of: "\"surfaces\":[]", with: "\"surfaces\":[\(surface)]")
+        ContractURLProtocol.responseHandler = { _ in (200, [:], Data(body.utf8)) }
+        try await model.recoverGlobalStateForTesting(api: api)
+        XCTAssertEqual(renders, 1)
+        try await model.recoverGlobalStateForTesting(api: api)
+        XCTAssertEqual(renders, 1)
+    }
+
     #if os(macOS)
     @MainActor func testActiveNativeSurfaceRecoveryTombstoneReachesACKTransport() async throws {
         _ = NSApplication.shared

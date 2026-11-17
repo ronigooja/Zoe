@@ -8,6 +8,29 @@ import ZoeKit
 
 @MainActor
 final class SurfaceManagerTests: XCTestCase {
+    func testOutsideClickAndEscapePolicy() {
+        XCTAssertTrue(SurfaceClosePolicy.shouldDismissPopover(isEscape: false, isMouseDown: true, isInside: false))
+        XCTAssertFalse(SurfaceClosePolicy.shouldDismissPopover(isEscape: false, isMouseDown: true, isInside: true))
+        XCTAssertTrue(SurfaceClosePolicy.shouldDismissPopover(isEscape: true, isMouseDown: false, isInside: true))
+        XCTAssertFalse(SurfaceClosePolicy.shouldDismissPopover(isEscape: false, isMouseDown: false, isInside: false))
+    }
+
+    func testFocusDeadlineDisabledPendingAndRegainedFocus() {
+        let lost = Date(timeIntervalSince1970: 100)
+        XCTAssertEqual(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 60, awaitingInput: false), lost.addingTimeInterval(60))
+        XCTAssertNil(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 0, awaitingInput: false))
+        XCTAssertNil(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 60, awaitingInput: true))
+        XCTAssertNil(SurfaceClosePolicy.deadline(lostFocusAt: nil, delay: 60, awaitingInput: false))
+        XCTAssertEqual(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 20, awaitingInput: false), lost.addingTimeInterval(20))
+    }
+
+    func testRecoveryPolicyOnlyRestoresPendingOrAlreadyPresentedAndAppliesDeletion() {
+        XCTAssertFalse(SurfaceClosePolicy.shouldReplay(awaitingInput: false, deleted: false, wasPresented: false))
+        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(awaitingInput: true, deleted: false, wasPresented: false))
+        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(awaitingInput: false, deleted: false, wasPresented: true))
+        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(awaitingInput: false, deleted: true, wasPresented: false))
+    }
+
     func testFixedStyleUsesTransparentCardsAndSemanticCaptionColor() {
         let style = SurfaceManager.fixedStyle
         XCTAssertEqual(style.cardStyle.backgroundColor, Color.clear)
