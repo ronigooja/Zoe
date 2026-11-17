@@ -86,7 +86,6 @@ if compose:
     except subprocess.CalledProcessError: raise SystemExit("docker compose config validation failed")
 plan={"source_revision":source,"architecture":arch,"artifacts":checked,"images":checked_images,
       "installation_order":["verify manifest and artifact hashes","install OpenCode runtime and immutable Zoe release","switch current selector","start services and verify health/readiness"],
-      "rollback":{"selector":"/opt/zoe/releases/current","target":"previous immutable release","images":"previous manifest image digests"},
       "checks":{"manifest_sha256":True,"compose_config":bool(compose),"host_mutation":False}}
 text=json.dumps(plan,indent=2,sort_keys=True)+"\n"
 if output: pathlib.Path(output).write_text(text); print(f"deployment candidate valid; plan written to {output}")

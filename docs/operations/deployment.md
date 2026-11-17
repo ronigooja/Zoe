@@ -460,16 +460,20 @@ and other gateway deployment scripts are separate; this script never deploys
 them or changes CLIProxyAPI. New hosts still require [bootstrap installation](#complete-linux-deployment-order).
 
 ```bash
-bash deploy/linux/deploy.sh --sha FULL_40_CHARACTER_SHA --dry-run
+bash deploy/linux/deploy.sh --sha FULL_40_CHARACTER_SHA --run-id SERVER_RELEASE_RUN_ID --dry-run
 nohup bash deploy/linux/deploy.sh --sha FULL_40_CHARACTER_SHA --run-id SERVER_RELEASE_RUN_ID < /dev/null > /var/log/zoe-deploy-launch.log 2>&1 &
 # Optional: --cli-run-id ID selects a matching successful server-release run.
-bash deploy/linux/deploy.sh --rollback --sha PREVIOUS_FULL_SHA
+bash deploy/linux/deploy.sh --sha FULL_40_CHARACTER_SHA --artifact-dir /var/lib/zoe/release-staging/FULL_40_CHARACTER_SHA --dry-run
 ```
 
-Without `--run-id`, the script selects a successful `server-release.yml` run
-whose head SHA matches exactly, or aborts. It downloads both artifacts directly
-using host `gh`, with no workstation relay. Artifacts expire after seven days.
-Root must already have authenticated repository/GHCR access, Docker Compose v2,
+Without `--artifact-dir`, the GitHub source selects a successful
+`server-release.yml` run for the exact SHA when `--run-id` is omitted.
+`--cli-run-id` optionally selects a separate matching run; otherwise it defaults
+to the selected server run. `--artifact-dir` is mutually exclusive with both
+run-ID flags. The GitHub source checks successful workflow identity and exact head SHA for both runs,
+then downloads both artifacts directly using host `gh`, with no workstation
+relay. Artifacts expire after seven days. Only the GitHub source requires
+authenticated repository/GHCR access. Both sources require Docker Compose v2,
 Python 3.10+, GNU coreutils, `flock`, systemd and `curl`. The existing deployment
 must be Linux amd64 with SHA-named immutable releases and a PATH symlink, not a
 regular `/usr/local/bin/zoe` executable. No CLI commands, flags or menu entries
@@ -489,14 +493,16 @@ Implemented phases:
    health, per-namespace migration maxima, voice-turn/task counts, current
    selector and masked server image.
 2. **download-verify**: checksums, matching source/embedded CLI revision,
-   [candidate validation](#deployment-candidates-and-rollback), installed units
+   [candidate validation](#deployment-candidates), installed units
    including drop-ins, required executable/relative Compose paths, undefined
    Compose inputs, and rendered bind/secret/config sources. Missing names are
    reported without secret contents. Existing same-SHA directories must match.
 3. **backup**: SQLite backup API plus integrity check, preserving file ownership
    and mode, and a mode-preserving environment backup. Both use `.pre-<12-sha>`;
    existing backups are never overwritten.
-4. **images**: pull immutable manifest references; atomically update only changed
+4. **images**: pull immutable registry references for GitHub, or load all staged
+   image tarballs and verify their expected image IDs and Linux amd64 platform;
+   atomically update only changed
    server/memory-worker/runner image lines, preserving other environment lines.
 5. **install-cli**: checksum-verified archive through `install-cli.sh`, immutable
    `zoe-cli-<12-sha>` directory, atomic PATH selector and startup revision check.
@@ -508,46 +514,37 @@ Implemented phases:
    [expected-env.txt](../../deploy/linux/expected-env.txt), first-three values
    matching rendered Compose, migration/count preservation, runner journal,
    server listening/no panic/fatal/migration lines, and CLI startup.
-8. **rollback** on a failed mutation/verification phase: restore environment and
-   selectors/CLI; try the old server with a migrated database first. Only if
-   that server cannot become healthy is the database backup restored, with Zoe
-   writers stopped. The log and final summary explicitly report **DATA LOSS**
-   and lost voice-turn/task counts. Manual rollback uses the saved transaction
-   selected by the requested previous SHA; failed rollback needs operator
-   intervention, not repeated blind deployment.
-9. **cleanup**: remove only owned download/temp files; retain backups, transaction
-   records, previous server and CLI versions.
+8. **cleanup**: remove only owned download/temp files; retain backups and
+   verification/completion records. Existing release directories are untouched.
 
 Migration continuity is checked within each namespace's observed numeric range.
 The known core exclusions are 9 (instance_auth) and unregistered 10; namespace
-ranges may start above one. Compatibility with the old server is established by
-actually starting it and checking health, not guessed from version numbers.
-Completed same-SHA reruns are read-only no-ops. Interrupted transactions require
-explicit rollback. After a successful rollback, the same SHA can be deployed
-again: the previous state is archived as `.deploy-<sha>.attempt-<epoch>-<pid>`,
-and new backups use `.pre-<12-sha>.attempt-<epoch>-<pid>`. Each transaction records
-its own backup paths; original backups are never overwritten. The `.failed`
-marker remains until the fresh attempt succeeds. Downloads are staged under
+ranges may start above one. Completed same-SHA reruns are read-only no-ops.
+Failed mutations remain in place: deploy does not restore databases, environment,
+CLI, selectors, or services. An interrupted transaction blocks same-SHA retry
+and requires operator inspection and a separately reviewed recovery procedure;
+never delete transaction records or backups merely to bypass this gate.
+Downloads are staged under
 `<releases>/<sha>.dl` and removed on exit.
 
 #### Host command compatibility
 
-When verifying or rolling back a host deployment, these command contracts apply:
+When verifying a host deployment, these command contracts apply:
 
 | Contract | Audit / implementation |
 | --- | --- |
 | Log cutoffs | One `date +%s` value; `journalctl --since "@<seconds>"` uses the epoch syntax documented in [systemd v219](https://github.com/systemd/systemd/blob/v219/man/systemd.time.xml). [Docker logs](https://docs.docker.com/reference/cli/docker/container/logs/#since) receives bare `<seconds>`, not `@`. Neither depends on timezone, `date -d`, BSD/GNU date parsing, or RFC3339 support in journalctl. No other since/until filters exist in the deployment helper. |
-| All services active | Check each unit separately in verify and rollback: [multi-unit is-active](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html#is-active%20PATTERN%E2%80%A6) succeeds if any unit is active. |
+| All services active | Check each unit separately in verify: [multi-unit is-active](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html#is-active%20PATTERN%E2%80%A6) succeeds if any unit is active. |
 | Container selection | [Compose v2 ps -q SERVICE](https://docs.docker.com/reference/cli/docker/compose/ps/) returns IDs of running containers; require exactly one nonempty result. JSON inspection uses the default array, not Go templates or version-sensitive Compose ps JSON shapes. |
-| Image identity | Parse `docker inspect` container `Image` and `Config.Env`; compare with `docker image inspect` `Id` plus pinned `RepoDigests`. This assumes registry-pulled images with repository digest metadata, not locally built image tags. |
-| Database backup/restore | Python `sqlite3` URI `mode=ro` and [Connection.backup(destination)](https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.backup) use SQLite's online backup API, not shell sqlite3 flags or live file copies. Integrity checks run on backups; database writers stop before restore. |
+| Image identity | Parse `docker inspect` container `Image` and `Config.Env`; compare with `docker image inspect` `Id`. Registry references additionally require pinned `RepoDigests`; staged releases use immutable local image IDs, never mutable tags. |
+| Database backup | Python `sqlite3` URI `mode=ro` and [Connection.backup(destination)](https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.backup) use SQLite's online backup API, not shell sqlite3 flags or live file copies. Integrity checks run on backups. |
 | Checksums | GNU `sha256sum -c SHA256SUMS` runs from each extracted root; release generation and fixtures use its [hex-digest, two-space, relative-filename format](https://www.gnu.org/software/coreutils/manual/html_node/cksum-common-options.html). |
 | Lock | util-linux [flock -n 9](https://man7.org/linux/man-pages/man1/flock.1.html) locks the already-open descriptor for the script lifetime; use a local filesystem supporting flock, not an unverified network mount. |
 | Selector replacement | GNU [mv -T](https://www.gnu.org/software/coreutils/manual/html_node/mv-invocation.html) treats the destination as a path, not a directory. [ln -sfn](https://www.gnu.org/software/coreutils/manual/html_node/ln-invocation.html) replaces a symlink without following it; temporary selectors live beside their final selectors so rename is on the same filesystem. These are Linux/GNU prerequisites, not portable macOS/BSD commands. |
 
 CI fixtures strictly enforce the deployment's epoch timestamp subset and emulate
 systemctl's any-active result. They reject the former journal RFC3339 argument
-and Docker's unsupported `@epoch`, and test rollback retries/incomplete-state
+and Docker's unsupported `@epoch`, and test incomplete-state
 refusal. Static checks and shims do not establish actual host compatibility.
 
 Host-path overrides for controlled installations/tests are `ZOE_RELEASES_DIR`,
@@ -560,15 +557,43 @@ directory above. Do not pass secret values on the command line or source env
 files in a shell. Units, OpenCode and deployment configuration must already be
 provisioned; this transaction does not install or change systemd units.
 
-For a complete source-built release, `deploy/linux/build-release.sh RELEASE_TAG`
-also installs `bin/zoe` beside the runner in `/opt/zoe/releases/RELEASE_TAG`.
-Builds must run in CI or an authorized worker, not on the controller. After
-reviewing the release, install its CLI on the standard host PATH with:
+### Build-machine source
+
+On NB03HK (authorized Linux amd64 worker with Go, Git and Docker/buildx), build
+from an exact locally available full SHA in a clean detached worktree. Fetch the
+reviewed revision separately before building; the script does not fetch or push.
+It builds the workflow's four binaries and three Dockerfiles with their pinned
+bases, uses task-local Go/BuildKit caches, and removes its temporary builder and
+checkout. Builds are not run on the controller or Zoe host.
 
 ```sh
-sudo bash /opt/zoe/releases/RELEASE_TAG/deploy-linux/install-cli.sh /opt/zoe/releases/RELEASE_TAG
-zoe --source-revision
+bash deploy/linux/build-release.sh --sha FULL_SHA --artifact-dir /tmp/zoe-release-FULL_SHA
+bash deploy/linux/push-release.sh --artifact-dir /tmp/zoe-release-FULL_SHA
 ```
+
+The flat artifact directory contains `server-linux-amd64.tar.gz`,
+`zoe-linux-amd64.tar.gz`, `SOURCE_REVISION`, `SHA256SUMS`,
+`build-machine-manifest.json`, and `zoe-server.tar`, `zoe-memory-worker.tar`,
+`zoe-runner.tar`. The build-machine manifest records schema 1, builder hostname,
+source SHA, Go/Docker versions, SHA-256 of every other file, and each image
+archive's hash and expected image ID. The manifest cannot hash itself; trust is
+the reviewed worker and restricted transfer, not an unsigned checksum alone.
+Both archives retain their own checksums and identical embedded CLI revision.
+
+`push-release.sh` uses batch SFTP only through the existing `zoe-release` SSH
+alias, uploads to `/var/lib/zoe/release-staging/<sha>.uploading`, then renames to
+`<sha>` after successful transfer. It never opens a remote shell or deploys.
+The alias must expose that absolute SFTP path; no endpoint or credential is
+embedded in the scripts. Interrupted uploads remain for explicit inspection.
+
+Before host deployment, an authorized host administrator must promote the
+staged directory and every file to root ownership with no group/world write
+(directory `0700`, files `0600` recommended), outside this SFTP-only script.
+Deploy rejects symlinks, nonregular files, extra/unhashed payloads, wrong source
+SHA and insecure ownership/modes, then validates a private snapshot. Dry-run
+does not load images; real deployment loads and inspects all images before any
+image environment update or service switch. No registry access is needed for
+the three Zoe images; separately provisioned third-party images remain required.
 
 The installer atomically selects the immutable CLI through `/usr/local/bin/zoe`
 and refuses to overwrite an existing regular file. It does not start services
@@ -586,7 +611,7 @@ The current client accepts an operator-selected server URL and shared instance k
 
 For export, backup, migration, restore, and destruction, use [data lifecycle operations](data-lifecycle.md).
 
-## Deployment candidates and rollback
+## Deployment candidates
 
 A deployment candidate is a reviewed release manifest plus the immutable artifacts
 named by that manifest. Generate and inspect its plan before transferring files:
@@ -601,13 +626,11 @@ deploy/linux/deployment-candidate.sh RELEASE_MANIFEST.json \
 This command is read-only. It verifies the source revision, architecture, every
 artifact SHA-256 and optional image digest, and the rendered Compose configuration.
 It prints an explicit order: verify hashes, install OpenCode runtime and the immutable Zoe
-release, switch `/opt/zoe/releases/current`, then start and check services. The
-plan records the previous immutable release and image digests as rollback targets.
+release, switch `/opt/zoe/releases/current`, then start and check services.
 It never contacts a host, changes a selector, pulls an image, or starts a service.
 
 On the host, apply releases through the [host deployment transaction](#host-deployment-transaction),
-including its recorded rollback and conditional database restore; do not switch
-selectors manually. Keep old immutable release directories and image tags.
+including its backups and health verification; do not switch selectors manually.
 Repeat independent readiness, connectivity and task acceptance checks after
 the scripted operational checks. Record integrity, installation, readiness, connectivity,
 and end-to-end results separately; see the [acceptance evidence register](../acceptance/evidence.md)

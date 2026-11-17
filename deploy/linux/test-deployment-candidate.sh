@@ -10,7 +10,7 @@ JSON
 "$root/deploy/linux/deployment-candidate.sh" "$tmp/manifest.json" --output "$tmp/plan.json" >/dev/null
 python3 - "$tmp/plan.json" <<'PY'
 import json,sys
-p=json.load(open(sys.argv[1])); assert p['checks']['manifest_sha256']; assert not p['checks']['host_mutation']; assert p['rollback']['selector'].endswith('/current')
+p=json.load(open(sys.argv[1])); assert p['checks']['manifest_sha256']; assert not p['checks']['host_mutation']; assert 'rollback' not in p
 PY
 if sed 's/"sha256":"[0-9a-f]*/"sha256":"deadbeef/' "$tmp/manifest.json" > "$tmp/bad.json" && "$root/deploy/linux/deployment-candidate.sh" "$tmp/bad.json" >/dev/null 2>&1; then
   echo 'tampered manifest unexpectedly passed' >&2; exit 1

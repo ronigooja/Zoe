@@ -35,6 +35,40 @@ print('deployment log severity fixtures passed')
 PY
 }
 check_log_rules
+# Focused GitHub-selection simulation; no root, downloads or host commands.
+python3 - "$repo_root/deploy/linux/deploy.sh" <<'PY'
+import os, pathlib, subprocess, sys, tempfile
+text = pathlib.Path(sys.argv[1]).read_text()
+start = text.index('if [[ -z "$run_id" ]]; then', text.index('step=download-verify'))
+end = text.index('\nfi\nif [[ "$dry_run"', start)
+selection = text[start:end]
+with tempfile.TemporaryDirectory() as directory:
+    root = pathlib.Path(directory)
+    gh = root/'gh'
+    gh.write_text('''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ['CALLS'], 'a') as stream: stream.write(' '.join(sys.argv[1:])+'\\n')
+if sys.argv[2] == 'list':
+    print(json.dumps([{'databaseId':99,'headSha':'f'*40},{'databaseId':42,'headSha':'2'*40}]))
+else:
+    result={'headSha':'2'*40,'conclusion':'success','workflowName':'Server deployment artifact'}
+    if os.environ.get('BAD'): result[os.environ['BAD']]='wrong'
+    print(json.dumps(result))
+''')
+    gh.chmod(0o700)
+    for server, cli, expected in [('', '', ('42','42')), ('','43',('42','43')), ('44','',('44','44')), ('44','43',('44','43'))]:
+        for bad in ['', 'headSha', 'conclusion', 'workflowName']:
+            calls = root/'calls'; calls.unlink(missing_ok=True)
+            env = dict(os.environ, PATH=str(root)+os.pathsep+os.environ['PATH'], CALLS=str(calls), BAD=bad,
+                       run_id=server, cli_run_id=cli, sha='2'*40, scratch=str(root))
+            result = subprocess.run(['bash','-eu','-c',selection], env=env, capture_output=True)
+            assert (result.returncode == 0) == (not bad)
+            lines = calls.read_text().splitlines()
+            assert any(line.startswith('run list ') for line in lines) == (not server)
+            if not bad:
+                assert [line.split()[2] for line in lines if line.startswith('run view ')] == list(expected)
+print('GitHub automatic/explicit run-selection fixtures passed')
+PY
 # Check the current long-syntax YAML layout even without Docker or PyYAML.
 python3 - "$repo_root" <<'PY'
 import pathlib, re, sys
@@ -283,7 +317,7 @@ fixture() {
   export FIXTURE="$task_root/$1" CASE="$1"
   mkdir -p "$FIXTURE"
   python3 - <<'PY'
-import hashlib, json, os, pathlib, shutil, sqlite3, tarfile
+import hashlib, io, json, os, pathlib, shutil, sqlite3, tarfile
 p = pathlib.Path(os.environ['FIXTURE']); repo = pathlib.Path(os.environ['REPO_ROOT'])
 old, new = os.environ['OLD_SHA'], os.environ['NEW_SHA']
 for name in ['releases', 'units', 'bin', 'shims', 'archives', 'data']:
@@ -314,7 +348,7 @@ if os.environ['CASE'] == 'happy':
     for prefix in ['ZOE_REGISTER', 'ZOE_COMPACT', 'ZOE_UI_CONTROLLER']:
         for suffix in ['BASE_URL', 'MODEL', 'API_KEY_FILE']:
             env.pop(prefix+'_'+suffix)
-if os.environ['CASE'] in ['token-create', 'token-dry-run', 'token-rollback']:
+if os.environ['CASE'] in ['token-create', 'token-dry-run']:
     env.pop('ZOE_MEMORY_API_TOKEN_FILE')
     memory_token.unlink()
 if os.environ['CASE'] == 'token-empty':
@@ -393,6 +427,8 @@ artifacts = [{'name': f.name, 'path': f.relative_to(root).as_posix(), 'sha256': 
              for f in sorted(root.rglob('*')) if f.is_file()]
 images = {name: {'ref': 'ghcr.io/test/'+name+':test', 'digest': 'sha256:'+digit*64}
           for name,digit in [('zoe-server','2'), ('zoe-memory-worker','3'), ('zoe-runner','4')]}
+if case.startswith('staged-'):
+    images = {name: 'sha256:'+hashlib.sha256(name.encode()).hexdigest() for name in images}
 (root/'release-manifest.json').write_text(json.dumps({'source_revision':new,'architecture':'amd64','artifacts':artifacts,'images':images}))
 if case == 'checksum': (root/'bin/zoe-server').write_text('corrupt')
 with tarfile.open(p/'archives/server-linux-amd64.tar.gz', 'w:gz') as tar:
@@ -403,6 +439,25 @@ shutil.copy(repo/'deploy/linux/install-cli.sh', cli/'deploy-linux')
 sums(cli)
 with tarfile.open(p/'archives/zoe-linux-amd64.tar.gz', 'w:gz') as tar:
     for f in cli.iterdir(): tar.add(f, arcname=f.name)
+if case.startswith('staged-'):
+    stage = p/'archives'
+    staged_images = {}
+    for name, identity in images.items():
+        archive = name+'.tar'
+        with tarfile.open(stage/archive, 'w') as tar:
+            for filename, content in [('config.json', name.encode()), ('manifest.json', json.dumps([{'Config':'config.json','RepoTags':[],'Layers':[]}]).encode())]:
+                entry = tarfile.TarInfo(filename); entry.size = len(content)
+                tar.addfile(entry, io.BytesIO(content))
+        staged_images[name] = {'archive':archive,'id':identity,'sha256':hashlib.sha256((stage/archive).read_bytes()).hexdigest()}
+    (stage/'SOURCE_REVISION').write_text(new+'\n' if case != 'staged-sha' else old+'\n')
+    files = {f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in sorted(stage.iterdir())}
+    (stage/'SHA256SUMS').write_text(''.join(value+'  '+name+'\n' for name,value in files.items()))
+    files['SHA256SUMS'] = hashlib.sha256((stage/'SHA256SUMS').read_bytes()).hexdigest()
+    (stage/'build-machine-manifest.json').write_text(json.dumps({'schema':1,'source_revision':new,'builder_hostname':'fixture','go_version':'fixture','docker_version':'fixture','files':files,'images':staged_images}))
+    stage.chmod(0o700)
+    for f in stage.iterdir(): f.chmod(0o600)
+    if case == 'staged-tamper': (stage/'zoe-server.tar').write_text('tampered')
+    if case == 'staged-mode': stage.chmod(0o770)
 (p/'releases/current').symlink_to(old)
 (p/'bin/zoe').symlink_to(p/'releases'/old/'bin/zoe')
 for unit in ['zoe-compose', 'zoe-runner', 'zoe-opencode']:
@@ -430,9 +485,6 @@ def restarted(unit):
 def record():
     with (p/'calls').open('a') as out: out.write(cmd+' '+ ' '.join(args)+'\n')
 def healthy():
-    if case == 'restore-required' and current == old and (p/'restarted').exists():
-        with sqlite3.connect(p/'db.sqlite') as db:
-            return db.execute('select max(version) from schema_migrations').fetchone()[0] == 1
     return True
 def since_value():
     if '--since' not in args or args.count('--since') != 1:
@@ -523,14 +575,19 @@ elif cmd == 'docker':
         elif 'ps' in args:
             assert args[-3:] == ['ps','-q','zoe-server']
             print('server-container')
-    elif args[0] == 'pull': record()
+    elif args[0] in ['pull', 'load']: record()
     elif args[0] == 'inspect':
         assert args == ['inspect','server-container']
         env=json.loads((p/'config.json').read_text())['services']['zoe-server']['environment']
-        print(json.dumps([{'Image':'sha256:'+'2'*64,'Config':{'Env':[k+'='+v for k,v in env.items()]}}]))
+        identity = json.loads((p/'source/release-manifest.json').read_text())['images']['zoe-server'] if case.startswith('staged-') else 'sha256:'+'2'*64
+        print(json.dumps([{'Image':identity,'Config':{'Env':[k+'='+v for k,v in env.items()]}}]))
     elif args[:2] == ['image','inspect']:
-        assert args == ['image','inspect','ghcr.io/test/zoe-server@sha256:'+'2'*64]
-        print(json.dumps([{'Id':'sha256:'+'2'*64,'RepoDigests':['ghcr.io/test/zoe-server@sha256:'+'2'*64]}]))
+        if case.startswith('staged-'):
+            identity = args[2] if case != 'staged-image' else 'sha256:'+'9'*64
+            print(json.dumps([{'Id':identity,'Architecture':'amd64','Os':'linux'}]))
+        else:
+            assert args == ['image','inspect','ghcr.io/test/zoe-server@sha256:'+'2'*64]
+            print(json.dumps([{'Id':'sha256:'+'2'*64,'RepoDigests':['ghcr.io/test/zoe-server@sha256:'+'2'*64]}]))
     elif args[0] == 'logs':
         value=since_value()
         # Docker accepts seconds[.nanoseconds] or RFC3339, never @seconds.
@@ -539,7 +596,7 @@ elif cmd == 'docker':
         assert args == ['logs','--since',value,'server-container']
         record()
         print('listening')
-        if case in ['verify-failure','restore-required','token-rollback']: print('panic secret=DO_NOT_LEAK_SENTINEL')
+        if case == 'verify-failure': print('panic secret=DO_NOT_LEAK_SENTINEL')
     else: sys.exit(2)
 else: sys.exit(2)
 PY
@@ -557,6 +614,20 @@ unchanged() {
   [[ ! -f "$FIXTURE/db.sqlite.pre-${new:0:12}" ]]
   [[ ! -f "$FIXTURE/calls" ]]
 }
+if grep -Eq 'rollback|previous-release|previous-cli|armed=' "$repo_root/deploy/linux/deploy.sh"; then
+  echo 'removed deployment restoration code remains'; exit 1
+fi
+for scenario in success tamper sha image mode; do
+  fixture "staged-$scenario"
+  if PATH="$FIXTURE/shims:$PATH" bash "$repo_root/deploy/linux/deploy.sh" --sha "$new" --artifact-dir "$FIXTURE/archives"; then
+    [[ "$scenario" == success && -f "$FIXTURE/logs/$new.done" ]]
+    [[ "$(grep -c '^docker load ' "$FIXTURE/calls")" == 3 ]]
+    if grep -q '^docker pull ' "$FIXTURE/calls"; then exit 1; fi
+  else
+    [[ "$scenario" != success && -f "$FIXTURE/logs/$new.failed" ]]
+    if [[ "$scenario" != image ]]; then unchanged; fi
+  fi
+done
 for failure in active missing-unit-path undefined-variable checksum; do
   fixture "$failure"
   if deploy; then echo "expected refusal: $failure"; exit 1; fi
@@ -601,21 +672,6 @@ cp "$FIXTURE/calls" "$FIXTURE/calls-before"
 deploy
 cmp -s "$FIXTURE/calls" "$FIXTURE/calls-before"
 cmp -s "$FIXTURE/token-before" "$FIXTURE/secrets/memory-api-token"
-# Manual rollback must bypass token validation/provisioning, even if absent.
-rm "$FIXTURE/secrets/memory-api-token"
-PATH="$FIXTURE/shims:$PATH" bash "$repo_root/deploy/linux/deploy.sh" --rollback --sha "$old"
-[[ ! -e "$FIXTURE/secrets/memory-api-token" ]]
-cmp -s "$FIXTURE/initial-env" "$FIXTURE/stack.env"
-fixture token-rollback
-if deploy; then echo 'expected token deployment rollback'; exit 1; fi
-cmp -s "$FIXTURE/initial-env" "$FIXTURE/stack.env"
-[[ -s "$FIXTURE/secrets/memory-api-token" ]]
-grep -q 'deploy step=rollback status=ok' "$FIXTURE/logs/$new.log"
-python3 - "$FIXTURE" <<'PY'
-import pathlib, sys
-p = pathlib.Path(sys.argv[1]); value = (p/'secrets/memory-api-token').read_bytes()
-assert all(value not in log.read_bytes() for log in (p/'logs').glob('*') if log.is_file())
-PY
 fixture happy
 # Regression: the former shared RFC3339 argument fails on journalctl v219;
 # Docker accepts it, but rejects the journal's @epoch form.
@@ -651,17 +707,6 @@ PY
 cp "$FIXTURE/calls" "$FIXTURE/calls-before"
 deploy
 cmp -s "$FIXTURE/calls" "$FIXTURE/calls-before"
-PATH="$FIXTURE/shims:$PATH" bash "$repo_root/deploy/linux/deploy.sh" --rollback --sha "$old"
-[[ "$(readlink -f "$FIXTURE/releases/current")" == "$FIXTURE/releases/$old" ]]
-[[ -f "$FIXTURE/releases/.deploy-$new/rolled-back" && -f "$FIXTURE/logs/$new.failed" ]]
-# Same-SHA fresh attempt after rollback preserves original backup/state.
-deploy
-[[ -f "$FIXTURE/logs/$new.done" && ! -f "$FIXTURE/logs/$new.failed" ]]
-[[ "$(readlink -f "$FIXTURE/releases/current")" == "$FIXTURE/releases/$new" ]]
-[[ "$(cat "$FIXTURE/releases/.deploy-$new/db-backup")" == *'.attempt-'* ]]
-[[ -f "$FIXTURE/db.sqlite.pre-${new:0:12}" ]]
-[[ "$(grep -c '^install ' "$FIXTURE/calls")" == 1 ]]
-[[ "$(find "$FIXTURE/releases" -maxdepth 1 -type d -name ".deploy-$new.attempt-*" | wc -l | tr -d ' ')" == 1 ]]
 fixture incomplete
 mkdir "$FIXTURE/releases/.deploy-$new"
 if deploy; then echo 'incomplete transaction was accepted'; exit 1; fi
@@ -679,19 +724,16 @@ for success in runner-old-error runner-new-warn; do
   [[ "$(stat -c '%a:%u:%g' "$FIXTURE/data/qdrant")" == "750:$before_owner" ]]
   if grep -q '^install ' "$FIXTURE/calls"; then echo 'existing Qdrant storage was changed'; exit 1; fi
   [[ -f "$FIXTURE/releases/.deploy-$new/runner-changed" && -f "$FIXTURE/logs/$new.done" ]]
-  [[ ! -f "$FIXTURE/releases/.deploy-$new/rolled-back" ]]
   grep -q 'deploy step=verify status=ok' "$FIXTURE/logs/$new.log"
   runner_epoch="$(cat "$FIXTURE/zoe-runner-restart-epoch")"
   grep -q "^journalctl -u zoe-runner --since @$runner_epoch --no-pager$" "$FIXTURE/calls"
 done
-for failure in verify-failure restore-required inactive-service runner-new-error runner-unchanged-error; do
+for failure in verify-failure inactive-service runner-new-error runner-unchanged-error; do
   fixture "$failure"
-  if deploy; then echo "expected verification rollback: $failure"; exit 1; fi
-  [[ "$(readlink -f "$FIXTURE/releases/current")" == "$FIXTURE/releases/$old" ]]
-  [[ "$("$FIXTURE/bin/zoe" --source-revision)" == "$old" ]]
-  cmp -s "$FIXTURE/initial-env" "$FIXTURE/stack.env"
-  [[ -f "$FIXTURE/logs/$new.failed" && -f "$FIXTURE/releases/.deploy-$new/rolled-back" ]]
-  grep -q 'deploy step=rollback status=ok' "$FIXTURE/logs/$new.log"
+  if deploy; then echo "expected verification failure: $failure"; exit 1; fi
+  [[ "$(readlink -f "$FIXTURE/releases/current")" == "$FIXTURE/releases/$new" ]]
+  [[ "$("$FIXTURE/bin/zoe" --source-revision)" == "$new" ]]
+  [[ -f "$FIXTURE/logs/$new.failed" && -f "$FIXTURE/db.sqlite.pre-${new:0:12}" ]]
   if [[ "$failure" == runner-new-error || "$failure" == runner-unchanged-error ]]; then
     grep -q 'deploy step=verify status=fail' "$FIXTURE/logs/$new.log"
     grep -q '^log failures count=1$' "$FIXTURE/logs/$new.log"
@@ -711,11 +753,7 @@ for failure in verify-failure restore-required inactive-service runner-new-error
     grep -q '^systemctl is-active --quiet zoe-opencode$' "$FIXTURE/calls"
   fi
   if grep -q DO_NOT_LEAK_SENTINEL "$FIXTURE/logs/$new.log"; then exit 1; fi
-  if [[ "$failure" == restore-required ]]; then
-    grep -q 'DATA LOSS:.*voice_turns=1 tasks=1' "$FIXTURE/logs/$new.log"
-  else
-    if grep -q 'DATA LOSS:' "$FIXTURE/logs/$new.log"; then exit 1; fi
-  fi
+  if grep -q 'DATA LOSS:' "$FIXTURE/logs/$new.log"; then exit 1; fi
 done
 python3 - "$task_root" <<'PY'
 import pathlib, re, sys

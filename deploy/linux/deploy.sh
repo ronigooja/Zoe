@@ -4,22 +4,24 @@ set -euo pipefail
 umask 077
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helper="$script_dir/deploy-state.py"
-sha="" run_id="" cli_run_id="" dry_run=false manual=false
-usage() { echo 'usage: deploy.sh --sha FULL_SHA [--run-id ID] [--cli-run-id ID] [--dry-run] | --rollback --sha OLD_SHA' >&2; exit 2; }
+sha="" run_id="" cli_run_id="" artifact_dir="" dry_run=false
+usage() { echo 'usage: deploy.sh --sha FULL_SHA [--run-id ID] [--cli-run-id ID] [--dry-run] | --sha FULL_SHA --artifact-dir DIR [--dry-run]' >&2; exit 2; }
 while (($#)); do
   case "$1" in
     --sha) [[ $# -ge 2 ]] || usage; sha="$2"; shift 2 ;;
     --run-id) [[ $# -ge 2 ]] || usage; run_id="$2"; shift 2 ;;
     --cli-run-id) [[ $# -ge 2 ]] || usage; cli_run_id="$2"; shift 2 ;;
     --dry-run) dry_run=true; shift ;;
-    --rollback) manual=true; shift ;;
+    --artifact-dir) [[ $# -ge 2 ]] || usage; artifact_dir="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || usage
 [[ -z "$run_id" || "$run_id" =~ ^[0-9]+$ ]] || usage
 [[ -z "$cli_run_id" || "$cli_run_id" =~ ^[0-9]+$ ]] || usage
-[[ "$manual" == false || "$dry_run" == false ]] || usage
+if [[ -n "$artifact_dir" ]]; then
+  [[ -z "$run_id$cli_run_id" ]] || usage
+fi
 releases="${ZOE_RELEASES_DIR:-/opt/zoe/releases}"
 env_file="${ZOE_ENV_FILE:-/etc/zoe/zoe-stack.env}"
 db="${ZOE_DB_PATH:-/var/lib/zoe/server/data/zoe.sqlite}"
@@ -33,6 +35,7 @@ if [[ ! "$health_attempts" =~ ^[0-9]+$ ]]; then usage; fi
 if ((health_attempts < 1 || health_attempts > 30)); then usage; fi
 [[ $EUID -eq 0 ]] || { echo 'deploy step=preflight status=fail reason=root-required'; exit 1; }
 for tool in python3 docker systemctl journalctl gh curl sha256sum tar flock cp mv ln readlink cmp date sleep diff cut cat rm mkdir mktemp touch uname chmod install; do
+  if [[ "$tool" == gh && -n "$artifact_dir" ]]; then continue; fi
   command -v "$tool" >/dev/null || { echo "deploy step=preflight status=fail missing=$tool"; exit 1; }
 done
 # A lock is operational metadata, not deployment mutation. Dry-run leaves none.
@@ -41,7 +44,7 @@ exec 9>"$log_root/.lock"
 flock -n 9 || { echo 'deploy step=preflight status=fail reason=deployment-locked'; exit 1; }
 log="$log_root/$sha.log"
 exec >>"$log" 2>&1
-step=preflight armed=false loss=false scratch="" dl="" state="" restart_epoch="" own_dl=false
+step=preflight scratch="" dl="" state="" restart_epoch="" own_dl=false
 state_op() { python3 "$helper" "$@"; }
 ok() { echo "deploy step=$step status=ok"; }
 services_active() {
@@ -64,63 +67,13 @@ selector() {
   ln -sfn -- "$1" "$releases/current.new" || return 1
   mv -Tf -- "$releases/current.new" "$releases/current"
 }
-cli_restore() {
-  local target
-  target="$(cat "$state/previous-cli")" || return 1
-  [[ -x "$target" ]] || return 1
-  ln -sfn -- "$target" "$bin_dir/.zoe-deploy-cli" || return 1
-  mv -Tf -- "$bin_dir/.zoe-deploy-cli" "$bin_dir/zoe" || return 1
-  "$bin_dir/zoe" --source-revision >/dev/null
-}
-rollback() {
-  local old env_backup db_backup
-  old="$(cat "$state/previous-release")" || return 1
-  [[ -d "$old" && -f "$state/backup-complete" ]] || return 1
-  systemctl stop zoe-compose >/dev/null 2>&1 || return 1
-  env_backup="$env_file.pre-$(cat "$state/revision" | cut -c1-12)"
-  db_backup="$db.pre-$(cat "$state/revision" | cut -c1-12)"
-  if [[ -f "$state/env-backup" ]]; then env_backup="$(cat "$state/env-backup")" || return 1; fi
-  if [[ -f "$state/db-backup" ]]; then db_backup="$(cat "$state/db-backup")" || return 1; fi
-  state_op atomic-copy "$env_backup" "$env_file" || return 1
-  selector "$old" || return 1
-  # Try the old server against the migrated DB before considering data restore.
-  if [[ -f "$state/restart-attempted" ]]; then
-    local migration_status=0
-    state_op migrated "$state/before.json" "$db" || migration_status=$?
-    [[ "$migration_status" -le 1 ]] || return 1
-    if [[ "$migration_status" -eq 0 ]]; then
-      if ! systemctl start zoe-compose >/dev/null 2>&1 || ! wait_health; then
-        systemctl stop zoe-compose >/dev/null 2>&1 || return 1
-        # Stop every Zoe database writer before restoring via SQLite backup API.
-        systemctl stop zoe-runner >/dev/null 2>&1 || return 1
-        state_op restore-db "$db_backup" "$db" || return 1
-        loss=true
-        touch "$state/data-loss" || return 1
-      fi
-    fi
-  fi
-  cli_restore || return 1
-  systemctl start zoe-compose >/dev/null 2>&1 || return 1
-  wait_health || return 1
-  if [[ -f "$state/runner-changed" || "$loss" == true ]]; then
-    systemctl restart zoe-runner >/dev/null 2>&1 || return 1
-  fi
-  services_active || return 1
-  touch "$state/rolled-back" || return 1
-  return 0
-}
 finish() {
-  local status=$? rollback_status=not-needed
+  local status=$?
   trap - EXIT
   if ((status != 0)); then
     echo "deploy step=$step status=fail"
-    if [[ "$armed" == true ]]; then
-      if rollback; then rollback_status=ok; else rollback_status=failed; fi
-      echo "deploy step=rollback status=$([[ "$rollback_status" == ok ]] && echo ok || echo fail)"
-    fi
     [[ "$dry_run" == true ]] || { rm -f "$log_root/$sha.done"; touch "$log_root/$sha.failed"; }
-    echo "deploy summary=failed step=$step rollback=$rollback_status data_loss=$loss"
-    if [[ "$loss" == true ]]; then echo 'DATA LOSS: data written after deploy started is lost'; fi
+    echo "deploy summary=failed step=$step; inspect host before further mutation"
   fi
   # These selectors are transaction-owned scratch paths, never release data.
   if [[ "$dry_run" == false && -n "$state" && -d "$state" ]]; then
@@ -134,20 +87,6 @@ finish() {
 trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-if [[ "$manual" == true ]]; then
-  # The last transaction targeting this previous SHA owns the rollback backups.
-  state="$releases/.deploy-rollback-$sha"
-  [[ -L "$state" ]] || { echo 'no recorded rollback transaction for requested SHA'; exit 1; }
-  state_op idle "$db"
-  step=rollback
-  rollback
-  ok
-  rolled_revision="$(cat "$state/revision")"
-  rm -f "$log_root/$rolled_revision.done"
-  touch "$log_root/$rolled_revision.failed"
-  echo "deploy summary=manual-rollback data_loss=$loss"
-  exit 0
-fi
 state_op idle "$db"
 health "$api"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/zoe-deploy.XXXXXX")"
@@ -165,12 +104,13 @@ if [[ -f "$state/complete" && "$previous" == "$releases/$sha" ]]; then
   ok
   exit 0
 fi
-if [[ -d "$state" && ! -f "$state/rolled-back" ]]; then
-  echo 'incomplete transaction; run --rollback --sha PREVIOUS_SHA before retrying'
+if [[ -d "$state" ]]; then
+  echo 'incomplete transaction; operator inspection required before retrying'
   exit 1
 fi
 ok
 step=download-verify
+if [[ -z "$artifact_dir" ]]; then
 if [[ -z "$run_id" ]]; then
   gh run list -R ronigooja/Zoe --workflow server-release.yml --commit "$sha" --status success --limit 100 --json databaseId,headSha > "$scratch/runs.json" 2>/dev/null
   run_id="$(python3 - "$scratch/runs.json" "$sha" <<'PY'
@@ -191,12 +131,19 @@ assert run['headSha'] == sys.argv[2] and run['conclusion'] == 'success', 'run is
 assert run['workflowName'] == 'Server deployment artifact', 'unexpected release workflow'
 PY
 done
+fi
 if [[ "$dry_run" == true ]]; then dl="$scratch/download"; else dl="$releases/$sha.dl"; fi
 [[ ! -e "$dl" ]] || { echo 'download directory already exists; inspect interrupted download before retry'; exit 1; }
 mkdir -p "$dl/server-download" "$dl/cli-download" "$dl/server" "$dl/cli"
 own_dl=true
-gh run download "$run_id" -R ronigooja/Zoe -n "server-release-$sha" -D "$dl/server-download" >/dev/null 2>&1
-gh run download "$cli_run_id" -R ronigooja/Zoe -n "operator-cli-$sha" -D "$dl/cli-download" >/dev/null 2>&1
+if [[ -n "$artifact_dir" ]]; then
+  state_op staged-copy "$artifact_dir" "$sha" "$dl/staged"
+  cp "$dl/staged/server-linux-amd64.tar.gz" "$dl/server-download/"
+  cp "$dl/staged/zoe-linux-amd64.tar.gz" "$dl/cli-download/"
+else
+  gh run download "$run_id" -R ronigooja/Zoe -n "server-release-$sha" -D "$dl/server-download" >/dev/null 2>&1
+  gh run download "$cli_run_id" -R ronigooja/Zoe -n "operator-cli-$sha" -D "$dl/cli-download" >/dev/null 2>&1
+fi
 state_op extract "$dl/server-download/server-linux-amd64.tar.gz" "$dl/server"
 state_op extract "$dl/cli-download/zoe-linux-amd64.tar.gz" "$dl/cli"
 for release in "$dl/server" "$dl/cli"; do
@@ -217,49 +164,39 @@ assert manifest['source_revision'] == sys.argv[2], 'manifest revision mismatch'
 assert manifest['architecture'] == 'amd64', 'server release requires amd64 host'
 PY
 [[ "$(uname -m)" == x86_64 ]]
+if [[ -n "$artifact_dir" ]]; then state_op staged-images "$dl/staged" "$dl/server" verify; fi
 if [[ -e "$releases/$sha" ]]; then
   diff -qr "$dl/server" "$releases/$sha" >/dev/null 2>&1
 fi
 ok
 if [[ "$dry_run" == true ]]; then
-  echo 'deploy plan=backup,memory-token,pull-changed-images,install-cli,switch,restart,verify; rollback=automatic'
+  if [[ -n "$artifact_dir" ]]; then
+    echo 'deploy plan=backup,memory-token,load-images,install-cli,switch,restart,verify'
+  else
+    echo 'deploy plan=backup,memory-token,pull-changed-images,install-cli,switch,restart,verify'
+  fi
   echo 'deploy summary=dry-run; release,env,database,CLI,services unchanged'
   exit 0
 fi
 step=backup
 backup_suffix="${sha:0:12}"
-if [[ -f "$state/rolled-back" ]]; then
-  # A fresh attempt must not reuse the pre-rollback DB snapshot or overwrite it.
-  attempt="$(date +%s)-$$"
-  archived_state="$state.attempt-$attempt"
-  mv -T -- "$state" "$archived_state"
-  # Preserve the old manual-rollback reference until the new record is complete.
-  ln -sfn "$archived_state" "$releases/.deploy-rollback-$(basename "$previous")"
-  backup_suffix="${sha:0:12}.attempt-$attempt"
-fi
 mkdir "$state"
-printf '%s\n' "$sha" > "$state/revision"
-printf '%s\n' "$previous" > "$state/previous-release"
-printf '%s\n' "$previous_cli" > "$state/previous-cli"
 cp "$scratch/before.json" "$state/before.json"
-printf '%s\n' "$db.pre-$backup_suffix" > "$state/db-backup"
-printf '%s\n' "$env_file.pre-$backup_suffix" > "$state/env-backup"
 state_op backup "$db" "$db.pre-$backup_suffix"
 [[ ! -e "$env_file.pre-$backup_suffix" ]]
 cp -p "$env_file" "$env_file.pre-$backup_suffix"
-touch "$state/backup-complete"
-ln -sfn "$state" "$releases/.deploy-rollback-$(basename "$previous")"
 if ! cmp -s "$previous/bin/zoe-runner" "$dl/server/bin/zoe-runner"; then touch "$state/runner-changed"; fi
 if [[ ! -e "$releases/$sha" ]]; then
   chmod 0755 "$dl/server"
   mv -T "$dl/server" "$releases/$sha"
 fi
 ok
-# From this point failures also restore image environment / CLI before switching.
-armed=true
 step=memory-token
 state_op memory-token "$env_file"
 step=images
+if [[ -n "$artifact_dir" ]]; then
+  state_op staged-images "$dl/staged" "$releases/$sha" load
+else
 state_op images "$releases/$sha" "$env_file" > "$scratch/images"
 while IFS='=' read -r key ref; do
   # Pull by immutable digest; suppress registry output (credentials / full digests).
@@ -267,6 +204,7 @@ while IFS='=' read -r key ref; do
   digest="${ref##*@sha256:}"
   echo "image pulled name=$key digest=${digest:0:12}"
 done < "$scratch/images"
+fi
 state_op edit-images "$releases/$sha" "$env_file"
 ok
 step=install-cli
@@ -288,7 +226,6 @@ state_op idle "$db"
 restart_epoch="$(date +%s)"
 [[ "$restart_epoch" =~ ^[0-9]+$ ]]
 runner_restart_epoch="$restart_epoch"
-touch "$state/restart-attempted"
 systemctl restart zoe-compose >/dev/null 2>&1
 wait_health
 if [[ -f "$state/runner-changed" ]]; then
@@ -315,9 +252,8 @@ ok
 touch "$state/complete"
 rm -f "$log_root/$sha.failed"
 touch "$log_root/$sha.done"
-armed=false
 step=cleanup
 rm -rf -- "$dl"
 dl=""
 ok
-echo 'deploy summary=success backups=retained previous-release=retained previous-cli=retained'
+echo 'deploy summary=success backups=retained'

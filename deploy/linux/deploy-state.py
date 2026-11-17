@@ -180,6 +180,9 @@ def image_refs(release):
             if service == 'zoe-server':
                 fail('manifest missing server image')
             continue
+        if isinstance(image, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', image):
+            result[key] = image
+            continue
         if not isinstance(image, dict) or not re.fullmatch(r'sha256:[0-9a-f]{64}', image.get('digest', '')):
             fail('manifest requires immutable image digest: ' + service)
         ref = image['ref'].rsplit(':', 1)[0] + '@' + image['digest']
@@ -262,9 +265,108 @@ def extract(archive, target):
         tar.extractall(target)
 
 
+def file_sha256(path):
+    import hashlib
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def staged_copy(source, sha, destination):
+    # Flat, root-owned input only; pin the directory and each file descriptor so
+    # an SFTP uploader cannot swap a checked path during the private snapshot.
+    root_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        def secure(info):
+            if info.st_uid != 0 or info.st_mode & 0o022:
+                fail('staged input requires root ownership and no group/world write')
+        secure(os.fstat(root_fd))
+        target = Path(destination)
+        target.mkdir(mode=0o700)
+        for name in os.listdir(root_fd):
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root_fd)
+            with os.fdopen(fd, 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                secure(info)
+                if not stat.S_ISREG(info.st_mode):
+                    fail('staged input must contain regular files only')
+                with (target / name).open('xb') as out:
+                    import shutil
+                    shutil.copyfileobj(stream, out)
+        manifest = read(target / 'build-machine-manifest.json')
+        if manifest.get('schema') != 1 or manifest.get('source_revision') != sha:
+            fail('build-machine manifest revision/schema mismatch')
+        if not all(isinstance(manifest.get(k), str) and manifest[k] for k in ('builder_hostname', 'go_version', 'docker_version')):
+            fail('missing builder provenance')
+        files = manifest.get('files', {})
+        actual = {p.name for p in target.iterdir()} - {'build-machine-manifest.json'}
+        if set(files) != actual:
+            fail('build-machine manifest must cover every payload file')
+        for name, digest in files.items():
+            if not re.fullmatch(r'[0-9a-f]{64}', digest) or file_sha256(target / name) != digest:
+                fail('staged checksum mismatch')
+        if (target / 'SOURCE_REVISION').read_text().strip() != sha:
+            fail('staged SOURCE_REVISION mismatch')
+        required = {'server-linux-amd64.tar.gz', 'zoe-linux-amd64.tar.gz', 'SOURCE_REVISION', 'SHA256SUMS'}
+        if not required <= actual:
+            fail('missing staged payload')
+        # Require exact checksum coverage, not just whatever entries were supplied.
+        expected = ''.join(files[name] + '  ' + name + '\n' for name in sorted(actual - {'SHA256SUMS'}))
+        if (target / 'SHA256SUMS').read_text() != expected:
+            fail('staged SHA256SUMS coverage mismatch')
+    finally:
+        os.close(root_fd)
+
+
+def staged_images(staged, release, action):
+    import hashlib
+    root = Path(staged)
+    manifest = read(root / 'build-machine-manifest.json')
+    images = manifest.get('images', {})
+    services = {'zoe-server', 'zoe-memory-worker', 'zoe-runner'}
+    if set(images) != services:
+        fail('staged manifest requires all three images')
+    candidate = read(Path(release) / 'release-manifest.json')
+    for name, image in images.items():
+        archive, identity = image.get('archive'), image.get('id')
+        if archive != name + '.tar' or not re.fullmatch(r'sha256:[0-9a-f]{64}', identity or ''):
+            fail('invalid staged image metadata')
+        digest = file_sha256(root / archive)
+        if image.get('sha256') != digest or manifest['files'].get(archive) != digest:
+            fail('image tar checksum mismatch')
+        if candidate.get('images', {}).get(name) != identity:
+            fail('release/build-machine image identity mismatch')
+        # Inspect the saved config itself; a pre-existing daemon image must not
+        # mask a tarball which actually imports a different image (or extras).
+        with tarfile.open(root / archive) as tar:
+            entries = json.load(tar.extractfile('manifest.json'))
+            if len(entries) != 1:
+                fail('image archive must contain exactly one image')
+            config = tar.extractfile(entries[0]['Config']).read()
+            if 'sha256:' + hashlib.sha256(config).hexdigest() != identity:
+                fail('saved image ID mismatch')
+    if action == 'load':
+        for image in images.values():
+            subprocess.run(['docker', 'load', '--input', str(root / image['archive'])], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            loaded = json.loads(output(['docker', 'image', 'inspect', image['id']]))
+            if len(loaded) != 1 or loaded[0]['Id'] != image['id']:
+                fail('loaded image ID mismatch')
+            if loaded[0].get('Architecture') != 'amd64' or loaded[0].get('Os') != 'linux':
+                fail('loaded image platform mismatch')
+    elif action != 'verify':
+        fail('invalid staged image action')
+
+
 command, *args = sys.argv[1:]
 try:
-    if command == 'snapshot':
+    if command == 'staged-copy':
+        staged_copy(*args)
+    elif command == 'staged-images':
+        staged_images(*args)
+    elif command == 'snapshot':
         print(json.dumps(snapshot(args[0]), sort_keys=True))
     elif command == 'idle':
         with db_open(args[0]) as connection:
@@ -280,21 +382,6 @@ try:
                 fail('backup integrity check failed')
         os.chmod(destination, stat.S_IMODE(os.stat(source).st_mode))
         os.chown(destination, os.stat(source).st_uid, os.stat(source).st_gid)
-    elif command == 'restore-db':
-        source, destination = args
-        before, after = snapshot(source), snapshot(destination)
-        lost_turns = max(0, after['voice_turns'] - before['voice_turns'])
-        lost_tasks = max(0, sum(after['tasks'].values()) - sum(before['tasks'].values()))
-        with db_open(source) as src, sqlite3.connect(destination) as dst:
-            if src.execute('pragma integrity_check').fetchone()[0] != 'ok':
-                fail('backup integrity check failed')
-            src.backup(dst)
-        print(f'DATA LOSS: data written after deploy started is lost; voice_turns={lost_turns} tasks={lost_tasks}')
-    elif command == 'migrated':
-        before = read(args[0])['migrations']
-        with db_open(args[1]) as connection:
-            after = dict(connection.execute('select namespace,max(version) from schema_migrations group by namespace'))
-        sys.exit(0 if any(version > before.get(ns, 0) for ns, version in after.items()) else 1)
     elif command == 'db-verify':
         before, after = read(args[0]), snapshot(args[1])
         if any(after['migrations'].get(ns, -1) < value for ns, value in before['migrations'].items()):
@@ -351,7 +438,7 @@ try:
         image = json.loads(output(['docker', 'image', 'inspect', desired]))[0]
         if spec['Image'] != image['Id']:
             fail('running server image ID mismatch')
-        if desired not in image.get('RepoDigests', []):
+        if not desired.startswith('sha256:') and desired not in image.get('RepoDigests', []):
             fail('running server digest not in immutable image metadata')
         running = dict(entry.split('=', 1) for entry in spec['Config']['Env'] if '=' in entry)
         rendered = compose(release, env)['services']['zoe-server']['environment']
@@ -388,10 +475,6 @@ try:
         print(json.dumps(compose(*args)))
     elif command == 'qdrant-storage':
         print(qdrant_storage(*args))
-    elif command == 'atomic-copy':
-        source, destination = map(Path, args)
-        atomic(destination, source.read_text(), stat.S_IMODE(source.stat().st_mode))
-        os.chown(destination, source.stat().st_uid, source.stat().st_gid)
     else:
         fail('unknown deployment state operation')
 except (OSError, ValueError, KeyError, sqlite3.Error, subprocess.SubprocessError, tarfile.TarError):

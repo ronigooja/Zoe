@@ -1,111 +1,111 @@
 #!/usr/bin/env bash
+# Applies on an authorized Linux amd64 build host with Go, Docker/buildx and Git.
 set -euo pipefail
-
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-tag="${1:-}"
-if [[ ! "$tag" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]]; then
-  echo "usage: $0 RELEASE_TAG" >&2
-  exit 2
-fi
-if [[ ! -d "$repo_root/cmd/zoe-runner" ]]; then
-  echo "cmd/zoe-runner is not present in this source revision; integrate the coordinated runtime source before building the Linux release" >&2
-  exit 1
-fi
-
-cd "$repo_root"
-
-build_root="${ZOE_BUILD_ROOT:-/var/cache/zoe/builds}"
-release_root="${ZOE_RELEASE_ROOT:-/opt/zoe/releases}"
-docker_bin="${ZOE_DOCKER_BINARY:-docker}"
-go_bin="${GO:-go}"
-build_goarch="${ZOE_BUILD_GOARCH:-$("$go_bin" env GOARCH)}"
-build_platform="${ZOE_BUILD_PLATFORM:-linux/$build_goarch}"
-case "$build_goarch" in
-  amd64|arm64) ;;
-  *) echo "unsupported release GOARCH: $build_goarch" >&2; exit 1 ;;
-esac
-if [[ "$build_platform" != "linux/$build_goarch" ]]; then
-  echo "ZOE_BUILD_PLATFORM must match the release binaries' linux/$build_goarch architecture" >&2
-  exit 1
-fi
-release_dir="$release_root/$tag"
-if [[ -e "$release_dir" || -L "$release_dir" ]]; then
-  echo "release directory already exists; choose a new immutable release tag" >&2
-  exit 1
-fi
-mkdir -p "$build_root" "$release_root"
-cache_dir="${ZOE_BUILDX_CACHE_DIR:-$build_root/buildkit-cache}"
-mkdir -p "$cache_dir"
-buildx_cache_args=()
-if [[ -n "${ZOE_BUILDX_CACHE_FROM:-}" ]]; then buildx_cache_args+=(--cache-from "$ZOE_BUILDX_CACHE_FROM"); fi
-if [[ -n "${ZOE_BUILDX_CACHE_TO:-}" ]]; then buildx_cache_args+=(--cache-to "$ZOE_BUILDX_CACHE_TO"); fi
-# Bash with nounset rejects expanding an empty array; use a single command array.
-buildx_base=(buildx build --load --platform "$build_platform")
-if ((${#buildx_cache_args[@]})); then buildx_base+=("${buildx_cache_args[@]}"); fi
-build_dir=""
-release_stage=""
-cleanup_stages() {
-  [[ -z "$release_stage" ]] || rm -rf -- "$release_stage"
-  [[ -z "$build_dir" ]] || rm -rf -- "$build_dir"
+umask 077
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+sha="" output=""
+while (($#)); do
+  case "$1" in
+    --sha) sha="${2:?}"; shift 2 ;;
+    --artifact-dir) output="${2:?}"; shift 2 ;;
+    *) exit 2 ;;
+  esac
+done
+[[ "$sha" =~ ^[0-9a-f]{40}$ && -n "$output" && "$(uname -s -m)" == 'Linux x86_64' ]] || {
+  echo 'usage: build-release.sh --sha FULL_SHA --artifact-dir NEW_DIR' >&2; exit 2;
 }
-trap cleanup_stages EXIT
-build_dir="$(mktemp -d "$build_root/.${tag}.build.XXXXXX")"
-release_stage="$(mktemp -d "$release_root/.${tag}.staging.XXXXXX")"
-chmod 0700 "$build_dir"
-mkdir -p "$build_dir/bin" "$release_stage/bin"
-cp "$repo_root/deploy/linux/opencode-release.json" "$release_stage/opencode-release.json"
-chmod 0755 "$release_stage"
-
-export CGO_ENABLED=0 GOOS=linux GOARCH="$build_goarch"
-source_revision="$(git rev-parse HEAD)"
-"$go_bin" build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceRevision=$source_revision" -o "$build_dir/bin/zoe" ./cmd/zoe
-"$go_bin" build -trimpath -buildvcs=false -ldflags='-s -w' -o "$build_dir/bin/zoe-server" ./cmd/zoe-server
-"$go_bin" build -trimpath -buildvcs=false -ldflags='-s -w' -o "$build_dir/bin/zoe-runner" ./cmd/zoe-runner
-"$go_bin" build -trimpath -buildvcs=false -ldflags='-s -w' -o "$build_dir/bin/zoe-secret-entrypoint" ./deploy/linux/secret-entrypoint.go
-install -m 0755 "$build_dir/bin/zoe" "$release_stage/bin/zoe"
-install -m 0755 "$build_dir/bin/zoe-server" "$release_stage/bin/zoe-server"
-install -m 0755 "$build_dir/bin/zoe-runner" "$release_stage/bin/zoe-runner"
-install -m 0755 "$build_dir/bin/zoe-secret-entrypoint" "$release_stage/bin/zoe-secret-entrypoint"
-cp -a "$repo_root/deploy/linux" "$release_stage/deploy-linux"
-
-"$docker_bin" "${buildx_base[@]}" -f "$repo_root/deploy/linux/Dockerfile.server" -t "zoe-server:$tag" "$repo_root"
-"$docker_bin" "${buildx_base[@]}" -f "$repo_root/deploy/linux/Dockerfile.memory" -t "zoe-memory-worker:$tag" "$repo_root"
-"$docker_bin" "${buildx_base[@]}" -f "$repo_root/deploy/linux/Dockerfile.runner" -t "zoe-runner:$tag" "$repo_root"
-
-# Record immutable source, binary checksums, and local image IDs before publishing.
-printf '%s\n' "$source_revision" > "$release_stage/SOURCE_REVISION"
-(
-  cd "$release_stage"
-  sha256sum bin/* opencode-release.json SOURCE_REVISION > SHA256SUMS
-  RELEASE_TAG="$tag" SOURCE_REVISION="$source_revision" BUILD_PLATFORM="$build_platform" DOCKER_BIN="$docker_bin" python3 - <<'PY'
+[[ ! -e "$output" && ! -L "$output" ]]
+mkdir -p "$(dirname "$output")"
+output="$(cd "$(dirname "$output")" && pwd)/$(basename "$output")"
+task="$(mktemp -d "${TMPDIR:-/tmp}/zoe-release.XXXXXX")"
+builder="zoe-release-$$"
+cleanup() {
+  docker buildx rm "$builder" >/dev/null 2>&1 || true
+  git -C "$repo" worktree remove --force "$task/source" >/dev/null 2>&1 || true
+  rm -rf -- "$task"
+}
+trap cleanup EXIT
+git -C "$repo" worktree add --detach "$task/source" "$sha" >/dev/null 2>&1
+cd "$task/source"
+[[ "$(git rev-parse HEAD)" == "$sha" && -z "$(git status --porcelain)" ]]
+export GOCACHE="$task/go-cache" GOMODCACHE="$task/go-mod" CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+docker buildx create --name "$builder" --driver docker-container >/dev/null
+mkdir -p "$task/server/bin" "$task/server/deploy-linux" "$task/cli/bin" "$task/cli/deploy-linux" "$task/artifacts"
+log="$task/build.log"
+for name in zoe-server zoe zoe-runner zoe-secret-entrypoint; do
+  package="./cmd/$name"; flags='-s -w'
+  if [[ "$name" == zoe ]]; then flags+=" -X main.sourceRevision=$sha"; fi
+  if [[ "$name" == zoe-secret-entrypoint ]]; then package=./deploy/linux/secret-entrypoint.go; fi
+  if ! go build -trimpath -buildvcs=false -ldflags="$flags" -o "$task/server/bin/$name" "$package" >"$log" 2>&1; then
+    tail -n 40 "$log" >&2; exit 1
+  fi
+done
+[[ "$("$task/server/bin/zoe" --source-revision)" == "$sha" ]]
+for file in docker-compose.yml zoe-compose.service zoe-runner.service zoe-opencode.service zoe-runner-tmpfiles.conf install-cli.sh deploy.sh deploy-state.py deployment-candidate.sh expected-env.txt; do
+  cp "deploy/linux/$file" "$task/server/deploy-linux/"
+done
+cp deploy/linux/opencode-release.json "$task/server/"
+# Archive payloads must remain traversable by the installed service users;
+# outer staging files remain private under umask 077.
+find "$task/server" -type d -exec chmod 0755 {} +
+find "$task/server" -type f -exec chmod 0644 {} +
+chmod 0755 "$task/server/bin/"*
+for pair in server:zoe-server memory:zoe-memory-worker runner:zoe-runner; do
+  dockerfile="${pair%%:*}"; name="${pair#*:}"
+  # Use the exact checked-out workflow Dockerfiles, including their pinned bases.
+  if ! docker buildx build --builder "$builder" --load --platform linux/amd64 -f "deploy/linux/Dockerfile.$dockerfile" -t "$name:$sha" . >"$log" 2>&1; then
+    tail -n 40 "$log" >&2; exit 1
+  fi
+  docker save --output "$task/artifacts/$name.tar" "$name:$sha"
+done
+export RELEASE_TASK="$task" RELEASE_SHA="$sha"
+python3 - <<'PY'
 import hashlib, json, os, pathlib, subprocess
-root = pathlib.Path('.')
-artifacts = []
-for item in sorted(root.rglob('*')):
-    if not item.is_file() or item.name == 'release-manifest.json':
-        continue
-    artifacts.append({'name': item.name, 'path': item.relative_to(root).as_posix(), 'sha256': hashlib.sha256(item.read_bytes()).hexdigest()})
+task = pathlib.Path(os.environ['RELEASE_TASK']); root = task/'server'; sha = os.environ['RELEASE_SHA']
 images = {}
 for name in ('zoe-server', 'zoe-memory-worker', 'zoe-runner'):
-    ref = f'{name}:{os.environ["RELEASE_TAG"]}'
-    try:
-        images[name] = subprocess.check_output([os.environ['DOCKER_BIN'], 'image', 'inspect', ref, '--format', '{{.Id}}'], text=True).strip()
-    except (OSError, subprocess.CalledProcessError):
-        images[name] = ''
-manifest = {'schema': 1, 'release': os.environ['RELEASE_TAG'], 'source_revision': os.environ['SOURCE_REVISION'], 'architecture': os.environ['BUILD_PLATFORM'].split('/')[-1], 'platform': os.environ['BUILD_PLATFORM'], 'artifacts': artifacts, 'images': images}
-root.joinpath('release-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+    info = json.loads(subprocess.check_output(['docker', 'image', 'inspect', f'{name}:{sha}']))[0]
+    assert info['Architecture'] == 'amd64' and info['Os'] == 'linux'
+    images[name] = info['Id']
+(root/'SOURCE_REVISION').write_text(sha+'\n')
+(root/'IMAGE_REFERENCES').write_text(''.join(value+'\n' for value in images.values()))
+def digest(p):
+    h = hashlib.sha256()
+    with p.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''): h.update(block)
+    return h.hexdigest()
+paths = sorted(p for p in root.rglob('*') if p.is_file())
+(root/'SHA256SUMS').write_text(''.join(digest(p)+'  '+p.relative_to(root).as_posix()+'\n' for p in paths))
+paths = sorted(p for p in root.rglob('*') if p.is_file())
+artifacts = [{'name': p.name, 'path': p.relative_to(root).as_posix(), 'sha256': digest(p)} for p in paths]
+(root/'release-manifest.json').write_text(json.dumps({'schema':1,'release':sha,'source_revision':sha,'architecture':'amd64','platform':'linux/amd64','artifacts':artifacts,'images':images}, indent=2)+'\n')
 PY
-)
-
-# Linux GNU mv -Tn publishes the directory as one no-clobber rename. The image
-# tags above are separate Docker operations and are not a multi-tag transaction.
-if ! mv -Tn -- "$release_stage" "$release_dir"; then
-  echo "could not publish release directory; choose a new immutable release tag" >&2
-  exit 1
-fi
-if [[ -e "$release_stage" || -L "$release_stage" ]]; then
-  echo "another build published this release tag first; this build's release was not published" >&2
-  exit 1
-fi
-printf 'Built Linux release %s (%s) under %s and images zoe-server:%s, zoe-memory-worker:%s, zoe-runner:%s\n' "$tag" "$build_platform" "$release_dir" "$tag" "$tag" "$tag"
-printf 'Build scratch was private under %s and removed; authoritative and runner state remain under /var/lib/zoe.\n' "$build_root"
+cp "$task/server/bin/zoe" "$task/cli/bin/"
+cp "$task/server/deploy-linux/install-cli.sh" "$task/cli/deploy-linux/"
+cp "$task/server/SOURCE_REVISION" "$task/cli/"
+chmod 0755 "$task/cli" "$task/cli/bin" "$task/cli/deploy-linux" "$task/cli/bin/zoe"
+(cd "$task/cli"; sha256sum bin/zoe deploy-linux/install-cli.sh SOURCE_REVISION > SHA256SUMS)
+tar -C "$task/server" -czf "$task/artifacts/server-linux-amd64.tar.gz" .
+tar -C "$task/cli" -czf "$task/artifacts/zoe-linux-amd64.tar.gz" .
+cp "$task/server/SOURCE_REVISION" "$task/artifacts/"
+python3 - <<'PY'
+import hashlib, json, os, pathlib, socket, subprocess
+task = pathlib.Path(os.environ['RELEASE_TASK']); root = task/'artifacts'
+def digest(p):
+    h = hashlib.sha256()
+    with p.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''): h.update(block)
+    return h.hexdigest()
+files = {p.name: digest(p) for p in sorted(root.iterdir())}
+(root/'SHA256SUMS').write_text(''.join(value+'  '+name+'\n' for name,value in files.items()))
+files['SHA256SUMS'] = digest(root/'SHA256SUMS')
+images = json.loads((task/'server/release-manifest.json').read_text())['images']
+manifest = {'schema':1,'builder_hostname':socket.gethostname(),'source_revision':os.environ['RELEASE_SHA'],
+            'go_version':subprocess.check_output(['go','version'],text=True).strip(),
+            'docker_version':subprocess.check_output(['docker','version','--format','{{.Client.Version}} / {{.Server.Version}}'],text=True).strip(),
+            'files':files,'images':{name:{'archive':name+'.tar','sha256':files[name+'.tar'],'id':identity} for name,identity in images.items()}}
+(root/'build-machine-manifest.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+'\n')
+PY
+mv -Tn -- "$task/artifacts" "$output"
+[[ ! -e "$task/artifacts" ]] || { echo 'artifact directory already published' >&2; exit 1; }
+echo "Built release $sha: $output (local image tags retained)"
