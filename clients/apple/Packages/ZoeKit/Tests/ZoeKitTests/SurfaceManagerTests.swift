@@ -31,9 +31,10 @@ final class SurfaceManagerTests: XCTestCase {
         XCTAssertTrue(SurfaceClosePolicy.shouldReplay(awaitingInput: false, deleted: true, wasPresented: false))
     }
 
-    func testFixedStyleUsesTransparentCardsAndSemanticCaptionColor() {
+    func testFixedStyleUsesTintedCardsAndSemanticCaptionColor() {
         let style = SurfaceManager.fixedStyle
-        XCTAssertEqual(style.cardStyle.backgroundColor, Color.clear)
+        XCTAssertEqual(style.cardStyle.backgroundColor, Color.primary.opacity(0.06))
+        XCTAssertEqual(SurfaceManager.cardFillOpacity, 0.06)
         XCTAssertEqual(SurfaceManager.surfacePadding, 8)
         XCTAssertEqual(SurfaceManager.cardPadding, 8)
         XCTAssertEqual(SurfaceManager.leafMargin, 4)
@@ -215,12 +216,12 @@ final class SurfaceManagerTests: XCTestCase {
         let window = try XCTUnwrap(NSApp.windows.first { $0.identifier?.rawValue == id })
         XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size, NSSize(width: min(700, visible.width - 20), height: min(500, visible.height - 20)))
         XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle, SurfaceManager.fixedStyle)
-        XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle.cardStyle.backgroundColor, Color.clear)
+        XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle.cardStyle.backgroundColor, SurfaceManager.fixedStyle.cardStyle.backgroundColor)
         let before = window.contentRect(forFrameRect: window.frame).size
         XCTAssertTrue(manager.display(SurfaceSpec(id: id, kind: .window, messages: batch)))
         XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size, before)
         XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle.primaryColor, SurfaceManager.fixedStyle.primaryColor)
-        XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle.cardStyle.backgroundColor, Color.clear)
+        XCTAssertEqual(manager.viewModel(for: id)?.a2uiStyle.cardStyle.backgroundColor, SurfaceManager.fixedStyle.cardStyle.backgroundColor)
         XCTAssertTrue(manager.display(SurfaceSpec(id: id, kind: .window, messages: batch, size: .init(width: 600, height: 400))))
         XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size, NSSize(width: min(600, visible.width - 20), height: min(400, visible.height - 20)))
         XCTAssertTrue(manager.display(SurfaceSpec(id: id, kind: .window, messages: batch, size: .init(width: 5000, height: 5000))))

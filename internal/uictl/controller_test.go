@@ -21,7 +21,7 @@ func TestRenderingEnvironmentDefinitions(t *testing.T) {
 	for _, fact := range []string{
 		"anchored below the menu-bar icon", "closes when the user clicks elsewhere",
 		"opaque system background that stays open until closed",
-		"Cards have no fill", "8 pt of inner padding", "surface has 8 pt of padding",
+		"Cards have a faint neutral fill", "8 pt of inner padding", "surface has 8 pt of padding",
 		"4 pt of space around them", "Row, Column and List have no outer margin",
 		"h1, h2, h3, h4, h5, body and caption render at 22, 18, 15, 14, 13, 13 and 11 pt",
 		"h1 is bold, h2 through h5 are semibold", "caption uses the secondary color",

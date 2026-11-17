@@ -299,6 +299,8 @@ import A2UISwiftUI
     static let surfacePadding: CGFloat = 8
     static let cardPadding: CGFloat = 8
     static let leafMargin: CGFloat = 4
+    // Card fill is the primary label color at low opacity: visible on light, dark and the popover material.
+    static let cardFillOpacity: Double = 0.06
 
     static var fixedStyle: A2UIStyle {
         A2UIStyle(primaryColor: .accentColor, textStyles: [
@@ -309,7 +311,7 @@ import A2UISwiftUI
             "h5": .init(font: .system(size: 13), weight: .semibold),
             "body": .init(font: .system(size: 13)),
             "caption": .init(font: .system(size: 11), color: .secondary)
-        ], cardStyle: .init(padding: cardPadding, cornerRadius: 12, backgroundColor: .clear),
+        ], cardStyle: .init(padding: cardPadding, cornerRadius: 12, backgroundColor: Color.primary.opacity(cardFillOpacity)),
            leafMargin: leafMargin)
     }
 
