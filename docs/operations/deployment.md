@@ -466,11 +466,11 @@ nohup bash deploy/linux/deploy.sh --sha FULL_40_CHARACTER_SHA --run-id SERVER_RE
 bash deploy/linux/deploy.sh --sha FULL_40_CHARACTER_SHA --artifact-dir /var/lib/zoe/release-staging/FULL_40_CHARACTER_SHA --dry-run
 ```
 
-Without `--artifact-dir`, the GitHub source selects a successful
+Without `--artifact-dir` or `--from`, the GitHub source selects a successful
 `server-release.yml` run for the exact SHA when `--run-id` is omitted.
 `--cli-run-id` optionally selects a separate matching run; otherwise it defaults
-to the selected server run. `--artifact-dir` is mutually exclusive with both
-run-ID flags. The GitHub source checks successful workflow identity and exact head SHA for both runs,
+to the selected server run. `--artifact-dir` and `--from` are mutually exclusive
+with each other and both run-ID flags. The GitHub source checks successful workflow identity and exact head SHA for both runs,
 then downloads both artifacts directly using host `gh`, with no workstation
 relay. Artifacts expire after seven days. Only the GitHub source requires
 authenticated repository/GHCR access. Both sources require Docker Compose v2,
@@ -558,6 +558,24 @@ files in a shell. Units, OpenCode and deployment configuration must already be
 provisioned; this transaction does not install or change systemd units.
 
 ### Build-machine source
+
+The Zoe host can pull an existing build directory using its configured SSH
+key and alias (no passwords or remote setup performed by deploy):
+
+```sh
+bash deploy/linux/deploy.sh --sha FULL_SHA --from builder-nb03hk:artifact-d727cae --dry-run
+```
+
+`--from HOST_ALIAS:DIRNAME` accepts only `builder-nb03hk` or `builder-vm02hk`.
+`DIRNAME` is a single subdirectory under `/root/Agents/zoe-release-build`:
+letters, digits, dots, underscores and hyphens only; no slashes, `..` substring,
+or standalone `.`. Root's existing `/root/.ssh/config` and known-host keys must
+already permit the connection. Deploy uses recursive SCP with `BatchMode=yes`
+and `StrictHostKeyChecking=yes` into a root-owned `0700` temporary directory.
+The downloaded directory then follows exactly the `--artifact-dir` checks
+below, with no transfer-specific trust exception; its copy is removed on exit,
+including transfer or verification failure. Dry-run transfers and validates
+but does not load images or change the deployment.
 
 On NB03HK (authorized Linux amd64 worker with Go, Git and Docker/buildx), build
 from an exact locally available full SHA in a clean detached worktree. Fetch the

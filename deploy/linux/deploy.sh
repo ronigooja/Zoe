@@ -4,8 +4,8 @@ set -euo pipefail
 umask 077
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helper="$script_dir/deploy-state.py"
-sha="" run_id="" cli_run_id="" artifact_dir="" dry_run=false
-usage() { echo 'usage: deploy.sh --sha FULL_SHA [--run-id ID] [--cli-run-id ID] [--dry-run] | --sha FULL_SHA --artifact-dir DIR [--dry-run]' >&2; exit 2; }
+sha="" run_id="" cli_run_id="" artifact_dir="" from="" dry_run=false
+usage() { echo 'usage: deploy.sh --sha FULL_SHA [--run-id ID] [--cli-run-id ID] [--dry-run] | --sha FULL_SHA (--artifact-dir DIR | --from HOST_ALIAS:DIRNAME) [--dry-run]' >&2; exit 2; }
 while (($#)); do
   case "$1" in
     --sha) [[ $# -ge 2 ]] || usage; sha="$2"; shift 2 ;;
@@ -13,6 +13,7 @@ while (($#)); do
     --cli-run-id) [[ $# -ge 2 ]] || usage; cli_run_id="$2"; shift 2 ;;
     --dry-run) dry_run=true; shift ;;
     --artifact-dir) [[ $# -ge 2 ]] || usage; artifact_dir="$2"; shift 2 ;;
+    --from) [[ $# -ge 2 && -n "$2" ]] || usage; from="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -20,7 +21,12 @@ done
 [[ -z "$run_id" || "$run_id" =~ ^[0-9]+$ ]] || usage
 [[ -z "$cli_run_id" || "$cli_run_id" =~ ^[0-9]+$ ]] || usage
 if [[ -n "$artifact_dir" ]]; then
-  [[ -z "$run_id$cli_run_id" ]] || usage
+  [[ -z "$run_id$cli_run_id$from" ]] || usage
+fi
+if [[ -n "$from" ]]; then
+  [[ -z "$run_id$cli_run_id$artifact_dir" ]] || usage
+  [[ "$from" =~ ^(builder-nb03hk|builder-vm02hk):([A-Za-z0-9._-]+)$ ]] || usage
+  [[ "${from#*:}" != *..* && "${from#*:}" != . ]] || usage
 fi
 releases="${ZOE_RELEASES_DIR:-/opt/zoe/releases}"
 env_file="${ZOE_ENV_FILE:-/etc/zoe/zoe-stack.env}"
@@ -35,9 +41,12 @@ if [[ ! "$health_attempts" =~ ^[0-9]+$ ]]; then usage; fi
 if ((health_attempts < 1 || health_attempts > 30)); then usage; fi
 [[ $EUID -eq 0 ]] || { echo 'deploy step=preflight status=fail reason=root-required'; exit 1; }
 for tool in python3 docker systemctl journalctl gh curl sha256sum tar flock cp mv ln readlink cmp date sleep diff cut cat rm mkdir mktemp touch uname chmod install; do
-  if [[ "$tool" == gh && -n "$artifact_dir" ]]; then continue; fi
+  if [[ "$tool" == gh && -n "$artifact_dir$from" ]]; then continue; fi
   command -v "$tool" >/dev/null || { echo "deploy step=preflight status=fail missing=$tool"; exit 1; }
 done
+if [[ -n "$from" ]]; then
+  command -v scp >/dev/null || { echo 'deploy step=preflight status=fail missing=scp'; exit 1; }
+fi
 # A lock is operational metadata, not deployment mutation. Dry-run leaves none.
 mkdir -p "$log_root"
 exec 9>"$log_root/.lock"
@@ -110,6 +119,14 @@ if [[ -d "$state" ]]; then
 fi
 ok
 step=download-verify
+if [[ -n "$from" ]]; then
+  # Root-created private scratch is exit-owned. Never execute a remote shell;
+  # scp uses the host's preconfigured SSH alias and verified host key.
+  mkdir -m 0700 "$scratch/pull"
+  scp -r -oBatchMode=yes -oStrictHostKeyChecking=yes -- \
+    "${from%%:*}:/root/Agents/zoe-release-build/${from#*:}" "$scratch/pull/" >/dev/null 2>&1
+  artifact_dir="$scratch/pull/${from#*:}"
+fi
 if [[ -z "$artifact_dir" ]]; then
 if [[ -z "$run_id" ]]; then
   gh run list -R ronigooja/Zoe --workflow server-release.yml --commit "$sha" --status success --limit 100 --json databaseId,headSha > "$scratch/runs.json" 2>/dev/null

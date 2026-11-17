@@ -343,7 +343,17 @@ env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
        'ZOE_COMPACT_TIMEOUT_MS': '600000', 'ZOE_COMPACT_MAX_CHARACTERS': '8000',
         'ZOE_COMPACT_INTERVAL_MINUTES': '60', 'ZOE_REGISTER_RAW_WINDOW_MINUTES': '60',
         'ZOE_UI_CONTROLLER_BASE_URL': 'https://ui.invalid', 'ZOE_UI_CONTROLLER_MODEL': 'ui',
-        'ZOE_UI_CONTROLLER_API_KEY_FILE': '/run/secrets/ui_controller_api_key'}
+         'ZOE_UI_CONTROLLER_API_KEY_FILE': '/run/secrets/ui_controller_api_key'}
+# Mirror writeDeploymentFiles/defaultProfileValues in internal/ops/lifecycle.go.
+env['ZOE_RUNTIME_PROFILES'] = json.dumps({name: {
+    'id': name, 'harness': 'opencode', 'runtime_route_id': 'opencode',
+    'model_route_id': 'default', 'role': 'super' if name == 'zoe-super' else 'worker',
+    'agent': 'zoe-worker' if name == 'worker' else name,
+    'permission_tier': 'full' if name == 'zoe-steward' else 'external_paths',
+    'isolation_policy': 'opencode-workspace-write-v1',
+    'capability_ids': ['workspace.read', 'workspace.write', 'external.read'],
+    'scopes': ['workspace'],
+} for name in ['worker', 'zoe-worker', 'zoe-steward', 'zoe-super']}, separators=(',', ':'))
 if os.environ['CASE'] == 'happy':
     for prefix in ['ZOE_REGISTER', 'ZOE_COMPACT', 'ZOE_UI_CONTROLLER']:
         for suffix in ['BASE_URL', 'MODEL', 'API_KEY_FILE']:
@@ -385,10 +395,11 @@ for revision in [old, new]:
         shutil.copy(repo/'deploy/linux'/f'{unit}.service', root/'deploy-linux')
     shutil.copy(repo/'deploy/linux/install-cli.sh', root/'deploy-linux')
     compose = 'services:\n  zoe-server:\n    image: ${ZOE_SERVER_IMAGE}\n    environment:\n'
+    compose += '      ZOE_RUNTIME_PROFILES: ${ZOE_RUNTIME_PROFILES}\n'
     optional_names = {prefix+'_'+suffix for prefix in ['ZOE_REGISTER', 'ZOE_COMPACT', 'ZOE_UI_CONTROLLER']
                       for suffix in ['BASE_URL', 'MODEL', 'API_KEY_FILE']}
     for name, value in server_env.items():
-        if name not in optional_names:
+        if name not in optional_names and name != 'ZOE_RUNTIME_PROFILES':
             compose += '      '+name+': '+json.dumps(value)+'\n'
     for prefix, secret in [('ZOE_REGISTER', 'register_api_key'), ('ZOE_COMPACT', 'compact_api_key'), ('ZOE_UI_CONTROLLER', 'ui_controller_api_key')]:
         for suffix in ['BASE_URL', 'MODEL']:
@@ -498,7 +509,16 @@ def valid_rfc3339(value):
     except ValueError:
         return False
     return True
-if cmd == 'gh':
+if cmd == 'scp':
+    assert len(args) == 6 and args[:4] == ['-r','-oBatchMode=yes','-oStrictHostKeyChecking=yes','--']
+    assert args[4] in ['builder-nb03hk:/root/Agents/zoe-release-build/artifact-fixture',
+                       'builder-vm02hk:/root/Agents/zoe-release-build/artifact-fixture']
+    destination = pathlib.Path(args[5])
+    assert destination.stat().st_uid == 0 and destination.stat().st_mode & 0o777 == 0o700
+    (p/'pull-destination').write_text(str(destination))
+    if case == 'staged-unreachable': sys.exit(255)
+    shutil.copytree(p/'archives', destination/'artifact-fixture')
+elif cmd == 'gh':
     if args[:2] == ['run','list']: print(json.dumps([{'databaseId':42,'headSha':new}]))
     elif args[:2] == ['run','view']: print(json.dumps({'headSha':new,'conclusion':'success','workflowName':'Server deployment artifact'}))
     elif args[:2] == ['run','download']:
@@ -601,7 +621,7 @@ elif cmd == 'docker':
 else: sys.exit(2)
 PY
   chmod 0755 "$FIXTURE/shims/shim"
-  for tool in docker systemctl gh curl journalctl sleep date install; do ln -s shim "$FIXTURE/shims/$tool"; done
+  for tool in docker systemctl gh scp curl journalctl sleep date install; do ln -s shim "$FIXTURE/shims/$tool"; done
   export ZOE_RELEASES_DIR="$FIXTURE/releases" ZOE_ENV_FILE="$FIXTURE/stack.env" ZOE_DB_PATH="$FIXTURE/db.sqlite"
   export ZOE_API_URL=http://local/healthz ZOE_UNITS_DIR="$FIXTURE/units" ZOE_BIN_DIR="$FIXTURE/bin"
   export ZOE_DEPLOY_LOG_DIR="$FIXTURE/logs" ZOE_DEPLOY_HEALTH_ATTEMPTS=1
@@ -617,6 +637,40 @@ unchanged() {
 if grep -Eq 'rollback|previous-release|previous-cli|armed=' "$repo_root/deploy/linux/deploy.sh"; then
   echo 'removed deployment restoration code remains'; exit 1
 fi
+fixture staged-dry-run
+deploy --artifact-dir "$FIXTURE/archives" --dry-run
+unchanged
+grep -q 'deploy summary=dry-run' "$FIXTURE/logs/$new.log"
+[[ ! -e "$FIXTURE/releases/$new" && ! -e "$FIXTURE/releases/$new.dl" ]]
+for scenario in success tamper sha unreachable; do
+  fixture "staged-$scenario"
+  if deploy --from builder-nb03hk:artifact-fixture; then
+    [[ "$scenario" == success && -f "$FIXTURE/logs/$new.done" ]]
+    [[ "$(grep -c '^docker load ' "$FIXTURE/calls")" == 3 ]]
+    if grep -q '^docker pull ' "$FIXTURE/calls"; then exit 1; fi
+  else
+    [[ "$scenario" != success && -f "$FIXTURE/logs/$new.failed" ]]
+    unchanged
+  fi
+  [[ ! -e "$(cat "$FIXTURE/pull-destination")" ]]
+done
+fixture staged-pull-dry-run
+deploy --from builder-vm02hk:artifact-fixture --dry-run
+unchanged
+[[ ! -e "$(cat "$FIXTURE/pull-destination")" ]]
+for source in builder-nb03hk:../escape builder-nb03hk:a/b builder-nb03hk:a..b builder-nb03hk:. builder-nb03hk: builder-other:artifact-fixture; do
+  fixture "staged-invalid-${source//[^A-Za-z0-9]/_}"
+  if deploy --from "$source"; then echo "invalid pull source accepted: $source"; exit 1; fi
+  unchanged
+  [[ ! -e "$FIXTURE/pull-destination" ]]
+done
+fixture staged-exclusive
+for flag in --artifact-dir --run-id --cli-run-id; do
+  if deploy --from builder-nb03hk:artifact-fixture "$flag" 42; then
+    echo "conflicting pull source accepted: $flag"; exit 1
+  fi
+done
+unchanged
 for scenario in success tamper sha image mode; do
   fixture "staged-$scenario"
   if PATH="$FIXTURE/shims:$PATH" bash "$repo_root/deploy/linux/deploy.sh" --sha "$new" --artifact-dir "$FIXTURE/archives"; then
