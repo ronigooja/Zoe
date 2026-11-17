@@ -140,8 +140,11 @@ jobs:
           security import "$RUNNER_TEMP/zoe-signing.p12" -k "$keychain" -P "$SIGNING_P12_PASSWORD" -T /usr/bin/codesign
           rm -f "$RUNNER_TEMP/zoe-signing.p12"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          # A self-signed certificate is not a valid identity, so select it by hash, not by name.
+          identity="$(security find-certificate -c "Zoe Local Code Signing" -Z "$keychain" | awk '/SHA-1 hash:/{print $3}')"
+          test -n "$identity"
           codesign --force --deep --timestamp=none \
-            --keychain "$keychain" --sign "Zoe Local Code Signing" \
+            --keychain "$keychain" --sign "$identity" \
             --identifier com.zoe.mac "$app" > "$CI_OUTPUT/logs/codesign.log" 2>&1
           codesign --verify --deep --strict "$app" >> "$CI_OUTPUT/logs/codesign.log" 2>&1
           codesign -d -r- "$app" >> "$CI_OUTPUT/logs/codesign.log" 2>&1
