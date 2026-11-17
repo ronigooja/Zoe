@@ -20,7 +20,16 @@ const writeRestatement = "The user prefers LHR."
 
 func memoryWriteJobFixture(t *testing.T) (*storage.Store, *Service, func()) {
 	t.Helper()
-	store, svc := recallRecoveryFixture(t, Config{}, 0)
+	// These tests drive dispatch explicitly. Do not start an HTTP fixture's
+	// registered service, which would compete for the same durable jobs.
+	store, svc := newVoiceTestService(t, Config{Now: func() time.Time {
+		return time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC)
+	}})
+	t.Cleanup(svc.Stop)
+	at := svc.now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('handoff-session','default','owner','instance','request',X'01',1,'active',?,?)`, at, at); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.DB().Exec(`CREATE TABLE memory_write_outcomes(op_id TEXT PRIMARY KEY,status TEXT NOT NULL,error_kind TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatal(err)
 	}
@@ -108,11 +117,14 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 			}
 			handoff()
 			handoff()
-			if calls.Load() != 0 || writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='pending' AND question=?`, writeRestatement) != 1 || writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE intent_kind=? AND status='delivered' AND text=''`, memoryWriteHolding) != 1 {
-				t.Fatal("handoff called worker or failed to enqueue exactly once")
+			workerCalls := calls.Load()
+			pendingJobs := writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='pending' AND question=?`, writeRestatement)
+			holdingReplies := writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE intent_kind=? AND status='delivered' AND text=''`, memoryWriteHolding)
+			if workerCalls != 0 || pendingJobs != 1 || holdingReplies != 1 {
+				t.Fatalf("handoff: worker calls=%d want=0, pending jobs=%d want=1, delivered holding replies=%d want=1", workerCalls, pendingJobs, holdingReplies)
 			}
-			if writeJobCount(t, store, `SELECT handoff_handled FROM voice_turns WHERE id='write-turn'`) != 1 {
-				t.Fatal("turn not handled atomically with job")
+			if handled := writeJobCount(t, store, `SELECT handoff_handled FROM voice_turns WHERE id='write-turn'`); handled != 1 {
+				t.Fatalf("turn not handled atomically with job: handoff_handled=%d want=1", handled)
 			}
 			// Later handled transcript revisions must not replace the original
 			// sentence paired with the first durable job's restatement.
@@ -120,9 +132,19 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			svc.dispatchRecall(context.Background())
-			waitRecall(t, func() bool {
-				return writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status IN ('done','blocked')`) == 1
-			})
+			dispatched := make(chan struct{})
+			go func() {
+				svc.workers.Wait()
+				close(dispatched)
+			}()
+			select {
+			case <-dispatched:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("dispatch did not finish: worker calls=%d", calls.Load())
+			}
+			if terminal := writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status IN ('done','blocked')`); terminal != 1 {
+				t.Fatalf("terminal jobs=%d want=1", terminal)
+			}
 			var outcome string
 			if err := store.DB().QueryRow(`SELECT status FROM memory_write_outcomes`).Scan(&outcome); err != nil {
 				t.Fatal(err)
@@ -133,8 +155,8 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 			}
 			if mode == "blocked" {
 				wantOutcome = "write_blocked"
-				if writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='blocked'`) != 1 {
-					t.Fatal("quarantine not persisted as blocked")
+				if blocked := writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='blocked'`); blocked != 1 {
+					t.Fatalf("quarantine not persisted as blocked: blocked jobs=%d want=1, outcome=%s", blocked, outcome)
 				}
 			}
 			if mode == "uncertain" || mode == "timeout" || mode == "failure" {
@@ -155,8 +177,13 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 			if mode == "success" {
 				wantErrors = 0
 			}
-			if calls.Load() != wantCalls || writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs`) != 1 || writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE text<>''`) != wantErrors || writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE text=?`, stewardErrorSpeech) != wantErrors || writeJobCount(t, store, `SELECT count(*) FROM tasks`) != 0 {
-				t.Fatalf("mode=%s calls=%d; expected one job, %d errors, no tasks", mode, calls.Load(), wantErrors)
+			workerCalls = calls.Load()
+			jobs := writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs`)
+			replies := writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE text<>''`)
+			errors := writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE text=?`, stewardErrorSpeech)
+			tasks := writeJobCount(t, store, `SELECT count(*) FROM tasks`)
+			if workerCalls != wantCalls || jobs != 1 || replies != wantErrors || errors != wantErrors || tasks != 0 {
+				t.Fatalf("mode=%s calls=%d want=%d, jobs=%d want=1, replies=%d errors=%d want=%d each, tasks=%d want=0", mode, workerCalls, wantCalls, jobs, replies, errors, wantErrors, tasks)
 			}
 		})
 	}
