@@ -2,6 +2,14 @@
 # Synthetic host only: no Docker daemon, systemd, network, or real host data.
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+compose_skipped=false
+coverage_result() {
+  if [[ "$compose_skipped" == true ]]; then
+    echo 'SKIPPED: real Qdrant Compose rendering (deploy/linux/docker-compose.yml and services/memory/docker-compose.yml); synthetic checks do not replace this coverage' >&2
+    if [[ "${ZOE_TEST_ALLOW_COMPOSE_SKIP:-0}" != 1 ]]; then return 77; fi
+    echo 'PARTIAL ONLY: ZOE_TEST_ALLOW_COMPOSE_SKIP=1 explicitly permits missing Compose coverage' >&2
+  fi
+}
 # Log-only fixtures also run without root or Linux host utilities.
 check_log_rules() {
   python3 - "$repo_root/deploy/linux/deploy-state.py" <<'PY'
@@ -144,7 +152,8 @@ with tempfile.TemporaryDirectory() as directory:
 print('Qdrant rendered Compose storage fixtures passed (both files)')
 PY
 else
-  echo 'SKIP Qdrant rendered Compose storage fixtures: docker compose CLI unavailable'
+  compose_skipped=true
+  echo 'SKIPPED: Qdrant rendered Compose storage fixtures (both files): docker compose CLI unavailable; final status will be 77 unless ZOE_TEST_ALLOW_COMPOSE_SKIP=1' >&2
 fi
 # These read-only path checks also run on a non-root development host.
 python3 - "$repo_root/deploy/linux/deploy-state.py" <<'PY'
@@ -306,7 +315,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert not list(secrets_dir.glob('.zoe-memory-token-*'))
 print('Qdrant deployment path fixtures passed')
 PY
-[[ "${1:-}" != --logs-only ]] || exit 0
+if [[ "${1:-}" == --logs-only ]]; then coverage_result; exit 0; fi
 [[ $EUID -eq 0 ]] || { echo 'run test-deploy.sh as root (CI uses sudo)'; exit 1; }
 task_root="$(mktemp -d)"
 trap 'rm -rf -- "$task_root"' EXIT
@@ -314,10 +323,12 @@ old=1111111111111111111111111111111111111111
 new=2222222222222222222222222222222222222222
 export OLD_SHA="$old" NEW_SHA="$new" REPO_ROOT="$repo_root"
 fixture() {
-  export FIXTURE="$task_root/$1" CASE="$1"
-  mkdir -p "$FIXTURE"
+  # CASE controls injected behavior; each invocation owns an independent host.
+  CASE="$1"
+  FIXTURE="$(mktemp -d "$task_root/$CASE.XXXXXX")"
+  export FIXTURE CASE
   python3 - <<'PY'
-import hashlib, io, json, os, pathlib, shutil, sqlite3, tarfile
+import hashlib, io, json, os, pathlib, re, shutil, sqlite3, tarfile
 p = pathlib.Path(os.environ['FIXTURE']); repo = pathlib.Path(os.environ['REPO_ROOT'])
 old, new = os.environ['OLD_SHA'], os.environ['NEW_SHA']
 for name in ['releases', 'units', 'bin', 'shims', 'archives', 'data']:
@@ -328,6 +339,12 @@ memory_token.write_text('fixture-memory-token\n')
 memory_token.chmod(0o600)
 os.chown(memory_token, 65532, 65532)
 env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
+       'ZOE_DEFAULT_PROFILE_ID': 'worker', 'ZOE_MAX_RUNS': '12',
+       'ZOE_SERVER_DATA_ROOT': str(p/'data/server'),
+       'ZOE_MEMORY_DATA_ROOT': str(p/'data/memory'),
+       'ZOE_MEM0_LLM_API_KEY_FILE': str(p/'secrets/mem0-llm-api-key'),
+       'ZOE_MEM0_LLM_BASE_URL': 'https://memory-model.invalid/v1',
+       'ZOE_MEM0_LLM_MODEL': 'fixture-memory-model',
        'ZOE_RUNNER_TOKEN_FILE': str(p/'secrets/runner-token'),
        'ZOE_MEMORY_WORKER_IMAGE': 'ghcr.io/test/zoe-memory-worker@sha256:'+'3'*64,
        'ZOE_RUNNER_IMAGE': 'ghcr.io/test/zoe-runner@sha256:'+'4'*64,
@@ -354,6 +371,15 @@ env['ZOE_RUNTIME_PROFILES'] = json.dumps({name: {
     'capability_ids': ['workspace.read', 'workspace.write', 'external.read'],
     'scopes': ['workspace'],
 } for name in ['worker', 'zoe-worker', 'zoe-steward', 'zoe-super']}, separators=(',', ':'))
+# Required inputs come from the real product Compose, not the simplified shim.
+# Never auto-fill new names: an added requirement must receive a reviewed value.
+required = {name for name, suffix in re.findall(
+    r'\$\{([A-Za-z_][A-Za-z_0-9]*)([^{}]*)\}',
+    (repo/'deploy/linux/docker-compose.yml').read_text())
+    if not suffix.startswith((':-', '-', ':+', '+'))}
+missing = required - env.keys()
+assert not missing, 'fixture missing required Compose inputs: '+','.join(sorted(missing))
+assert all(env[name] for name in required), 'fixture has empty required Compose input'
 if os.environ['CASE'] == 'happy':
     for prefix in ['ZOE_REGISTER', 'ZOE_COMPACT', 'ZOE_UI_CONTROLLER']:
         for suffix in ['BASE_URL', 'MODEL', 'API_KEY_FILE']:
@@ -820,3 +846,4 @@ for log in root.glob('*/logs/*'):
         assert all(value not in log.read_bytes() for value in values), 'token leaked into fixture logs'
 PY
 echo 'host deployment transaction tests passed'
+coverage_result
