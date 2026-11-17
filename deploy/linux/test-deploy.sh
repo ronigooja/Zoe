@@ -43,6 +43,88 @@ print('deployment log severity fixtures passed')
 PY
 }
 check_log_rules
+# Focused store-identity simulation; runnable without root or a Docker daemon.
+check_staged_identity() {
+  python3 - "$repo_root/deploy/linux/deploy-state.py" <<'PY'
+import hashlib, io, json, os, pathlib, subprocess, sys, tarfile, tempfile
+helper = sys.argv[1]
+with tempfile.TemporaryDirectory() as directory:
+    root = pathlib.Path(directory)
+    stage = root/'stage'; stage.mkdir()
+    release = root/'release'; release.mkdir()
+    shim = root/'docker'
+    shim.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sys
+a=sys.argv[1:]; root=pathlib.Path(os.environ['IDENTITY_ROOT'])
+with (root/'calls').open('a') as out: out.write(' '.join(a)+'\\n')
+data=json.loads((root/'fixture.json').read_text()); case=os.environ['IDENTITY_CASE']
+if a[0]=='load':
+    if case=='load-error': sys.exit('secret=DO_NOT_LEAK_SENTINEL')
+    print('Loaded image: fixture:test'); sys.exit()
+assert a[:2]==['image','inspect']
+if os.environ['IDENTITY_STORE']=='containerd' and a[2]==data['config_id']:
+    sys.exit('No such image')
+spec=data['spec']
+if case=='inspect-error': sys.exit('secret=DO_NOT_LEAK_SENTINEL')
+if case=='layers': spec['RootFS']['Layers']=['sha256:'+'9'*64]
+if case=='tag-only': spec.pop('RootFS'); spec.pop('Config')
+if case=='config': spec['Config']['Env']=['WRONG=1']
+if case=='platform': spec['Architecture']='arm64'
+print(json.dumps([spec]))
+''')
+    shim.chmod(0o700)
+    config = {'architecture':'amd64', 'os':'linux', 'config':{'Env':['EXPECTED=1']},
+              'rootfs':{'type':'layers','diff_ids':['sha256:'+'1'*64]}}
+    content = json.dumps(config).encode()
+    config_id = 'sha256:'+hashlib.sha256(content).hexdigest()
+    images = {}; files = {}
+    for name in ['zoe-server','zoe-memory-worker','zoe-runner']:
+        archive = name+'.tar'
+        with tarfile.open(stage/archive, 'w') as tar:
+            for filename, payload in [('config.json',content), ('manifest.json',json.dumps([
+                    {'Config':'config.json','RepoTags':['fixture:test'],'Layers':[]}]).encode())]:
+                entry=tarfile.TarInfo(filename); entry.size=len(payload); tar.addfile(entry,io.BytesIO(payload))
+        digest=hashlib.sha256((stage/archive).read_bytes()).hexdigest()
+        images[name]={'archive':archive,'id':config_id,'sha256':digest}; files[archive]=digest
+    (stage/'build-machine-manifest.json').write_text(json.dumps({'images':images,'files':files}))
+    (release/'release-manifest.json').write_text(json.dumps({'images':dict.fromkeys(images,config_id)}))
+    for store in ['classic','containerd']:
+        host_id=config_id if store=='classic' else 'sha256:'+'2'*64
+        (root/'fixture.json').write_text(json.dumps({'config_id':config_id, 'spec':{
+            'Id':host_id,'Architecture':'amd64','Os':'linux','Config':config['config'],
+            'RootFS':{'Type':'layers','Layers':config['rootfs']['diff_ids']}}}))
+        for case in ['success','layers','tag-only','config','platform','load-error','inspect-error']:
+            mapping=release/'host-image-ids.json'; mapping.unlink(missing_ok=True)
+            (root/'calls').write_text('')
+            env=dict(os.environ,PATH=str(root)+os.pathsep+os.environ['PATH'],IDENTITY_ROOT=str(root),
+                     IDENTITY_CASE=case,IDENTITY_STORE=store)
+            result=subprocess.run([sys.executable,helper,'staged-images',str(stage),str(release),'load'],
+                                  env=env,capture_output=True,text=True)
+            log=result.stdout+result.stderr
+            assert (result.returncode==0)==(case=='success'), (store,case,log)
+            assert 'DO_NOT_LEAK_SENTINEL' not in log
+            if case=='success':
+                assert all(v['host_id']==host_id for v in json.loads(mapping.read_text()).values())
+                refs=subprocess.check_output([sys.executable,helper,'images',str(release),str(root/'calls')],text=True)
+                assert refs.count('='+host_id)==3
+                assert ('image inspect '+host_id) in (root/'calls').read_text()
+                if store=='containerd':
+                    assert ('image inspect '+config_id) not in (root/'calls').read_text()
+                    # The simulated store explicitly rejects lookup by config digest.
+                    missing=subprocess.run([str(shim),'image','inspect',config_id],env=env,capture_output=True,text=True)
+                    assert missing.returncode and 'No such image' in missing.stderr
+            else:
+                assert not mapping.exists()
+                if case.endswith('error'):
+                    assert 'error=CalledProcessError' in log and 'command=docker ' in log
+                    assert ('load' if case=='load-error' else 'image inspect') in log
+                else:
+                    assert 'loaded image ' in log and 'mismatch' in log
+print('staged classic/containerd identity, immutable pinning and redacted error fixtures passed')
+PY
+}
+check_staged_identity
+if [[ "${ZOE_TEST_STAGED_IDENTITY_ONLY:-0}" == 1 ]]; then exit 0; fi
 # Focused GitHub-selection simulation; no root, downloads or host commands.
 python3 - "$repo_root/deploy/linux/deploy.sh" <<'PY'
 import os, pathlib, subprocess, sys, tempfile
@@ -465,7 +547,9 @@ artifacts = [{'name': f.name, 'path': f.relative_to(root).as_posix(), 'sha256': 
 images = {name: {'ref': 'ghcr.io/test/'+name+':test', 'digest': 'sha256:'+digit*64}
           for name,digit in [('zoe-server','2'), ('zoe-memory-worker','3'), ('zoe-runner','4')]}
 if case.startswith('staged-'):
-    images = {name: 'sha256:'+hashlib.sha256(name.encode()).hexdigest() for name in images}
+    configs = {name: json.dumps({'architecture':'amd64','os':'linux','config':{'Env':[name]},
+               'rootfs':{'type':'layers','diff_ids':['sha256:'+hashlib.sha256(name.encode()).hexdigest()]}}).encode() for name in images}
+    images = {name: 'sha256:'+hashlib.sha256(configs[name]).hexdigest() for name in images}
 (root/'release-manifest.json').write_text(json.dumps({'source_revision':new,'architecture':'amd64','artifacts':artifacts,'images':images}))
 if case == 'checksum': (root/'bin/zoe-server').write_text('corrupt')
 with tarfile.open(p/'archives/server-linux-amd64.tar.gz', 'w:gz') as tar:
@@ -482,7 +566,7 @@ if case.startswith('staged-'):
     for name, identity in images.items():
         archive = name+'.tar'
         with tarfile.open(stage/archive, 'w') as tar:
-            for filename, content in [('config.json', name.encode()), ('manifest.json', json.dumps([{'Config':'config.json','RepoTags':[],'Layers':[]}]).encode())]:
+            for filename, content in [('config.json', configs[name]), ('manifest.json', json.dumps([{'Config':'config.json','RepoTags':['fixture/'+name+':test'],'Layers':[]}]).encode())]:
                 entry = tarfile.TarInfo(filename); entry.size = len(content)
                 tar.addfile(entry, io.BytesIO(content))
         staged_images[name] = {'archive':archive,'id':identity,'sha256':hashlib.sha256((stage/archive).read_bytes()).hexdigest()}
@@ -621,7 +705,10 @@ elif cmd == 'docker':
         elif 'ps' in args:
             assert args[-3:] == ['ps','-q','zoe-server']
             print('server-container')
-    elif args[0] in ['pull', 'load']: record()
+    elif args[0] in ['pull', 'load']:
+        record()
+        if args[0] == 'load' and case == 'staged-load-error':
+            sys.exit('secret=DO_NOT_LEAK_SENTINEL')
     elif args[0] == 'inspect':
         assert args == ['inspect','server-container']
         env=json.loads((p/'config.json').read_text())['services']['zoe-server']['environment']
@@ -629,8 +716,16 @@ elif cmd == 'docker':
         print(json.dumps([{'Image':identity,'Config':{'Env':[k+'='+v for k,v in env.items()]}}]))
     elif args[:2] == ['image','inspect']:
         if case.startswith('staged-'):
-            identity = args[2] if case != 'staged-image' else 'sha256:'+'9'*64
-            print(json.dumps([{'Id':identity,'Architecture':'amd64','Os':'linux'}]))
+            import tarfile
+            for name, identity in json.loads((p/'source/release-manifest.json').read_text())['images'].items():
+                if args[2] not in [identity, 'fixture/'+name+':test']: continue
+                with tarfile.open(p/'archives'/(name+'.tar')) as tar:
+                    config=json.load(tar.extractfile('config.json'))
+                layers=config['rootfs']['diff_ids'] if case != 'staged-image' else []
+                print(json.dumps([{'Id':identity,'Architecture':'amd64','Os':'linux',
+                                  'Config':config['config'],'RootFS':{'Type':'layers','Layers':layers}}]))
+                break
+            else: sys.exit('No such image')
         else:
             assert args == ['image','inspect','ghcr.io/test/zoe-server@sha256:'+'2'*64]
             print(json.dumps([{'Id':'sha256:'+'2'*64,'RepoDigests':['ghcr.io/test/zoe-server@sha256:'+'2'*64]}]))
@@ -697,7 +792,7 @@ for flag in --artifact-dir --run-id --cli-run-id; do
   fi
 done
 unchanged
-for scenario in success tamper sha image mode; do
+for scenario in success tamper sha image mode load-error; do
   fixture "staged-$scenario"
   if PATH="$FIXTURE/shims:$PATH" bash "$repo_root/deploy/linux/deploy.sh" --sha "$new" --artifact-dir "$FIXTURE/archives"; then
     [[ "$scenario" == success && -f "$FIXTURE/logs/$new.done" ]]
@@ -705,7 +800,14 @@ for scenario in success tamper sha image mode; do
     if grep -q '^docker pull ' "$FIXTURE/calls"; then exit 1; fi
   else
     [[ "$scenario" != success && -f "$FIXTURE/logs/$new.failed" ]]
-    if [[ "$scenario" != image ]]; then unchanged; fi
+    if [[ "$scenario" == load-error ]]; then
+      grep -q 'error=CalledProcessError command=docker load' "$FIXTURE/logs/$new.log"
+      if grep -q DO_NOT_LEAK_SENTINEL "$FIXTURE/logs/$new.log"; then exit 1; fi
+    elif [[ "$scenario" != image ]]; then
+      unchanged
+    else
+      grep -q 'loaded image layers mismatch' "$FIXTURE/logs/$new.log"
+    fi
   fi
 done
 for failure in active missing-unit-path undefined-variable checksum; do

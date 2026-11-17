@@ -172,6 +172,8 @@ def qdrant_storage(release, env, config=None):
 
 def image_refs(release):
     manifest = read(Path(release) / 'release-manifest.json')
+    resolved_path = Path(release) / 'host-image-ids.json'
+    resolved = read(resolved_path) if resolved_path.exists() else {}
     result = {}
     for service, key in [('zoe-server', 'ZOE_SERVER_IMAGE'), ('zoe-memory-worker', 'ZOE_MEMORY_WORKER_IMAGE'),
                          ('zoe-runner', 'ZOE_RUNNER_IMAGE')]:
@@ -181,6 +183,11 @@ def image_refs(release):
                 fail('manifest missing server image')
             continue
         if isinstance(image, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', image):
+            host = resolved.get(service)
+            if host is not None:
+                if host.get('config_id') != image or not re.fullmatch(r'sha256:[0-9a-f]{64}', host.get('host_id', '')):
+                    fail('invalid host image identity: ' + service)
+                image = host['host_id']
             result[key] = image
             continue
         if not isinstance(image, dict) or not re.fullmatch(r'sha256:[0-9a-f]{64}', image.get('digest', '')):
@@ -329,6 +336,7 @@ def staged_images(staged, release, action):
     if set(images) != services:
         fail('staged manifest requires all three images')
     candidate = read(Path(release) / 'release-manifest.json')
+    saved = {}
     for name, image in images.items():
         archive, identity = image.get('archive'), image.get('id')
         if archive != name + '.tar' or not re.fullmatch(r'sha256:[0-9a-f]{64}', identity or ''):
@@ -347,15 +355,47 @@ def staged_images(staged, release, action):
             config = tar.extractfile(entries[0]['Config']).read()
             if 'sha256:' + hashlib.sha256(config).hexdigest() != identity:
                 fail('saved image ID mismatch')
+            config = json.loads(config)
+            diff_ids = config.get('rootfs', {}).get('diff_ids')
+            if (config.get('rootfs', {}).get('type') != 'layers' or not isinstance(diff_ids, list) or
+                    any(not isinstance(item, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', item) for item in diff_ids)):
+                fail('invalid saved image layers')
+            saved[name] = (config, entries[0].get('RepoTags', []))
     if action == 'load':
-        for image in images.values():
-            subprocess.run(['docker', 'load', '--input', str(root / image['archive'])], check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            loaded = json.loads(output(['docker', 'image', 'inspect', image['id']]))
-            if len(loaded) != 1 or loaded[0]['Id'] != image['id']:
-                fail('loaded image ID mismatch')
-            if loaded[0].get('Architecture') != 'amd64' or loaded[0].get('Os') != 'linux':
-                fail('loaded image platform mismatch')
+        resolved = {}
+        for name, image in images.items():
+            loaded_output = output(['docker', 'load', '--input', str(root / image['archive'])])
+            config, tags = saved[name]
+            references = tags or re.findall(r'^Loaded image(?: ID)?: (\S+)$', loaded_output, re.M)
+            if not references:
+                fail('loaded image reference missing')
+            host_id = None
+            # A tag only locates the image; it never proves its identity. Compare
+            # runtime config and content-addressed uncompressed layers, then
+            # re-inspect by the host ID to close a mutable-tag race.
+            for ref in references:
+                for target in (ref, host_id):
+                    target = target or host_id
+                    loaded = json.loads(output(['docker', 'image', 'inspect', target]))
+                    if len(loaded) != 1:
+                        fail('loaded image count mismatch')
+                    spec = loaded[0]
+                    identity = spec.get('Id', '')
+                    if not re.fullmatch(r'sha256:[0-9a-f]{64}', identity) or (host_id and identity != host_id):
+                        fail('loaded image ID mismatch')
+                    if (spec.get('Architecture') != config.get('architecture') or
+                            spec.get('Os') != config.get('os') or
+                            spec.get('Architecture') != 'amd64' or spec.get('Os') != 'linux' or
+                            spec.get('Variant', '') != config.get('variant', '')):
+                        fail('loaded image platform mismatch')
+                    if (spec.get('RootFS', {}).get('Type') != 'layers' or
+                            spec.get('RootFS', {}).get('Layers') != config['rootfs']['diff_ids']):
+                        fail('loaded image layers mismatch')
+                    if spec.get('Config') != config.get('config') or not isinstance(spec.get('Config'), dict):
+                        fail('loaded image config mismatch')
+                    host_id = identity
+            resolved[name] = {'config_id': image['id'], 'host_id': host_id}
+        atomic(Path(release) / 'host-image-ids.json', json.dumps(resolved, sort_keys=True) + '\n')
     elif action != 'verify':
         fail('invalid staged image action')
 
@@ -477,7 +517,15 @@ try:
         print(qdrant_storage(*args))
     else:
         fail('unknown deployment state operation')
-except (OSError, ValueError, KeyError, sqlite3.Error, subprocess.SubprocessError, tarfile.TarError):
+except (OSError, ValueError, KeyError, sqlite3.Error, subprocess.SubprocessError, tarfile.TarError) as error:
     # Exceptions can include commands, SQL, paths or environment values.
-    print('deployment state operation failed: ' + command, file=sys.stderr)
+    detail = ''
+    if isinstance(error, subprocess.CalledProcessError):
+        # Never echo argv, paths, environment or daemon stderr. Only known
+        # executable/subcommand names are safe diagnostic labels.
+        argv = error.cmd if isinstance(error.cmd, list) else []
+        safe = {'docker', 'image', 'inspect', 'load', 'compose', 'config', 'systemctl', 'cat', 'install'}
+        detail = ' command=' + ' '.join(part for part in argv[:3] if part in safe)
+        detail += ' exit=' + str(error.returncode)
+    print('deployment state operation failed: ' + command + ' error=' + type(error).__name__ + detail, file=sys.stderr)
     sys.exit(2)

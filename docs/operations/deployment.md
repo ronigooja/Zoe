@@ -598,6 +598,18 @@ archive's hash and expected image ID. The manifest cannot hash itself; trust is
 the reviewed worker and restricted transfer, not an unsigned checksum alone.
 Both archives retain their own checksums and identical embedded CLI revision.
 
+When deploying staged images, the manifest image ID authenticates the saved
+config bytes, not the daemon's lookup key. After loading, archive `RepoTags`
+(or Docker's reported loaded reference for untagged archives) locate each image;
+matching tags alone never establish identity. Deployment compares runtime
+`Config`, platform, and ordered RootFS layer diff IDs with the authenticated
+archive config, then repeats inspection by the daemon's immutable `Id`.
+`host-image-ids.json` in the installed release records config-to-host IDs for
+Compose pinning and subsequent container verification. This supports classic
+and containerd image stores without assuming config digest equals daemon ID.
+Existing schema-1 artifacts, including `artifact-674363b`, need no rebuild or
+new manifest fields: layer diff IDs are derived from the saved config.
+
 `push-release.sh` uses batch SFTP only through the existing `zoe-release` SSH
 alias, uploads to `/var/lib/zoe/release-staging/<sha>.uploading`, then renames to
 `<sha>` after successful transfer. It never opens a remote shell or deploys.
