@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ronigooja/Zoe/contracts"
@@ -28,10 +29,14 @@ func TestVoiceAVASCreateAcknowledgement(t *testing.T) {
 					w.WriteHeader(http.StatusNotImplemented)
 					return
 				}
+				var request gatewaySessionRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.OpeningContext == nil || request.OpeningContext.Kind != "full" {
+					t.Errorf("default AVAS create omitted full opening context: %+v, %v", request, err)
+				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"answer_sdp": "answer", "voice_session_id": "gateway", "opening_context": json.RawMessage(tc.acknowledgement), "context_chars": tc.chars})
 			}))
 			defer gateway.Close()
-			store, svc := newVoiceTestService(t, Config{GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), UpstreamRoute: "avas"})
+			store, svc := newVoiceTestService(t, Config{GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client()})
 			created, err := svc.create(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user", DeviceID: "device"}, createRequest{RequestID: "ack", OfferSDP: "offer"})
 			if err != nil {
 				t.Fatal(err)
@@ -45,5 +50,14 @@ func TestVoiceAVASCreateAcknowledgement(t *testing.T) {
 				t.Fatalf("acknowledgement delivery=%q chars=%d response=%+v; want %q chars=%d", delivery, chars, created, tc.want, tc.chars)
 			}
 		})
+	}
+}
+
+func TestRejectLegacyVoiceRouteBeforeRegistration(t *testing.T) {
+	for _, route := range []string{"wm", "bogus"} {
+		err := Register(nil, nil, Config{UpstreamRoute: route})
+		if err == nil || !strings.Contains(err.Error(), "AVAS only") {
+			t.Fatalf("route %q: expected actionable AVAS-only error, got %v", route, err)
+		}
 	}
 }

@@ -22,6 +22,12 @@ public struct VoiceConfig: Codable, Equatable, Sendable {
     public var languages: [VoiceLanguage]
     public var webRTC: VoiceWebRTCConfig
 
+    /// Applies when starting a new call; unavailable preferences never reach the gateway.
+    public func resolvedVoice(preferred: String?) -> String {
+        if let preferred, voices.contains(where: { $0.id == preferred }) { return preferred }
+        return defaults.voice
+    }
+
     private enum CodingKeys: String, CodingKey {
         case version
         case defaults

@@ -16,7 +16,6 @@ func TestResultWiringDisabledAndOpeningAvailability(t *testing.T) {
 		t.Fatalf("default sent status=%s posts=%d", status, r.posts.Load())
 	}
 	r.seedCall(t, "opening", "user-1", 1)
-	r.svc.upstreamRoute = "avas"
 	r.svc.openingBudget = 10000
 	principal := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
 	opening := r.svc.buildAVASOpeningContext(context.Background(), principal)

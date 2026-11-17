@@ -41,6 +41,7 @@ type Config struct {
 	Now                    func() time.Time
 	OpeningContextBudget   int
 	ContextCharBudget      int
+	// UpstreamRoute accepts only empty or avas; retained to reject legacy configuration.
 	UpstreamRoute          string
 	ResultDeliveryEnabled  bool
 	ResultDeliveryInterval time.Duration
@@ -70,7 +71,6 @@ type Service struct {
 	now                    func() time.Time
 	openingBudget          int
 	contextCharBudget      int
-	upstreamRoute          string
 	resultDeliveryEnabled  bool
 	resultDeliveryInterval time.Duration
 	steward                TaskSteward
@@ -142,8 +142,6 @@ type gatewaySessionResponse struct {
 	AccountLeaseID         string                `json:"account_lease_id,omitempty"`
 	AccountLeaseGeneration int64                 `json:"account_lease_generation,omitempty"`
 	AccountID              string                `json:"account_id,omitempty"`
-	Conversation           string                `json:"conversation,omitempty"`
-	ConversationConfirmed  *bool                 `json:"conversation_confirmed,omitempty"`
 	ContextChars           int                   `json:"context_chars,omitempty"`
 	OpeningContext         *openingContextResult `json:"opening_context,omitempty"`
 }
@@ -220,37 +218,7 @@ func (s *Service) acknowledgeOpeningResults(ctx context.Context, p contracts.Pri
 }
 
 func (s *Service) buildOpeningContext(ctx context.Context, p contracts.Principal) *openingContext {
-	if s.upstreamRoute == "avas" {
-		return s.buildAVASOpeningContext(ctx, p)
-	}
-	if s.openingBudget <= 0 {
-		return nil
-	}
-	version := 1
-	_ = s.db.QueryRowContext(ctx, `SELECT coalesce(max(opening_context_version),0)+1 FROM voice_sessions WHERE workspace_id=? AND owner_id=?`, p.WorkspaceID, p.SubjectID).Scan(&version)
-	c := &openingContext{Kind: "full", Version: version}
-	used := 0
-	rows, err := s.db.QueryContext(ctx, `SELECT title,goal FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND status IN ('queued','running') ORDER BY updated_at DESC LIMIT 8`, p.WorkspaceID, p.SubjectID)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var title, goal string
-			if rows.Scan(&title, &goal) != nil {
-				continue
-			}
-			text := "active task: " + strings.TrimSpace(title+" — "+goal)
-			cost := len([]rune(text))
-			if cost == 0 || used+cost > s.openingBudget {
-				break
-			}
-			c.Items = append(c.Items, openingContextItem{Role: "user", Text: text})
-			used += cost
-		}
-	}
-	if len(c.Items) == 0 {
-		return nil
-	}
-	return c
+	return s.buildAVASOpeningContext(ctx, p)
 }
 
 func (s *Service) buildAVASOpeningContext(ctx context.Context, p contracts.Principal) *openingContext {
@@ -331,53 +299,10 @@ func (s *Service) buildAVASOpeningContext(ctx context.Context, p contracts.Princ
 	return c
 }
 
-func (s *Service) deltaOpeningContext(ctx context.Context, p contracts.Principal, full *openingContext) *openingContext {
-	if full == nil {
-		return nil
-	}
-	var version int
-	if err := s.db.QueryRowContext(ctx, `SELECT opening_context_version FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND state='active'`, p.WorkspaceID, p.SubjectID).Scan(&version); err != nil || version < 1 {
-		return full
-	}
-	if version >= full.Version {
-		return nil
-	}
-	return full
-}
-
-func (s *Service) applyOpeningContext(ctx context.Context, sessionID string, c *openingContext) (string, error) {
-	if c == nil || len(c.Items) == 0 {
-		return "unsupported", nil
-	}
-	body, err := json.Marshal(c)
-	if err != nil {
-		return "unsupported", err
-	}
-	response, _, err := s.callGateway(ctx, http.MethodPost, "/v1/voice/sessions/"+url.PathEscape(sessionID)+"/opening-context", body)
-	if err != nil {
-		return "unverified", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotImplemented {
-		return "unsupported", nil
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "unverified", fmt.Errorf("opening context gateway status %d", response.StatusCode)
-	}
-	var result openingContextResult
-	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&result); err != nil {
-		return "unverified", err
-	}
-	if result.Silent == "unverified" {
-		return "unverified", nil
-	}
-	if result.Applied {
-		return "delivered", nil
-	}
-	return "unverified", nil
-}
-
 func Register(server *control.Server, store *storage.Store, cfg Config) error {
+	if route := strings.ToLower(strings.TrimSpace(cfg.UpstreamRoute)); route != "" && route != "avas" {
+		return errors.New("Zoe voice supports AVAS only; remove legacy ZOE_VOICE_UPSTREAM_ROUTE after confirming the gateway uses AVAS")
+	}
 	if _, err := ResolveInstructionText(cfg.InstructionText); err != nil {
 		return err
 	}
@@ -483,16 +408,12 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if contextBudget <= 0 {
 		contextBudget = 12000
 	}
-	route := strings.ToLower(strings.TrimSpace(cfg.UpstreamRoute))
-	if route != "avas" {
-		route = "wm"
-	}
 	interval := cfg.ResultDeliveryInterval
 	if interval <= 0 {
 		interval = time.Second
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	s := &Service{resultReceiptAdapter: cfg.ResultDelivery.ReceiptAdapter, db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, upstreamRoute: route, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	s := &Service{resultReceiptAdapter: cfg.ResultDelivery.ReceiptAdapter, db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 	if cfg.DiscoverResultReceipts && s.gatewayReady() && s.resultReceiptAdapter == nil {
 		s.resultCapability = &gatewayResultCapability{adapter: NewGatewayResultReceiptAdapter(s)}
 	}
@@ -838,10 +759,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	if err := tx.Commit(); err != nil {
 		return sessionResponse{}, err
 	}
-	var opening *openingContext
-	if s.upstreamRoute == "avas" {
-		opening = s.buildOpeningContext(ctx, p)
-	}
+	opening := s.buildOpeningContext(ctx, p)
 	// The gateway owns account selection and returns only its opaque sticky
 	// session handle. Zoe never receives or records an account credential/id.
 	// Startup rejects invalid configuration. Keep media creation safe if an
@@ -879,27 +797,8 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 		_ = s.markSession(ctx, id, 1, "allocating", "quarantined", "gateway_media_generation_invalid", nil, "")
 		return sessionResponse{}, apiError(http.StatusBadGateway, "voice_outcome_unknown", "Space gateway returned an invalid media generation; media lease quarantined", nil)
 	}
-	if s.upstreamRoute == "wm" {
-		opening = s.buildOpeningContext(ctx, p)
-		if upstream.Conversation == "resumed" {
-			opening = s.deltaOpeningContext(ctx, p, opening)
-			if opening != nil {
-				opening.Kind = "delta"
-			}
-		}
-	}
-	if s.upstreamRoute == "avas" {
-		openingDelivery = []byte("unsupported")
-		if opening != nil {
-			openingDelivery = []byte("unverified")
-			openingVersion = opening.Version
-			openingChars = openingCharsFor(opening)
-		}
-	} else if upstream.OpeningContext != nil && upstream.OpeningContext.Applied {
-		openingDelivery = []byte("delivered")
-		openingVersion = opening.Version
-		openingChars = openingCharsFor(opening)
-	} else if opening != nil {
+	openingDelivery = []byte("unsupported")
+	if opening != nil {
 		openingDelivery = []byte("unverified")
 		openingVersion = opening.Version
 		openingChars = openingCharsFor(opening)
@@ -910,7 +809,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	if upstream.OpeningContext != nil && (upstream.OpeningContext.Silent == nil || upstream.OpeningContext.Silent == true) && upstream.OpeningContext.Applied {
 		openingDelivery = []byte("delivered")
 	}
-	if s.upstreamRoute == "avas" && upstream.OpeningContext != nil && upstream.OpeningContext.Supported != nil && !*upstream.OpeningContext.Supported {
+	if upstream.OpeningContext != nil && upstream.OpeningContext.Supported != nil && !*upstream.OpeningContext.Supported {
 		openingDelivery = []byte("unsupported")
 	}
 	// The gateway's account ID is sensitive correlation data. Persist only the
@@ -927,21 +826,11 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 		manifest, _ := json.Marshal(opening)
 		_, _ = s.db.ExecContext(ctx, `UPDATE voice_sessions SET opening_context_delivery=?,opening_context_version=?,opening_context_chars=?,opening_context_manifest=?,gateway_context_chars=? WHERE id=?`, string(openingDelivery), openingVersion, openingChars, manifest, upstream.ContextChars, id)
 	}
-	if s.upstreamRoute == "avas" {
-		if err := s.acknowledgeOpeningResults(ctx, p, id, 1, opening, upstream.OpeningContext); err != nil {
-			logging.Warnf("opening_result_availability_failed")
-		}
+	if err := s.acknowledgeOpeningResults(ctx, p, id, 1, opening, upstream.OpeningContext); err != nil {
+		logging.Warnf("opening_result_availability_failed")
 	}
 	if opening == nil {
 		openingDelivery = []byte("unsupported")
-	}
-	if opening != nil && s.upstreamRoute == "wm" {
-		// The gateway owns route selection. WM applies context through this
-		// endpoint; AVAS returns 501 because its creation-time initial_items
-		// already carried the context. Both outcomes are non-fatal to media.
-		delivery, _ := s.applyOpeningContext(ctx, upstream.VoiceSessionID, opening)
-		openingDelivery = []byte(delivery)
-		_, _ = s.db.ExecContext(ctx, `UPDATE voice_sessions SET opening_context_delivery=? WHERE id=?`, delivery, id)
 	}
 	// The Space gateway intentionally keeps account_id server-side. Its
 	// downstream contract exposes only the opaque lease identity and

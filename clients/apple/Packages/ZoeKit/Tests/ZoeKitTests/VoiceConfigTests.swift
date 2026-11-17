@@ -26,5 +26,12 @@ final class VoiceConfigTests: XCTestCase {
         XCTAssertEqual(config.webRTC.dataChannel.label, "zoe")
         XCTAssertTrue(config.webRTC.receiveAudio)
         XCTAssertFalse(config.webRTC.receiveVideo)
+        XCTAssertEqual(config.resolvedVoice(preferred: nil), "cove")
+        XCTAssertEqual(config.resolvedVoice(preferred: "removed"), "cove")
+        var available = config
+        available.voices = [VoiceChoice(id: "selected", name: "Selected")]
+        XCTAssertEqual(available.resolvedVoice(preferred: "selected"), "selected")
+        available.voices = []
+        XCTAssertEqual(available.resolvedVoice(preferred: "selected"), "cove")
     }
 }

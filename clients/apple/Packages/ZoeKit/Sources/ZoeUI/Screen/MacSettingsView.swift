@@ -46,6 +46,22 @@ public struct MacSettingsView: View {
             .padding(20)
             .tabItem { Text("Connection") }
             Form {
+                if let config = model.voiceConfig {
+                    Picker("Voice", selection: Binding(
+                        get: { model.preferredVoice ?? "" },
+                        set: { model.setPreferredVoice($0.isEmpty ? nil : $0) }
+                    )) {
+                        Text("Gateway default").tag("")
+                        ForEach(config.voices) { voice in Text(voice.name).tag(voice.id) }
+                        if let saved = model.preferredVoice, !config.voices.contains(where: { $0.id == saved }) {
+                            Text("Saved voice unavailable").tag(saved)
+                        }
+                    }
+                    Text("Applies to new calls. Unavailable voices use the gateway default.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Connect to load available voices.").foregroundStyle(.secondary)
+                }
                 Toggle("Hang up after silence", isOn: Binding(
                     get: { model.silenceHangupEnabled },
                     set: { model.setSilenceHangupEnabled($0) }
@@ -63,6 +79,7 @@ public struct MacSettingsView: View {
         .frame(width: 520, height: 360)
         .onAppear { address = model.serverAddress; refreshSilenceSeconds() }
         .onChange(of: model.silenceTimeoutSeconds) { _, _ in refreshSilenceSeconds() }
+        .task(id: model.connectionEpoch) { await model.refreshVoiceReadiness() }
     }
 
     @FocusState private var secondsFocused: Bool

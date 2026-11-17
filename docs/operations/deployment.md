@@ -41,9 +41,8 @@ the context register and current tasks. The rule is not configurable by
 `ZOE_VOICE_INSTRUCTION_TEXT`. When inspecting delivery in `voice_sessions.opening_context_delivery`:
 `delivered` means the gateway acknowledged `applied`; `unverified` means it did not
 acknowledge or reported `silent: "unverified"`; `unsupported` means nothing was
-sent or the gateway said it is unsupported. A route mismatch (see
-`ZOE_VOICE_UPSTREAM_ROUTE` below) leaves the AVAS items unsent. Zoe never pushes
-opening context after creation on AVAS.
+sent or the gateway said it is unsupported. Zoe supports only AVAS and never
+pushes opening context after creation. See the upgrade checks below.
 The register-based source and mid-call additions in [ADR 0013](../architecture/decisions/0013-context-register.md)
 are **Accepted, not implemented**; they do not change these deployed instructions.
 The gateway must return `opening_context: {"applied": true}` (with `silent`
@@ -127,7 +126,9 @@ If the gateway runs client-direct, keep it `false`.
 server-side voice reaping: active sessions with no recent heartbeat are reclaimed
 through the normal release flow; unverified termination remains quarantined and
 keeps the voice pool blocked.
-`ZOE_VOICE_UPSTREAM_ROUTE` must match the gateway's `VOICE_UPSTREAM_ROUTE`. The Linux compose file passes it to the server with default `avas`; the server binary itself falls back to `wm` when the variable is absent. If they differ, Zoe builds the wrong opening context (on `wm` it calls opening-context on an AVAS gateway, receives 501, and records `unsupported`); the call still works but the AVAS `initial_items` are not sent.
+When upgrading voice deployments, first end active calls and independently confirm the external gateway uses `VOICE_UPSTREAM_ROUTE=avas`. Zoe supports AVAS only, including when `ZOE_VOICE_UPSTREAM_ROUTE` is absent. The compatibility variable accepts only empty or `avas`; `wm` and unknown values fail startup with an actionable error. The env writer preserves an existing `wm` value so an upgrade cannot silently rewrite the operator's route choice. After confirming gateway compatibility, the operator must remove the old value or set `avas` in the Zoe stack environment. Compose still passes the variable (default `avas`) so stale deployments fail visibly. This change does not modify the external gateway, deploy services, or establish its actual route: the gateway's public config has no route attestation, so successful config retrieval or media negotiation is not proof of compatibility. Do not upgrade a WM gateway deployment until AVAS is independently confirmed. Back up the existing stack environment and database before upgrading; no schema, existing session manifests, transcript rows, lease state, or historical delivery status is deleted or rewritten. Unknown media remains quarantined under the existing release policy; do not clear leases to force an upgrade. Roll back the binary and environment together if necessary.
+
+When selecting a voice on macOS, Settings loads the gateway's public voice catalog through authenticated Zoe `/v1/voice/config`. The preferred voice is saved locally per normalized server URL, not per credential, and applies only to new calls (including reconnects). A missing/removed preference falls back to the current gateway default while retaining the saved preference; no hard-coded voice list or mid-call update is used. Existing clients that omit a preference continue to use the gateway default. This is client preference storage, not a server-side cross-device preference.
 
 Check service status without printing environment files or secret values:
 

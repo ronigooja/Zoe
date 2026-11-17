@@ -80,6 +80,18 @@ func TestWriteEnvPreservesVoiceUpstreamRoute(t *testing.T) {
 	if !validOperatorEnvValue("ZOE_VOICE_UPSTREAM_ROUTE", "wm") || !validOperatorEnvValue("ZOE_VOICE_UPSTREAM_ROUTE", "avas") || validOperatorEnvValue("ZOE_VOICE_UPSTREAM_ROUTE", "bogus") {
 		t.Fatal("voice route validation mismatch")
 	}
+	// Legacy operator intent must survive the env rewrite and reach startup's
+	// explicit rejection, rather than silently concealing a gateway mismatch.
+	if err := os.WriteFile(path, []byte("ZOE_VOICE_UPSTREAM_ROUTE=wm\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeEnv(path, map[string]string{"ZOE_VOICE_UPSTREAM_ROUTE": "avas"}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil || string(data) != "ZOE_VOICE_UPSTREAM_ROUTE=wm\n" {
+		t.Fatalf("legacy route silently rewritten: %q, %v", data, err)
+	}
 }
 
 func TestWriteEnvPreservesRotationOperatorSettingsAndRejectsInvalidValues(t *testing.T) {

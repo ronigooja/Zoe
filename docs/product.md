@@ -101,6 +101,8 @@ The system should not require every event, state update, or background operation
 
 ## 3. Client Requirements
 
+When using voice, Zoe supports only the AVAS gateway path. On macOS, the user can select a voice from the connected gateway's public catalog in Settings. Save the preference per server locally and use it for new calls, including reconnects; use the gateway default when the selected voice is no longer offered. Changing the preference must not interrupt an active call.
+
 The macOS client is an ambient screen defined in [macOS ambient screen](#macos-ambient-screen) and [ADR 0008](architecture/decisions/0008-ambient-screen-client.md). iPhone and iPad have no approved interface design yet. Behavior boundaries every client must keep are in [Client behavior boundaries](#client-behavior-boundaries).
 
 End voice and Stop task are distinct actions. Voice acceptance includes a 30-minute mixed Mandarin–English session on each of a real iPhone and iPad while locked, plus interruption, reconnect, audio-route changes, and durable-task continuity; this is a target, not a completed result. APNs only prompts a durable-inbox refresh; a push is not the notice authority.

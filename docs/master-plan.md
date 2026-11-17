@@ -17,6 +17,8 @@ Milestones sequence delivery without reducing product scope. The [acceptance mat
 
 ## Current status and blockers
 
+The voice path is AVAS-only in source, with explicit startup rejection of legacy WM configuration and a macOS gateway-catalog voice preference for new calls. Targeted Linux voice/ops/server tests passed on the approved SSH build host; Apple build/tests, external gateway compatibility and live-call behavior remain unverified. See the [evidence record](acceptance/evidence.md#avas-only-voice-and-client-preference--2026-11-15).
+
 The [A2UI screen design](design/screen-document.md) was accepted 2026-11-14, replacing the Zoe-specific format and component library. Implementation is pending: the Go contract and Swift renderer have not yet changed. Renderer dependency compatibility in macOS CI, catalog registration, and licensing remain [open items](design/screen-document.md#open-items); existing Apple evidence does not verify this replacement.
 
 Scheduled memory ingestion now sends transcript/task text to the Python worker, replacing Go extraction and staged writes; see the [current contract](architecture.md#memory-retrieval-and-context). Local non-SQLite scheduler, HTTP client, and migration checks exist; SQLite scheduler integration, Linux full-suite, and real Mem0/Qdrant acceptance remain open. The claim subsystem and its migrations are removed; only fresh databases are supported. Exports explicitly exclude worker memory. Call-summary generation is not the current ingestion path.

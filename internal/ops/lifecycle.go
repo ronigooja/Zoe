@@ -1204,6 +1204,8 @@ func validOperatorEnvValue(key, value string) bool {
 		}
 		return true
 	case "ZOE_VOICE_UPSTREAM_ROUTE":
+		// During upgrades preserve legacy wm so voice startup rejects it explicitly;
+		// rewriting it would hide an independently configured gateway.
 		return value == "wm" || value == "avas"
 	case "ZOE_VOICE_INGEST_TOKEN_FILE", "ZOE_VOICE_INGEST_ID", "ZOE_VOICE_INGEST_WORKSPACES":
 		return true

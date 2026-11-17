@@ -77,6 +77,8 @@ On macOS the pinned a2ui-swift renderer/basic catalog and platform shell remain 
 
 ## Voice and business work
 
+Zoe's voice transport is AVAS-only: opening context is included in session creation, never applied by a legacy post-create endpoint. Historical WM session data and lease evidence remain readable and unchanged; no WM create/resume/delta path remains. Startup rejects a legacy non-AVAS route setting rather than silently reinterpreting it. The external gateway must independently use AVAS; Zoe does not configure it or infer its route from successful media. Upgrade safety and client-local voice preference behavior are defined in the [deployment runbook](operations/deployment.md#server-and-worker-settings).
+
 When reading the historical voice descriptions below, [ADR 0013](architecture/decisions/0013-context-register.md) supersedes triage, impact confirmation, opening instructions and task/context routing. These old gates, fallback and interaction states were deployed on `bb07671`, removed on main; they are not current implementation requirements.
 
 Zoe-compatible `ronigooja/chatgpt-web-voice` fork is the selected gateway/account pool. The current voice topology and lease boundary are defined by [ADR 0005](architecture/decisions/0005-voice-task-and-lease-boundaries.md); deployment details live in [voice deployment](../deploy/voice/README.md).

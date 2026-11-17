@@ -38,6 +38,7 @@ public final class ZoeAppModel: ObservableObject {
     private var connectionCleanupWarning: String?
     @Published public private(set) var connectionEpoch: UInt64 = 0
     @Published public private(set) var voiceConfig: VoiceConfig?
+    @Published public private(set) var preferredVoice: String?
     @Published public private(set) var voicePoolStatus: VoicePoolStatus?
     @Published public private(set) var voiceStatus: VoiceIntegrationStatus = .idle
     @Published public private(set) var continuousVoiceEnabled: Bool
@@ -47,6 +48,7 @@ public final class ZoeAppModel: ObservableObject {
     @Published public private(set) var voiceDraftRevision: Int64 = 0
     private let defaults: UserDefaults
     private let continuousVoiceKey = "zoe.voice.continuous"
+    private var voiceReadinessRevision: UInt64 = 0
     private let pendingVoiceHangupKey = "zoe.voice.pendingHangup"
     private var api: APIClient?
     private var identity: (any InstanceKeyStoring)?
@@ -57,6 +59,8 @@ public final class ZoeAppModel: ObservableObject {
     private var streamBackoff: UInt64 = 1
     private var connectionGeneration = ConnectionGeneration()
 #if DEBUG
+    var voiceReadinessOverrideForTesting: (() async throws -> (VoiceConfig, VoicePoolStatus))?
+    func installVoiceConfigForTesting(_ config: VoiceConfig) { voiceConfig = config }
     var connectionAPIOverrideForTesting: ((URL, InstanceKey, String) throws -> APIClient)?
     var keyStoreOverrideForTesting: ((URL) throws -> any InstanceKeyStoring)?
     var suppressConnectionFollowupsForTesting = false
@@ -202,11 +206,13 @@ public final class ZoeAppModel: ObservableObject {
         silenceTimeoutSeconds = timeout
         silence = SilenceController(timeoutSeconds: timeout, isEnabled: savedEnabled, clock: silenceClock)
         serverAddress = defaults.string(forKey: "zoe.instance.serverAddress") ?? ""
+        preferredVoice = nil
         let savedInstallation = defaults.string(forKey: "zoe.installationID")
         let identifier = savedInstallation.flatMap(UUID.init(uuidString:))?.uuidString.lowercased() ?? UUID().uuidString.lowercased()
         installationID = identifier
         defaults.set(identifier, forKey: "zoe.installationID")
         continuousVoiceEnabled = defaults.bool(forKey: continuousVoiceKey)
+        loadVoicePreference()
         silenceTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
@@ -437,6 +443,7 @@ public final class ZoeAppModel: ObservableObject {
                 throw error
             }
             serverAddress = candidate.serverURL.absoluteString
+            loadVoicePreference()
             defaults.set(serverAddress, forKey: "zoe.instance.serverAddress")
             pendingConnectionImport = nil
             isBusy = false
@@ -476,6 +483,7 @@ public final class ZoeAppModel: ObservableObject {
         }
         configuredServerURL = nil
         serverAddress = ""
+        preferredVoice = nil
         defaults.removeObject(forKey: "zoe.instance.serverAddress")
     }
 
@@ -533,18 +541,48 @@ public final class ZoeAppModel: ObservableObject {
     public func refreshVoiceReadiness() async {
         guard let api = try? configure() else { return }
         let generation = connectionGeneration.value
+        let mediaEpoch = voiceMediaEpoch
+        voiceReadinessRevision &+= 1
+        let revision = voiceReadinessRevision
         do {
-            async let config = api.voiceConfig()
-            async let pool = api.voicePoolStatus()
-            let (nextConfig, nextPool) = try await (config, pool)
-            guard generation == connectionGeneration.value, api === self.api else { return }
+            let (nextConfig, nextPool) = try await fetchVoiceReadiness(api: api)
+            guard !Task.isCancelled, generation == connectionGeneration.value,
+                  api === self.api, mediaEpoch == voiceMediaEpoch,
+                  revision == voiceReadinessRevision else { return }
             voiceConfig = nextConfig
             voicePoolStatus = nextPool
-            if voiceSession == nil { voiceStatus = .idle }
         } catch {
-            guard generation == connectionGeneration.value else { return }
-            voiceStatus = .unavailable(reason: voiceUnavailableMessage())
+            // Settings readiness is advisory, not a media lifecycle observation.
+            // Retain the last cache and actual call state on failure/cancellation.
         }
+    }
+
+    private func fetchVoiceReadiness(api: APIClient) async throws -> (VoiceConfig, VoicePoolStatus) {
+        #if DEBUG
+        if let override = voiceReadinessOverrideForTesting { return try await override() }
+        #endif
+        async let config = api.voiceConfig()
+        async let pool = api.voicePoolStatus()
+        return try await (config, pool)
+    }
+
+    public var effectiveVoice: String? { voiceConfig.map { $0.resolvedVoice(preferred: preferredVoice) } }
+
+    public func setPreferredVoice(_ voice: String?) {
+        guard voice == nil || voiceConfig?.voices.contains(where: { $0.id == voice }) == true,
+              let key = voicePreferenceKey else { return }
+        preferredVoice = voice
+        if let voice { defaults.set(voice, forKey: key) }
+        else { defaults.removeObject(forKey: key) }
+    }
+
+    private var voicePreferenceKey: String? {
+        guard let url = try? ServerAddress.normalize(serverAddress) else { return nil }
+        return "zoe.voice.preferred." + url.absoluteString
+    }
+
+    private func loadVoicePreference() {
+        preferredVoice = voicePreferenceKey.flatMap { defaults.string(forKey: $0) }
     }
 
     public func startVoice(voice: String? = nil, voiceMode: String? = nil, languageCode: String? = nil) async {
@@ -617,7 +655,7 @@ public final class ZoeAppModel: ObservableObject {
             let created = try await api.createVoiceSession(
                 requestID: UUID().uuidString.lowercased(),
                 offerSDP: offer,
-                voice: voice ?? config.defaults.voice,
+                voice: config.resolvedVoice(preferred: voice ?? preferredVoice),
                 voiceMode: voiceMode ?? config.defaults.voiceMode,
                 languageCode: languageCode ?? config.defaults.languageCode
             )
@@ -1048,6 +1086,7 @@ public final class ZoeAppModel: ObservableObject {
             connectionGeneration.switchOrigin(to: url)
             connectionEpoch = connectionGeneration.value
             configuredServerURL = url
+            loadVoicePreference()
             voiceConfig = nil
             voicePoolStatus = nil
             voiceDraft = ""
