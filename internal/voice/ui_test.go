@@ -253,6 +253,7 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 				return n
 			}
 			before := count(`SELECT count(*) FROM task_entries`)
+			beforeRuns := count(`SELECT count(*) FROM runs`)
 			mu.Lock()
 			choice = steward.Choice{Action: steward.ActionRedisplay, TaskID: &target}
 			routes = []string{"task", "ui"}
@@ -288,11 +289,50 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 					t.Fatal("missing UI receipt or handled marker")
 				}
 				commitAndHandoff(t, ts, key, "display-again", "show the earlier result")
-				if count(`SELECT count(*) FROM ui_jobs WHERE kind='task_entry'`) != 2 || count(`SELECT ui_display FROM tasks`) != 1 {
-					t.Fatal("redisplays deduplicated or authoritative result not selected")
+				// The dispatcher may also create task_entry:older. Only the two
+				// turn-keyed jobs belong to these explicit redisplays.
+				rows, err := store.DB().Query(`SELECT dedupe_key FROM ui_jobs WHERE kind='task_entry' ORDER BY dedupe_key`)
+				if err != nil {
+					t.Fatal(err)
 				}
-				if count(`SELECT count(*) FROM ui_result_sources WHERE entry_id='older' AND run_id='redisplay-run'`) != 2 {
-					t.Fatal("redisplays did not pin authoritative event instead of latest assistant entry or tasks.result")
+				var keys []string
+				for rows.Next() {
+					var key string
+					if err := rows.Scan(&key); err != nil {
+						rows.Close()
+						t.Fatal(err)
+					}
+					keys = append(keys, key)
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					t.Fatal(err)
+				}
+				rows.Close()
+				for _, turn := range []string{"display", "display-again"} {
+					var turnID string
+					if err := store.DB().QueryRow(`SELECT id FROM voice_turns WHERE turn_id=?`, turn).Scan(&turnID); err != nil {
+						t.Fatal(err)
+					}
+					wantKey := "task_entry:" + target + "#" + turnID
+					n := 0
+					for _, key := range keys {
+						if key == wantKey {
+							n++
+						}
+					}
+					if n != 1 {
+						t.Fatalf("redisplay job %q count=%d want=1; keys=%v", wantKey, n, keys)
+					}
+				}
+				if display := count(`SELECT ui_display FROM tasks`); display != 1 {
+					t.Fatalf("ui_display=%d want=1; keys=%v", display, keys)
+				}
+				if sources := count(`SELECT count(*) FROM ui_result_sources s JOIN ui_requests r ON r.id=s.request_id JOIN voice_turns v ON v.id=r.voice_turn_id WHERE v.turn_id IN ('display','display-again') AND s.entry_id='older' AND s.run_id='redisplay-run'`); sources != 2 {
+					t.Fatalf("redisplays pinned authoritative sources=%d want=2; keys=%v", sources, keys)
+				}
+				if tasks, entries, runs := count(`SELECT count(*) FROM tasks`), count(`SELECT count(*) FROM task_entries`), count(`SELECT count(*) FROM runs`); tasks != 1 || entries != before || runs != beforeRuns {
+					t.Fatalf("redisplays admitted work: tasks=%d want=1 entries=%d want=%d runs=%d want=%d; keys=%v", tasks, entries, before, runs, beforeRuns, keys)
 				}
 			} else {
 				want := stewardErrorSpeech

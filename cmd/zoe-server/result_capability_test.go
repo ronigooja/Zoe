@@ -76,7 +76,8 @@ func TestComposedReceiptSchedulerIndependentOfAccountMediaAndRegister(t *testing
 				`INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES('entry-1','task-1','default','assistant_message','full result','device-1','2026-01-01')`,
 				`INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('event-1','default',1,1,'task.assistant_message','2026-01-01','task','task-1',1,'{"payload":{"task_id":"task-1","run_id":"run-1","entry_id":"entry-1"}}')`,
 				`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,gateway_session_id,generation,gateway_media_generation,state,created_at,updated_at) VALUES('s1','default','user-1','device-1','req-1',X'01','gw-s1',1,1,'active','2026-01-01','2026-01-01')`,
-				`INSERT INTO voice_result_deliveries(entry_id,workspace_id,task_id,run_id,subject_id,status,next_attempt_at,created_at,updated_at) VALUES('entry-1','default','task-1','run-1','user-1','pending','2026-01-01','2026-01-01','2026-01-01')`,
+				// The live scheduler may already have created this delivery from event-1.
+				`INSERT OR IGNORE INTO voice_result_deliveries(entry_id,workspace_id,task_id,run_id,subject_id,status,next_attempt_at,created_at,updated_at) VALUES('entry-1','default','task-1','run-1','user-1','pending','2026-01-01','2026-01-01','2026-01-01')`,
 			} {
 				if _, err := store.DB().Exec(query); err != nil {
 					t.Fatal(err)
