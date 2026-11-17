@@ -135,6 +135,41 @@ func TestVoiceReaperHeartbeatFallbackAndTimestampOrdering(t *testing.T) {
 	}
 }
 
+func TestVoiceReleaseUsesCurrentUnbindStateAfterReaper(t *testing.T) {
+	now := time.Date(2026, 10, 31, 10, 1, 0, 0, time.UTC)
+	store, svc := newVoiceTestService(t, Config{HeartbeatTimeout: 30 * time.Second, Now: func() time.Time { return now }, GatewayURL: "https://gateway.test", GatewayAPIKey: "key"})
+	deletes := 0
+	svc.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deletes++
+		return &http.Response{StatusCode: http.StatusNoContent, Body: http.NoBody, Header: make(http.Header)}, nil
+	})}
+	insertReaperSession(t, store, "stale-hangup", now.Add(-time.Minute).Format(time.RFC3339Nano), now.Add(-time.Minute).Format(time.RFC3339Nano))
+	// Pause a hangup after its initial read, let the reaper finish, then
+	// resume the hangup claim with exactly the stale flags it already read.
+	var gatewayUnbound, gatewayUnbindUnknown int
+	if err := store.DB().QueryRow(`SELECT gateway_unbound,gateway_unbind_unknown FROM voice_sessions WHERE id='stale-hangup' AND state='active'`).Scan(&gatewayUnbound, &gatewayUnbindUnknown); err != nil {
+		t.Fatal(err)
+	}
+	reapWithTimeout(t, svc)
+	status, state, blocked, err := svc.releaseSession(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user-stale-hangup"}, "stale-hangup", 1, "gateway", "lease", 2, 3, gatewayUnbound, gatewayUnbindUnknown, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusAccepted || state != "quarantined" || !blocked {
+		t.Fatalf("status=%d state=%s blocked=%t", status, state, blocked)
+	}
+	if deletes != 1 {
+		t.Fatalf("gateway deletes=%d, want 1", deletes)
+	}
+	result, err := store.DB().Exec(`UPDATE voice_sessions SET heartbeat_at=? WHERE id='stale-hangup' AND state='active'`, now.Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 0 {
+		t.Fatalf("late heartbeat changed %d rows", changed)
+	}
+}
+
 func TestVoiceReaperRaceReleasesOnceAndLateHeartbeatConflicts(t *testing.T) {
 	now := time.Date(2026, 10, 31, 10, 1, 0, 0, time.UTC)
 	store, svc := newVoiceTestService(t, Config{HeartbeatTimeout: 30 * time.Second, Now: func() time.Time { return now }, GatewayURL: "https://gateway.test", GatewayAPIKey: "key"})
@@ -152,7 +187,7 @@ func TestVoiceReaperRaceReleasesOnceAndLateHeartbeatConflicts(t *testing.T) {
 	go func() { defer wg.Done(); reapWithTimeout(t, svc) }()
 	go func() {
 		defer wg.Done()
-		_, _, _, _ = svc.releaseSession(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user"}, "race", 1, "gateway", "lease", 2, 3, 0, 0, false)
+		_, _, _, _ = svc.releaseSession(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "user-race"}, "race", 1, "gateway", "lease", 2, 3, 0, 0, false)
 	}()
 	wg.Wait()
 	mu.Lock()
