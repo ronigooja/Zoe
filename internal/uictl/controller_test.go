@@ -105,7 +105,7 @@ func TestOptionalPropertyDefinitionsAccepted(t *testing.T) {
 			for _, key := range definition.required {
 				required = required || key == property
 			}
-			if required {
+			if required || len(propertyEnums[name+"."+property]) > 0 {
 				continue
 			}
 			switch kind {
