@@ -327,6 +327,27 @@ def staged_copy(source, sha, destination):
         os.close(root_fd)
 
 
+def image_config_matches(saved, loaded):
+    """Allow daemon-added empty defaults, never additional runtime settings."""
+    if not isinstance(saved, dict) or not isinstance(loaded, dict):
+        return False
+
+    def empty(value):
+        return value is None or value is False or value == '' or value == [] or value == {}
+
+    for key, value in saved.items():
+        if key not in loaded:
+            return False
+        actual = loaded[key]
+        # JSON's false and zero compare equal in Python; only empty values
+        # normalize, and all non-empty values retain their JSON types.
+        if empty(value) and empty(actual):
+            continue
+        if type(actual) is not type(value) or actual != value:
+            return False
+    return all(key in saved or empty(value) for key, value in loaded.items())
+
+
 def staged_images(staged, release, action):
     import hashlib
     root = Path(staged)
@@ -391,7 +412,7 @@ def staged_images(staged, release, action):
                     if (spec.get('RootFS', {}).get('Type') != 'layers' or
                             spec.get('RootFS', {}).get('Layers') != config['rootfs']['diff_ids']):
                         fail('loaded image layers mismatch')
-                    if spec.get('Config') != config.get('config') or not isinstance(spec.get('Config'), dict):
+                    if not image_config_matches(config.get('config'), spec.get('Config')):
                         fail('loaded image config mismatch')
                     host_id = identity
             resolved[name] = {'config_id': image['id'], 'host_id': host_id}

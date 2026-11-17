@@ -46,8 +46,23 @@ check_log_rules
 # Focused store-identity simulation; runnable without root or a Docker daemon.
 check_staged_identity() {
   python3 - "$repo_root/deploy/linux/deploy-state.py" <<'PY'
-import hashlib, io, json, os, pathlib, subprocess, sys, tarfile, tempfile
+import ast, hashlib, io, json, os, pathlib, subprocess, sys, tarfile, tempfile
 helper = sys.argv[1]
+# Exercise normalization boundaries independently of store representation.
+tree = ast.parse(pathlib.Path(helper).read_text())
+function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'image_config_matches')
+namespace = {}
+exec(compile(ast.Module(body=[function], type_ignores=[]), helper, 'exec'), namespace)
+matches = namespace['image_config_matches']
+for key, value in {'Entrypoint':['evil'], 'Cmd':['evil'], 'Env':['EVIL=1'],
+                   'User':'root', 'Labels':{'evil':'1'}}.items():
+    assert not matches({}, {key:value}), key
+for empty in [None, '', [], {}, False]:
+    assert matches({}, {'User':empty})
+    assert matches({'User':None}, {'User':empty})
+assert not matches({'User':None}, {})
+assert not matches({}, {'ArgsEscaped':0})
+assert not matches({'Env':['A=1','B=2']}, {'Env':['B=2','A=1']})
 with tempfile.TemporaryDirectory() as directory:
     root = pathlib.Path(directory)
     stage = root/'stage'; stage.mkdir()
@@ -69,11 +84,16 @@ if case=='inspect-error': sys.exit('secret=DO_NOT_LEAK_SENTINEL')
 if case=='layers': spec['RootFS']['Layers']=['sha256:'+'9'*64]
 if case=='tag-only': spec.pop('RootFS'); spec.pop('Config')
 if case=='config': spec['Config']['Env']=['WRONG=1']
+if case.startswith('extra-'):
+    key=case.removeprefix('extra-')
+    spec['Config'][key]={'Entrypoint':['evil'], 'Cmd':['evil'], 'Env':['EVIL=1'],
+                         'User':'root', 'Labels':{'evil':'1'}}[key]
+if case=='missing-key': spec['Config'].pop('Env')
 if case=='platform': spec['Architecture']='arm64'
 print(json.dumps([spec]))
 ''')
     shim.chmod(0o700)
-    config = {'architecture':'amd64', 'os':'linux', 'config':{'Env':['EXPECTED=1']},
+    config = {'architecture':'amd64', 'os':'linux', 'config':{'Env':['EXPECTED=1','SECOND=2']},
               'rootfs':{'type':'layers','diff_ids':['sha256:'+'1'*64]}}
     content = json.dumps(config).encode()
     config_id = 'sha256:'+hashlib.sha256(content).hexdigest()
@@ -90,10 +110,16 @@ print(json.dumps([spec]))
     (release/'release-manifest.json').write_text(json.dumps({'images':dict.fromkeys(images,config_id)}))
     for store in ['classic','containerd']:
         host_id=config_id if store=='classic' else 'sha256:'+'2'*64
+        loaded_config = dict(config['config'])
+        if store == 'classic':
+            loaded_config.update({'Healthcheck':{},'Volumes':None,'OnBuild':[], 'Labels':{},
+                                  'ArgsEscaped':False,'Hostname':'','Domainname':'','User':'',
+                                  'AttachStdin':False,'Entrypoint':None,'Cmd':[]})
         (root/'fixture.json').write_text(json.dumps({'config_id':config_id, 'spec':{
-            'Id':host_id,'Architecture':'amd64','Os':'linux','Config':config['config'],
+            'Id':host_id,'Architecture':'amd64','Os':'linux','Config':loaded_config,
             'RootFS':{'Type':'layers','Layers':config['rootfs']['diff_ids']}}}))
-        for case in ['success','layers','tag-only','config','platform','load-error','inspect-error']:
+        for case in ['success','layers','tag-only','config','platform','load-error','inspect-error',
+                     'missing-key','extra-Entrypoint','extra-Cmd','extra-Env','extra-User','extra-Labels']:
             mapping=release/'host-image-ids.json'; mapping.unlink(missing_ok=True)
             (root/'calls').write_text('')
             env=dict(os.environ,PATH=str(root)+os.pathsep+os.environ['PATH'],IDENTITY_ROOT=str(root),
