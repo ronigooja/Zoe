@@ -1,0 +1,36 @@
+[
+  {"version":"v0.9","createSurface":{"surfaceId":"s","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},
+  {"version":"v0.9","updateComponents":{"surfaceId":"s","components":[
+    {"id":"root","component":"Column","children":["head","d0","c1","c2","c3","foot"]},
+    {"id":"head","component":"Row","align":"center","children":["hIcon","hText","hDate"]},
+    {"id":"hIcon","component":"Icon","name":"star"},
+    {"id":"hText","component":"Text","text":"GitHub 今日热门 Top 3","variant":"h2","weight":1},
+    {"id":"hDate","component":"Text","text":"11 月 17 日","variant":"caption"},
+    {"id":"d0","component":"Divider"},
+
+    {"id":"c1","component":"Card","child":"c1col"},
+    {"id":"c1col","component":"Column","children":["c1top","c1desc"]},
+    {"id":"c1top","component":"Row","align":"center","children":["c1name","c1stars"]},
+    {"id":"c1name","component":"Text","text":"1. owner/project-alpha","variant":"h3","weight":1},
+    {"id":"c1stars","component":"Text","text":"★ 12.4k","variant":"h5"},
+    {"id":"c1desc","component":"Text","text":"一个用 Rust 写的终端复用器，主打低延迟和可脚本化。","variant":"body"},
+
+    {"id":"c2","component":"Card","child":"c2col"},
+    {"id":"c2col","component":"Column","children":["c2top","c2desc"]},
+    {"id":"c2top","component":"Row","align":"center","children":["c2name","c2stars"]},
+    {"id":"c2name","component":"Text","text":"2. owner/project-beta","variant":"h3","weight":1},
+    {"id":"c2stars","component":"Text","text":"★ 9.8k","variant":"h5"},
+    {"id":"c2desc","component":"Text","text":"本地优先的笔记应用，支持端到端加密同步。","variant":"body"},
+
+    {"id":"c3","component":"Card","child":"c3col"},
+    {"id":"c3col","component":"Column","children":["c3top","c3desc"]},
+    {"id":"c3top","component":"Row","align":"center","children":["c3name","c3stars"]},
+    {"id":"c3name","component":"Text","text":"3. owner/project-gamma","variant":"h3","weight":1},
+    {"id":"c3stars","component":"Text","text":"★ 7.1k","variant":"h5"},
+    {"id":"c3desc","component":"Text","text":"轻量级向量数据库，单文件部署，内置 Go 客户端。","variant":"body"},
+
+    {"id":"foot","component":"Row","align":"center","children":["fIcon","fText"]},
+    {"id":"fIcon","component":"Icon","name":"info"},
+    {"id":"fText","component":"Text","text":"数据来自 GitHub Trending，按今日新增星标排序。","variant":"caption","weight":1}
+  ]}}
+]

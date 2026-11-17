@@ -65,6 +65,18 @@ without release packages. Apple artifacts are not notarized; artifact creation d
 not install or deploy. Server and OpenCode runtime artifact workflows remain separate; see
 [deployment operations](../operations/deployment.md).
 
+## Offline surface rendering
+
+When checking how an A2UI messages JSON looks, render it offline with the production renderer, `SurfaceManager.fixedStyle` and the window container content (`SurfaceManager.surfaceRootView`):
+
+```sh
+bash clients/apple/tools/render-surface.sh clients/apple/tools/render-fixtures/github-top3.json /tmp/render 400x520
+```
+
+It runs the inert-by-default test `RenderHarnessTests` (`swift test --filter RenderHarnessTests`) and writes `<prefix>-light.png` and `<prefix>-dark.png`, plus `<prefix>-errors.txt` when the renderer reports errors. The input is a JSON array of `v0.9` messages (`createSurface`, `updateComponents`, ...). Size defaults to 400x480 points.
+
+Limits: it does not apply the popover system material or the real window chrome, does not run the server validator (use `internal/uictl`), and loads remote images only if the machine has network access. It is a local Mac check, not part of CI; the test skips unless `ZOE_RENDER_INPUT` and `ZOE_RENDER_OUTPUT` are set.
+
 When reporting verification, link the immutable workflow run and state the source
 revision and selected checks; use the [evidence register](../acceptance/evidence.md#evidence-categories-and-acceptance-boundary)
 for the authoritative evidence categories and acceptance boundary.

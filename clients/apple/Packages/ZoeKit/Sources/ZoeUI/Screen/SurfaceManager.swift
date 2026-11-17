@@ -325,12 +325,16 @@ import A2UISwiftUI
                       height: min(max(desired.height, minimum.height), max(1, visible.height - 20)))
     }
 
+    // Single definition of the container content, shared with the offline render harness.
+    @ViewBuilder static func surfaceRootView(_ model: SurfaceViewModel, onAction: @escaping (ResolvedAction) -> Void) -> some View {
+        ScrollView(.vertical) {
+            A2UISurfaceView(viewModel: model, scrolls: false, onAction: onAction)
+                .padding(surfacePadding)
+        }
+    }
+
     private func hostingController(_ model: SurfaceViewModel, id: String, kind: SurfaceKind) -> NSViewController {
-        let handler = capturedActionHandler(id: id)
-        let controller = NSHostingController(rootView: ScrollView(.vertical) {
-            A2UISurfaceView(viewModel: model, scrolls: false, onAction: handler)
-                .padding(Self.surfacePadding)
-        })
+        let controller = NSHostingController(rootView: Self.surfaceRootView(model, onAction: capturedActionHandler(id: id)))
         controller.sizingOptions = []
         if kind == .popover {
             // Let NSPopover's system material show through; windows retain their normal background.
