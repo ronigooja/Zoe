@@ -11,11 +11,20 @@ final class SurfaceManagerTests: XCTestCase {
     func testFixedStyleUsesTransparentCardsAndSemanticCaptionColor() {
         let style = SurfaceManager.fixedStyle
         XCTAssertEqual(style.cardStyle.backgroundColor, Color.clear)
-        XCTAssertEqual(style.cardStyle.padding, 16)
+        XCTAssertEqual(SurfaceManager.surfacePadding, 8)
+        XCTAssertEqual(SurfaceManager.cardPadding, 8)
+        XCTAssertEqual(SurfaceManager.leafMargin, 4)
+        XCTAssertEqual(style.cardStyle.padding, SurfaceManager.cardPadding)
+        XCTAssertEqual(style.leafMargin, SurfaceManager.leafMargin)
         XCTAssertEqual(style.cardStyle.cornerRadius, 12)
-        XCTAssertEqual(style.cardStyle.shadowRadius, 1)
-        XCTAssertEqual(style.cardStyle.shadowColor, Color(nsColor: .separatorColor))
-        XCTAssertEqual(style.cardStyle.shadowY, 0)
+        XCTAssertNil(style.cardStyle.shadowRadius)
+        XCTAssertNil(style.cardStyle.shadowColor)
+        XCTAssertNil(style.cardStyle.shadowY)
+        XCTAssertEqual(style.textStyles["h1"]?.font, Font.system(size: 22))
+        XCTAssertEqual(style.textStyles["h2"]?.font, Font.system(size: 18))
+        XCTAssertEqual(style.textStyles["h3"]?.font, Font.system(size: 15))
+        XCTAssertEqual(style.textStyles["body"]?.font, Font.system(size: 13))
+        XCTAssertEqual(style.textStyles["caption"]?.font, Font.system(size: 11))
         XCTAssertEqual(style.textStyles["caption"]?.color, Color.secondary)
     }
 

@@ -187,6 +187,12 @@ import A2UISwiftUI
         onUserClosed?()
     }
 
+    // Host-owned spacing in points; rendering facts in internal/uictl/controller.go
+    // and docs/design/screen-document.md track these values and fixedStyle together.
+    static let surfacePadding: CGFloat = 8
+    static let cardPadding: CGFloat = 8
+    static let leafMargin: CGFloat = 4
+
     static var fixedStyle: A2UIStyle {
         A2UIStyle(primaryColor: .accentColor, textStyles: [
             "h1": .init(font: .system(size: 22), weight: .bold),
@@ -194,8 +200,8 @@ import A2UISwiftUI
             "h3": .init(font: .system(size: 15), weight: .semibold),
             "body": .init(font: .system(size: 13)),
             "caption": .init(font: .system(size: 11), color: .secondary)
-        ], cardStyle: .init(padding: 16, cornerRadius: 12, shadowRadius: 1,
-                           shadowColor: Color(nsColor: .separatorColor), shadowY: 0, backgroundColor: .clear))
+        ], cardStyle: .init(padding: cardPadding, cornerRadius: 12, backgroundColor: .clear),
+           leafMargin: leafMargin)
     }
 
     func viewModel(for id: String) -> SurfaceViewModel? { entries[id]?.viewModel }
@@ -212,7 +218,10 @@ import A2UISwiftUI
 
     private func hostingController(_ model: SurfaceViewModel, id: String, kind: SurfaceKind) -> NSViewController {
         let handler = capturedActionHandler(id: id)
-        let controller = NSHostingController(rootView: A2UISurfaceView(viewModel: model, onAction: handler))
+        let controller = NSHostingController(rootView: ScrollView(.vertical) {
+            A2UISurfaceView(viewModel: model, scrolls: false, onAction: handler)
+                .padding(Self.surfacePadding)
+        })
         controller.sizingOptions = []
         if kind == .popover {
             // Let NSPopover's system material show through; windows retain their normal background.
