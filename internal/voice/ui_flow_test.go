@@ -125,6 +125,58 @@ func TestUIRegisterJobFlow(t *testing.T) {
 	}
 }
 
+func TestUIJobServerOwnedMessageVersion(t *testing.T) {
+	for _, version := range []string{`"version":"v0.9",`, ""} {
+		t.Run(version, func(t *testing.T) {
+			r := uiTargetRig(t)
+			uiFlowServer(t, r)
+			var mu sync.Mutex
+			output := uiFlowOutput(strings.ReplaceAll(uiFlowCreate+","+uiFlowRoot, `"version":"v0.9.1",`, version), false)
+			r.svc.uiController = uiFlowModel(t, &output, &mu)
+			uiFlowRegister(t, r)
+			var state, payload, status string
+			if err := r.store.DB().QueryRow(`SELECT status FROM ui_jobs`).Scan(&status); err != nil || status != "done" {
+				t.Fatalf("status=%s err=%v", status, err)
+			}
+			if err := r.store.DB().QueryRow(`SELECT state_json FROM ui_surfaces`).Scan(&state); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.store.DB().QueryRow(`SELECT payload FROM events WHERE event_type='ui.surface'`).Scan(&payload); err != nil {
+				t.Fatal(err)
+			}
+			for _, document := range []string{state, payload} {
+				if strings.Count(document, `"version":"v0.9.1"`) != 2 || strings.Contains(document, `"version":"v0.9"`) {
+					t.Fatalf("noncanonical document: %s", document)
+				}
+			}
+		})
+	}
+}
+
+func TestUIJobSafeValidationFailure(t *testing.T) {
+	for _, tc := range []struct{ messages, code string }{
+		{strings.Replace(uiFlowCreate, `"version":"v0.9.1"`, `"version":123`, 1), "validation_failed:string_required:version"},
+		{uiFlowCreate + "," + strings.Replace(uiFlowRoot, `"text":"Title"`, `"text":{"private user text":"model content"}`, 1), "validation_failed:component_property:Text.text"},
+		{`{"private user text":"model content"}`, "validation_failed:unknown_field"},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			r := uiTargetRig(t)
+			uiFlowServer(t, r)
+			var mu sync.Mutex
+			output := uiFlowOutput(tc.messages, false)
+			r.svc.uiController = uiFlowModel(t, &output, &mu)
+			uiFlowRegister(t, r)
+			var status, code string
+			if err := r.store.DB().QueryRow(`SELECT status,last_error FROM ui_jobs`).Scan(&status, &code); err != nil {
+				t.Fatal(err)
+			}
+			if status != "failed" || code != tc.code || strings.Contains(code, "private") || strings.Contains(code, "model content") {
+				t.Fatalf("status=%s code=%s", status, code)
+			}
+		})
+	}
+}
+
 func TestUITaskJobsAccumulate(t *testing.T) {
 	r := uiTargetRig(t)
 	uiFlowServer(t, r)

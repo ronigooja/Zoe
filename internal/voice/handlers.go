@@ -187,12 +187,15 @@ func (s *Service) handleHangup(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) releaseSession(ctx context.Context, p contracts.Principal, sessionID string, generation int64, gatewayID, accountLeaseID string, accountLeaseGeneration, gatewayMediaGeneration int64, gatewayUnbound, gatewayUnbindUnknown int, claimed bool) (int, string, bool, error) {
 	if !claimed {
-		claim, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET state='ending',updated_at=? WHERE id=? AND generation=? AND state IN ('active','quarantined')`, s.now().UTC().Format(time.RFC3339Nano), sessionID, generation)
+		// A reaper may have unbound and quarantined the session since the
+		// caller read it. Decide whether to DELETE from the flags at claim time,
+		// not the caller's snapshot; ending excludes other release claimants.
+		err := s.db.QueryRowContext(ctx, `UPDATE voice_sessions SET state='ending',updated_at=? WHERE id=? AND generation=? AND state IN ('active','quarantined') RETURNING gateway_unbound,gateway_unbind_unknown`, s.now().UTC().Format(time.RFC3339Nano), sessionID, generation).Scan(&gatewayUnbound, &gatewayUnbindUnknown)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, "", true, apiError(http.StatusConflict, "voice_outcome_unknown", "voice generation is already ending or otherwise unresolved; media lease remains quarantined", nil)
+		}
 		if err != nil {
 			return 0, "", true, err
-		}
-		if n, _ := claim.RowsAffected(); n != 1 {
-			return 0, "", true, apiError(http.StatusConflict, "voice_outcome_unknown", "voice generation is already ending or otherwise unresolved; media lease remains quarantined", nil)
 		}
 	}
 	if gatewayUnbound == 0 && gatewayUnbindUnknown == 0 {

@@ -1,9 +1,6 @@
 package uictl
 
-import (
-	"encoding/json"
-	"errors"
-)
+import "encoding/json"
 
 type componentDefinition struct {
 	required   []string
@@ -36,7 +33,7 @@ func validateComponent(c map[string]json.RawMessage, name string) error {
 	d := definitions[name]
 	for _, key := range d.required {
 		if _, ok := c[key]; !ok {
-			return errors.New("component_required_property")
+			return validationField("component_required_property", name+"."+key)
 		}
 	}
 	for key, value := range c {
@@ -48,7 +45,12 @@ func validateComponent(c map[string]json.RawMessage, name string) error {
 			kind = "number"
 		}
 		if !validProperty(value, kind) {
-			return errors.New("component_property")
+			// Unknown property names are untrusted input, not safe diagnostics.
+			field := name
+			if kind != "" {
+				field += "." + key
+			}
+			return validationField("component_property", field)
 		}
 		if options := propertyEnums[name+"."+key]; len(options) > 0 {
 			var text string
@@ -58,7 +60,7 @@ func validateComponent(c map[string]json.RawMessage, name string) error {
 				found = found || text == option
 			}
 			if !found {
-				return errors.New("component_enum")
+				return validationField("component_enum", name+"."+key)
 			}
 		}
 	}
