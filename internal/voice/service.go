@@ -30,6 +30,7 @@ import (
 type Config struct {
 	Ready                  *ReadyHandle
 	RetryModels            map[string]RetryModelConfig
+	RetryStatusPath        string
 	ResultDelivery         ResultDeliveryConfig
 	DiscoverResultReceipts bool
 	MemoryAPI              *memoryapi.Client
@@ -66,6 +67,8 @@ type Service struct {
 	retryModels            map[string]RetryModelConfig
 	retryReadyMu           sync.Mutex
 	retryReady             bool
+	retryStatusPath        string
+	retryPublish           chan struct{}
 	resultReceiptAdapter   ResultReceiptAdapter
 	resultCapability       *gatewayResultCapability
 	db                     *sql.DB
@@ -322,6 +325,8 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 	svc := newService(store.DB(), cfg)
 	svc.retry = backoff.Store{DB: store.DB()}
 	svc.retryModels = cfg.RetryModels
+	svc.retryStatusPath = cfg.RetryStatusPath
+	svc.retryPublish = make(chan struct{}, 1)
 	if cfg.Ready != nil {
 		cfg.Ready.service = svc
 	}
