@@ -40,8 +40,15 @@ func (s *Service) AfterMigrate(ctx context.Context) error {
 		}
 	}
 	for _, consumer := range []string{"register", "steward", "ui_controller", "compact"} {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		cfg, ok := s.retryModels[consumer]
-		if !ok || cfg.Endpoint == "" || cfg.Model == "" || cfg.CredentialFile == "" {
+		if !ok {
+			continue
+		}
+		if cfg.Endpoint == "" || cfg.Model == "" || cfg.CredentialFile == "" {
+			logging.Warnf("model_retry_config_unavailable")
 			continue
 		}
 		key, err := os.ReadFile(cfg.CredentialFile)
@@ -51,7 +58,10 @@ func (s *Service) AfterMigrate(ctx context.Context) error {
 		}
 		fingerprint := backoff.Fingerprint(cfg.Endpoint, cfg.Model, cfg.Effort, cfg.Thinking, key)
 		if _, err := s.retry.ObserveConfig(ctx, consumer, fingerprint); err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			logging.Warnf("model_retry_observe_failed")
 		}
 	}
 	if s.recallCtx != nil {
