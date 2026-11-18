@@ -164,10 +164,10 @@ func TestMemoryConfigureConsumesCRLFAnswersFromSingleChunk(t *testing.T) {
 	}
 	t.Cleanup(func() { opsManager = old })
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/models" || r.Header.Get("Authorization") != "Bearer memory-token" {
+		if r.Method != http.MethodPost || r.URL.Path != "/responses" || r.Header.Get("Authorization") != "Bearer memory-token" {
 			t.Error("memory probe did not receive the prompted credential")
 		}
-		_, _ = io.WriteString(w, `{"data":[{"id":"gpt-6.1-sol"}]}`)
+		_, _ = io.WriteString(w, `{"output_text":"OK"}`)
 	}))
 	defer gateway.Close()
 	var out, errOut bytes.Buffer

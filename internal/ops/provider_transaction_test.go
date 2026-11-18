@@ -24,7 +24,11 @@ func modelServer(t *testing.T) *httptest.Server {
 		if r.Header.Get("Authorization") != "Bearer next" {
 			t.Error("staged credential was not sent")
 		}
-		_, _ = w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
+		if r.URL.Path == "/responses" {
+			_, _ = w.Write([]byte(`{"output_text":"OK"}`))
+		} else {
+			_, _ = w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
+		}
 	}))
 	t.Cleanup(s.Close)
 	return s
@@ -140,7 +144,10 @@ func TestMemoryTransactionChangesOnlyMemorySettingsAndReloadsWorker(t *testing.T
 		if r.Header.Get("Authorization") != "Bearer next" {
 			t.Error("memory credential was not sent")
 		}
-		_, _ = w.Write([]byte(`{"data":[{"id":"memory-model"}]}`))
+		if r.URL.Path != "/responses" || r.Method != http.MethodPost {
+			t.Errorf("unexpected probe: %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"output_text":"OK"}`))
 	}))
 	defer server.Close()
 	var commands []string

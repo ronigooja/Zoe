@@ -571,7 +571,7 @@ func (m Manager) ConfigureMemory(ctx context.Context, d Deployment, c MemoryConf
 	if d.Mode != ModeCompose {
 		return ProbeResult{}, errors.New("memory configuration requires the managed Compose deployment")
 	}
-	result := Probe(ctx, ProviderConfig{BaseURL: c.BaseURL, Model: c.Model, Secret: c.Secret}, client)
+	result := probeMemory(ctx, c, client)
 	if !result.OK() {
 		_ = saveMemoryCheck(d, result)
 		return result, probeError("memory", result)
@@ -646,7 +646,7 @@ func (m Manager) TestMemory(ctx context.Context, d Deployment, c MemoryConfig, c
 		return ProbeResult{}, err
 	}
 	defer unlock()
-	r := Probe(ctx, ProviderConfig{BaseURL: c.BaseURL, Model: c.Model, SecretPath: c.SecretPath}, client)
+	r := probeMemory(ctx, c, client)
 	if err := saveMemoryCheck(d, r); err != nil {
 		return r, err
 	}

@@ -24,6 +24,11 @@ type Client struct {
 
 type HTTPError struct{ StatusCode int }
 
+type transportError struct{ cause error }
+
+func (e *transportError) Error() string { return "model request failed or timed out" }
+func (e *transportError) Unwrap() error { return e.cause }
+
 func (e *HTTPError) Error() string {
 	return fmt.Sprintf("model request returned HTTP %d", e.StatusCode)
 }
@@ -230,7 +235,7 @@ func (c *Client) call(ctx context.Context, style, instructions, input string) ([
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, 0, errors.New("model request failed or timed out")
+		return nil, 0, &transportError{cause: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
