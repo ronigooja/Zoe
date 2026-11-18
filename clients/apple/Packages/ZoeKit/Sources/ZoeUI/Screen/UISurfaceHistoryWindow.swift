@@ -1,5 +1,6 @@
 #if os(macOS)
 import A2UISwiftCore
+import A2UISwiftUI
 import AppKit
 import Combine
 import SwiftUI
