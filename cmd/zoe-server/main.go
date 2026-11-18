@@ -117,7 +117,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	server, err := composeControlServer(store, cfg, voice.Config{DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	ready := &voice.ReadyHandle{}
+	models := make(map[string]voice.RetryModelConfig)
+	for consumer, prefix := range map[string]string{"register": "ZOE_REGISTER", "compact": "ZOE_COMPACT", "steward": "ZOE_STEWARD", "ui_controller": "ZOE_UI_CONTROLLER"} {
+		if (consumer == "register" || consumer == "compact") && registerConfig == nil || consumer == "steward" && stewardClient == nil || consumer == "ui_controller" && uiController == nil {
+			continue
+		}
+		models[consumer] = voice.RetryModelConfig{Endpoint: strings.TrimRight(strings.TrimSpace(os.Getenv(prefix+"_BASE_URL")), "/"), Model: strings.TrimSpace(os.Getenv(prefix + "_MODEL")), Effort: strings.TrimSpace(os.Getenv(prefix + "_REASONING_EFFORT")), Thinking: strings.TrimSpace(os.Getenv(prefix + "_THINKING")), CredentialFile: strings.TrimSpace(os.Getenv(prefix + "_API_KEY_FILE"))}
+	}
+	server, err := composeControlServer(store, cfg, voice.Config{Ready: ready, RetryModels: models, DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	})
@@ -125,6 +133,9 @@ func run() error {
 		return err
 	}
 	if err = store.Migrate(ctx); err != nil {
+		return err
+	}
+	if err = ready.AfterMigrate(ctx); err != nil {
 		return err
 	}
 	server.StartRuntimeWaitingWorker()

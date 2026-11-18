@@ -28,6 +28,8 @@ import (
 )
 
 type Config struct {
+	Ready                  *ReadyHandle
+	RetryModels            map[string]RetryModelConfig
 	ResultDelivery         ResultDeliveryConfig
 	DiscoverResultReceipts bool
 	MemoryAPI              *memoryapi.Client
@@ -61,6 +63,9 @@ type TaskSteward interface {
 
 type Service struct {
 	retry                  backoff.Store
+	retryModels            map[string]RetryModelConfig
+	retryReadyMu           sync.Mutex
+	retryReady             bool
 	resultReceiptAdapter   ResultReceiptAdapter
 	resultCapability       *gatewayResultCapability
 	db                     *sql.DB
@@ -316,6 +321,10 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 	}
 	svc := newService(store.DB(), cfg)
 	svc.retry = backoff.Store{DB: store.DB()}
+	svc.retryModels = cfg.RetryModels
+	if cfg.Ready != nil {
+		cfg.Ready.service = svc
+	}
 	svc.uiEventServer = server
 	if cfg.RegisterConfig != nil {
 		var err error
