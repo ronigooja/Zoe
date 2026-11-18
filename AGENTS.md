@@ -30,5 +30,3 @@
 
 - Refer to secrets by name or deployment reference; never include their values
   or private account data in source, documentation, logs, or fixtures.
-- Repository changes do not authorize changes to external services or the
-  existing CLIProxyAPI deployment. Obtain explicit authorization before doing so.
