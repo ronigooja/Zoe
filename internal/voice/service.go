@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/memoryapi"
@@ -59,6 +60,7 @@ type TaskSteward interface {
 }
 
 type Service struct {
+	retry                  backoff.Store
 	resultReceiptAdapter   ResultReceiptAdapter
 	resultCapability       *gatewayResultCapability
 	db                     *sql.DB
@@ -313,6 +315,7 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 		return err
 	}
 	svc := newService(store.DB(), cfg)
+	svc.retry = backoff.Store{DB: store.DB()}
 	svc.uiEventServer = server
 	if cfg.RegisterConfig != nil {
 		var err error
