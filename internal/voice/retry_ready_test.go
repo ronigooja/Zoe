@@ -38,12 +38,8 @@ func TestRetryAfterMigrateObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := []byte("fixture-credential-do-not-persist")
-	keyPath := filepath.Join(dir, "key")
-	if err = os.WriteFile(keyPath, key, 0600); err != nil {
-		t.Fatal(err)
-	}
 	store := backoff.Store{DB: db.DB()}
-	model := RetryModelConfig{Endpoint: "https://example.invalid", Model: "model", CredentialFile: keyPath}
+	model := RetryModelConfig{Endpoint: "https://example.invalid", Model: "model", Credential: key}
 	newService := func() *Service {
 		return &Service{retry: store, retryModels: map[string]RetryModelConfig{"register": model}}
 	}
@@ -231,11 +227,7 @@ func TestRetryObserveFailureContinues(t *testing.T) {
 	if _, err = db.DB().Exec(`CREATE TRIGGER fail_register BEFORE INSERT ON model_config_fingerprints WHEN NEW.consumer='register' BEGIN SELECT RAISE(FAIL, 'fixture'); END`); err != nil {
 		t.Fatal(err)
 	}
-	keyPath := filepath.Join(dir, "key")
-	if err = os.WriteFile(keyPath, []byte("fixture"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := RetryModelConfig{Endpoint: "https://example.invalid", Model: "fixture", CredentialFile: keyPath}
+	cfg := RetryModelConfig{Endpoint: "https://example.invalid", Model: "fixture", Credential: []byte("fixture")}
 	s := newService(db.DB(), Config{})
 	s.retry = backoff.Store{DB: db.DB()}
 	s.retryModels = map[string]RetryModelConfig{"register": cfg, "steward": cfg}
@@ -277,14 +269,10 @@ func TestRetryCredentialNotPersisted(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := []byte("fixture-key-not-in-any-table")
-	keyPath := filepath.Join(dir, "key")
-	if err = os.WriteFile(keyPath, key, 0600); err != nil {
-		t.Fatal(err)
-	}
 	s := newService(db.DB(), Config{})
 	s.retry = backoff.Store{DB: db.DB()}
 	s.retryPublish = make(chan struct{}, 1)
-	s.retryModels = map[string]RetryModelConfig{"register": {Endpoint: "https://example.invalid", Model: "fixture", CredentialFile: keyPath}}
+	s.retryModels = map[string]RetryModelConfig{"register": {Endpoint: "https://example.invalid", Model: "fixture", Credential: key}}
 	s.retryStatusPath = filepath.Join(dir, "status")
 	defer s.Stop()
 	if err = s.AfterMigrate(ctx); err != nil {

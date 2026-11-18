@@ -22,6 +22,15 @@ type Client struct {
 	mu                                        sync.Mutex
 }
 
+// FingerprintConfig returns the loaded configuration and a copy of its credential.
+// Callers must use the credential only to compute a configuration fingerprint.
+func (c *Client) FingerprintConfig() (endpoint, model, effort, thinking string, credential []byte) {
+	if c == nil {
+		return
+	}
+	return c.base, c.model, c.effort, c.thinking, []byte(c.key)
+}
+
 type HTTPError struct{ StatusCode int }
 
 type transportError struct{ cause error }

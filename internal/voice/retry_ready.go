@@ -2,7 +2,6 @@ package voice
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/ronigooja/Zoe/internal/backoff"
@@ -11,7 +10,8 @@ import (
 
 // RetryModelConfig identifies the loaded model and its credential source.
 type RetryModelConfig struct {
-	Endpoint, Model, Effort, Thinking, CredentialFile string
+	Endpoint, Model, Effort, Thinking string
+	Credential                        []byte
 }
 
 // ReadyHandle exposes post-migration service initialization to the server.
@@ -47,16 +47,11 @@ func (s *Service) AfterMigrate(ctx context.Context) error {
 		if !ok {
 			continue
 		}
-		if cfg.Endpoint == "" || cfg.Model == "" || cfg.CredentialFile == "" {
+		if cfg.Endpoint == "" || cfg.Model == "" || len(cfg.Credential) == 0 {
 			logging.Warnf("model_retry_config_unavailable")
 			continue
 		}
-		key, err := os.ReadFile(cfg.CredentialFile)
-		if err != nil {
-			logging.Warnf("model_retry_credential_unreadable")
-			continue
-		}
-		fingerprint := backoff.Fingerprint(cfg.Endpoint, cfg.Model, cfg.Effort, cfg.Thinking, key)
+		fingerprint := backoff.Fingerprint(cfg.Endpoint, cfg.Model, cfg.Effort, cfg.Thinking, cfg.Credential)
 		if _, err := s.retry.ObserveConfig(ctx, consumer, fingerprint); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
