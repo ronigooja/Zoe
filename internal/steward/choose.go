@@ -109,6 +109,11 @@ func (c *Client) Choose(ctx context.Context, input Input) (choice Choice, result
 	defer func() {
 		logging.Infof("steward_call configured_ms=%d effective_ms=%d elapsed_ms=%d error_kind=%s", configured.Milliseconds(), effective.Milliseconds(), time.Since(started).Milliseconds(), errorKind(resultErr))
 	}()
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, effective)
+		defer cancel()
+	}
 	input, refs, err := prepareInput(input)
 	if err != nil {
 		return Choice{}, err

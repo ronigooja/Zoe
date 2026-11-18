@@ -3,6 +3,8 @@ package steward
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -42,6 +44,22 @@ func TestInteractiveRetry(t *testing.T) {
 				t.Fatal("expected error")
 			}
 		})
+	}
+}
+
+func TestChooseDeadlineBoundsRetries(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
+	defer server.Close()
+	c := configured(t, server.URL, "")
+	c.timeout = 5 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := c.Choose(ctx, Input{Request: "request"}); err == nil {
+		t.Fatal("expected failure")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("deadline exceeded: %v", elapsed)
 	}
 }
 

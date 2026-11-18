@@ -23,6 +23,8 @@ import (
 	"github.com/ronigooja/Zoe/internal/steward"
 )
 
+var ErrModelConsumerStopped = errors.New("model consumer stopped")
+
 func (s *Service) interactiveModel(ctx context.Context, consumer string, call func() error) error {
 	store := s.retry
 	if store.DB == nil {
@@ -30,10 +32,11 @@ func (s *Service) interactiveModel(ctx context.Context, consumer string, call fu
 	}
 	due, err := store.Due(ctx, consumer, "", s.now())
 	if err != nil {
-		return err
+		logging.Warnf("model_retry_state_unreadable consumer=%s", consumer)
+		due = true
 	}
 	if !due {
-		return errors.New("model consumer stopped")
+		return ErrModelConsumerStopped
 	}
 	err = call()
 	if err != nil && backoff.Classify(err) == backoff.Auth {
