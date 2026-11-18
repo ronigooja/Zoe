@@ -17,6 +17,7 @@ import (
 	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/ops"
+	"github.com/ronigooja/Zoe/internal/prompts"
 	"github.com/skip2/go-qrcode"
 )
 
@@ -941,6 +942,7 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 		fmt.Fprintf(out, "%s: host=%s model=%s effort=%s thinking=%s\n", kind, safeLabel(safeHost(c.BaseURL)), safeLabel(c.Model), safeLabel(c.ReasoningEffort), safeLabel(c.Thinking))
 	}
 	writeRetryStatus(out, backoff.StatusPath, time.Now())
+	writePromptStatus(out, prompts.Dir())
 	current := filepath.Join(*optRoot, "releases", "current")
 	if revision, readErr := os.ReadFile(filepath.Join(current, "SOURCE_REVISION")); readErr == nil {
 		fmt.Fprintf(out, "Release: source-revision=%s\n", safeLabel(strings.TrimSpace(string(revision))))
@@ -953,6 +955,20 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func writePromptStatus(out io.Writer, dir string) {
+	for _, name := range prompts.Names() {
+		path := filepath.Join(dir, name+".txt")
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			fmt.Fprintf(out, "Prompt: name=%s path=%s missing\n", name, safeLabel(path))
+		} else if err != nil {
+			fmt.Fprintf(out, "Prompt: name=%s path=%s unreadable\n", name, safeLabel(path))
+		} else {
+			fmt.Fprintf(out, "Prompt: name=%s path=%s bytes=%d\n", name, safeLabel(path), info.Size())
+		}
+	}
 }
 
 func writeRetryStatus(out io.Writer, path string, now time.Time) {
