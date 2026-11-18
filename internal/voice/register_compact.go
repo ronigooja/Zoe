@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/modelclient"
 )
@@ -83,6 +85,15 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 		kind = "config"
 		return false, err
 	}
+	scope := o.WorkspaceID + "/" + o.OwnerSubjectID
+	if r.retry != nil {
+		due, err := r.retry.Due(ctx, "compact", scope, now)
+		if err != nil {
+			logging.Warnf("model_retry_state_unreadable consumer=compact")
+		} else if !due {
+			return false, nil
+		}
+	}
 	if _, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO voice_context_registers(workspace_id,owner_subject_id) VALUES(?,?)`, o.WorkspaceID, o.OwnerSubjectID); err != nil {
 		return false, err
 	}
@@ -147,11 +158,28 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 	}
 	cancel()
 	if err != nil {
+		if r.retry != nil {
+			category := backoff.Classify(err)
+			if category == backoff.Auth || category == backoff.Transient {
+				jitter := r.retryJitter
+				if jitter == nil {
+					jitter = rand.Float64
+				}
+				if r.retry.Record(ctx, "compact", scope, category, now, backoff.Background, jitter) == nil && r.requestPublish != nil {
+					r.requestPublish()
+				}
+			}
+		}
 		return false, err
 	}
 	if strings.TrimSpace(output) == "" || utf8.RuneCountInString(output) > r.limit {
 		stage, kind = "invalid_output", "output_invalid"
 		return false, errors.New("invalid register compact")
+	}
+	if r.retry != nil {
+		if r.retry.Clear(ctx, "compact", scope) == nil && r.requestPublish != nil {
+			r.requestPublish()
+		}
 	}
 	// Re-read caller-owned M before replacing coverage; a failed fence retains it.
 	stage, kind = "write", "db"
@@ -183,17 +211,35 @@ func (r *ContextRegister) Start(ctx context.Context) {
 	logging.Infof("register status=started interval_ms=%d", r.interval.Milliseconds())
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(r.interval)
-		defer ticker.Stop()
+		nextRegular := time.Now()
 		for {
 			if ctx.Err() != nil {
 				return
 			}
-			_ = r.RebuildCompact(ctx, time.Now())
+			now := time.Now()
+			_ = r.RebuildCompact(ctx, now)
+			if !now.Before(nextRegular) {
+				nextRegular = now.Add(r.interval)
+			}
+			next := nextRegular
+			if r.retry != nil {
+				states, err := r.retry.List(ctx)
+				if err == nil {
+					for _, state := range states {
+						if state.Consumer == "compact" && !state.AuthFailed && state.NextAttemptAt.After(now) && state.NextAttemptAt.Before(next) {
+							next = state.NextAttemptAt
+						}
+					}
+				} else {
+					logging.Warnf("model_retry_state_unreadable consumer=compact")
+				}
+			}
+			timer := time.NewTimer(time.Until(next))
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return
-			case <-ticker.C:
+			case <-timer.C:
 			}
 		}
 	}()

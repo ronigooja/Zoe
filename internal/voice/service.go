@@ -483,6 +483,11 @@ func (s *Service) Start() {
 	}
 	s.started = true
 	if s.register != nil {
+		if s.retry.DB == nil {
+			s.retry = backoff.Store{DB: s.db}
+		}
+		s.register.retry = &s.retry
+		s.register.requestPublish = s.PublishRetryState
 		s.register.Start(s.recallCtx)
 	}
 	s.recoverRecall(s.recallCtx, true)
