@@ -359,3 +359,38 @@ func TestBuildInput(t *testing.T) {
 		}
 	}
 }
+
+func TestServerSuppliesCatalogID(t *testing.T) {
+	withoutCatalog := `{"createSurface":{"surfaceId":"screen"}}`
+	for _, tc := range []struct {
+		name, create string
+		valid        bool
+	}{
+		{"omitted", withoutCatalog, true},
+		{"correct", create, true},
+		{"wrong", strings.Replace(create, CatalogID, "other", 1), false},
+		{"null", `{"createSurface":{"surfaceId":"screen","catalogId":null}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, err := Parse(fixture(tc.create+","+root), nil)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%t err=%v", tc.valid, err)
+			}
+			if !tc.valid {
+				return
+			}
+			var message struct {
+				CreateSurface struct {
+					CatalogID string `json:"catalogId"`
+				} `json:"createSurface"`
+				Version string `json:"version"`
+			}
+			if err := json.Unmarshal(o.Messages[0], &message); err != nil {
+				t.Fatal(err)
+			}
+			if message.CreateSurface.CatalogID != CatalogID || message.Version != Version {
+				t.Fatalf("server-owned fields not applied: %s", o.Messages[0])
+			}
+		})
+	}
+}
