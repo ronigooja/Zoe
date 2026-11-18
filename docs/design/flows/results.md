@@ -30,9 +30,20 @@ Transport acknowledgement or model wording is not task success; stale observatio
 
 Unsupported, malformed or unavailable health retains pending work with `receipt_capability_disabled`, without transport attempts. An applied receipt proves local transport writes plus durable receipt persistence, never upstream consumption or speech; capability discovery is not live end-to-end evidence.
 
+## Delivery paths
+
+Every write to the upstream conversation uses one of two checkpointed paths; there is no unkeyed append.
+
+| Content | Path | Identity |
+|---|---|---|
+| Task results | `deliverCheckpointedResult` | result, destination/session generation, chunk |
+| Other persisted texts (fast replies, UI feedback) | `deliverDurableText` | `(workspace, owner, source_kind, source_id)`, chunk ordinal |
+
+Both require an active call with a bound gateway session and the receipt capability above. A new text source adds a `source_kind` and a stable `source_id`; it does not add a transport.
+
 ## Implementation locations
 
-[Result delivery](../../../internal/voice/result_delivery.go), [capability gate](../../../internal/voice/result_capability.go).
+[Result delivery](../../../internal/voice/result_delivery.go), [result checkpoint](../../../internal/voice/result_checkpoint.go), [text checkpoint](../../../internal/voice/text_checkpoint.go), [capability gate](../../../internal/voice/result_capability.go).
 
 ## Verification obligations
 

@@ -13,12 +13,6 @@ const fastReplyLease = 30 * time.Second
 // resultDeliveryLease bounds how long a claimed delivery is hidden from other dispatchers.
 const resultDeliveryLease = 30 * time.Second
 
-// appendContext is an explicit unsupported legacy boundary. Persisted callers
-// must use deliverDurableText with a stable source identity.
-func (s *Service) appendContext(ctx context.Context, gateway, text string) (bool, string) {
-	return false, "receipt_identity_required"
-}
-
 func (s *Service) resultDispatcher() {
 	t := time.NewTicker(s.resultDeliveryInterval)
 	defer t.Stop()

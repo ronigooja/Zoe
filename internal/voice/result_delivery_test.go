@@ -387,7 +387,7 @@ func TestFastReplyLongTextChunks(t *testing.T) {
 	}
 }
 
-func TestAppendContextStopsOnChunkFailure(t *testing.T) {
+func TestDeliverDurableTextStopsOnChunkFailure(t *testing.T) {
 	for _, code := range []int{http.StatusBadGateway, http.StatusNotImplemented} {
 		var chunks []string
 		gw := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -415,7 +415,7 @@ func TestAppendContextStopsOnChunkFailure(t *testing.T) {
 	}
 }
 
-func TestAppendContextRejectsInvalidOrEmptyText(t *testing.T) {
+func TestDeliverDurableTextRejectsInvalidOrEmptyText(t *testing.T) {
 	r := newDeliveryRig(t)
 	r.seedCall(t, "invalid-call", "user-1", 1)
 	r.enableReceiptFixture(t)
