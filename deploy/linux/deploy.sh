@@ -4,20 +4,22 @@ set -euo pipefail
 umask 077
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helper="$script_dir/deploy-state.py"
-sha="" run_id="" cli_run_id="" artifact_dir="" from="" dry_run=false
-usage() { echo 'usage: deploy.sh --sha FULL_SHA [--run-id ID] [--cli-run-id ID] [--dry-run] | --sha FULL_SHA (--artifact-dir DIR | --from HOST_ALIAS:DIRNAME) [--dry-run]' >&2; exit 2; }
+sha="" run_id="" cli_run_id="" artifact_dir="" from="" dry_run=false prompts_mode=keep
+usage() { echo 'usage: deploy.sh --sha FULL_SHA [--run-id ID] [--cli-run-id ID] [--dry-run] [--prompts keep|overwrite] | --sha FULL_SHA (--artifact-dir DIR | --from HOST_ALIAS:DIRNAME) [--dry-run] [--prompts keep|overwrite]' >&2; exit 2; }
 while (($#)); do
   case "$1" in
     --sha) [[ $# -ge 2 ]] || usage; sha="$2"; shift 2 ;;
     --run-id) [[ $# -ge 2 ]] || usage; run_id="$2"; shift 2 ;;
     --cli-run-id) [[ $# -ge 2 ]] || usage; cli_run_id="$2"; shift 2 ;;
     --dry-run) dry_run=true; shift ;;
+    --prompts) [[ $# -ge 2 ]] || usage; prompts_mode="$2"; shift 2 ;;
     --artifact-dir) [[ $# -ge 2 ]] || usage; artifact_dir="$2"; shift 2 ;;
     --from) [[ $# -ge 2 && -n "$2" ]] || usage; from="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || usage
+[[ "$prompts_mode" == keep || "$prompts_mode" == overwrite ]] || usage
 [[ -z "$run_id" || "$run_id" =~ ^[0-9]+$ ]] || usage
 [[ -z "$cli_run_id" || "$cli_run_id" =~ ^[0-9]+$ ]] || usage
 if [[ -n "$artifact_dir" ]]; then
@@ -30,6 +32,7 @@ if [[ -n "$from" ]]; then
 fi
 releases="${ZOE_RELEASES_DIR:-/opt/zoe/releases}"
 env_file="${ZOE_ENV_FILE:-/etc/zoe/zoe-stack.env}"
+prompt_dir="${ZOE_PROMPT_DIR:-/etc/zoe/prompts}"
 db="${ZOE_DB_PATH:-/var/lib/zoe/server/data/zoe.sqlite}"
 api="${ZOE_API_URL:-http://127.0.0.1:8787/healthz}"
 units="${ZOE_UNITS_DIR:-/etc/systemd/system}"
@@ -80,7 +83,11 @@ finish() {
   local status=$?
   trap - EXIT
   if ((status != 0)); then
-    echo "deploy step=$step status=fail"
+    if [[ "$step" == prompts ]]; then
+      echo 'deploy step=prompts status=failed'
+    else
+      echo "deploy step=$step status=fail"
+    fi
     [[ "$dry_run" == true ]] || { rm -f "$log_root/$sha.done"; touch "$log_root/$sha.failed"; }
     echo "deploy summary=failed step=$step; inspect host before further mutation"
   fi
@@ -186,13 +193,84 @@ if [[ -e "$releases/$sha" ]]; then
   diff -qr "$dl/server" "$releases/$sha" >/dev/null 2>&1
 fi
 ok
+step=prompts
+prompts() {
+  local prompt_release="$dl/server"
+  [[ -d "$prompt_release" ]] || prompt_release="$releases/$sha"
+  python3 - "$prompt_release" "$prompt_dir" "$prompts_mode" "$sha" "$1" <<'PY'
+import hashlib, json, os, pathlib, re, shutil, sys, tempfile
+release, host, mode, sha, action = sys.argv[1:]
+release, host = pathlib.Path(release), pathlib.Path(host)
+required = {'ui_controller.txt', 'register.txt', 'compact.txt', 'steward.txt', 'task_ui_display.txt', 'voice_instruction.txt'}
+try:
+    source = release/'prompts'
+    files = sorted(source.iterdir())
+    if not required <= {p.name for p in files} or not files:
+        raise ValueError('missing prompts')
+    manifest = {p['path']: p['sha256'] for p in json.loads((release/'release-manifest.json').read_text())['artifacts']}
+    sums = (release/'SHA256SUMS').read_text().splitlines()
+    plans = []
+    for p in files:
+        if not re.fullmatch(r'[A-Za-z0-9_]+\.txt', p.name) or p.is_symlink() or not p.is_file():
+            raise ValueError('invalid prompt')
+        data = p.read_bytes()
+        if not data or not (p.stat().st_mode & 0o444): raise ValueError('empty or unreadable prompt')
+        digest = hashlib.sha256(data).hexdigest()
+        if manifest.get('prompts/'+p.name) != digest or digest+'  prompts/'+p.name not in sums:
+            raise ValueError('unverified prompt')
+        dest = host/p.name
+        if dest.is_symlink() or (dest.exists() and not dest.is_file()): raise ValueError('invalid host prompt')
+        if not dest.exists(): decision = 'install'
+        elif dest.read_bytes() == data: decision = 'identical'
+        elif mode == 'keep': decision = 'keep(differs)'
+        else: decision = 'overwrite'
+        if decision == 'overwrite' and os.path.lexists(host/(p.name+'.pre-'+sha[:12])):
+            raise ValueError('backup exists')
+        plans.append((p, dest, data, decision))
+    parent = host
+    while not parent.exists(): parent = parent.parent
+    if not parent.is_dir() or not (parent.stat().st_mode & 0o222) or not os.access(parent, os.W_OK | os.X_OK):
+        raise ValueError('prompt directory not writable')
+    if action == 'plan':
+        for p, dest, data, decision in plans:
+            print(f'prompt name={p.name} bytes={len(data)} action={decision}')
+    else:
+        missing = not host.exists()
+        host.mkdir(mode=0o755, parents=True, exist_ok=True)
+        if missing: host.chmod(0o755)
+        counts = {'install': 0, 'overwrite': 0, 'kept': 0}
+        for p, dest, data, decision in plans:
+            if decision not in ('install', 'overwrite'):
+                counts['kept'] += 1
+                continue
+            if decision == 'overwrite':
+                backup = host/(p.name+'.pre-'+sha[:12])
+                with backup.open('xb') as out, dest.open('rb') as old:
+                    shutil.copyfileobj(old, out)
+                shutil.copystat(dest, backup)
+            fd, temporary = tempfile.mkstemp(prefix='.zoe-prompt-', dir=host)
+            try:
+                with os.fdopen(fd, 'wb') as out:
+                    out.write(data); out.flush(); os.fsync(out.fileno())
+                os.chmod(temporary, 0o644); os.chown(temporary, 0, 0)
+                os.replace(temporary, dest)
+            finally:
+                if os.path.exists(temporary): os.unlink(temporary)
+            counts[decision] += 1
+        print(f"deploy step=prompts status=ok installed={counts['install']} kept={counts['kept']} overwritten={counts['overwrite']}")
+except (OSError, ValueError, KeyError, TypeError):
+    sys.exit(1)
+PY
+}
+prompts plan
+step=download-verify
 if [[ "$dry_run" == true ]]; then
   if [[ -n "$artifact_dir" ]]; then
-    echo 'deploy plan=backup,memory-token,load-images,install-cli,switch,restart,verify'
+    echo 'deploy plan=backup,prompts,memory-token,load-images,install-cli,switch,restart,verify'
   else
-    echo 'deploy plan=backup,memory-token,pull-changed-images,install-cli,switch,restart,verify'
+    echo 'deploy plan=backup,prompts,memory-token,pull-changed-images,install-cli,switch,restart,verify'
   fi
-  echo 'deploy summary=dry-run; release,env,database,CLI,services unchanged'
+  echo 'deploy summary=dry-run; release,env,database,CLI,services unchanged; prompts unchanged'
   exit 0
 fi
 step=backup
@@ -208,6 +286,8 @@ if [[ ! -e "$releases/$sha" ]]; then
   mv -T "$dl/server" "$releases/$sha"
 fi
 ok
+step=prompts
+prompts install
 step=memory-token
 state_op memory-token "$env_file"
 step=images

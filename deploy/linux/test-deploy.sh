@@ -554,6 +554,16 @@ for revision in [old, new]:
     (root/'deploy-linux/docker-compose.yml').write_text(compose)
 root = p/'source'
 case = os.environ['CASE']
+(root/'prompts').mkdir()
+for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction']:
+    (root/'prompts'/(name+'.txt')).write_text('PROMPT_SECRET_SENTINEL '+name+'\n')
+if case == 'prompt-missing': (root/'prompts/register.txt').unlink()
+if case in ['prompt-keep', 'prompt-overwrite', 'prompt-identical', 'prompt-dry']:
+    (p/'prompts').mkdir()
+    (p/'prompts/register.txt').write_text('PROMPT_SECRET_SENTINEL register\n' if case == 'prompt-identical' else 'old content\n')
+if case == 'prompt-unwritable':
+    (p/'prompts').mkdir(mode=0o555)
+    (p/'prompts').chmod(0o555)
 if case == 'runner-unchanged-error':
     shutil.copy(p/'releases'/old/'bin/zoe-runner', root/'bin/zoe-runner')
 if case == 'happy':
@@ -772,6 +782,7 @@ PY
   export ZOE_RELEASES_DIR="$FIXTURE/releases" ZOE_ENV_FILE="$FIXTURE/stack.env" ZOE_DB_PATH="$FIXTURE/db.sqlite"
   export ZOE_API_URL=http://local/healthz ZOE_UNITS_DIR="$FIXTURE/units" ZOE_BIN_DIR="$FIXTURE/bin"
   export ZOE_DEPLOY_LOG_DIR="$FIXTURE/logs" ZOE_DEPLOY_HEALTH_ATTEMPTS=1
+  export ZOE_PROMPT_DIR="$FIXTURE/prompts"
 }
 deploy() { PATH="$FIXTURE/shims:$PATH" bash "$repo_root/deploy/linux/deploy.sh" --sha "$new" "$@"; }
 unchanged() {
@@ -845,6 +856,35 @@ fixture dry-run
 deploy --dry-run
 unchanged
 [[ ! -e "$FIXTURE/releases/$new" && ! -e "$FIXTURE/releases/$new.dl" ]]
+for failure in prompt-missing prompt-unwritable; do
+  fixture "$failure"
+  if deploy; then echo "expected refusal: $failure"; exit 1; fi
+  unchanged
+  grep -q 'deploy step=prompts status=failed' "$FIXTURE/logs/$new.log"
+done
+fixture prompt-dry
+deploy --dry-run --prompts overwrite
+unchanged
+[[ "$(cat "$FIXTURE/prompts/register.txt")" == 'old content' ]]
+[[ ! -e "$FIXTURE/prompts/register.txt.pre-${new:0:12}" ]]
+grep -q 'action=overwrite' "$FIXTURE/logs/$new.log"
+if grep -q PROMPT_SECRET_SENTINEL "$FIXTURE/logs/$new.log"; then exit 1; fi
+fixture prompt-keep
+deploy
+[[ "$(cat "$FIXTURE/prompts/register.txt")" == 'old content' ]]
+[[ -f "$FIXTURE/prompts/compact.txt" ]]
+[[ "$(stat -c '%a:%u:%g' "$FIXTURE/prompts/compact.txt")" == 644:0:0 ]]
+grep -q 'action=keep(differs)' "$FIXTURE/logs/$new.log"
+fixture prompt-overwrite
+deploy --prompts overwrite
+[[ "$(cat "$FIXTURE/prompts/register.txt.pre-${new:0:12}")" == 'old content' ]]
+[[ "$(cat "$FIXTURE/prompts/register.txt")" == 'PROMPT_SECRET_SENTINEL register' ]]
+fixture prompt-identical
+before="$(stat -c '%i:%Y' "$FIXTURE/prompts/register.txt")"
+deploy --prompts overwrite
+[[ "$before" == "$(stat -c '%i:%Y' "$FIXTURE/prompts/register.txt")" ]]
+[[ ! -e "$FIXTURE/prompts/register.txt.pre-${new:0:12}" ]]
+grep -q 'action=identical' "$FIXTURE/logs/$new.log"
 fixture token-dry-run
 deploy --dry-run
 unchanged
