@@ -28,7 +28,7 @@ Existing crash-finalized at-most-once writes and repeated successful ingestion c
 
 ## Failure and recovery
 
-Never replay an uncertain write blindly; preserve known applied progress and distinguish uncertainty from success. Search failure is not “no memory” and must not fabricate content. Resume unfinished chunks without duplicate writes; boundary does not advance over failure or unseen content. Compact failure keeps raw coverage from the retained edge; no gap or premature source exclusion.
+Never replay an uncertain write blindly; preserve known applied progress and distinguish uncertainty from success. Search failure is not “no memory” and must not fabricate content. Resume unfinished chunks without duplicate writes; boundary does not advance over failure or unseen content. Compact failure keeps raw coverage from the retained edge; no gap or premature source exclusion. Failed ingestion, write and compact requests follow the [retry contract](configuration.md#required-behavior); an authentication failure stops them until reconfiguration, and unfinished batches and write jobs are retained.
 
 ## Implementation locations
 

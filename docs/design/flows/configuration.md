@@ -16,6 +16,10 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 Never log credentials. Reset and backup are explicit operations; never silently regenerate keys or destroy data to make startup pass. Verify effective runtime/session settings rather than menu success alone.
 
+**Probe.** An operator probe of a model consumer makes one real generation request using the endpoint and protocol style the consumer uses at runtime. Listing models does not establish that a consumer works. The Worker provider probe also lists models, for model metadata and limits, and makes one real `responses` request. A probe makes one request and never retries. Authentication failure (401/403) is reported as such; other HTTP errors, timeouts and network errors are reported as distinct categories, never as authentication failure.
+
+**Retry.** Every model request that is retried uses one shared exponential backoff: the delay doubles per consecutive failure from a consumer-specific base delay up to a consumer-specific cap, with jitter. Interactive consumers (Register, Steward, UI_Controller) use a short base and a bounded attempt count; background consumers (Compact, memory write, memory ingestion) use a longer base and retry without an attempt bound. Failure count and next-attempt time are persisted and survive restart. Authentication failure (401/403) is not retried: the consumer stops, reports the condition in `zoe status`, and resumes only after the operator reconfigures it. Transient failure (timeout, 429, 5xx, network error) retries under the backoff. A retry never replays an uncertain write blindly; see [Memory](memory.md#failure-and-recovery).
+
 ## Persistence and idempotency
 
 Keep previous known configuration and applied version. Record effective per-consumer configuration identity. Retain immutable release identity, retained configuration/data inventory and explicit backup/rollback references.
@@ -30,4 +34,4 @@ Probe/save/reload failure rolls back the whole change, not a partially selected 
 
 ## Verification obligations
 
-Verify probe/save/reload failures with atomic rollback, effective model+effort equality across Worker route/provider/agent/session, consumer separation, retained network/key/data and explicit reset/backup/restore evidence; real end-to-end task/result/voice/UI success separately from health. Follow the [acceptance boundary](../../development.md#evidence-and-acceptance).
+Verify probe/save/reload failures with atomic rollback, effective model+effort equality across Worker route/provider/agent/session, consumer separation, retained network/key/data and explicit reset/backup/restore evidence; real end-to-end task/result/voice/UI success separately from health. Verify probes against the runtime endpoint, 401/403 stop without retry, transient-failure backoff growth and cap, persistence across restart, and `zoe status` reporting. Follow the [acceptance boundary](../../development.md#evidence-and-acceptance).
