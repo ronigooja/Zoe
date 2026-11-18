@@ -7,90 +7,131 @@ public struct MacSettingsView: View {
     @State private var address = ""
     @State private var key = ""
     @State private var silenceSeconds = ""
+    @State private var confirmingClearKey = false
+    @FocusState private var secondsFocused: Bool
 
     public init(model: ZoeAppModel) { self.model = model }
 
     public var body: some View {
         TabView {
             Form {
-                TextField("Server address", text: $address)
-                SecureField("Instance key", text: $key)
-                HStack {
-                    Button(model.isConnecting ? "Connecting…" : "Connect") {
-                        Task {
-                            if await model.connect(serverAddress: address, key: key) { key = "" }
-                        }
-                    }
-                    Button("Clear saved key", role: .destructive) {
-                        Task { await model.clearCredential(); address = model.serverAddress; key = "" }
-                    }
-                }.disabled(model.isBusy || model.isConnecting)
-                LabeledContent("Connection", value: connectionStatus)
-                if let notice = model.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
-                if let pending = model.pendingConnectionImport {
-                    Text("Installation link ready: \(pending.serverURL.absoluteString)").font(.caption)
-                    HStack {
-                        Button("Use") {
-                            Task {
-                                if await model.connectImportedConnection(pending) { address = model.serverAddress; key = "" }
+                Section("Voice") {
+                    if let config = model.voiceConfig {
+                        Picker("Voice", selection: Binding(
+                            get: { model.preferredVoice ?? "" },
+                            set: { model.setPreferredVoice($0.isEmpty ? nil : $0) }
+                        )) {
+                            Text("Gateway default").tag("")
+                            ForEach(config.voices) { voice in Text(voice.name).tag(voice.id) }
+                            if let saved = model.preferredVoice, !config.voices.contains(where: { $0.id == saved }) {
+                                Text("Saved voice unavailable").tag(saved)
                             }
                         }
-                        Button("Dismiss") { model.dismissConnectionImport() }
-                    }.disabled(model.isBusy || model.isConnecting)
+                        Text("Applies to new calls. Unavailable voices use the gateway default.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("Connect to load available voices.").foregroundStyle(.secondary)
+                    }
                 }
-                if let error = model.connectionImportError {
-                    Text(error).font(.caption).foregroundStyle(.red)
-                    Button("Dismiss") { model.dismissConnectionImportError() }
+                Section("Silence") {
+                    Toggle("Hang up after silence", isOn: Binding(
+                        get: { model.silenceHangupEnabled },
+                        set: { model.setSilenceHangupEnabled($0) }
+                    ))
+                    if model.silenceHangupEnabled {
+                        TextField("Silence timeout (seconds)", text: $silenceSeconds)
+                            .onSubmit { applySilenceSeconds() }
+                            .onChange(of: secondsFocused) { _, focused in
+                                if !focused { applySilenceSeconds() }
+                            }
+                            .focused($secondsFocused)
+                    }
+                }
+                Section {
+                    TextField(uiText("Popover close delay (seconds)"), value: Binding(
+                        get: { model.popoverCloseDelaySeconds }, set: { model.setPopoverCloseDelaySeconds($0) }
+                    ), format: .number)
+                    TextField(uiText("Window close delay (seconds)"), value: Binding(
+                        get: { model.windowCloseDelaySeconds }, set: { model.setWindowCloseDelaySeconds($0) }
+                    ), format: .number)
+                } header: {
+                    Text("Screen")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(uiText("After focus loss, 0 means never, and the maximum is 3600 seconds."))
+                        Text(uiText("Pending questions never auto-close; outside clicks and Esc close popovers immediately, and the popover delay applies only to other focus loss."))
+                    }
                 }
             }
-            .padding(20)
-            .tabItem { Text("Connection") }
+            .formStyle(.grouped)
+            .tabItem { Label("General", systemImage: "gearshape") }
+
             Form {
-                if let config = model.voiceConfig {
-                    Picker("Voice", selection: Binding(
-                        get: { model.preferredVoice ?? "" },
-                        set: { model.setPreferredVoice($0.isEmpty ? nil : $0) }
-                    )) {
-                        Text("Gateway default").tag("")
-                        ForEach(config.voices) { voice in Text(voice.name).tag(voice.id) }
-                        if let saved = model.preferredVoice, !config.voices.contains(where: { $0.id == saved }) {
-                            Text("Saved voice unavailable").tag(saved)
+                Section("Server") {
+                    TextField("Server address", text: $address)
+                    SecureField("Instance key", text: $key)
+                    HStack {
+                        Button {
+                            Task {
+                                if await model.connect(serverAddress: address, key: key) { key = "" }
+                            }
+                        } label: {
+                            HStack {
+                                if model.isConnecting { ProgressView().controlSize(.small) }
+                                Text(model.isConnecting ? "Connecting…" : "Connect")
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                        Button("Clear saved key", role: .destructive) { confirmingClearKey = true }
+                    }
+                    .disabled(model.isBusy || model.isConnecting)
+                }
+                Section("Status") {
+                    LabeledContent("Connection") {
+                        HStack(spacing: 6) {
+                            Circle().fill(connectionStatusColor).frame(width: 8, height: 8)
+                            Text(connectionStatus)
                         }
                     }
-                    Text("Applies to new calls. Unavailable voices use the gateway default.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text("Connect to load available voices.").foregroundStyle(.secondary)
+                    if let notice = model.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
                 }
-                Toggle("Hang up after silence", isOn: Binding(
-                    get: { model.silenceHangupEnabled },
-                    set: { model.setSilenceHangupEnabled($0) }
-                ))
-                TextField("Seconds", text: $silenceSeconds)
-                    .onSubmit { applySilenceSeconds() }
-                    .onChange(of: secondsFocused) { _, focused in
-                        if !focused { applySilenceSeconds() }
+                if let pending = model.pendingConnectionImport {
+                    Section {
+                        Text("Installation link ready: \(pending.serverURL.absoluteString)").font(.caption)
+                        HStack {
+                            Button("Use") {
+                                Task {
+                                    if await model.connectImportedConnection(pending) { address = model.serverAddress; key = "" }
+                                }
+                            }
+                            Button("Dismiss") { model.dismissConnectionImport() }
+                        }.disabled(model.isBusy || model.isConnecting)
                     }
-                    .focused($secondsFocused)
-                TextField(uiText("Popover close delay (seconds)"), value: Binding(
-                    get: { model.popoverCloseDelaySeconds }, set: { model.setPopoverCloseDelaySeconds($0) }
-                ), format: .number)
-                TextField(uiText("Window close delay (seconds)"), value: Binding(
-                    get: { model.windowCloseDelaySeconds }, set: { model.setWindowCloseDelaySeconds($0) }
-                ), format: .number)
-                Text(uiText("After focus loss: 0 means never; maximum 3600 seconds. Pending questions never auto-close. Outside clicks and Esc close popovers immediately; the popover delay applies only to other focus loss."))
-                    .font(.caption).foregroundStyle(.secondary)
+                }
+                if let error = model.connectionImportError {
+                    Section {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                        Button("Dismiss") { model.dismissConnectionImportError() }
+                    }
+                }
             }
-            .padding(20)
-            .tabItem { Text("General") }
+            .formStyle(.grouped)
+            .tabItem { Label("Connection", systemImage: "network") }
         }
-        .frame(width: 520, height: 480)
+        .frame(minWidth: 520, idealWidth: 520, maxWidth: 520, minHeight: 420, idealHeight: 540)
+        .confirmationDialog("Clear saved key?", isPresented: $confirmingClearKey, titleVisibility: .visible) {
+            Button("Clear saved key", role: .destructive) {
+                Task { await model.clearCredential(); address = model.serverAddress; key = "" }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The saved instance key will be removed from this Mac.")
+        }
         .onAppear { address = model.serverAddress; refreshSilenceSeconds() }
         .onChange(of: model.silenceTimeoutSeconds) { _, _ in refreshSilenceSeconds() }
         .task(id: model.connectionEpoch) { await model.refreshVoiceReadiness() }
     }
-
-    @FocusState private var secondsFocused: Bool
 
     private func applySilenceSeconds() {
         if let seconds = Double(silenceSeconds.trimmingCharacters(in: .whitespacesAndNewlines)), seconds.isFinite {
@@ -110,6 +151,14 @@ public struct MacSettingsView: View {
         case .connected: "Connected"
         case .disconnected: "Not connected"
         case .unavailable: "Unavailable"
+        }
+    }
+
+    private var connectionStatusColor: Color {
+        switch model.authentication {
+        case .connected: .green
+        case .unavailable: .red
+        case .checking, .disconnected: .secondary
         }
     }
 }

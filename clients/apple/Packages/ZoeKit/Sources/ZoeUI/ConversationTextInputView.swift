@@ -5,12 +5,18 @@ import ZoeKit
 final class ConversationTextDraft: ObservableObject {
     @Published var text = "" {
         didSet {
-            if text != oldValue { key = nil; status = nil }
+            if text != oldValue { key = nil; status = nil; cancelAcceptedStatusClear() }
         }
     }
     @Published private(set) var sending = false
     @Published private(set) var status: String?
     private(set) var key: String?
+    private(set) var acceptedStatusClearTask: Task<Void, Never>?
+    private let acceptedStatusDelay: Duration
+
+    init(acceptedStatusDelay: Duration = .seconds(2)) {
+        self.acceptedStatusDelay = acceptedStatusDelay
+    }
 
     static func isValid(_ text: String) -> Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && text.utf8.count <= 20_000
@@ -21,6 +27,7 @@ final class ConversationTextDraft: ObservableObject {
         let submittedText = text
         let submittedKey = key ?? UUID().uuidString.lowercased()
         key = submittedKey
+        cancelAcceptedStatusClear()
         sending = true
         status = "Sending…"
         do {
@@ -29,6 +36,7 @@ final class ConversationTextDraft: ObservableObject {
                 text = ""
                 key = nil
                 status = "Accepted."
+                scheduleAcceptedStatusClear()
             }
         } catch {
             if text == submittedText && key == submittedKey {
@@ -42,6 +50,21 @@ final class ConversationTextDraft: ObservableObject {
             }
         }
         sending = false
+    }
+
+    private func scheduleAcceptedStatusClear() {
+        let delay = acceptedStatusDelay
+        acceptedStatusClearTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self, self.status == "Accepted." else { return }
+            self.status = nil
+            self.acceptedStatusClearTask = nil
+        }
+    }
+
+    private func cancelAcceptedStatusClear() {
+        acceptedStatusClearTask?.cancel()
+        acceptedStatusClearTask = nil
     }
 }
 
@@ -58,18 +81,31 @@ public struct ConversationTextInputView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             TextEditor(text: $draft.text)
+                .scrollContentBackground(.hidden)
                 .accessibilityLabel("Conversation text")
+                .padding(6)
                 .frame(minHeight: 120)
-                .border(.secondary)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
             let remaining = 20_000 - draft.text.utf8.count
             Text(remaining >= 0 ? "\(remaining) bytes remaining" : "\(-remaining) bytes over the limit")
+                .font(.caption)
+                .foregroundStyle(remaining >= 0 ? Color.secondary : Color.red)
                 .accessibilityLabel(remaining >= 0 ? "\(remaining) bytes remaining" : "\(-remaining) bytes over the limit")
-            if !model.canSubmitConversationText { Text("Connect to the server before sending.") }
-            if let status = draft.status { Text(status).accessibilityLabel(status) }
+            HStack(spacing: 6) {
+                if draft.sending { ProgressView().controlSize(.small) }
+                if let status = draft.status {
+                    Text(status).accessibilityLabel(status)
+                } else if !model.canSubmitConversationText {
+                    Text("Connect to the server before sending.").foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
                 Button("Send") { send() }
+                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(!model.canSubmitConversationText || draft.sending || !ConversationTextDraft.isValid(draft.text))
             }
