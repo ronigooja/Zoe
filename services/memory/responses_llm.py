@@ -7,6 +7,7 @@ from typing import Any
 from mem0.configs.llms.openai import OpenAIConfig
 from mem0.llms.openai import OpenAILLM
 from openai import AuthenticationError, PermissionDeniedError
+from .auth_tracking import UpstreamUnauthorized, reject_auth
 
 _request_timeout_seconds: ContextVar[float | None] = ContextVar("zoe_memory_llm_timeout", default=None)
 
@@ -94,7 +95,7 @@ class ResponsesLLM(OpenAILLM):
         try:
             response = self.client.with_options(max_retries=0).responses.create(**request)
         except (AuthenticationError, PermissionDeniedError):
-            raise UpstreamUnauthorized() from None
+            reject_auth(self)
         if not tools:
             return response.output_text or ""
         calls: list[dict[str, Any]] = []
@@ -108,10 +109,6 @@ class ResponsesLLM(OpenAILLM):
                 parsed = {}
             calls.append({"name": item.name, "arguments": parsed})
         return {"content": response.output_text or "", "tool_calls": calls}
-
-
-class UpstreamUnauthorized(Exception):
-    """An upstream model credential was rejected; no response details are retained."""
 
 
 def register_responses_provider() -> None:

@@ -165,6 +165,18 @@ class MemoryAPITests(unittest.TestCase):
         self.assertEqual(self.request("/v1/memory/ingest", body),
                          (502, {"error_kind": "upstream_unauthorized"}))
 
+    def test_swallowed_auth_rejection_does_not_complete_ingestion(self):
+        from services.memory.auth_tracking import reject_auth
+        def swallowed(*args, **kwargs):
+            try:
+                reject_auth(self.memory.llm)
+            except Exception:
+                return {"results": []}
+        self.memory.add = swallowed
+        body = {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": "text"}
+        self.assertEqual(self.request("/v1/memory/ingest", body),
+                         (502, {"error_kind": "upstream_unauthorized"}))
+
     def test_body_limit_and_request_validation(self):
         for route, old in (
             ("write", {"user": "u", "sentence": "s", "restatement": "r"}),

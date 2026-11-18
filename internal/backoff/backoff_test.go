@@ -19,7 +19,8 @@ func TestDelay(t *testing.T) {
 	}{
 		{1, .5, 30 * time.Second}, {2, .5, time.Minute}, {3, .5, 2 * time.Minute},
 		{1, 0, 24 * time.Second}, {1, 1, 36 * time.Second},
-		{1000000, .5, time.Hour}, {1000000, 1, time.Hour}, {1000000, 0, 48 * time.Minute},
+		{8, 0, 48 * time.Minute}, {8, 1, time.Hour},
+		{1000000, .5, 54 * time.Minute}, {1000000, 1, time.Hour}, {1000000, 0, 48 * time.Minute},
 	} {
 		got := Delay(tc.failures, Background.Base, Background.Cap, func() float64 { return tc.sample })
 		if got != tc.want {

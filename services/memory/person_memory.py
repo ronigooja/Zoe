@@ -99,8 +99,10 @@ class PersonMemory:
     Qdrant has no compare-and-swap and this is not distributed atomicity.
     """
     def __init__(self, memory: Any):
+        from .auth_tracking import attach_auth_tracker
         self.memory = memory
         self._lock = threading.Lock()
+        self._auth_rejected = attach_auth_tracker(memory.llm)
         self._ingest_context = None
         self._ingest_facts = None
         self._ingest_hashes = set()
@@ -239,11 +241,16 @@ class PersonMemory:
 
     @contextmanager
     def _serialized(self, deadline: float):
+        from .auth_tracking import check_auth
         if not self._lock.acquire(timeout=check_deadline(deadline)):
             raise MemoryAPIError(504, "deadline_exceeded")
+        self._auth_rejected.clear()
         try:
             check_deadline(deadline)
-            yield
+            try:
+                yield
+            finally:
+                check_auth(self._auth_rejected)
         finally:
             self._lock.release()
 
@@ -522,6 +529,8 @@ class PersonMemory:
                     self.memory.add(text, user_id=user_id, infer=True, prompt=INGEST_INSTRUCTIONS)
                 except _ManifestReady:
                     pass
+                from .auth_tracking import check_auth
+                check_auth(self._auth_rejected)
                 check_deadline(deadline)
                 status, error_kind = "ok", "none"
             except TimeoutError:

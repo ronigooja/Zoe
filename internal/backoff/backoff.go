@@ -59,7 +59,11 @@ func Delay(failures int, base, cap time.Duration, jitter func() float64) time.Du
 	if sample > 1 {
 		sample = 1
 	}
-	value := float64(d) * (0.8 + 0.4*sample)
+	spread := 0.4
+	if d == cap {
+		spread = 0.2
+	}
+	value := float64(d) * (0.8 + spread*sample)
 	if value >= float64(cap) {
 		return cap
 	}
