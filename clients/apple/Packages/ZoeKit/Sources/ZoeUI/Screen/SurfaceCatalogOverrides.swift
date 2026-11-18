@@ -5,10 +5,22 @@ import A2UISwiftUI
 import SwiftUI
 
 /// Catalog overrides shared by live surfaces and the read-only history view.
-/// Every override wraps the library's default view, so the library still renders the component.
+/// Every override wraps the library's default view, so the library still renders and dispatches the component.
 enum SurfaceCatalogOverrides {
-    @MainActor static func items() -> [CatalogItem] {
+    /// `tracker` nil means read-only: every Button is disabled and no input state is tracked.
+    @MainActor static func items(tracker: SurfaceActionTracker?) -> [CatalogItem] {
         [
+            CatalogItem(name: .button) { context in
+                if tracker == nil {
+                    return AnyView(context.buildDefaultView().disabled(true))
+                }
+                guard let props = try? context.node.typedProperties(ButtonProperties.self),
+                      case let .event(_, eventContext) = props.action else { return nil }
+                let paths = uiBoundPaths(in: eventContext)
+                guard !paths.isEmpty else { return nil }
+                return AnyView(BoundInputButton(content: context.buildDefaultView(), componentID: context.node.baseComponentId,
+                                                context: context.dataContext, paths: paths, tracker: tracker))
+            },
             CatalogItem(name: .image) { context in
                 guard let props = try? context.node.typedProperties(ImageProperties.self) else { return nil }
                 return saveAsWrapped(context, url: context.dataContext.resolve(props.url))
@@ -30,6 +42,41 @@ enum SurfaceCatalogOverrides {
         return AnyView(view.contextMenu {
             SwiftUI.Button(uiText("Save As…")) { SurfaceMediaSaver.chooseDestination(for: source) }
         })
+    }
+}
+
+/// Mechanism: the library's Button reads `a2uiActionHandler` from the environment and calls it after dispatch.
+/// This wrapper overrides that environment value for its own subtree, marks the component pending on tap,
+/// then forwards to the handler it received. Modal triggers receive their handler from the same environment,
+/// so trigger activation still reaches Modal. Only event actions with bound context get this wrapper.
+private struct BoundInputButton: View {
+    let content: AnyView
+    let componentID: String
+    let context: DataContext
+    let paths: [String]
+    let tracker: SurfaceActionTracker?
+
+    @Environment(\.a2uiActionHandler) private var parentHandler
+
+    var body: some View {
+        let pending = tracker?.isPending(componentID) == true
+        let failed = tracker?.didFail(componentID) == true
+        HStack(spacing: 6) {
+            content
+                .disabled(pending)
+                .environment(\.a2uiActionHandler) { action in
+                    MainActor.assumeIsolated {
+                        tracker?.begin(component: componentID, context: context, paths: paths)
+                    }
+                    parentHandler?(action)
+                }
+            if pending {
+                ProgressView().controlSize(.small)
+            }
+            if failed {
+                Text(uiText("Not sent")).font(.caption).foregroundStyle(.red)
+            }
+        }
     }
 }
 

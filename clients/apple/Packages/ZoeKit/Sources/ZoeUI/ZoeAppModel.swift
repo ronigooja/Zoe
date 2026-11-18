@@ -1685,17 +1685,27 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     public func sendUISurfaceAction(binding: UISurfaceBinding, action: ResolvedAction) {
-        guard authentication.isConnected else { return }
+        let component = action.sourceComponentId
+        let surfaceID = binding.surfaceID
+        guard authentication.isConnected else {
+            SurfaceActionOutcomes.shared.report(surfaceID: surfaceID, component: component, success: false)
+            return
+        }
         do {
             let payload = try uiActionPayload(binding: binding, action: action)
             let generation = connectionGeneration.value
             let sourceAPI = api
             Task { @MainActor [weak self] in
-                guard let self, self.isCurrentConnection(generation, sourceAPI: sourceAPI) else { return }
-                await self.submitUICommand(kind: "ui.action", payload: payload, key: UUID().uuidString.lowercased())
+                guard let self, self.isCurrentConnection(generation, sourceAPI: sourceAPI) else {
+                    SurfaceActionOutcomes.shared.report(surfaceID: surfaceID, component: component, success: false)
+                    return
+                }
+                let accepted = await self.submitUICommand(kind: "ui.action", payload: payload, key: UUID().uuidString.lowercased())
+                SurfaceActionOutcomes.shared.report(surfaceID: surfaceID, component: component, success: accepted)
             }
         } catch {
             api?.recordDiagnostic(phase: "ui_action", requestPath: "/v1/commands", errorType: "encoding_error", errorSummary: "invalid_action_context", level: .warn)
+            SurfaceActionOutcomes.shared.report(surfaceID: surfaceID, component: component, success: false)
         }
     }
 
