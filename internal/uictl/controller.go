@@ -80,7 +80,6 @@ type Output struct {
 	Feedback      string            `json:"feedback"`
 	AwaitingInput bool              `json:"awaiting_input"`
 	VoiceInput    bool              `json:"voice_input"`
-	InputNote     string            `json:"input_note"`
 	SurfaceID     string            `json:"-"`
 	Size          *Size             `json:"size,omitempty"`
 }
@@ -182,6 +181,32 @@ func stripFence(text string) string {
 	return strings.TrimSpace(inner)
 }
 
+// extractBlocks recognizes only the two protocol tags; diagnostics never contain model text.
+func extractBlocks(text string) (string, string, error) {
+	tags := []string{"<ui-meta>", "</ui-meta>", "<a2ui-json>", "</a2ui-json>"}
+	positions := make([]int, len(tags))
+	for i, tag := range tags {
+		n := strings.Count(text, tag)
+		if n > 1 {
+			return "", "", errors.New("block_duplicate")
+		}
+		if n == 0 {
+			if strings.Contains(text, tags[i^1]) {
+				return "", "", errors.New("block_unclosed")
+			}
+			return "", "", errors.New("block_missing")
+		}
+		positions[i] = strings.Index(text, tag)
+	}
+	if positions[0] > positions[1] || positions[2] > positions[3] {
+		return "", "", errors.New("block_unclosed")
+	}
+	if positions[1] > positions[2] {
+		return "", "", errors.New("block_order")
+	}
+	return text[positions[0]+len(tags[0]) : positions[1]], text[positions[2]+len(tags[2]) : positions[3]], nil
+}
+
 // Parse permits exactly one target surface per invocation; multi-surface changes
 // require separate jobs so every presentation has one version and render outcome.
 func Parse(text string, screen *Size) (Output, error) {
@@ -190,11 +215,15 @@ func Parse(text string, screen *Size) (Output, error) {
 		return o, errors.New("output_limit_or_utf8")
 	}
 	text = stripFence(text)
-	m, err := decodeObject([]byte(text), "messages", "container", "feedback", "awaiting_input", "voice_input", "input_note", "size")
+	meta, messages, err := extractBlocks(text)
 	if err != nil {
 		return o, err
 	}
-	for _, key := range []string{"messages", "container", "feedback", "awaiting_input", "voice_input", "input_note"} {
+	m, err := decodeObject([]byte(meta), "container", "feedback", "awaiting_input", "voice_input", "size")
+	if err != nil {
+		return o, err
+	}
+	for _, key := range []string{"container", "feedback", "awaiting_input", "voice_input", "size"} {
 		if _, ok := m[key]; !ok {
 			return o, validationField("missing_field", key)
 		}
@@ -206,10 +235,10 @@ func Parse(text string, screen *Size) (Output, error) {
 			return o, errors.New("size_invalid")
 		}
 	}
-	if err = json.Unmarshal([]byte(text), &o); err != nil {
+	if err = json.Unmarshal([]byte(meta), &o); err != nil {
 		return o, err
 	}
-	for _, k := range []string{"container", "feedback", "input_note"} {
+	for _, k := range []string{"container", "feedback"} {
 		if _, err = stringField(m, k); err != nil {
 			return o, err
 		}
@@ -233,14 +262,17 @@ func Parse(text string, screen *Size) (Output, error) {
 		return o, errors.New("input_semantics")
 	}
 	if o.AwaitingInput || o.VoiceInput {
-		if strings.TrimSpace(o.InputNote) == "" || o.Feedback != "" {
+		if o.Feedback != "" {
 			return o, errors.New("input_semantics")
 		}
 	} else {
 		o.Feedback = strings.TrimSpace(o.Feedback)
-		if o.Feedback == "" || len(o.Feedback) > 8000 || o.InputNote != "" {
+		if o.Feedback == "" || len(o.Feedback) > 8000 {
 			return o, errors.New("feedback_semantics")
 		}
+	}
+	if err := json.Unmarshal([]byte(messages), &o.Messages); err != nil {
+		return o, errors.New("invalid_array")
 	}
 	if len(o.Messages) == 0 || len(o.Messages) > 64 {
 		return o, errors.New("message_limit")

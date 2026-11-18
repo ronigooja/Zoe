@@ -38,7 +38,8 @@ func TestParseSize(t *testing.T) {
 		{"popover_tall", "popover", `{"width":400,"height":721}`, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			text := strings.Replace(fixture(create+","+root), `"container":"window"`, `"container":"`+tc.container+`","size":`+tc.size, 1)
+			text := strings.Replace(fixture(create+","+root), `"container":"window"`, `"container":"`+tc.container+`"`, 1)
+			text = strings.Replace(text, `"size":{"width":400,"height":300}`, `"size":`+tc.size, 1)
 			o, err := Parse(text, tc.screen)
 			if (err == nil) != tc.valid || (err == nil && o.Size == nil) {
 				t.Fatalf("output=%+v err=%v", o, err)

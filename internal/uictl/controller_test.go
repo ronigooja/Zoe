@@ -16,7 +16,7 @@ const update = `{"version":"v0.9.1","updateDataModel":{"surfaceId":"screen","pat
 const remove = `{"version":"v0.9.1","deleteSurface":{"surfaceId":"screen"}}`
 
 func fixture(messages string) string {
-	return `{"messages":[` + messages + `],"container":"window","feedback":"Shown.","awaiting_input":false,"voice_input":false,"input_note":""}`
+	return `<ui-meta>{"container":"window","feedback":"Shown.","awaiting_input":false,"voice_input":false,"size":{"width":400,"height":300}}</ui-meta><a2ui-json>[` + messages + `]</a2ui-json>`
 }
 
 func TestRenderingEnvironmentDefinitions(t *testing.T) {
@@ -142,37 +142,37 @@ func TestParse(t *testing.T) {
 	}{
 		{"valid", valid, true},
 		{"popover", strings.Replace(valid, `"window"`, `"popover"`, 1), true},
-		{"input", strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(valid, `"Shown."`, `""`), `"awaiting_input":false`, `"awaiting_input":true`), `"input_note":""`, `"input_note":"Requested value"`), true},
-		{"voice_input", strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(valid, `"Shown."`, `""`), `"voice_input":false`, `"voice_input":true`), `"input_note":""`, `"input_note":"Enter text"`), true},
+		{"input", strings.ReplaceAll(strings.ReplaceAll(valid, `"Shown."`, `""`), `"awaiting_input":false`, `"awaiting_input":true`), true},
+		{"voice_input", strings.ReplaceAll(strings.ReplaceAll(valid, `"Shown."`, `""`), `"voice_input":false`, `"voice_input":true`), true},
 		{"voice_missing", strings.Replace(valid, `,"voice_input":false`, "", 1), false},
 		{"voice_null", strings.Replace(valid, `"voice_input":false`, `"voice_input":null`, 1), false},
-		{"both_input", strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(valid, `"Shown."`, `""`), `"voice_input":false`, `"voice_input":true`), `"awaiting_input":false`, `"awaiting_input":true`), `"input_note":""`, `"input_note":"Enter text"`), false},
+		{"both_input", strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(valid, `"Shown."`, `""`), `"voice_input":false`, `"voice_input":true`), `"awaiting_input":false`, `"awaiting_input":true`), false},
 		{"fence_json", "```json\n" + valid + "\n```", true},
 		{"fence_plain", "```\n" + valid + "\n```", true},
 		{"fence_outer_space", "  \n```json\n" + valid + "\n```\n  ", true},
-		{"fence_open_only", "```json\n" + valid, false},
-		{"fence_close_only", valid + "\n```", false},
-		{"fence_text_after", "```json\n" + valid + "\n```\nDone.", false},
-		{"fence_text_before", "Here:\n```json\n" + valid + "\n```", false},
-		{"fence_nested", "```json\n```json\n" + valid + "\n```\n```", false},
-		{"fence_one_line", "```" + valid + "```", false},
+		{"fence_open_only", "```json\n" + valid, true},
+		{"fence_close_only", valid + "\n```", true},
+		{"fence_text_after", "```json\n" + valid + "\n```\nDone.", true},
+		{"fence_text_before", "Here:\n```json\n" + valid + "\n```", true},
+		{"fence_nested", "```json\n```json\n" + valid + "\n```\n```", true},
+		{"fence_one_line", "```" + valid + "```", true},
 		{"fence_invalid_inside", "```json\n" + strings.Replace(valid, `"container"`, `"extra":0,"container"`, 1) + "\n```", false},
 		{"unknown", strings.Replace(valid, `"container"`, `"extra":0,"container"`, 1), false},
 		{"duplicate", strings.Replace(valid, `"container"`, `"container":"window","container"`, 1), false},
 		{"nested_duplicate", strings.Replace(valid, `"surfaceId":"screen"`, `"surfaceId":"screen","surfaceId":"screen"`, 1), false},
-		{"trailing", valid + `{}`, false},
-		{"array", "[" + valid + "]", false},
-		{"missing", strings.Replace(valid, `,"input_note":""`, "", 1), false},
+		{"trailing", valid + `{}`, true},
+		{"array", "[" + valid + "]", true},
+		{"missing", strings.Replace(valid, `,"feedback":"Shown."`, "", 1), false},
 		{"null_string", strings.Replace(valid, `"feedback":"Shown."`, `"feedback":null`, 1), false},
 		{"null_bool", strings.Replace(valid, `"awaiting_input":false`, `"awaiting_input":null`, 1), false},
 		{"wrong_bool", strings.Replace(valid, `"awaiting_input":false`, `"awaiting_input":"false"`, 1), false},
 		{"container", strings.Replace(valid, `"window"`, `"other"`, 1), false},
 		{"empty_feedback", strings.Replace(valid, `"Shown."`, `" "`, 1), false},
 		{"large_feedback", strings.Replace(valid, `"Shown."`, `"`+strings.Repeat("x", 8001)+`"`, 1), false},
-		{"unexpected_note", strings.Replace(valid, `"input_note":""`, `"input_note":"note"`, 1), false},
+		{"unexpected_note", strings.Replace(valid, `"container"`, `"input_note":"note","container"`, 1), false},
 		{"input_missing_note", strings.Replace(valid, `"awaiting_input":false`, `"awaiting_input":true`, 1), false},
 		{"empty_messages", fixture(""), false},
-		{"null_messages", strings.Replace(valid, `"messages":[`+create+","+root+`]`, `"messages":null`, 1), false},
+		{"null_messages", strings.Replace(valid, `[`+create+","+root+`]`, `null`, 1), false},
 		{"many_messages", fixture(strings.TrimSuffix(strings.Repeat(update+",", 65), ",")), false},
 		{"version", strings.Replace(valid, `v0.9.1`, `v0.9`, 1), true},
 		{"missing_version", strings.Replace(valid, `"version":"v0.9.1",`, "", 1), true},
@@ -410,4 +410,39 @@ func testUIPrompt(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return p.UIController()
+}
+
+func TestTaggedBlocks(t *testing.T) {
+	valid := fixture(create + "," + root)
+	meta := `<ui-meta>{"container":"window","feedback":"Shown.","awaiting_input":false,"voice_input":false,"size":{"width":400,"height":300}}</ui-meta>`
+	array := `<a2ui-json>[` + create + `,` + root + `]</a2ui-json>`
+	for _, tc := range []struct{ name, text, code string }{
+		{"missing_meta", array, "block_missing"},
+		{"missing_array", meta, "block_missing"},
+		{"duplicate", meta + meta + array, "block_duplicate"},
+		{"order", array + meta, "block_order"},
+		{"unclosed", strings.TrimSuffix(meta, "</ui-meta>") + array, "block_unclosed"},
+		{"unknown_meta", strings.Replace(valid, `"container"`, `"extra":1,"container"`, 1), "unknown_field"},
+		{"input_note", strings.Replace(valid, `"container"`, `"input_note":"x","container"`, 1), "unknown_field"},
+		{"size_missing", strings.Replace(valid, `,"size":{"width":400,"height":300}`, "", 1), "missing_field:size"},
+		{"size_outside", strings.Replace(valid, `,"size":{"width":400,"height":300}`, "", 1) + ` {"size":{"width":640,"height":520}}`, "missing_field:size"},
+		{"size_message", fixture(`{"size":{"width":640,"height":520}}`), "unknown_field"},
+		{"production_pattern", meta + `<a2ui-json>[` + create + `],"size":{"width":640,"height":520}</a2ui-json>`, "invalid_array"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse(tc.text, nil)
+			if err == nil || FailureCode(err) != tc.code {
+				t.Fatalf("expected %s, got %v", tc.code, err)
+			}
+		})
+	}
+	withSize := strings.Replace(valid, `"size":{"width":400,"height":300}`, `"size":{"width":640,"height":520}`, 1)
+	o, err := Parse("prose "+withSize+" more prose", nil)
+	if err != nil || o.Size == nil || o.Size.Width != 640 || o.Size.Height != 520 {
+		t.Fatalf("size: %+v, %v", o.Size, err)
+	}
+	prompt := testUIPrompt(t)
+	if len(prompt) > 16000 || !strings.Contains(prompt, "<ui-meta>") || !strings.Contains(prompt, "<a2ui-json>") {
+		t.Fatal("invalid deployed UI prompt")
+	}
 }

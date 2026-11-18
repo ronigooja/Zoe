@@ -65,7 +65,7 @@ func TestUIJobSize(t *testing.T) {
 	r := uiTargetRig(t)
 	uiFlowServer(t, r)
 	var mu sync.Mutex
-	output := strings.Replace(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false), `"container":"window"`, `"container":"window","size":{"width":500,"height":400}`, 1)
+	output := strings.Replace(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false), `"size":{"height":300,"width":400}`, `"size":{"width":500,"height":400}`, 1)
 	r.svc.uiController = uiFlowModel(t, &output, &mu)
 	r.seedTask(t, "task", "owner")
 	uiFlowRun(t, r.store.DB(), "task", "run")
@@ -88,7 +88,7 @@ func TestUIJobSize(t *testing.T) {
 			t.Fatalf("size=%dx%d event=%s", width, height, raw)
 		}
 		mu.Lock()
-		output = uiFlowOutput(`{"version":"v0.9.1","updateDataModel":{"surfaceId":"screen","value":{}}}`, false)
+		output = strings.Replace(uiFlowOutput(`{"version":"v0.9.1","updateDataModel":{"surfaceId":"screen","value":{}}}`, false), `"size":{"height":300,"width":400}`, `"size":{"width":500,"height":400}`, 1)
 		mu.Unlock()
 	}
 	var request string
@@ -117,7 +117,7 @@ func TestUIJobSizeExceedsScreen(t *testing.T) {
 	uiFlowServer(t, r)
 	r.exec(t, `INSERT INTO ui_screens(workspace_id,owner_subject_id,width,height,updated_at) VALUES('default','owner',400,300,?)`, r.now().Format(time.RFC3339Nano))
 	var mu sync.Mutex
-	output := strings.Replace(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false), `"container":"window"`, `"container":"window","size":{"width":500,"height":400}`, 1)
+	output := strings.Replace(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false), `"size":{"height":300,"width":400}`, `"size":{"width":500,"height":400}`, 1)
 	r.svc.uiController = uiFlowModel(t, &output, &mu)
 	uiFlowRegister(t, r)
 	var status, code string
