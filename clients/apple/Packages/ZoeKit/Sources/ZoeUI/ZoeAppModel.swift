@@ -21,6 +21,9 @@ public final class ZoeAppModel: ObservableObject {
     private var recoveryRendered: [UISurfaceBinding: UISurfaceEvent] = [:]
     private var sessionPresentedSurfaces: [String: UISurfaceEvent] = [:]
     public var onUISurfaceInputState: ((UISurfaceEvent) -> Void)?
+    /// Called only after the native host reports a successful display of the event.
+    public var onUISurfaceDisplayed: ((UISurfaceEvent, UISurfaceHistoryScope) -> Void)?
+    private let historyScopeKey = "zoe.history.scope"
     private var recoveryACKTask: Task<Void, Never>?
     #if os(macOS)
     public var screenVisibleSize: () -> NSSize? = { NSScreen.main?.visibleFrame.size }
@@ -1495,6 +1498,7 @@ public final class ZoeAppModel: ObservableObject {
                     let displayed = onUISurface?(event) ?? false
                     guard generation == connectionGeneration.value, !Task.isCancelled else { throw CancellationError() }
                     guard displayed else { throw ZoeError.invalidResponse }
+                    recordUISurfaceHistory(event)
                     recoveryRendered = recoveryRendered.filter { $0.key.surfaceID != event.surfaceID }
                     recoveryRendered[event.binding] = event
                     sessionPresentedSurfaces[event.surfaceID] = event
@@ -1644,7 +1648,10 @@ public final class ZoeAppModel: ObservableObject {
         }
         recoveryRendered = recoveryRendered.filter { $0.key.surfaceID != event.surfaceID }
         let displayed = onUISurface?(event) ?? false
-        if displayed { sessionPresentedSurfaces[event.surfaceID] = event }
+        if displayed {
+            sessionPresentedSurfaces[event.surfaceID] = event
+            recordUISurfaceHistory(event)
+        }
         uiSurfaceRequests.recordRender(event, success: displayed)
         recordUITrace(phase: displayed ? "ui_surface_displayed" : "ui_surface_display_failed", summary: event.diagnosticSummary, level: displayed ? .info : .warn, upload: !displayed)
         await submitUICommand(kind: "ui.rendered", payload: event.renderedPayload(success: displayed), key: event.renderedIdempotencyKey)
@@ -1652,6 +1659,18 @@ public final class ZoeAppModel: ObservableObject {
 
     private func isCurrentConnection(_ generation: UInt64, sourceAPI: APIClient?) -> Bool {
         generation == connectionGeneration.value && (sourceAPI == nil || sourceAPI === api)
+    }
+
+    /// History is local and never fed back to the server. The last scope persists so it stays viewable while disconnected.
+    private func recordUISurfaceHistory(_ event: UISurfaceEvent) {
+        guard let workspace = workspaceID, !serverAddress.isEmpty else { return }
+        let scope = UISurfaceHistoryScope(serverURL: serverAddress, workspaceID: workspace)
+        if let data = try? JSONEncoder().encode(scope) { defaults.set(data, forKey: historyScopeKey) }
+        onUISurfaceDisplayed?(event, scope)
+    }
+
+    public var historyScope: UISurfaceHistoryScope? {
+        defaults.data(forKey: historyScopeKey).flatMap { try? JSONDecoder().decode(UISurfaceHistoryScope.self, from: $0) }
     }
 
     private func closeUISurfaces() {
@@ -1685,17 +1704,27 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     public func sendUISurfaceAction(binding: UISurfaceBinding, action: ResolvedAction) {
-        guard authentication.isConnected else { return }
+        let component = action.sourceComponentId
+        let surfaceID = binding.surfaceID
+        guard authentication.isConnected else {
+            SurfaceActionOutcomes.shared.report(surfaceID: surfaceID, component: component, success: false)
+            return
+        }
         do {
             let payload = try uiActionPayload(binding: binding, action: action)
             let generation = connectionGeneration.value
             let sourceAPI = api
             Task { @MainActor [weak self] in
-                guard let self, self.isCurrentConnection(generation, sourceAPI: sourceAPI) else { return }
-                await self.submitUICommand(kind: "ui.action", payload: payload, key: UUID().uuidString.lowercased())
+                guard let self, self.isCurrentConnection(generation, sourceAPI: sourceAPI) else {
+                    SurfaceActionOutcomes.shared.report(surfaceID: surfaceID, component: component, success: false)
+                    return
+                }
+                let accepted = await self.submitUICommand(kind: "ui.action", payload: payload, key: UUID().uuidString.lowercased())
+                SurfaceActionOutcomes.shared.report(surfaceID: surfaceID, component: component, success: accepted)
             }
         } catch {
             api?.recordDiagnostic(phase: "ui_action", requestPath: "/v1/commands", errorType: "encoding_error", errorSummary: "invalid_action_context", level: .warn)
+            SurfaceActionOutcomes.shared.report(surfaceID: surfaceID, component: component, success: false)
         }
     }
 

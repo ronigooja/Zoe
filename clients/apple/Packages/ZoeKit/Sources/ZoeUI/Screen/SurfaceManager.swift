@@ -32,6 +32,7 @@ import A2UISwiftUI
             (event.deleted ? entries[event.surfaceID] == nil : entries[event.surfaceID] != nil)
     }
     private var renderFailed = Set<String>()
+    private var actionTrackers: [String: SurfaceActionTracker] = [:]
     // Test seam at the native presentation boundary, after real message processing.
     var presentationAcceptedForTesting: (() -> Bool)?
     func presentationVersionForTesting(_ id: String) -> Int64? { revisions[id] }
@@ -204,9 +205,22 @@ import A2UISwiftUI
     /// Clear revision fences only when the authenticated connection scope is discarded.
     public func reset() {
         for id in Array(entries.keys) { close(id: id) }
+        for id in Array(actionTrackers.keys) { SurfaceActionOutcomes.shared.unregister(surfaceID: id) }
+        actionTrackers.removeAll()
         bindings.removeAll()
         revisions.removeAll()
         physicalBindings.removeAll()
+    }
+
+    /// Trackers outlive close(): open() closes before re-presenting, and an outstanding action must still restore its control.
+    private func actionTracker(id: String) -> SurfaceActionTracker {
+        if let existing = actionTrackers[id] { return existing }
+        let tracker = SurfaceActionTracker()
+        actionTrackers[id] = tracker
+        SurfaceActionOutcomes.shared.register(surfaceID: id) { component, success in
+            tracker.finish(component: component, success: success)
+        }
+        return tracker
     }
 
     public func windowWillClose(_ notification: Notification) {
@@ -331,6 +345,8 @@ import A2UISwiftUI
         let handler = capturedActionHandler(id: id)
         let controller = NSHostingController(rootView: ScrollView(.vertical) {
             A2UISurfaceView(viewModel: model, scrolls: false, onAction: handler)
+                .a2uiCatalogItems(SurfaceCatalogOverrides.items(tracker: actionTracker(id: id)))
+                .textSelection(.enabled)
                 .padding(Self.surfacePadding)
         })
         controller.sizingOptions = []
@@ -349,7 +365,10 @@ import A2UISwiftUI
         return { [weak self] action in
             Task { @MainActor [weak self] in
                 if let binding { self?.onBoundAction?(binding, action) }
-                else { self?.actionHandler(id, action) }
+                else {
+                    SurfaceActionOutcomes.shared.report(surfaceID: id, component: action.sourceComponentId, success: false)
+                    self?.actionHandler(id, action)
+                }
             }
         }
     }
