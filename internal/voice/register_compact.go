@@ -176,11 +176,6 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 		stage, kind = "invalid_output", "output_invalid"
 		return false, errors.New("invalid register compact")
 	}
-	if r.retry != nil {
-		if r.retry.Clear(ctx, "compact", scope) == nil && r.requestPublish != nil {
-			r.requestPublish()
-		}
-	}
 	// Re-read caller-owned M before replacing coverage; a failed fence retains it.
 	stage, kind = "write", "db"
 	boundary, err := r.memoryBoundary(ctx, o)
@@ -195,6 +190,11 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 		return false, err
 	}
 	n, err = result.RowsAffected()
+	if err == nil && n == 1 && r.retry != nil {
+		if r.retry.Clear(ctx, "compact", scope) == nil && r.requestPublish != nil {
+			r.requestPublish()
+		}
+	}
 	return n == 1, err
 }
 

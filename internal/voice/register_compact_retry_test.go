@@ -114,3 +114,46 @@ func TestCompactRetryUnreadable(t *testing.T) {
 		t.Fatal("unreadable retry state blocked rebuild")
 	}
 }
+
+func TestCompactRetryClearedOnlyAfterFencedWrite(t *testing.T) {
+	f := newRegisterFixture(t)
+	f.turn("handoff-session", 0, "user", "old", f.now.Add(-3*time.Hour))
+	if !f.rebuild(f.now) {
+		t.Fatal("initial compact missing")
+	}
+	previous := f.layers(f.now).Compact
+	f.turn("handoff-session", 1, "user", "new", f.now.Add(-2*time.Hour))
+	store := backoff.Store{DB: f.db}
+	f.r.retry = &store
+	published := 0
+	f.r.requestPublish = func() { published++ }
+	scope := f.owner.WorkspaceID + "/" + f.owner.OwnerSubjectID
+	if err := store.Record(context.Background(), "compact", scope, backoff.Transient, f.now.Add(-time.Minute), backoff.Background, nil); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.List(context.Background())
+	if err != nil || len(before) != 1 {
+		t.Fatalf("initial retry state=%v err=%v", before, err)
+	}
+	f.onCall = func() {
+		f.exec(`UPDATE voice_context_registers SET version=version+1 WHERE workspace_id=? AND owner_subject_id=?`, f.owner.WorkspaceID, f.owner.OwnerSubjectID)
+	}
+	if f.rebuild(f.now) {
+		t.Fatal("rejected fence reported success")
+	}
+	if f.layers(f.now).Compact != previous {
+		t.Fatal("rejected fence changed compact")
+	}
+	after, err := store.List(context.Background())
+	if err != nil || len(after) != 1 || after[0] != before[0] || published != 0 {
+		t.Fatalf("retry state changed after fence: before=%v after=%v published=%d err=%v", before, after, published, err)
+	}
+	f.onCall = nil
+	if !f.rebuild(f.now) {
+		t.Fatal("successful rebuild failed")
+	}
+	after, err = store.List(context.Background())
+	if err != nil || len(after) != 0 || published != 1 {
+		t.Fatalf("retry state not cleared: after=%v published=%d err=%v", after, published, err)
+	}
+}
