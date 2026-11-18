@@ -331,6 +331,8 @@ import A2UISwiftUI
         let handler = capturedActionHandler(id: id)
         let controller = NSHostingController(rootView: ScrollView(.vertical) {
             A2UISurfaceView(viewModel: model, scrolls: false, onAction: handler)
+                .a2uiCatalogItems(SurfaceCatalogOverrides.items())
+                .textSelection(.enabled)
                 .padding(Self.surfacePadding)
         })
         controller.sizingOptions = []
