@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/ops"
 	"github.com/skip2/go-qrcode"
@@ -939,6 +940,7 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 		}
 		fmt.Fprintf(out, "%s: host=%s model=%s effort=%s thinking=%s\n", kind, safeLabel(safeHost(c.BaseURL)), safeLabel(c.Model), safeLabel(c.ReasoningEffort), safeLabel(c.Thinking))
 	}
+	writeRetryStatus(out, backoff.StatusPath, time.Now())
 	current := filepath.Join(*optRoot, "releases", "current")
 	if revision, readErr := os.ReadFile(filepath.Join(current, "SOURCE_REVISION")); readErr == nil {
 		fmt.Fprintf(out, "Release: source-revision=%s\n", safeLabel(strings.TrimSpace(string(revision))))
@@ -951,6 +953,20 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func writeRetryStatus(out io.Writer, path string, now time.Time) {
+	snapshot, err := backoff.ReadSnapshot(path, now)
+	if err != nil {
+		return
+	}
+	for _, state := range snapshot.States {
+		if state.AuthFailed {
+			fmt.Fprintf(out, "%s: stopped (authentication failed); reconfigure to resume\n", safeLabel(state.Consumer))
+		} else if !state.NextAttemptAt.IsZero() && state.NextAttemptAt.After(now) {
+			fmt.Fprintf(out, "%s: backing off, %d failures, next attempt %s\n", safeLabel(state.Consumer), state.Failures, state.NextAttemptAt.UTC().Format(time.RFC3339))
+		}
+	}
 }
 
 func safeLabel(value string) string {

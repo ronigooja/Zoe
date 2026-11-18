@@ -224,13 +224,21 @@ CREATE INDEX voice_input_notices_due ON voice_input_notices(status,next_attempt_
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 202, Name: "model_retry_state", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 202, Name: "model_retry_state", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE model_retry_state (
 			consumer TEXT NOT NULL CHECK(consumer IN ('register','steward','ui_controller','compact','memory_write','memory_ingest')),
 			scope TEXT NOT NULL, failures INTEGER NOT NULL CHECK(failures >= 0),
 			next_attempt_at TEXT NOT NULL, auth_failed INTEGER NOT NULL CHECK(auth_failed IN (0,1)),
 			last_error TEXT NOT NULL CHECK(last_error IN ('','auth','transient','permanent')),
 			updated_at TEXT NOT NULL, PRIMARY KEY(consumer,scope))`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 203, Name: "model_config_fingerprints", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE model_config_fingerprints (
+			consumer TEXT PRIMARY KEY CHECK(consumer IN ('register','steward','ui_controller','compact','memory_write','memory_ingest')),
+			fingerprint TEXT NOT NULL CHECK(length(fingerprint)=64))`)
 		return err
 	}})
 }
