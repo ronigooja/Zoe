@@ -7,13 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math/rand"
 	"sync"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/uictl"
 )
+
+var uiRetryJitter = rand.Float64
 
 func (s *Service) createRegisterUIJobs(ctx context.Context) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -163,7 +167,7 @@ type uiJob struct {
 }
 
 func (s *Service) dispatchUIJobs(ctx context.Context) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts FROM ui_jobs WHERE status='pending' AND next_attempt_at<=? ORDER BY created_at,rowid LIMIT 25`, s.now().UTC().Format(time.RFC3339Nano))
+	rows, err := s.db.QueryContext(ctx, `SELECT id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts FROM ui_jobs WHERE status='pending' AND julianday(next_attempt_at)<=julianday(?) ORDER BY created_at,rowid LIMIT 25`, s.now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return
 	}
@@ -266,7 +270,7 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 	now := s.now().UTC()
 	stamp := now.Format(time.RFC3339Nano)
-	res, err := s.db.ExecContext(ctx, `UPDATE ui_jobs SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=? AND next_attempt_at<=? AND NOT EXISTS(SELECT 1 FROM ui_jobs earlier WHERE earlier.workspace_id=ui_jobs.workspace_id AND earlier.owner_subject_id=ui_jobs.owner_subject_id AND earlier.status='pending' AND earlier.rowid<ui_jobs.rowid)`, now.Add(30*time.Second).Format(time.RFC3339Nano), stamp, j.id, j.attempts, stamp)
+	res, err := s.db.ExecContext(ctx, `UPDATE ui_jobs SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=? AND julianday(next_attempt_at)<=julianday(?) AND NOT EXISTS(SELECT 1 FROM ui_jobs earlier WHERE earlier.workspace_id=ui_jobs.workspace_id AND earlier.owner_subject_id=ui_jobs.owner_subject_id AND earlier.status='pending' AND earlier.rowid<ui_jobs.rowid)`, now.Add(30*time.Second).Format(time.RFC3339Nano), stamp, j.id, j.attempts, stamp)
 	if err != nil {
 		return
 	}
@@ -283,6 +287,18 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 		s.failUIJob(ctx, j, "ui_controller_disabled", false)
 		return
 	}
+	store := s.retry
+	if store.DB == nil {
+		store = backoff.Store{DB: s.db}
+	}
+	due, err := store.Due(ctx, "ui_controller", "", now)
+	if err != nil {
+		logging.Warnf("model_retry_state_unreadable consumer=ui_controller")
+	} else if !due {
+		logging.Warnf("ui_controller_auth_stopped")
+		s.failUIJob(ctx, j, "model_error", false)
+		return
+	}
 	input, err := s.uiInput(ctx, j)
 	if err != nil {
 		s.failUIJob(ctx, j, "input_invalid", false)
@@ -297,8 +313,17 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 	call.Output(output)
 	if err != nil {
 		call.Result(nil, "model_error")
-		s.failUIJob(ctx, j, "model_error", true)
+		kind := backoff.Classify(err)
+		if kind == backoff.Auth {
+			if store.Record(ctx, "ui_controller", "", kind, s.now(), backoff.Interactive, uiRetryJitter) == nil {
+				s.PublishRetryState()
+			}
+		}
+		s.failUIJob(ctx, j, "model_error", kind == backoff.Transient)
 		return
+	}
+	if store.Clear(ctx, "ui_controller", "") == nil {
+		s.PublishRetryState()
 	}
 	var controllerInput uictl.Input
 	if err = json.Unmarshal(input, &controllerInput); err != nil {
@@ -500,7 +525,7 @@ func (s *Service) failUIJob(ctx context.Context, j uiJob, code string, retry boo
 	logging.Warnf("ui_controller error_kind=%s", code)
 	at := s.now().UTC().Format(time.RFC3339Nano)
 	if retry && j.attempts < 3 {
-		_, _ = s.db.ExecContext(ctx, `UPDATE ui_jobs SET last_error=?,next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=?`, code, s.now().Add(time.Duration(1<<uint(j.attempts-1))*time.Second).UTC().Format(time.RFC3339Nano), at, j.id, j.attempts)
+		_, _ = s.db.ExecContext(ctx, `UPDATE ui_jobs SET last_error=?,next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=?`, code, s.now().Add(backoff.Delay(j.attempts, backoff.Interactive.Base, backoff.Interactive.Cap, uiRetryJitter)).UTC().Format(time.RFC3339Nano), at, j.id, j.attempts)
 		return
 	}
 	tx, err := s.db.BeginTx(ctx, nil)

@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/modelclient"
 	"github.com/ronigooja/Zoe/internal/steward"
@@ -38,6 +39,9 @@ type RegisterConfig struct {
 }
 type ContextRegister struct {
 	db             *sql.DB
+	retry          *backoff.Store
+	requestPublish func()
+	retryJitter    func() float64
 	model          *modelclient.Client
 	compactModel   *modelclient.Client
 	compactTimeout time.Duration
