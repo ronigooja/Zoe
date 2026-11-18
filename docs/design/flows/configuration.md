@@ -2,7 +2,7 @@
 
 ## Purpose and boundary
 
-Approved target, not a claim of current implementation, deployment or acceptance. No external CLIProxyAPI configuration change is authorized by this design.
+Approved target, not a claim of current implementation, deployment or acceptance.
 
 ## Inputs and outputs
 

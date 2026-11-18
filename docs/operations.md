@@ -10,6 +10,5 @@ Implementation entry points:
 - [Runner](../internal/runner/engine.go)
 - [Deployment implementation](../deploy/linux/)
 
-Implementation locations do not establish conformance or authorize running
-state-changing operations. Record any verification under the
+Implementation locations do not establish conformance. Record any verification under the
 [acceptance boundary](development.md#evidence-and-acceptance).
