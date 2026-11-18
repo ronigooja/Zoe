@@ -30,6 +30,14 @@ type Client struct {
 	http      *http.Client
 }
 
+// FingerprintConfig returns the loaded model configuration for fingerprinting only.
+func (c *Client) FingerprintConfig() (endpoint, model, effort, thinking string, credential []byte) {
+	if c == nil {
+		return
+	}
+	return c.transport.FingerprintConfig()
+}
+
 // FromEnv applies only to ZOE_STEWARD_*; an empty base URL disables the model.
 func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) (*Client, error) {
 	if getenv == nil || readFile == nil {
