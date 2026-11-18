@@ -295,7 +295,7 @@ import A2UISwiftUI
     }
 
     // Host-owned spacing in points; rendering facts in internal/uictl/controller.go
-    // and docs/design/flows/screen.md track these values and fixedStyle together.
+    // track these values and fixedStyle together.
     static let surfacePadding: CGFloat = 8
     static let cardPadding: CGFloat = 8
     static let leafMargin: CGFloat = 4

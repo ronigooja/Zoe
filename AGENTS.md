@@ -5,8 +5,8 @@
 - Start with [the design overview](docs/design/data-flows.md), then read only
   the contracts relevant to the task.
 - Use [development guidance](docs/development.md) for verification and
-  documentation maintenance, and [operations](docs/operations.md) for deployment
-  and data-management procedures.
+  documentation maintenance, and [operations](docs/operations.md) for
+  implementation entry points.
 
 ## Preserve the approved design
 

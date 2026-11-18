@@ -1,12 +1,12 @@
-# Steward decision contract
+# Steward
 
 ## Purpose and boundary
 
-Approved target, 2026-11-16; not implementation or acceptance evidence. The [approved overview](../data-flows.md) establishes precedence. Steward decides task handling from the [register request](register.md) and server facts, never executes work or rewrites the request. [Execution](execution.md) owns effects; [results](results.md) and [screen](screen.md) own delivery.
+Approved target, not a claim of current implementation, deployment or acceptance. Steward returns a decision, never echoes or rewrites the request. The server retains and dispatches that full request.
 
 ## Inputs and outputs
 
-The server retrieves owner/workspace-scoped task facts, preserving full goals, pending questions, results, and retained additions. Titles, quoted original utterances, and per-call aliases are not selectors. Exact schemas:
+The server retrieves owner/workspace-scoped task facts, preserving full goals, pending questions, results and retained additions. Titles, quoted original utterances and per-call aliases are not selectors. The exact schemas are:
 
 ```typescript
 type StewardInput = {
@@ -30,37 +30,35 @@ type StewardOutput = {
 };
 ```
 
-Every key is present; irrelevant fields are null. IDs are real stable server-owned identities from supplied facts. `status` is authoritative; absent `result` is null; additions retain conversational order. Pending-question IDs survive retries and are scoped to the selected task. Steward returns only a decision; the server retains and dispatches the full request.
+Every key is present; irrelevant fields are null. IDs are real stable server-owned identities from the supplied facts. `status` reflects authoritative task state; `result` is null when absent; additions remain in conversational order.
 
 ## Required behavior
 
-Non-null fields below are in addition to `action`; all others are null.
-
-| Action | Semantic choice | Non-null fields | Effect using retained full request |
+| Action | Semantic choice | Required non-null output beyond action | Server effect using retained request |
 |---|---|---|---|
-| `new` | Independent work not dependent on existing work. | None | Admit task with full request as goal. |
-| `append` | Additional direction for existing live work. | `task_id` | Persist ordered addition; deliver to original live session, no replacement work. |
-| `answer` | Response to a current pending question. | `task_id`, `question_id` | Bind full request to that exact pending question. |
-| `continue` | New work dependent on prior work, not an addition to live execution. | `task_id` | Admit new task with request as goal and structured prior-task context. |
-| `report` | Factual state/progress/result/handling of identified work. | `task_id`, `reply` | Deliver fact-grounded reply; do not execute or mutate task. |
-| `cancel` | Withdrawal/stopping of identified work. | `task_id` | Apply cancellation, preserving actual termination semantics. |
-| `redisplay` | Existing authoritative result presentation without new work. | `task_id` | Send result and request to UI_Controller; invoke no Worker. |
-| `clarify` | Insufficiently determined intent or task/question reference. | `reply` | Ask resolving question; admit no work. |
+| `new` | Independent work not dependent on an existing task. | None | Admit a new task whose goal is the full request. |
+| `append` | Additional direction for existing live work. | task_id | Persist the full request as an ordered addition and deliver to the original live session, without replacement work. |
+| `answer` | Response to a currently pending question of existing work. | task_id, question_id | Bind the full request as the answer to that exact pending question. |
+| `continue` | New work dependent on prior work rather than an addition to its live execution. | task_id | Admit a new task with the full request as goal and structured prior-task context. |
+| `report` | Request for factual state, progress, result or handling of identified work. | task_id, reply | Deliver the fact-grounded reply; do not execute or mutate the task. |
+| `cancel` | Withdrawal or stopping of identified work. | task_id | Apply cancellation to that task, preserving actual termination semantics. |
+| `redisplay` | Presentation of an existing authoritative result with no new work. | task_id | Send that result and request to UI_Controller; invoke no Worker. |
+| `clarify` | Intent or task/question reference is insufficiently determined. | reply | Ask the resolving question without admitting work. |
 
-Choose semantically from these definitions and supplied context, not examples, keywords, or newest-task heuristics. Empty candidates do not imply `new`: unresolved intent/references require `clarify`. Ambiguity must not select arbitrarily. A report must identify a real supplied task; no resolvable subject means clarification, not an invented report task. Report/clarify replies are nonempty and follow the request's language, without another answer model. Do not filter long requests out of candidate facts.
+Steward chooses semantically using these definitions and supplied context, not examples, keyword rules or newest-task heuristics. An empty candidate set does not imply `new`: unresolved references or intent require `clarify`. Ambiguity requires clarification instead of arbitrary selection. A report must identify a real supplied task; absence of a resolvable subject uses clarification, not an invented report task. Replies for report/clarify are nonempty and follow the request's language.
 
 ## Persistence and idempotency
 
-Retain source identity, request, decision, selected stable IDs/reply, and resulting task/entry/question linkage. Transactionally validate ownership, IDs, eligibility, and current pending state before applying any decision. Stable question and entry identities support [execution checkpoints](execution.md#persistence-and-idempotency).
+Pending-question IDs survive retries and are scoped to the selected task. Keep source identity, decision, selected stable IDs and resulting task/entry/question linkage. Before applying a decision, the server validates ownership, selected IDs, eligibility and current pending state transactionally.
 
 ## Failure and recovery
 
-If facts changed, refresh and re-evaluate selection; never silently convert a stale/rejected/ambiguous decision into new work. Invalid output or unavailable model fails without admission. Existing `Processing error.` behavior may report failure; it is not fallback authorization.
+If facts changed, refresh and re-evaluate the selection; never silently convert it into new work. Invalid model output or an unavailable model fails without admitting work. Existing processing-error behavior may report failure; it is not fallback authorization.
 
 ## Implementation locations
 
-[Candidate retrieval](../../../internal/voice/taskcandidates.go), [Steward](../../../internal/steward/choose.go), [task commands](../../../internal/control/core_handlers.go), [handoff](../../../internal/voice/handoff_preflight.go).
+[Candidate retrieval](../../../internal/voice/taskcandidates.go), [Steward](../../../internal/steward/choose.go), [task commands](../../../internal/control/core_handlers.go).
 
 ## Verification obligations
 
-Exercise every action's required/null fields, duplicate-title tasks with distinct stable IDs, pending-question scoping, semantic ambiguity, empty candidates, and stale-selection refresh. Verify preservation of the full request at every branch, no Worker for redisplay, factual nonmutating reports, clarification language, and actual runtime continuity separately from schema fixtures. Follow [evidence and acceptance](../../development.md#evidence-and-acceptance).
+Verify every action's required/null fields, stable duplicate-title task IDs and pending-question IDs, semantic ambiguity/empty candidates, stale-selection re-evaluation, and preserved full request at all execution branches. Follow the [acceptance boundary](../../development.md#evidence-and-acceptance).
