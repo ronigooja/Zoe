@@ -43,6 +43,15 @@ func TestRetryModelsFromLoaded(t *testing.T) {
 		return backoff.Fingerprint(cfg.Endpoint, cfg.Model, cfg.Effort, cfg.Thinking, cfg.Credential)
 	}
 	loaded := load()
+	register := &voice.RegisterConfig{Model: voice.RegisterModelConfig{BaseURL: "https://example.invalid", Model: "fixture", APIKey: "fixture"}, CompactModel: voice.RegisterModelConfig{BaseURL: "https://example.invalid", Model: "fixture", APIKey: "fixture"}}
+	before := retryModelsFromLoaded(register, nil, nil)
+	register.RegisterInstruction, register.CompactInstruction = "first", "second"
+	after := retryModelsFromLoaded(register, nil, nil)
+	for _, name := range []string{"register", "compact"} {
+		if fingerprint(before[name]) != fingerprint(after[name]) {
+			t.Fatal("prompt changed model configuration identity")
+		}
+	}
 	for consumer, prefix := range map[string]string{"register": "ZOE_REGISTER", "compact": "ZOE_COMPACT", "steward": "ZOE_STEWARD", "ui_controller": "ZOE_UI_CONTROLLER"} {
 		t.Run(consumer, func(t *testing.T) {
 			cfg := loaded[consumer]

@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/ronigooja/Zoe/internal/prompts"
 )
 
 func choiceServer(t *testing.T, reply string, inspect func([]byte)) *httptest.Server {
@@ -35,6 +37,11 @@ func configured(t *testing.T, base, timeout string) *Client {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p, err := prompts.Load("../../deploy/prompts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetInstructions(p.Steward())
 	return c
 }
 

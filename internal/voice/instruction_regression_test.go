@@ -1,28 +1,23 @@
 package voice
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"strings"
 	"testing"
 )
 
 func TestInstructionDefaultExact(t *testing.T) {
-	const expected = `## Background capabilities
-- The background can run tasks, search the web, and use files and devices.
-- The background can report task progress and results, and cancel or change tasks.
-- The background can save and update the user's personal facts and preferences.
-- The background can look up the user's saved personal records and earlier conversations.
-- The background can show content to the user on their Mac screen.
-- The background can ask the user for input through their Mac screen.`
-	if DefaultInstructionText != expected {
+	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(testPrompts(t).VoiceInstruction()))); got != "0438963491114fc94fee23b59b80a482efd4824096519127a9a824621c5d8b67" {
 		t.Fatal("default instruction differs from the approved system prompt")
 	}
 	for _, capability := range []string{"## Background capabilities", "run tasks", "search the web", "use files and devices", "report task progress and results", "cancel or change tasks", "save and update the user's personal facts and preferences", "look up the user's saved personal records and earlier conversations"} {
-		if !strings.Contains(DefaultInstructionText, capability) {
+		if !strings.Contains(testPrompts(t).VoiceInstruction(), capability) {
 			t.Errorf("default instruction missing capability %q", capability)
 		}
 	}
 	for _, requirement := range []string{"must", "always", "never", "do not answer", "delegate"} {
-		if strings.Contains(strings.ToLower(DefaultInstructionText), requirement) {
+		if strings.Contains(strings.ToLower(testPrompts(t).VoiceInstruction()), requirement) {
 			t.Errorf("default instruction contains requirement %q", requirement)
 		}
 	}

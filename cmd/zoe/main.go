@@ -157,7 +157,6 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 		fmt.Fprintln(out, "  16) Configure voice gateway")
 		fmt.Fprintln(out, "  17) Test voice gateway")
 		fmt.Fprintln(out, "  18) Show voice gateway status")
-		fmt.Fprintln(out, "  19) Configure voice instruction")
 		fmt.Fprintln(out, "Access:")
 		fmt.Fprintln(out, "  20) Create instance key")
 		fmt.Fprintln(out, "  21) Rotate instance key")
@@ -183,8 +182,6 @@ func menuWithRoot(in io.Reader, out, errOut io.Writer, root string) error {
 			actionErr = menuWorker(configureMenuIO(root, in, out, errOut))
 		case "7":
 			actionErr = menuTestWorker(root, out)
-		case "19":
-			actionErr = menuVoiceInstruction(configureMenuIO(root, in, out, errOut))
 		case "8", "10", "12", "14", "24":
 			kind := map[string]string{"8": "Register", "10": "Compact", "12": "Steward", "14": "Memory", "24": "UI_Controller"}[choice]
 			actionErr = menuModel(configureMenuIO(root, in, out, errOut), kind)

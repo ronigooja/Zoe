@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ronigooja/Zoe/internal/prompts"
 	"github.com/ronigooja/Zoe/internal/steward"
 )
 
@@ -28,6 +29,11 @@ func TestSteward(ctx context.Context, c ModelConfig, h *http.Client, text ...str
 	if client == nil {
 		return ModelProbeResult{}, errors.New("steward is disabled")
 	}
+	promptSet, err := prompts.Load(prompts.Dir())
+	if err != nil {
+		return ModelProbeResult{}, err
+	}
+	client.SetInstructions(promptSet.Steward())
 	if h != nil {
 		client.SetHTTPClient(h)
 	}

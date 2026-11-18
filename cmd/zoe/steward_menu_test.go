@@ -15,6 +15,7 @@ import (
 )
 
 func TestStewardMenuConfigurationAndOwnedKey(t *testing.T) {
+	t.Setenv("ZOE_PROMPT_DIR", "../../deploy/prompts")
 	previous, output := logging.CurrentLevel(), log.Writer()
 	t.Cleanup(func() { logging.SetLevel(previous); log.SetOutput(output) })
 	t.Setenv("ZOE_LOG_LEVEL", "")

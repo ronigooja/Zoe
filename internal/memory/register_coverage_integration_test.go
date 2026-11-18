@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/internal/memoryapi"
+	"github.com/ronigooja/Zoe/internal/prompts"
 	"github.com/ronigooja/Zoe/internal/storage"
 	"github.com/ronigooja/Zoe/internal/voice"
 )
@@ -65,7 +66,11 @@ func TestRealMemoryBatchBoundaryRetainsRegisterCoverage(t *testing.T) {
 	defer model.Close()
 	repo := NewRepository(store.DB())
 	cfg := voice.RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
-	register, err := voice.NewRegister(store.DB(), voice.RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000, MemoryBoundary: func(ctx context.Context, o voice.RegisterOwner) (time.Time, error) {
+	promptSet, err := prompts.Load("../../deploy/prompts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	register, err := voice.NewRegister(store.DB(), voice.RegisterConfig{RegisterInstruction: promptSet.Register(), CompactInstruction: promptSet.Compact(), Model: cfg, CompactModel: cfg, CompactCharacters: 1000, MemoryBoundary: func(ctx context.Context, o voice.RegisterOwner) (time.Time, error) {
 		return repo.BoundaryAt(ctx, o.WorkspaceID, o.OwnerSubjectID)
 	}})
 	if err != nil {

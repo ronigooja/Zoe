@@ -34,7 +34,7 @@ func TestRegisterSeparateModelsAndRawWindow(t *testing.T) {
 	route := server("routing-only", `{"routes":["chat"],"request":null}`, &routeCalls)
 	compact := server("compaction-only", "compact", &compactCalls)
 	var err error
-	f.r, err = NewRegister(f.db, RegisterConfig{
+	f.r, err = NewRegister(f.db, RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(),
 		Model:        RegisterModelConfig{BaseURL: route.URL, Model: "routing-only", APIKey: "fixture", Timeout: time.Second},
 		CompactModel: RegisterModelConfig{BaseURL: compact.URL, Model: "compaction-only", APIKey: "fixture", Timeout: 5 * time.Second},
 		RawWindow:    30 * time.Minute, CompactCharacters: 8000,
@@ -62,7 +62,7 @@ func TestRegisterSeparateModelsAndRawWindow(t *testing.T) {
 
 func TestRegisterRequiresCompactModel(t *testing.T) {
 	f := newRegisterFixture(t)
-	_, err := NewRegister(f.db, RegisterConfig{Model: RegisterModelConfig{BaseURL: "https://route.invalid", Model: "route", APIKey: "fixture"}, CompactCharacters: 8000})
+	_, err := NewRegister(f.db, RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: RegisterModelConfig{BaseURL: "https://route.invalid", Model: "route", APIKey: "fixture"}, CompactCharacters: 8000})
 	if err == nil || !strings.Contains(err.Error(), "ZOE_COMPACT_BASE_URL") {
 		t.Fatalf("missing compaction model accepted: %v", err)
 	}

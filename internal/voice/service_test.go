@@ -208,9 +208,8 @@ func TestVoiceReaperRaceReleasesOnceAndLateHeartbeatConflicts(t *testing.T) {
 
 func newVoiceTestService(t *testing.T, cfg Config) (*storage.Store, *Service) {
 	t.Helper()
-	// Legacy component fixtures do not exercise call-start instruction delivery.
-	if cfg.InstructionText == "" {
-		cfg.InstructionText = "off"
+	if cfg.UIControllerInstruction == "" {
+		cfg.UIControllerInstruction = testPrompts(t).UIController()
 	}
 	ctx := context.Background()
 	store, err := storage.Open(ctx, storage.Config{Path: ":memory:"})
@@ -398,6 +397,9 @@ func handoffHTTPServerWithConfig(t *testing.T, voiceCfg Config) (*httptest.Serve
 
 func handoffHTTPServerWithScopes(t *testing.T, voiceCfg Config, scopes []string) (*httptest.Server, *storage.Store, string) {
 	t.Helper()
+	if voiceCfg.UIControllerInstruction == "" {
+		voiceCfg.UIControllerInstruction = testPrompts(t).UIController()
+	}
 	if voiceCfg.RegisterConfig == nil && voiceCfg.ContextRegister == nil {
 		model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var body struct{ Input string }
@@ -407,7 +409,7 @@ func handoffHTTPServerWithScopes(t *testing.T, voiceCfg Config, scopes []string)
 			_ = json.NewEncoder(w).Encode(map[string]string{"output_text": string(out)})
 		}))
 		t.Cleanup(model.Close)
-		voiceCfg.RegisterConfig = &RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000}
+		voiceCfg.RegisterConfig = &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000}
 		if voiceCfg.Steward == nil {
 			voiceCfg.Steward = &fakeSteward{}
 		}

@@ -18,22 +18,23 @@ import (
 )
 
 type Config struct {
-	RunnerToken        string
-	RunnerID           string
-	RunnerWorkspaceIDs []string
-	RunnerScopes       []string
-	InstanceScopes     []string
-	DefaultProfileID   string
-	RoleProfiles       map[string]string
-	RuntimeRouteID     string
-	ModelRouteID       string
-	Profiles           map[string]RuntimeProfile
-	MaxRequestBytes    int64
-	MaxRuns            int
-	WaitLimit          time.Duration
-	PushSender         PushSender
-	Now                func() time.Time
-	WaitSweepInterval  time.Duration
+	TaskUIDisplayInstruction string
+	RunnerToken              string
+	RunnerID                 string
+	RunnerWorkspaceIDs       []string
+	RunnerScopes             []string
+	InstanceScopes           []string
+	DefaultProfileID         string
+	RoleProfiles             map[string]string
+	RuntimeRouteID           string
+	ModelRouteID             string
+	Profiles                 map[string]RuntimeProfile
+	MaxRequestBytes          int64
+	MaxRuns                  int
+	WaitLimit                time.Duration
+	PushSender               PushSender
+	Now                      func() time.Time
+	WaitSweepInterval        time.Duration
 }
 
 type RuntimeProfile struct {

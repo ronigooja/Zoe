@@ -13,6 +13,7 @@ import (
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
+	"github.com/ronigooja/Zoe/internal/prompts"
 )
 
 type rotationSummarizerFake struct {
@@ -23,6 +24,21 @@ type rotationSummarizerFake struct {
 	model  string
 	input  string
 	block  bool
+}
+
+func TestDisplayInstructionInInitialAndRotationPrompt(t *testing.T) {
+	p, err := prompts.Load("../../deploy/prompts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := rotationClaim()
+	c.Instructions = []string{p.TaskUIDisplay()}
+	engine := &Engine{}
+	for _, text := range []string{buildPrompt(c), engine.buildRotationPrompt(context.Background(), c, nil)} {
+		if strings.Count(text, p.TaskUIDisplay()) != 1 {
+			t.Fatal("display instruction missing or repeated")
+		}
+	}
 }
 
 func (f *rotationSummarizerFake) Summarize(ctx context.Context, model, input string) (string, error) {

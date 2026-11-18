@@ -37,7 +37,7 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 			}))
 			defer model.Close()
 			cfg := RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
-			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(context.Context, steward.Input) (steward.Choice, error) {
+			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(context.Context, steward.Input) (steward.Choice, error) {
 				mu.Lock()
 				defer mu.Unlock()
 				return choice, nil
@@ -131,15 +131,15 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 					t.Fatal("attach created another task")
 				}
 				var entries int
-				if err := store.DB().QueryRow(`SELECT count(*) FROM task_entries WHERE task_id=? AND instr(content,?)>0`, target, TaskUIDisplayInstruction).Scan(&entries); err != nil || entries != 0 {
+				if err := store.DB().QueryRow(`SELECT count(*) FROM task_entries WHERE task_id=? AND instr(content,?)>0`, target, testPrompts(t).TaskUIDisplay()).Scan(&entries); err != nil || entries != 0 {
 					t.Fatalf("append display definition entries=%d err=%v", entries, err)
 				}
 			} else {
-				if strings.Contains(goal, TaskUIDisplayInstruction) {
+				if strings.Contains(goal, testPrompts(t).TaskUIDisplay()) {
 					t.Fatalf("display definition missing or leaked: %q", goal)
 				}
 				var initial string
-				if err := store.DB().QueryRow(`SELECT content FROM task_entries WHERE task_id=? AND kind='user_message'`, r.ResourceID).Scan(&initial); err != nil || strings.Contains(initial, TaskUIDisplayInstruction) {
+				if err := store.DB().QueryRow(`SELECT content FROM task_entries WHERE task_id=? AND kind='user_message'`, r.ResourceID).Scan(&initial); err != nil || strings.Contains(initial, testPrompts(t).TaskUIDisplay()) {
 					t.Fatalf("initial display definition missing or leaked err=%v", err)
 				}
 				if strings.HasPrefix(name, "complete_") && (r.ResourceID == target || strings.Contains(goal, "previous result")) {
@@ -212,7 +212,7 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 			}))
 			defer model.Close()
 			cfg := RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
-			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(_ context.Context, input steward.Input) (steward.Choice, error) {
+			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(_ context.Context, input steward.Input) (steward.Choice, error) {
 				mu.Lock()
 				defer mu.Unlock()
 				if input.DisplayRequested != (len(routes) == 2) {

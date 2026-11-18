@@ -12,32 +12,13 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 )
 
-func TestInstructionConfiguration(t *testing.T) {
-	for _, tc := range []struct{ input, want string }{{"", DefaultInstructionText}, {"off", ""}, {"custom rule", "custom rule"}, {strings.Repeat("a", 6000), strings.Repeat("a", 6000)}} {
-		got, err := ResolveInstructionText(tc.input)
-		if err != nil || got != tc.want {
-			t.Fatalf("configuration resolution differs: error=%v", err)
-		}
-	}
-	for _, input := range []string{strings.Repeat("a", 6001), strings.Repeat("界", 2001), string([]byte{0xff})} {
-		if _, err := ResolveInstructionText(input); err == nil || !strings.Contains(err.Error(), "ZOE_VOICE_INSTRUCTION_TEXT") {
-			t.Fatal("invalid instruction not rejected with named configuration error")
-		}
-		if err := Register(nil, nil, Config{InstructionText: input}); err == nil || !strings.Contains(err.Error(), "ZOE_VOICE_INSTRUCTION_TEXT") {
-			t.Fatal("registration did not validate startup configuration")
-		}
-	}
-}
-
 // Decode the wire body rather than the production request type so this test
 // compiles on the baseline and fails for the missing create-session field.
 func TestInstructionCreateSessionWireAndReconnect(t *testing.T) {
 	for _, tc := range []struct{ name, input, want string }{
-		{"default", "", DefaultInstructionText},
+		{"default", testPrompts(t).VoiceInstruction(), testPrompts(t).VoiceInstruction()},
 		{"custom", "规则: \"请委托\"\n保留换行与$符号", "规则: \"请委托\"\n保留换行与$符号"},
-		{"off", "off", ""},
-		{"oversize-defense", strings.Repeat("界", 2001), ""},
-		{"invalid-defense", string([]byte{0xff}), ""},
+		{"off", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var creates, pushes int
@@ -66,10 +47,7 @@ func TestInstructionCreateSessionWireAndReconnect(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]any{"voice_session_id": fmt.Sprintf("gateway-%d", creates), "voice_session_generation": creates, "answer_sdp": "answer"})
 			}))
 			defer gateway.Close()
-			store, svc := newVoiceTestService(t, Config{InstructionText: "off", GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), UpstreamRoute: "avas"})
-			// Bypass startup only to exercise the defensive invalid-config path.
-			// The helper otherwise replaces an empty instruction with off.
-			svc.recall.InstructionText = tc.input
+			store, svc := newVoiceTestService(t, Config{InstructionText: tc.input, GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), UpstreamRoute: "avas"})
 			p := contracts.Principal{WorkspaceID: "default", SubjectID: "user", DeviceID: "device"}
 			for generation := 1; generation <= 2; generation++ {
 				req := createRequest{RequestID: fmt.Sprintf("media-%d", generation), OfferSDP: "offer"}

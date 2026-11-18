@@ -33,7 +33,7 @@ func TestCompactRetryPersistenceAndAuth(t *testing.T) {
 	}))
 	defer server.Close()
 	model := RegisterModelConfig{BaseURL: server.URL, Model: "fixture", APIKey: "fixture"}
-	register, err := NewRegister(f.db, RegisterConfig{Model: model, CompactModel: model, CompactCharacters: 1000})
+	register, err := NewRegister(f.db, RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: model, CompactModel: model, CompactCharacters: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}

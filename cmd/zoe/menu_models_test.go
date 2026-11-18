@@ -46,7 +46,6 @@ Voice:
   16) Configure voice gateway
   17) Test voice gateway
   18) Show voice gateway status
-  19) Configure voice instruction
 Access:
   20) Create instance key
   21) Rotate instance key

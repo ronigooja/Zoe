@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ronigooja/Zoe/internal/prompts"
 )
 
 const create = `{"version":"v0.9.1","createSurface":{"surfaceId":"screen","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}`
@@ -18,6 +20,12 @@ func fixture(messages string) string {
 }
 
 func TestRenderingEnvironmentDefinitions(t *testing.T) {
+	prompt := testUIPrompt(t)
+	index := strings.Index(prompt, "The user sees the surface in a native macOS container.")
+	if index < 0 {
+		t.Fatal("missing rendering environment")
+	}
+	rendering := prompt[index:]
 	for _, fact := range []string{
 		"anchored below the menu-bar icon", "closes when the user clicks elsewhere",
 		"opaque system background that stays open until closed",
@@ -29,24 +37,24 @@ func TestRenderingEnvironmentDefinitions(t *testing.T) {
 		"adapt to light and dark appearance", "the model cannot set colors",
 		"Content taller than the container scrolls vertically",
 	} {
-		if !strings.Contains(RenderingEnvironment, fact) {
+		if !strings.Contains(rendering, fact) {
 			t.Errorf("missing rendering fact %q", fact)
 		}
 	}
-	if !strings.HasSuffix(SubsetDefinitions, "\n\n"+RenderingEnvironment) {
+	if !strings.HasSuffix(prompt, "\n\n"+rendering) {
 		t.Fatal("controller subset definitions must include rendering environment")
 	}
-	if !strings.Contains(Prompt, "The user reads the surface on the Mac screen beside other applications and can type into it when a question is pending.") {
+	if !strings.Contains(prompt, "The user reads the surface on the Mac screen beside other applications and can type into it when a question is pending.") {
 		t.Fatal("missing surface purpose")
 	}
-	if strings.Contains(RenderingEnvironment, "shown back to the model") {
+	if strings.Contains(rendering, "shown back to the model") {
 		t.Fatal("removed output-feedback sentence restored")
 	}
 }
 
 func TestOptionalPropertyDefinitionsAccepted(t *testing.T) {
 	// Parse the actual prompt notation, not a second hand-maintained enum list.
-	listed := regexp.MustCompile(`([A-Za-z]+)\.([A-Za-z]+)=([A-Za-z0-9|]+)`).FindAllStringSubmatch(OptionalProperties, -1)
+	listed := regexp.MustCompile(`([A-Za-z]+)\.([A-Za-z]+)=([A-Za-z0-9|]+)`).FindAllStringSubmatch(testUIPrompt(t), -1)
 	if len(listed) == 0 {
 		t.Fatal("prompt documents no enum properties")
 	}
@@ -393,4 +401,13 @@ func TestServerSuppliesCatalogID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testUIPrompt(t *testing.T) string {
+	t.Helper()
+	p, err := prompts.Load("../../deploy/prompts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p.UIController()
 }

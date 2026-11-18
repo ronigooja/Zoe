@@ -34,7 +34,7 @@ type registerFixture struct {
 func newRegisterFixture(t *testing.T) *registerFixture {
 	t.Helper()
 	fixtureModel := RegisterModelConfig{BaseURL: "https://unused.invalid", Model: "fixture", APIKey: "fixture"}
-	_, store, _ := handoffHTTPServerWithConfig(t, Config{IngestEnabled: true, RegisterConfig: &RegisterConfig{Model: fixtureModel, CompactModel: fixtureModel, CompactCharacters: 1000}})
+	_, store, _ := handoffHTTPServerWithConfig(t, Config{IngestEnabled: true, RegisterConfig: &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: fixtureModel, CompactModel: fixtureModel, CompactCharacters: 1000}})
 	f := &registerFixture{t: t, db: store.DB(), store: store, now: time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC), owner: RegisterOwner{"default", "owner"}, output: "compact record"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct{ Instructions, Input string }
@@ -57,7 +57,7 @@ func newRegisterFixture(t *testing.T) *registerFixture {
 	}))
 	t.Cleanup(server.Close)
 	var err error
-	f.r, err = NewRegister(f.db, RegisterConfig{Model: RegisterModelConfig{BaseURL: server.URL, Model: "route-fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: server.URL, Model: "compact-fixture", APIKey: "fixture"}, CompactCharacters: 1000, MemoryBoundary: func(_ context.Context, o RegisterOwner) (time.Time, error) {
+	f.r, err = NewRegister(f.db, RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: RegisterModelConfig{BaseURL: server.URL, Model: "route-fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: server.URL, Model: "compact-fixture", APIKey: "fixture"}, CompactCharacters: 1000, MemoryBoundary: func(_ context.Context, o RegisterOwner) (time.Time, error) {
 		if o == f.owner {
 			return f.boundary, nil
 		}
@@ -113,7 +113,7 @@ func TestRegisterContiguousLayersAndMemoryBoundary(t *testing.T) {
 	if !s.CompactThrough.Equal(edge) || !s.RawFrom.Equal(s.CompactThrough) || !s.CompactFrom.IsZero() || strings.Contains(s.Raw, "old") || !strings.Contains(s.Raw, "assistant: edge") {
 		t.Fatalf("noncontiguous layers: %+v", s)
 	}
-	if !strings.Contains(f.inputs[0], "user: old") || strings.Contains(f.inputs[0], "assistant: edge") || f.instructions[0] != RegisterCompactInstruction {
+	if !strings.Contains(f.inputs[0], "user: old") || strings.Contains(f.inputs[0], "assistant: edge") || f.instructions[0] != testPrompts(t).Compact() {
 		t.Fatal("incorrect compaction instruction/input")
 	}
 	m := f.now.Add(-2 * time.Hour)
@@ -158,7 +158,7 @@ func TestRegisterCrossCallStableOrderingAndOwnerIsolation(t *testing.T) {
 	if _, err := f.r.Route(context.Background(), f.owner, "that", f.now); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(f.inputs[1], "SECRET_") || strings.Contains(f.inputs[1], "Memory keys") || f.instructions[1] != RegisterAttributionInstruction {
+	if strings.Contains(f.inputs[1], "SECRET_") || strings.Contains(f.inputs[1], "Memory keys") || f.instructions[1] != testPrompts(t).Register() {
 		t.Fatal("attribution isolation/instruction violated")
 	}
 }
@@ -313,19 +313,19 @@ func TestRegisterAttributionInstructionChat(t *testing.T) {
 		"Never output the literal none",
 		"only routes and request",
 	} {
-		if !strings.Contains(RegisterAttributionInstruction, required) {
+		if !strings.Contains(testPrompts(t).Register(), required) {
 			t.Errorf("missing instruction: %s", required)
 		}
 	}
-	if strings.Contains(RegisterAttributionInstruction, "and conversation addressed to the assistant") {
+	if strings.Contains(testPrompts(t).Register(), "and conversation addressed to the assistant") {
 		t.Error("task still includes conversation")
 	}
 	for _, forbidden := range []string{"memory_key", "memory keys", "Memory keys", "memory content", "For example", "e.g.", "Example:"} {
-		if strings.Contains(RegisterAttributionInstruction, forbidden) {
+		if strings.Contains(testPrompts(t).Register(), forbidden) {
 			t.Errorf("obsolete instruction: %s", forbidden)
 		}
 	}
-	for _, r := range RegisterAttributionInstruction {
+	for _, r := range testPrompts(t).Register() {
 		if unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul) {
 			t.Fatalf("instruction contains CJK character %U", r)
 		}

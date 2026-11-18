@@ -25,11 +25,12 @@ const (
 )
 
 type Client struct {
-	transport   *modelclient.Client
-	timeout     time.Duration
-	http        *http.Client
-	retryJitter func() float64
-	retrySleep  func(context.Context, time.Duration) error
+	instructions string
+	transport    *modelclient.Client
+	timeout      time.Duration
+	http         *http.Client
+	retryJitter  func() float64
+	retrySleep   func(context.Context, time.Duration) error
 }
 
 // FingerprintConfig returns the loaded model configuration for fingerprinting only.
@@ -60,6 +61,8 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 	c.SetHTTPClient(h)
 	return &Client{transport: c, timeout: timeout, http: h}, nil
 }
+
+func (c *Client) SetInstructions(text string) { c.instructions = text }
 
 func (c *Client) SetHTTPClient(h *http.Client) {
 	if h != nil {

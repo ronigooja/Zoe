@@ -991,9 +991,6 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 	}
 	stack := map[string]string{"ZOE_SERVER_IMAGE": image(mfest, "zoe-server"), "ZOE_MEMORY_WORKER_IMAGE": image(mfest, "zoe-memory-worker"), "ZOE_SERVER_DATA_ROOT": filepath.Join(o.DataRoot, "server"), "ZOE_MEMORY_DATA_ROOT": filepath.Join(o.DataRoot, "memory"), "ZOE_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "runner-token"), "ZOE_MEM0_LLM_API_KEY_FILE": filepath.Join(o.Root, "secrets", "mem0-llm-api-key"), "ZOE_RUNTIME_PROFILES": profiles, "ZOE_DEFAULT_PROFILE_ID": "worker", "ZOE_MAX_RUNS": "12", "ZOE_COMPOSE_FILE": filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", "docker-compose.yml")}
 	oldStack, _ := readEnv(filepath.Join(o.Root, "zoe-stack.env"))
-	if value, ok := oldStack["ZOE_VOICE_INSTRUCTION_TEXT"]; ok {
-		stack["ZOE_VOICE_INSTRUCTION_TEXT"] = value
-	}
 	stack["ZOE_MEMORY_API_TOKEN_FILE"] = filepath.Join(o.Root, "secrets", "memory-api-token")
 	for _, key := range []string{"ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_REGISTER_BASE_URL", "ZOE_REGISTER_MODEL", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_REGISTER_THINKING", "ZOE_REGISTER_TIMEOUT_MS", "ZOE_REGISTER_API_KEY_FILE", "ZOE_COMPACT_BASE_URL", "ZOE_COMPACT_MODEL", "ZOE_COMPACT_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_COMPACT_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE", "ZOE_UI_CONTROLLER_BASE_URL", "ZOE_UI_CONTROLLER_MODEL", "ZOE_UI_CONTROLLER_REASONING_EFFORT", "ZOE_UI_CONTROLLER_THINKING", "ZOE_UI_CONTROLLER_TIMEOUT_MS", "ZOE_UI_CONTROLLER_API_KEY_FILE"} {
 		if value := strings.TrimSpace(oldStack[key]); value != "" {
@@ -1148,9 +1145,6 @@ func isReleaseOwnedEnvKey(key string) bool {
 }
 
 func isOperatorOwnedEnvKey(key string) bool {
-	if key == "ZOE_VOICE_INSTRUCTION_TEXT" {
-		return true
-	}
 	switch key {
 	case "ZOE_RUNTIME_PROFILES", "ZOE_DEFAULT_PROFILE_ID", "ZOE_MAX_RUNS", "ZOE_RUNNER_ROUTES", "ZOE_AGENT_CONTEXT_WINDOW_RATIO", "ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "ZOE_AGENT_MAX_ROTATIONS", "ZOE_AGENT_ROTATION_SUMMARY":
 		return true
@@ -1168,9 +1162,6 @@ func isOperatorOwnedEnvKey(key string) bool {
 }
 
 func validOperatorEnvValue(key, value string) bool {
-	if key == "ZOE_VOICE_INSTRUCTION_TEXT" {
-		return true // Startup validates the optional instruction; updates preserve it verbatim.
-	}
 	if value == "" || value == "{}" {
 		return false
 	}

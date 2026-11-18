@@ -46,6 +46,7 @@ func TestChooseStatelessAutoStyleAndIgnoredLegacyEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.SetInstructions(testStewardPrompt(t))
 	for _, sentence := range []string{"first sentence", "second sentence"} {
 		choice, err := c.Choose(context.Background(), Input{Request: sentence})
 		if err != nil || choice.Action != ActionNew {
@@ -82,6 +83,7 @@ func TestStewardExplicitStyle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			c.SetInstructions(testStewardPrompt(t))
 			if _, err := c.Choose(context.Background(), Input{Request: "sentence"}); err == nil || errorKind(err) != "http_status" {
 				t.Fatalf("error=%v", err)
 			}

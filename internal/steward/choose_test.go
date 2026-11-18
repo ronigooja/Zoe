@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/ronigooja/Zoe/internal/logging"
+	"github.com/ronigooja/Zoe/internal/prompts"
 )
 
 func text(s string) *string { return &s }
@@ -149,7 +150,7 @@ func TestChooseFullInputNoTruncationOrAliases(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		if outer.Input != encoded(want) || outer.Instructions != chooseInstructions {
+		if outer.Input != encoded(want) || outer.Instructions != testStewardPrompt(t) {
 			t.Error("wire input differs from complete canonical facts")
 		}
 	})
@@ -211,12 +212,12 @@ func TestPrepareInputRejectsMalformedFacts(t *testing.T) {
 
 func TestChooseInstructionsDefinitionOnly(t *testing.T) {
 	for _, forbidden := range []string{"for example", "e.g.", "such as", "newest listed task", "keyword rules", "restatement", "screen_display"} {
-		if strings.Contains(chooseInstructions, forbidden) {
+		if strings.Contains(testStewardPrompt(t), forbidden) {
 			t.Fatalf("legacy/example instruction %q", forbidden)
 		}
 	}
 	for _, required := range []string{"new:", "append:", "answer:", "continue:", "report:", "cancel:", "redisplay:", "clarify:", "empty task list does not imply new", "Ambiguity requires clarify", "Replies follow the request's language"} {
-		if !strings.Contains(chooseInstructions, required) {
+		if !strings.Contains(testStewardPrompt(t), required) {
 			t.Fatalf("missing definition %q", required)
 		}
 	}
@@ -261,4 +262,13 @@ func TestChooseFailuresAndPrivateDiagnostics(t *testing.T) {
 	if _, err := c.Choose(ctx, Input{Request: "request"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation lost: %v", err)
 	}
+}
+
+func testStewardPrompt(t *testing.T) string {
+	t.Helper()
+	p, err := prompts.Load("../../deploy/prompts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p.Steward()
 }

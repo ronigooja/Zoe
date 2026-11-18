@@ -63,7 +63,6 @@ services:
       ZOE_COMPACT_MAX_CHARACTERS: ${ZOE_COMPACT_MAX_CHARACTERS:-8000}
       ZOE_COMPACT_INTERVAL_MINUTES: ${ZOE_COMPACT_INTERVAL_MINUTES:-60}
       ZOE_STEWARD_BASE_URL: ${ZOE_STEWARD_BASE_URL:-}
-      ZOE_VOICE_INSTRUCTION_TEXT: ${ZOE_VOICE_INSTRUCTION_TEXT:-}
       ZOE_STEWARD_API_STYLE: ${ZOE_STEWARD_API_STYLE:-}
       ZOE_STEWARD_MODEL: ${ZOE_STEWARD_MODEL:-}
       ZOE_STEWARD_REASONING_EFFORT: ${ZOE_STEWARD_REASONING_EFFORT:-}
@@ -81,6 +80,10 @@ services:
     entrypoint: ["/usr/local/bin/zoe-secret-entrypoint"]
     command: ["/usr/local/bin/zoe-server"]
     volumes:
+      - type: bind
+        source: /etc/zoe/prompts
+        target: /etc/zoe/prompts
+        read_only: true
       - type: bind
         source: ${ZOE_SERVER_DATA_ROOT:?set a private server authority root}
         target: /var/lib/zoe/server

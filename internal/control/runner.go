@@ -217,6 +217,10 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claim := contracts.JobClaim{RunID: runID, TaskID: chosen.id, AttemptID: attemptID, WorkspaceID: chosen.workspace, TaskVersion: newVersion, Goal: chosen.goal, ProfileID: profile.ID, Harness: chosen.harness, RuntimeRouteID: profile.RuntimeRouteID, ModelRouteID: profile.ModelRouteID, IsolationPolicy: profile.IsolationPolicy, Role: profile.Role, Agent: profile.Agent, PermissionTier: profile.PermissionTier, PermissionRules: rules, ImpactLevel: impact, Authorization: authorization, Fence: fence, LineageRootTaskID: chosen.root, LineageParentTaskID: chosen.parent, LineageDepth: chosen.depth, PregrantCapabilityIDs: append([]string{}, pregrant...), Budget: budget}
+	if err = addTaskDisplayInstruction(r.Context(), tx, &claim, s.cfg.TaskUIDisplayInstruction); err != nil {
+		writeError(w, err)
+		return
+	}
 	initialEntries, err := orderedRunEntries(r.Context(), tx, runID, false)
 	if err != nil {
 		writeError(w, err)
@@ -390,13 +394,15 @@ func intersectStrings(granted, requested []string) []string {
 }
 
 func loadClaim(ctx context.Context, tx *sql.Tx, runID string, cfg Config) (contracts.JobClaim, error) {
-	_ = cfg
 	var c contracts.JobClaim
 	var fence uint64
 	var authJSON []byte
 	var budgetJSON []byte
 	err := tx.QueryRowContext(ctx, `SELECT r.id,r.task_id,r.attempt_id,r.workspace_id,r.task_version,r.goal,r.profile_id,r.harness,r.runtime_route_id,r.model_route_id,r.role,r.isolation_policy,r.runtime_session_id,r.fence,r.authorization_json,coalesce(r.lineage_root_task_id,''),coalesce(r.lineage_parent_task_id,''),r.lineage_depth,r.budget_snapshot_json FROM runs r WHERE r.id=?`, runID).Scan(&c.RunID, &c.TaskID, &c.AttemptID, &c.WorkspaceID, &c.TaskVersion, &c.Goal, &c.ProfileID, &c.Harness, &c.RuntimeRouteID, &c.ModelRouteID, &c.Role, &c.IsolationPolicy, &c.RuntimeSessionID, &fence, &authJSON, &c.LineageRootTaskID, &c.LineageParentTaskID, &c.LineageDepth, &budgetJSON)
 	if err != nil {
+		return c, err
+	}
+	if err := addTaskDisplayInstruction(ctx, tx, &c, cfg.TaskUIDisplayInstruction); err != nil {
 		return c, err
 	}
 	if c.Harness == "" || c.Harness != "opencode" {
@@ -443,6 +449,20 @@ func loadClaim(ctx context.Context, tx *sql.Tx, runID string, cfg Config) (contr
 		return c, err
 	}
 	return c, nil
+}
+
+func addTaskDisplayInstruction(ctx context.Context, tx *sql.Tx, claim *contracts.JobClaim, instruction string) error {
+	if instruction == "" {
+		return nil
+	}
+	var display bool
+	if err := tx.QueryRowContext(ctx, `SELECT ui_display FROM tasks WHERE id=?`, claim.TaskID).Scan(&display); err != nil {
+		return err
+	}
+	if display {
+		claim.Instructions = append(claim.Instructions, instruction)
+	}
+	return nil
 }
 
 func (s *Server) handleCurrentClaims(w http.ResponseWriter, r *http.Request) {
@@ -533,6 +553,9 @@ func (s *Server) handleCurrentClaims(w http.ResponseWriter, r *http.Request) {
 		}
 		if txErr == nil {
 			claim.PriorContexts, txErr = loadPriorContexts(r.Context(), tx, claim.TaskID)
+		}
+		if txErr == nil {
+			txErr = addTaskDisplayInstruction(r.Context(), tx, &claim, s.cfg.TaskUIDisplayInstruction)
 		}
 		tx.Rollback()
 		if txErr != nil {

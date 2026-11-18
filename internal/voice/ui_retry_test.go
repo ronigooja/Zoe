@@ -27,7 +27,7 @@ func reopenUIFixture(t *testing.T, r *deliveryRig) {
 	}
 	t.Cleanup(func() { db.Close() })
 	controller := r.svc.uiController
-	r.svc = newService(db, Config{Now: r.now, UIController: controller})
+	r.svc = newService(db, Config{Now: r.now, UIController: controller, UIControllerInstruction: testPrompts(t).UIController()})
 }
 
 func addUIRetryJob(t *testing.T, db *sql.DB, now time.Time, id string) {

@@ -95,7 +95,7 @@ func TestInteractiveClassificationHTTPFailures(t *testing.T) {
 				s.retry = backoff.Store{DB: db.DB()}
 				if consumer == "register" {
 					var err error
-					s.register, err = NewRegister(db.DB(), RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000})
+					s.register, err = NewRegister(db.DB(), RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: cfg, CompactModel: cfg, CompactCharacters: 1000})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -107,6 +107,7 @@ func TestInteractiveClassificationHTTPFailures(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					client.SetInstructions(testPrompts(t).Steward())
 					s.steward = client
 				}
 				for i := 0; i < 2; i++ {
@@ -177,7 +178,7 @@ func TestInteractiveRegisterClassificationDeadline(t *testing.T) {
 	s := newService(db.DB(), Config{ClassificationTimeout: 1500 * time.Millisecond})
 	defer s.Stop()
 	var err error
-	s.register, err = NewRegister(db.DB(), RegisterConfig{Model: cfg, CompactModel: cfg, CompactCharacters: 1000})
+	s.register, err = NewRegister(db.DB(), RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: cfg, CompactModel: cfg, CompactCharacters: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}

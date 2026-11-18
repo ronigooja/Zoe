@@ -20,6 +20,7 @@ import (
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/modelclient"
+	"github.com/ronigooja/Zoe/internal/prompts"
 	"github.com/ronigooja/Zoe/internal/steward"
 	"github.com/ronigooja/Zoe/internal/storage"
 	"github.com/ronigooja/Zoe/internal/voice"
@@ -35,12 +36,21 @@ func main() {
 		return
 	}
 	if err := run(); err != nil {
-		logging.Errorf("zoe-server stopped: %T", err)
+		var promptErr *prompts.Error
+		if errors.As(err, &promptErr) {
+			logging.Errorf("zoe-server stopped: %s", promptErr.Error())
+		} else {
+			logging.Errorf("zoe-server stopped: %T", err)
+		}
 		os.Exit(1)
 	}
 }
 
 func run() error {
+	promptSet, err := prompts.Load(prompts.Dir())
+	if err != nil {
+		return err
+	}
 	addr := env("ZOE_LISTEN_ADDR", "127.0.0.1:8787")
 	dbPath := strings.TrimSpace(os.Getenv("ZOE_DATABASE_PATH"))
 	if dbPath == "" {
@@ -49,6 +59,10 @@ func run() error {
 	registerConfig, err := registerConfigForStartup(os.Getenv, os.ReadFile, logging.Infof)
 	if err != nil {
 		return err
+	}
+	if registerConfig != nil {
+		registerConfig.RegisterInstruction = promptSet.Register()
+		registerConfig.CompactInstruction = promptSet.Compact()
 	}
 	profiles, err := loadProfiles(os.Getenv("ZOE_RUNTIME_PROFILES"))
 	if err != nil {
@@ -89,16 +103,17 @@ func run() error {
 		return errors.New("ZOE_WAIT_LIMIT_MINUTES must be an integer from 1 through 1440")
 	}
 	cfg := control.Config{
-		RunnerToken:        runnerToken,
-		RunnerID:           env("ZOE_RUNNER_ID", "configured-runner"),
-		RunnerWorkspaceIDs: splitEnv("ZOE_RUNNER_WORKSPACES", "default"),
-		RunnerScopes:       splitEnv("ZOE_RUNNER_SCOPES", "runner:claim,runner:observe,runner:control:read"),
-		InstanceScopes:     optionalSplitEnv("ZOE_INSTANCE_SCOPES"),
-		DefaultProfileID:   strings.TrimSpace(os.Getenv("ZOE_DEFAULT_PROFILE_ID")),
-		Profiles:           profiles,
-		PushSender:         pushSender,
-		MaxRuns:            maxRuns,
-		WaitLimit:          waitLimit,
+		TaskUIDisplayInstruction: promptSet.TaskUIDisplay(),
+		RunnerToken:              runnerToken,
+		RunnerID:                 env("ZOE_RUNNER_ID", "configured-runner"),
+		RunnerWorkspaceIDs:       splitEnv("ZOE_RUNNER_WORKSPACES", "default"),
+		RunnerScopes:             splitEnv("ZOE_RUNNER_SCOPES", "runner:claim,runner:observe,runner:control:read"),
+		InstanceScopes:           optionalSplitEnv("ZOE_INSTANCE_SCOPES"),
+		DefaultProfileID:         strings.TrimSpace(os.Getenv("ZOE_DEFAULT_PROFILE_ID")),
+		Profiles:                 profiles,
+		PushSender:               pushSender,
+		MaxRuns:                  maxRuns,
+		WaitLimit:                waitLimit,
 	}
 	stewardClient, err := steward.FromEnv(os.Getenv, os.ReadFile)
 	if err != nil {
@@ -107,6 +122,7 @@ func run() error {
 	}
 	var taskSteward voice.TaskSteward
 	if stewardClient != nil {
+		stewardClient.SetInstructions(promptSet.Steward())
 		taskSteward = stewardClient
 	}
 	uiController, err := uiControllerFromEnv(os.Getenv, os.ReadFile)
@@ -119,7 +135,7 @@ func run() error {
 	}
 	ready := &voice.ReadyHandle{}
 	models := retryModelsFromLoaded(registerConfig, stewardClient, uiController)
-	server, err := composeControlServer(store, cfg, voice.Config{Ready: ready, RetryModels: models, DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: os.Getenv("ZOE_VOICE_INSTRUCTION_TEXT"), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	server, err := composeControlServer(store, cfg, voice.Config{Ready: ready, RetryModels: models, DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: promptSet.VoiceInstruction(), UIControllerInstruction: promptSet.UIController(), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	})

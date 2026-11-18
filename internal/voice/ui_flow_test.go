@@ -53,7 +53,14 @@ func uiFlowOutput(messages string, await bool) string {
 }
 func uiFlowModel(t *testing.T, output *string, mu *sync.Mutex) *modelclient.Client {
 	t.Helper()
+	wantPrompt := testPrompts(t).UIController()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Instructions string `json:"instructions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Instructions != wantPrompt {
+			t.Error("UI controller did not receive the loaded prompt")
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": *output})

@@ -842,6 +842,9 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 	var b strings.Builder
 	b.WriteString("Continue the assigned goal in a fresh session.\n\nGoal:\n")
 	b.WriteString(c.Goal + "\n\nUser instructions in order:\n")
+	for _, instruction := range c.Instructions {
+		b.WriteString("- " + instruction + "\n")
+	}
 	for _, instruction := range ctxData.Instructions {
 		b.WriteString("- " + instruction + "\n")
 	}

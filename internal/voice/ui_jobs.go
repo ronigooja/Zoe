@@ -306,7 +306,7 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 	}
 	callCtx, cancel := context.WithTimeout(logging.WithUserHash(ctx, logging.UserHash(j.o)), 25*time.Second)
 	defer cancel()
-	prompt := uictl.Prompt + "\n" + uictl.SubsetDefinitions
+	prompt := s.recall.UIControllerInstruction
 	call := logging.ModelCallFromContext(callCtx, "ui_controller")
 	call.Input(prompt, string(input))
 	output, err := s.uiController.Complete(callCtx, prompt, string(input))

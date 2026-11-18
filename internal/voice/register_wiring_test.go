@@ -65,7 +65,7 @@ func TestHandoffSnapshotRefreshRetainsRegister(t *testing.T) {
 			}))
 			defer model.Close()
 			modelCfg := RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
-			cfg := Config{RegisterConfig: &RegisterConfig{Model: modelCfg, CompactModel: modelCfg, CompactCharacters: 1000}}
+			cfg := Config{RegisterConfig: &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: modelCfg, CompactModel: modelCfg, CompactCharacters: 1000}}
 			var mutate func()
 			cfg.Steward = classificationStewardFunc(func(_ context.Context, input steward.Input) (steward.Choice, error) {
 				choices.Add(1)
@@ -160,7 +160,7 @@ func TestResolvedRequestHandoffFoundation(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": output})
 			}))
 			defer model.Close()
-			cfg := Config{RegisterConfig: &RegisterConfig{Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000}}
+			cfg := Config{RegisterConfig: &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactModel: RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}, CompactCharacters: 1000}}
 			cfg.Steward = classificationStewardFunc(func(_ context.Context, input steward.Input) (steward.Choice, error) {
 				received = input
 				if selected == "" {
@@ -342,7 +342,7 @@ func TestRegisterApprovedRequestSchema(t *testing.T) {
 			t.Fatalf("accepted %s", output)
 		}
 	}
-	if strings.Contains(RegisterAttributionInstruction, "one plain sentence") {
+	if strings.Contains(testPrompts(t).Register(), "one plain sentence") {
 		t.Fatal("truncating old instruction")
 	}
 }

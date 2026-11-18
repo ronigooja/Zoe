@@ -28,23 +28,24 @@ import (
 )
 
 type Config struct {
-	Ready                  *ReadyHandle
-	RetryModels            map[string]RetryModelConfig
-	RetryStatusPath        string
-	ResultDelivery         ResultDeliveryConfig
-	DiscoverResultReceipts bool
-	MemoryAPI              *memoryapi.Client
-	InstructionText        string
-	IngestEnabled          bool
-	GatewayURL             string
-	GatewayAPIKey          string
-	HTTPClient             *http.Client
-	MaxOfferBytes          int64
-	AccountMediaLifecycle  AccountMediaLifecycle
-	HeartbeatTimeout       time.Duration
-	Now                    func() time.Time
-	OpeningContextBudget   int
-	ContextCharBudget      int
+	Ready                   *ReadyHandle
+	RetryModels             map[string]RetryModelConfig
+	RetryStatusPath         string
+	ResultDelivery          ResultDeliveryConfig
+	DiscoverResultReceipts  bool
+	MemoryAPI               *memoryapi.Client
+	InstructionText         string
+	UIControllerInstruction string
+	IngestEnabled           bool
+	GatewayURL              string
+	GatewayAPIKey           string
+	HTTPClient              *http.Client
+	MaxOfferBytes           int64
+	AccountMediaLifecycle   AccountMediaLifecycle
+	HeartbeatTimeout        time.Duration
+	Now                     func() time.Time
+	OpeningContextBudget    int
+	ContextCharBudget       int
 	// UpstreamRoute accepts only empty or avas; retained to reject legacy configuration.
 	UpstreamRoute          string
 	ResultDeliveryEnabled  bool
@@ -312,9 +313,6 @@ func (s *Service) buildAVASOpeningContext(ctx context.Context, p contracts.Princ
 func Register(server *control.Server, store *storage.Store, cfg Config) error {
 	if route := strings.ToLower(strings.TrimSpace(cfg.UpstreamRoute)); route != "" && route != "avas" {
 		return errors.New("Zoe voice supports AVAS only; remove legacy ZOE_VOICE_UPSTREAM_ROUTE after confirming the gateway uses AVAS")
-	}
-	if _, err := ResolveInstructionText(cfg.InstructionText); err != nil {
-		return err
 	}
 	if server == nil || store == nil || store.DB() == nil {
 		return errors.New("voice registration requires control server and storage")
@@ -787,9 +785,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	opening := s.buildOpeningContext(ctx, p)
 	// The gateway owns account selection and returns only its opaque sticky
 	// session handle. Zoe never receives or records an account credential/id.
-	// Startup rejects invalid configuration. Keep media creation safe if an
-	// internally constructed service nevertheless contains invalid text.
-	instructions, _ := ResolveInstructionText(s.recall.InstructionText)
+	instructions := s.recall.InstructionText
 	gatewayBody, _ := json.Marshal(gatewaySessionRequest{OfferSDP: req.OfferSDP, Voice: req.Voice, VoiceMode: req.VoiceMode, LanguageCode: req.LanguageCode, OpeningContext: opening, Instructions: instructions})
 	gatewayRequestID := uuid.NewString()
 	if err := s.persistGatewayRequestID(ctx, id, gatewayRequestID); err != nil {

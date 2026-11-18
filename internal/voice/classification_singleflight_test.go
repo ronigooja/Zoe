@@ -38,7 +38,7 @@ func newClassificationRig(t *testing.T, routeHook func()) *classificationRig {
 		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"routes":["task"],"request":"Perform the private requested work."}`})
 	}))
 	t.Cleanup(model.Close)
-	register, err := NewRegister(r.store.DB(), RegisterConfig{
+	register, err := NewRegister(r.store.DB(), RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(),
 		Model:             RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"},
 		CompactModel:      RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"},
 		CompactCharacters: 1000,
