@@ -44,12 +44,12 @@ func (a *uiFlowReceiptObserver) Lookup(ctx context.Context, gateway string, p Re
 }
 
 func uiFlowOutput(messages string, await bool) string {
-	feedback, note := "Shown.", ""
+	feedback := "Shown."
 	if await {
-		feedback, note = "", "Requested input"
+		feedback = ""
 	}
-	b, _ := json.Marshal(map[string]any{"messages": json.RawMessage("[" + messages + "]"), "container": "window", "feedback": feedback, "awaiting_input": await, "voice_input": false, "input_note": note})
-	return string(b)
+	b, _ := json.Marshal(map[string]any{"container": "window", "feedback": feedback, "awaiting_input": await, "voice_input": false})
+	return "<ui-meta>" + string(b) + "</ui-meta><a2ui-json>[" + messages + "]</a2ui-json>"
 }
 func uiFlowModel(t *testing.T, output *string, mu *sync.Mutex) *modelclient.Client {
 	t.Helper()

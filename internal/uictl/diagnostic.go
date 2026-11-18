@@ -21,7 +21,7 @@ func FailureCode(err error) string {
 	if !errors.As(err, &failure) {
 		// Only exact validator-owned classes pass through; decoder text does not.
 		switch err.Error() {
-		case "duplicate_field", "invalid_object", "invalid_array", "invalid_json",
+		case "block_missing", "block_duplicate", "block_order", "block_unclosed", "duplicate_field", "invalid_object", "invalid_array", "invalid_json",
 			"trailing_data", "object_required", "unknown_field", "output_limit_or_utf8",
 			"size_invalid", "bool_required", "container_invalid", "input_semantics",
 			"feedback_semantics", "message_limit", "mixed_surfaces", "message_kind",

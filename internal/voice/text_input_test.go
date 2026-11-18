@@ -183,7 +183,6 @@ func TestVoiceInputCommitUIJob(t *testing.T) {
 	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('job','default','owner','task_entry','voice-job','request',1,?,?,?)`, at, at, at)
 	output := strings.Replace(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false), `"voice_input":false`, `"voice_input":true`, 1)
 	output = strings.Replace(output, `"feedback":"Shown."`, `"feedback":""`, 1)
-	output = strings.Replace(output, `"input_note":""`, `"input_note":"Type"`, 1)
 	o, err := uictl.Parse(output, nil)
 	if err != nil {
 		t.Fatal(err)
