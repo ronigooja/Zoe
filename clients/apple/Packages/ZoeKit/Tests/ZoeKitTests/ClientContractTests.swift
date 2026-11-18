@@ -550,6 +550,36 @@ final class ClientContractTests: XCTestCase {
         ContractURLProtocol.failureHandler = nil
     }
 
+    func testConversationTextRecoveryResendsJournaledCommand() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory); ContractURLProtocol.failureHandler = nil }
+        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
+        let coordinator = CommandCoordinator(api: api, journal: journal)
+        let key = UUID().uuidString.lowercased()
+        let payload: JSONValue = .object(["text": .string("hello")])
+        ContractURLProtocol.failureHandler = { request in request.httpMethod == "POST" ? URLError(.timedOut) : nil }
+        ContractURLProtocol.responseHandler = { _ in (404, [:], Data(#"{"error":{"code":"not_found","message":"missing"}}"#.utf8)) }
+        do {
+            _ = try await coordinator.submit(kind: "voice.text_input", payload: payload, workspaceID: "workspace-1", idempotencyKey: key)
+            XCTFail("Expected an uncertain submission")
+        } catch { }
+        let pending = try await journal.all()
+        XCTAssertEqual(pending.first?.kind, "voice.text_input")
+        XCTAssertEqual(pending.first?.payload, payload)
+        ContractURLProtocol.failureHandler = nil
+        ContractURLProtocol.responseHandler = { request in
+            if request.httpMethod == "GET" { return (404, [:], Data(#"{"error":{"code":"not_found","message":"missing"}}"#.utf8)) }
+            return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: "voice.text_input", workspaceID: "workspace-1", resourceID: ""))
+        }
+        let outcomes = try await coordinator.recoverPending(currentWorkspaceID: "workspace-1", onOutcome: { _ in })
+        XCTAssertEqual(outcomes.count, 1)
+        XCTAssertFalse(try XCTUnwrap(outcomes.first).recovered)
+        let remaining = try await journal.all()
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
     func testSSEParserCombinesDataLinesAndPreservesDecimalCursor() throws {
         let payload = #"{"schema_version":1,"event_id":"ev-7","cursor":"9007199254740993","type":"task.updated","occurred_at":"2026-10-20T12:00:00Z","workspace_id":"workspace","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":5,"payload":{"status":"active"}}"#
         var parser = SSEParser()

@@ -18,6 +18,7 @@ struct ZoeMacApp {
     private let model = ZoeAppModel()
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
+    private var textInputWindow: NSWindow?
     private var subscriptions = Set<AnyCancellable>()
     private lazy var surfaces = SurfaceManager(popoverAnchor: { [weak self] in self?.statusItem?.button })
 
@@ -28,6 +29,9 @@ struct ZoeMacApp {
         let voice = NSMenuItem(title: "Voice", action: #selector(toggleVoice), keyEquivalent: "")
         voice.target = self
         menu.addItem(voice)
+        let textInput = NSMenuItem(title: "Text Input", action: #selector(showTextInput), keyEquivalent: "")
+        textInput.target = self
+        menu.addItem(textInput)
         let settings = NSMenuItem(title: "Settings", action: #selector(showSettings), keyEquivalent: "")
         settings.target = self
         menu.addItem(settings)
@@ -81,6 +85,19 @@ struct ZoeMacApp {
     @objc private func toggleVoice() { model.setContinuousVoiceEnabled(!model.continuousVoiceEnabled) }
 
     @objc private func quitApplication() { NSApp.terminate(nil) }
+
+    @objc private func showTextInput() {
+        if textInputWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 360), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Text Input"
+            window.isReleasedWhenClosed = false
+            window.contentViewController = NSHostingController(rootView: ConversationTextInputView(model: model, onCancel: { [weak window] in window?.close() }))
+            window.center()
+            textInputWindow = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        textInputWindow?.makeKeyAndOrderFront(nil)
+    }
 
     @objc private func showSettings() {
         if settingsWindow == nil {

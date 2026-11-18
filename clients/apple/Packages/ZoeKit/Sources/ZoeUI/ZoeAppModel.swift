@@ -1675,6 +1675,15 @@ public final class ZoeAppModel: ObservableObject {
         recordUITrace(phase: "ui_surface_render_error", summary: "count=\(errors.count) first_type=\(errorType)", level: .warn, upload: true)
     }
 
+    public var canSubmitConversationText: Bool { authentication.isConnected && coordinator != nil && workspaceID != nil }
+
+    public func submitConversationText(_ text: String, idempotencyKey: String) async throws {
+        guard canSubmitConversationText, let coordinator, let workspaceID else {
+            throw ZoeError.persistence("Connect to the server before sending.")
+        }
+        _ = try await coordinator.submit(kind: "voice.text_input", payload: .object(["text": .string(text)]), workspaceID: workspaceID, idempotencyKey: idempotencyKey)
+    }
+
     public func sendUISurfaceAction(binding: UISurfaceBinding, action: ResolvedAction) {
         guard authentication.isConnected else { return }
         do {

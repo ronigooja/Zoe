@@ -116,7 +116,7 @@ public actor CommandCoordinator {
         try await requireValidity(isValid)
         try await journal.append(command)
         try await requireValidity(isValid)
-        return try await deliver(command, checkReceiptFirst: alreadyPending, isValid: isValid)
+        return try await deliver(command, checkReceiptFirst: alreadyPending || (kind == "voice.text_input" && idempotencyKey != nil), isValid: isValid)
     }
 
     public func recoverPending() async throws -> [CommandOutcome] {
@@ -140,7 +140,7 @@ public actor CommandCoordinator {
         let commands = try await journal.all()
         try await requireValidity(isValid)
         var outcomes: [CommandOutcome] = []
-        for command in commands where command.kind == "voice.turn.commit" || command.kind == "voice.turn.handoff" || command.kind == "ui.rendered" || command.kind == "ui.action" {
+        for command in commands where command.kind == "voice.turn.commit" || command.kind == "voice.turn.handoff" || command.kind == "voice.text_input" || command.kind == "ui.rendered" || command.kind == "ui.action" {
             try await requireValidity(isValid)
             guard !enforceWorkspace || (command.workspaceID != nil && currentWorkspaceID != nil && command.workspaceID == currentWorkspaceID) else {
                 await onWorkspaceMismatch(command)
