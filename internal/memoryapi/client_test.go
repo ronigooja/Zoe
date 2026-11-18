@@ -90,6 +90,25 @@ func TestQuarantinedClassification(t *testing.T) {
 	}
 }
 
+func TestUpstreamUnauthorized(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error_kind":"upstream_unauthorized"}`))
+	}))
+	defer server.Close()
+	client, err := New(server.URL, path, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = client.Write(context.Background(), "owner", "op", "request"); !errors.Is(err, ErrUpstreamUnauthorized) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestClientFailures(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {

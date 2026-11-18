@@ -31,8 +31,12 @@ func TestWorkerMenuModelQualification(t *testing.T) {
 			requests := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
-				if r.URL.Path != "/models" || r.Header.Get("Authorization") != "Bearer fixture-key" {
+				if (r.URL.Path != "/models" && r.URL.Path != "/responses") || r.Header.Get("Authorization") != "Bearer fixture-key" {
 					t.Error("wrong model probe endpoint or authorization")
+				}
+				if r.URL.Path == "/responses" {
+					_, _ = io.WriteString(w, `{"output_text":"OK"}`)
+					return
 				}
 				_, _ = io.WriteString(w, `{"data":[{"id":"gpt-6.1-sol"},{"id":"gpt-6.1-terra"}]}`)
 			}))
@@ -55,7 +59,7 @@ func TestWorkerMenuModelQualification(t *testing.T) {
 			if err != nil || saved.Model != tc.want || saved.ReasoningEffort != "high" {
 				t.Fatalf("saved model=%q effort=%q err=%v", saved.Model, saved.ReasoningEffort, err)
 			}
-			if requests != 1 {
+			if requests != 2 {
 				t.Fatalf("model probe requests=%d", requests)
 			}
 			if !strings.Contains(out.String(), "Model [gpt-6.1-sol]: ") || strings.Contains(out.String(), "hidden") || strings.Contains(out.String(), "fixture-key") || errOut.Len() != 0 {

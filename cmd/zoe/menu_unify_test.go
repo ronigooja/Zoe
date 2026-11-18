@@ -19,10 +19,14 @@ import (
 func workerMenuFixture(t *testing.T, status int) (string, string) {
 	t.Helper()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer fixture-key" || r.URL.Path != "/models" {
+		if r.Header.Get("Authorization") != "Bearer fixture-key" || (r.URL.Path != "/models" && r.URL.Path != "/responses") {
 			t.Error("wrong Worker key or endpoint")
 		}
 		w.WriteHeader(status)
+		if r.URL.Path == "/responses" {
+			_, _ = io.WriteString(w, `{"output_text":"OK"}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{"data":[{"id":"worker-model"},{"id":"worker-changed"}]}`)
 	}))
 	t.Cleanup(s.Close)

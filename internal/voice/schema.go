@@ -213,13 +213,24 @@ CREATE INDEX ui_feedback_due ON ui_feedback_deliveries(status,next_attempt_at);
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 201, Name: "conversation_text_input", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 201, Name: "conversation_text_input", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 ALTER TABLE ui_requests ADD COLUMN voice_input INTEGER NOT NULL DEFAULT 0 CHECK(voice_input IN (0,1));
 CREATE TABLE voice_text_inputs (command_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, owner_subject_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')), attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0), next_attempt_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX voice_text_inputs_due ON voice_text_inputs(status,next_attempt_at);
 CREATE TABLE voice_input_notices (kind TEXT NOT NULL CHECK(kind IN ('ui_input_request','ui_input_received')), source_id TEXT NOT NULL, workspace_id TEXT NOT NULL, owner_subject_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')), attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0), next_attempt_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(kind,source_id));
 CREATE INDEX voice_input_notices_due ON voice_input_notices(status,next_attempt_at);`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 202, Name: "model_retry_state", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE model_retry_state (
+			consumer TEXT NOT NULL CHECK(consumer IN ('register','steward','ui_controller','compact','memory_write','memory_ingest')),
+			scope TEXT NOT NULL, failures INTEGER NOT NULL CHECK(failures >= 0),
+			next_attempt_at TEXT NOT NULL, auth_failed INTEGER NOT NULL CHECK(auth_failed IN (0,1)),
+			last_error TEXT NOT NULL CHECK(last_error IN ('','auth','transient','permanent')),
+			updated_at TEXT NOT NULL, PRIMARY KEY(consumer,scope))`)
 		return err
 	}})
 }

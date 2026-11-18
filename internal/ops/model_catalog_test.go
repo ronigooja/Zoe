@@ -31,7 +31,13 @@ func TestProviderModelMetadataOfficialFallbackAndSecretSafe(t *testing.T) {
 	oldTransport := http.DefaultTransport
 	http.DefaultTransport = official.Client().Transport
 	defer func() { http.DefaultTransport = oldTransport }()
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"data":[{"id":"gpt-test"}]}`)) }))
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/responses" {
+			_, _ = w.Write([]byte(`{"output_text":"OK"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-test"}]}`))
+	}))
 	defer gateway.Close()
 	result := Probe(context.Background(), ProviderConfig{BaseURL: gateway.URL, Model: "gpt-test", Secret: "secret"}, gateway.Client())
 	if !result.OK() {
@@ -65,6 +71,10 @@ func TestProviderModelMetadataGatewayWinsAndFilters(t *testing.T) {
 	http.DefaultTransport = official.Client().Transport
 	defer func() { http.DefaultTransport = oldTransport }()
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/responses" {
+			_, _ = w.Write([]byte(`{"output_text":"OK"}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-test","context_length":10},{"id":"gpt-image-x"},{"id":"bad key"},{"id":"default"}]}`))
 	}))
 	defer gateway.Close()

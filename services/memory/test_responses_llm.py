@@ -3,11 +3,23 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
+import httpx
+import openai
 
-from .responses_llm import ResponsesLLM, reset_request_timeout, set_request_timeout
+from .responses_llm import ResponsesLLM, UpstreamUnauthorized, reset_request_timeout, set_request_timeout
 
 
 class ResponsesAdapterTests(unittest.TestCase):
+    def test_authentication_errors_are_sanitized(self):
+        for code, error_type in ((401, openai.AuthenticationError), (403, openai.PermissionDeniedError)):
+            adapter, client = self.adapter()
+            response = httpx.Response(code, request=httpx.Request("POST", "https://example.invalid"))
+            client.responses.create.side_effect = error_type("private upstream body", response=response, body=None)
+            with self.assertRaises(UpstreamUnauthorized) as result:
+                adapter.generate_response([])
+            self.assertNotIn("private", str(result.exception))
+            client.with_options.assert_called_once_with(max_retries=0)
+
     def adapter(self, model="gpt-6-luna", effort="low"):
         adapter = object.__new__(ResponsesLLM)
         object.__setattr__(adapter, "config", SimpleNamespace(

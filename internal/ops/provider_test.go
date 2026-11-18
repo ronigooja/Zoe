@@ -67,6 +67,10 @@ func TestProbeCategoriesAndModel(t *testing.T) {
 				if r.Header.Get("Authorization") != "Bearer secret" {
 					t.Fatal("missing auth")
 				}
+				if r.URL.Path == "/responses" {
+					_, _ = w.Write([]byte(`{"output_text":"OK"}`))
+					return
+				}
 				w.WriteHeader(tt.status)
 				_, _ = w.Write([]byte(tt.body))
 			}))
@@ -85,6 +89,10 @@ func TestProbeCategoriesAndModel(t *testing.T) {
 
 func TestProbeMatchesOpenCodeProviderPrefix(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/responses" {
+			_, _ = w.Write([]byte(`{"output_text":"OK"}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-6.1-sol"},{"id":"org/model"}]}`))
 	}))
 	defer server.Close()
@@ -97,6 +105,34 @@ func TestProbeMatchesOpenCodeProviderPrefix(t *testing.T) {
 	wrong := Probe(context.Background(), ProviderConfig{BaseURL: server.URL, Model: "cliproxyapi/other", Secret: "secret"}, server.Client())
 	if wrong.ModelAvailable || wrong.ErrorCategory != "model_unavailable" {
 		t.Fatalf("wrong model result=%+v", wrong)
+	}
+}
+
+func TestProviderProbeBothEndpoints(t *testing.T) {
+	for _, status := range []int{200, 401, 403, 429, 500} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var paths []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.Method+" "+r.URL.Path)
+				if r.URL.Path == "/models" {
+					_, _ = w.Write([]byte(`{"data":[{"id":"model"}]}`))
+					return
+				}
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"output_text":"OK"}`))
+			}))
+			defer server.Close()
+			result := Probe(context.Background(), ProviderConfig{BaseURL: server.URL, Model: "model", Secret: "fixture"}, server.Client())
+			want := ""
+			if status == 401 || status == 403 {
+				want = "authentication_failed"
+			} else if status != 200 {
+				want = "provider_http_error"
+			}
+			if result.ErrorCategory != want || len(paths) != 2 || paths[0] != "GET /models" || paths[1] != "POST /responses" {
+				t.Fatalf("result=%+v paths=%v", result, paths)
+			}
+		})
 	}
 }
 

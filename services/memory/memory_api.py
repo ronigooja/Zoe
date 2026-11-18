@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .person_memory import MemoryAPIError, PersonMemory, check_deadline
+from .responses_llm import UpstreamUnauthorized
 
 LOG = logging.getLogger("zoe.memory.api")
 MAX_BODY_BYTES = 64 * 1024
@@ -150,6 +151,8 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
                     results.put((200, self._dispatch()))
                 except MemoryAPIError as exc:
                     results.put((exc.status, {"error_kind": exc.kind}))
+                except UpstreamUnauthorized:
+                    results.put((502, {"error_kind": "upstream_unauthorized"}))
                 except TimeoutError:
                     results.put((504, {"error_kind": "deadline_exceeded"}))
                 except Exception:

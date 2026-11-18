@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 from services.memory.memory_api import LOG, MemoryAPIServer, create_memory_api
 from services.memory.person_memory import INGEST_INSTRUCTIONS, PersonMemory, WRITE_INSTRUCTIONS, person_user_id
 from services.memory.worker import configure_logging
-from services.memory.responses_llm import ResponsesLLM
+from services.memory.responses_llm import ResponsesLLM, UpstreamUnauthorized
 
 
 class _ResponsesClient:
@@ -158,6 +158,12 @@ class MemoryAPITests(unittest.TestCase):
             self.assertEqual(self.request("/healthz", token=token, method="GET"),
                              (401, {"error_kind": "unauthorized"}))
         self.assertEqual(self.request("/healthz", method="GET")[0], 200)
+
+    def test_upstream_authentication_failure_is_distinct(self):
+        self.backend.ingest = Mock(side_effect=UpstreamUnauthorized())
+        body = {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": "text"}
+        self.assertEqual(self.request("/v1/memory/ingest", body),
+                         (502, {"error_kind": "upstream_unauthorized"}))
 
     def test_body_limit_and_request_validation(self):
         for route, old in (

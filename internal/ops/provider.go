@@ -426,8 +426,13 @@ func Probe(ctx context.Context, c ProviderConfig, client *http.Client) ProbeResu
 	}
 	if !result.ModelAvailable {
 		result.ErrorCategory = "model_unavailable"
+		return result
 	}
-	return result
+	// Release the metadata connection before making the generation request.
+	_ = res.Body.Close()
+	generation := probeMemory(ctx, MemoryConfig{BaseURL: normalized.BaseURL, Model: normalized.Model, ReasoningEffort: normalized.ReasoningEffort, SecretPath: normalized.SecretPath, Secret: normalized.Secret}, client)
+	generation.Models = result.Models
+	return generation
 }
 
 func modelIDMatches(id, configured string) bool {

@@ -51,8 +51,12 @@ func TestProviderConfigureTestStatusUsePersistedDeployment(t *testing.T) {
 	requests := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer "+token {
+		if (r.URL.Path != "/v1/models" && r.URL.Path != "/v1/responses") || r.Header.Get("Authorization") != "Bearer "+token {
 			t.Error("provider request did not use supplied configuration")
+		}
+		if r.URL.Path == "/v1/responses" {
+			_, _ = io.WriteString(w, `{"output_text":"OK"}`)
+			return
 		}
 		io.WriteString(w, `{"data":[{"id":"chosen-model"}]}`)
 	}))
@@ -73,7 +77,7 @@ func TestProviderConfigureTestStatusUsePersistedDeployment(t *testing.T) {
 	if err := statusOperation([]string{"--root", root}, nil, &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
-	if requests != 2 {
+	if requests != 4 {
 		t.Fatalf("provider requests = %d", requests)
 	}
 	if !strings.Contains(out.String(), "chosen-model") || !strings.Contains(out.String(), "last-check=") {
