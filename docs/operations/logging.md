@@ -13,7 +13,7 @@ Set `ZOE_LOG_LEVEL=debug|info|warn|error`; the default is **debug**. Values are 
 | INFO | Operational metadata | Time, status, route, elapsed time, counts, safe IDs and user hashes |
 | DEBUG | Content-bearing diagnostics | Full model instructions, input, raw output and parsed results, plus metadata |
 
-**Content text is allowed only at DEBUG.** This includes user speech, compact records, restatements, model input/output and text returned upstream. Tokens, API keys, credentials, Authorization headers, key-bearing endpoints and HTTP request/client dumps are forbidden at every level. Call sites select permitted fields; there is no redaction engine or keyword policy. Never pass arbitrary errors to logging functions: error messages can contain private input.
+**Content text is allowed only at DEBUG.** This includes user speech, compact records, full Register requests, model input/output and text returned upstream. Tokens, API keys, credentials, Authorization headers, key-bearing endpoints and HTTP request/client dumps are forbidden at every level. Call sites select permitted fields; there is no redaction engine or keyword policy. Never pass arbitrary errors to logging functions: error messages can contain private input.
 
 ## Events
 
@@ -40,4 +40,9 @@ Zoe server, memory worker and Qdrant containers log to the host's systemd journa
 
 ## Verification boundary
 
-Unit tests establish filtering, safe error classification and complete call-site text capture. They do not establish deployed settings, access controls, rotation or end-to-end acceptance; see [evidence categories](../acceptance/evidence.md) and [delivery status](../master-plan.md).
+Filtering, safe error classification and call-site capture require component
+checks on the reviewed revision. Those checks do not establish deployed settings,
+access controls, rotation or end-to-end acceptance; see
+[evidence and acceptance](../development.md#evidence-and-acceptance). Inspect the
+host's actual journal limits and permissions rather than treating the recorded
+200 MB setting above as a provisioned default or measured retention guarantee.

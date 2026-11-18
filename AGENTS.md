@@ -1,12 +1,34 @@
 # Repository guidance
 
-## Documentation and product changes
+## Read selectively
 
-- When changing product behavior or interfaces, follow [product requirements](docs/product.md) and [architecture](docs/architecture.md); update their applicable requirements or decisions when the approved baseline changes.
-- When changing native UI, follow [product chapter 3](docs/product.md#3-client-requirements), [ADR 0008](docs/architecture/decisions/0008-ambient-screen-client.md), and the [A2UI screen contract](docs/design/screen-document.md).
-- When reporting implementation or verification, follow [the evidence register](docs/acceptance/evidence.md) for evidence categories and the acceptance boundary, with delivery status in [the master plan](docs/master-plan.md).
+- Start with [the design overview](docs/design/data-flows.md), then read only
+  the contracts relevant to the task.
+- Use [development guidance](docs/development.md) for verification and
+  documentation maintenance, and [operations](docs/operations.md) for deployment
+  and data-management procedures.
 
-## Coordination and operational safety
+## Preserve the approved design
 
-- When working with credentials or private account data, use secret names or deployment references; never put their values in source, documentation, logs, or fixtures.
-- When modifying the repository, do not change external services or the existing CLIProxyAPI deployment unless explicitly authorized.
+- Implement the approved contracts; do not change them merely to match existing
+  code or make a check pass.
+- Report conflicts, missing requirements, and source-to-contract differences.
+  Obtain approval before changing intended product behavior.
+- Keep each rule in one authoritative location. Update its definition and
+  affected links when behavior changes; remove superseded normative text.
+- Write repository documentation in English for selective reading. Do not add
+  task journals, duplicated specifications, or historical verification logs.
+
+## Verify honestly
+
+- Select checks by affected behavior and risk. Report the source revision,
+  environment, checks, results, and remaining coverage gaps.
+- Distinguish source review, fixtures, builds, installation, health, transport
+  acknowledgements, rendering, and end-to-end user-visible success.
+
+## Protect operational boundaries
+
+- Refer to secrets by name or deployment reference; never include their values
+  or private account data in source, documentation, logs, or fixtures.
+- Repository changes do not authorize changes to external services or the
+  existing CLIProxyAPI deployment. Obtain explicit authorization before doing so.

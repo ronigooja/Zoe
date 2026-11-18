@@ -40,4 +40,4 @@ Always discover the current workspace, scheme, and eligible destination. Workspa
 
 ## Completion
 
-Separate MCP connectivity, project authorization, successful build, confirmed installation, launch, continued process existence, visible UI, and functional acceptance. Report only the stages actually checked. Keep repository decisions and acceptance evidence in `docs/master-plan.md`; this skill is an operator workflow, not a Zoe runtime or a macOS control server.
+Separate MCP connectivity, project authorization, successful build, confirmed installation, launch, continued process existence, visible UI, and functional acceptance. Report only the stages actually checked. Follow the [design overview](../../../docs/design/data-flows.md) for repository contracts and [development guidance](../../../docs/development.md#evidence-and-acceptance) for verification reporting; retain run-specific evidence in the PR or linked CI run, not a repository journal. This skill is an operator workflow, not a Zoe runtime or a macOS control server.

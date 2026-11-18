@@ -36,7 +36,7 @@ def select(paths, full=False):
         if path.startswith(".github/") or path in ("tools/ci_scope.py", "tools/test_ci_scope.py"):
             return dict.fromkeys(KEYS, True)
         if path.endswith(".md") or path.startswith("docs/") or path in (
-            "tools/check_docs.py", "tools/test_check_docs.py", "tools/docs_requirements.json",
+            "tools/check_docs.py", "tools/test_check_docs.py",
         ):
             scope["docs"] = True
         elif path.startswith("clients/apple/Apps/macOS/"):

@@ -15,6 +15,12 @@ class ScopeTests(unittest.TestCase):
     def test_docs_do_not_build(self):
         self.assertEqual(self.selected(["README.md", "docs/design/reference.png"]), {"docs"})
 
+    def test_documentation_checker_paths(self):
+        for path in ("tools/check_docs.py", "tools/test_check_docs.py", "docs/design/flows/new.md"):
+            with self.subTest(path=path):
+                self.assertEqual(self.selected([path]), {"docs"})
+        self.assertEqual(self.selected(["tools/docs_requirements.json"]), set(KEYS))
+
     def test_platform_specific_changes(self):
         self.assertEqual(self.selected(["clients/apple/Apps/macOS/ZoeMacApp.swift"]), {"macos"})
         self.assertEqual(self.selected(["clients/apple/Apps/iOS/ZoeMobileApp.swift"]), {"ios"})

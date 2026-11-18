@@ -80,6 +80,6 @@ root-readable secret file.
 The container listener is plain HTTP; expose it to Zoe only through an
 approved private HTTPS reverse proxy or equivalent trusted transport. The
 voice topology, termination boundary, and unsupported account-media mode are
-defined in [ADR 0005](../../docs/architecture/decisions/0005-voice-task-and-lease-boundaries.md).
+defined in [media](../../docs/design/flows/media.md).
 Deployment alone does not prove voice calls or task dispatch work; see the
-[acceptance evidence register](../../docs/acceptance/evidence.md).
+[evidence and acceptance guidance](../../docs/development.md#evidence-and-acceptance).

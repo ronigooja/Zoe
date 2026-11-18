@@ -9,6 +9,12 @@ redacted diagnostic and best-effort submits it to `POST /v1/diagnostics/client`.
 The upload must not block interaction, change command authority, or change
 receipt/retry semantics.
 
+Use [screen](../design/flows/screen.md) for client authority and presentation,
+[results](../design/flows/results.md) for receipt/delivery boundaries, and
+[media](../design/flows/media.md) for voice recovery. Endpoint and database
+inspection below describe source-level investigation entry points, not proof
+that a deployed release conforms to those contracts.
+
 This is an operator investigation path, not a client-facing error-detail
 channel. Follow the repository's [credential handling rule](../../AGENTS.md),
 and do not ask a user to copy tokens, headers, response bodies, audio,
@@ -277,5 +283,5 @@ Record separately:
 
 Do not claim that a diagnostic row proves successful voice, model execution,
 task completion, account isolation, secure media termination, or physical data
-erasure; consult the [acceptance evidence register](../acceptance/evidence.md)
+erasure; consult [evidence and acceptance](../development.md#evidence-and-acceptance)
 when closing an incident.

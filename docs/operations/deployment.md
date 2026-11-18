@@ -1,10 +1,14 @@
 # Deployment operations
 
-This runbook describes the local Linux installation and the macOS client on
-`zhuwei@macair`. For the distinction between documentation and acceptance, see
-the [evidence register](../acceptance/evidence.md).
+This runbook describes Linux installation and native-client connection. Inspect
+the actual host before applying examples; no recorded installation is a default
+deployment target. Follow [evidence and acceptance](../development.md#evidence-and-acceptance).
 
-When operating voice routing, use the register configuration below and [ADR 0013](../architecture/decisions/0013-context-register.md) for main. Historical triage, alias-roster Steward, held-task controls and fallback descriptions are **deployed on `bb07671`, removed on main**; never apply those historical commands or env keys to a new installation. Replacement deployment and live acceptance remain unverified.
+Use [configuration](../design/flows/configuration.md) for the approved consumer
+boundaries and [Register](../design/flows/register.md) for routing. Historical
+triage, alias-roster, held-task and answer-model configuration is not a supported
+new-installation recipe. Design approval does not establish source or deployed
+conformance; verify the reviewed release and effective settings independently.
 
 For client error investigation, authenticated diagnostic uploads, bounded
 SQLite inspection, and voice pool isolation checks, see the
@@ -14,75 +18,64 @@ SQLite inspection, and voice pool isolation checks, see the
 
 ### Voice delegation instruction
 
-When creating a voice session, `ZOE_VOICE_INSTRUCTION_TEXT` optionally overrides
-the built-in Chinese delegation rule (valid UTF-8, at most 6000 bytes). An unset
-or empty value uses the default, which states identity and tone and the split of
-work: actions and tasks go to the backend, upstream answers directly only what
-needs no information, does not claim it cannot do things, treats backend results
-as authoritative, and does not state a task stopped or finished unless told. It
-does not carry the cancel, progress, and personal-question delegation rule; that
-rule is sent as the first `initial_items` entry (see below). Literal `off` omits `instructions`.
-Use maintenance menu item **21) Configure voice instruction** to view the effective
-default, custom text or disabled state and save a single-line replacement; empty
-input removes the key to restore the default. The atomic stack-env writer escapes
-quotes, newlines and dollar signs for literal Compose parsing. Apply saved changes
-with `zoe update`, which preserves custom values. For every gateway create-session
-request, including reconnects, Zoe sends the resolved rule verbatim in the top-level
-`instructions` field alongside `opening_context`. The gateway writes it unchanged
-into AVAS `session.instructions`. No prefix, post-create context push, or connected
-retry is used. Migration 215 and its historical delivery rows remain intact; this
-path no longer writes separate delivery rows. Successful transport does not prove
-silence or compliance: whether upstream obeys must be verified in live calls.
+Inspect the reviewed release before configuring voice instructions. The approved
+[Register contract](../design/flows/register.md#required-behavior) uses capability
+descriptions, not a compulsory delegation rule or first user-rule item. Do not
+restore older cancel/progress/personal-question prompts as a deployment recipe.
 
-On the AVAS route the same request also carries `opening_context` items, which the
-gateway forwards as upstream `initial_items`: first the fixed delegation rule
-(cancel, progress, and personal questions are delegated), then at most five
-the context register and current tasks. The rule is not configurable by
-`ZOE_VOICE_INSTRUCTION_TEXT`. When inspecting delivery in `voice_sessions.opening_context_delivery`:
+`ZOE_VOICE_INSTRUCTION_TEXT` accepts an optional UTF-8 override up to 6000 bytes;
+unset/empty uses the release default and literal `off` omits `instructions`.
+Select **Configure voice instruction** by name, not remembered menu number.
+Empty input restores the default. The env writer escapes quotes, newlines and
+dollar signs for literal Compose parsing; apply saved values through the reviewed
+update procedure. Inspect the actual top-level `instructions` and creation-time
+context flow without dumping private prompt text into shared logs. Transport
+acceptance does not prove upstream silence, compliance or delegation quality.
+
+Opening-context assembly follows [memory](../design/flows/memory.md#compactrawlive-coverage).
+When inspecting `voice_sessions.opening_context_delivery`:
 `delivered` means the gateway acknowledged `applied`; `unverified` means it did not
 acknowledge or reported `silent: "unverified"`; `unsupported` means nothing was
 sent or the gateway said it is unsupported. Zoe supports only AVAS and never
 pushes opening context after creation. See the upgrade checks below.
-The register-based source and mid-call additions in [ADR 0013](../architecture/decisions/0013-context-register.md)
-are **Accepted, not implemented**; they do not change these deployed instructions.
+For intended context assembly and delivery, follow [memory](../design/flows/memory.md)
+and [results](../design/flows/results.md). The source procedure above does not
+establish conformance or live upstream compliance.
 The gateway must return `opening_context: {"applied": true}` (with `silent`
 omitted, null, or true) for `delivered`; `silent: "unverified"` remains unverified.
 Return top-level `context_chars` to report the gateway's applied character count;
 an omitted count decodes as zero. These fields describe opening context, not the
 separate `instructions` system prompt.
 
-### Register routing configuration
+### Model configuration and menu operation
 
-When deploying the context-register wiring, independently configure routing with
-`ZOE_REGISTER_{BASE_URL,MODEL,API_KEY_FILE,REASONING_EFFORT,THINKING,TIMEOUT_MS}`
-and compaction with `ZOE_COMPACT_{BASE_URL,MODEL,API_KEY_FILE,REASONING_EFFORT,THINKING,TIMEOUT_MS}`.
-Both groups are optional at startup. The register is enabled only when each
-prefix has `BASE_URL`, `MODEL`, and `API_KEY_FILE`. If either group is unset or
-partial, startup succeeds with the register disabled and one
-`register status=disabled reason=not_configured missing=<comma-separated variable names>`
-log line. Every delegated sentence then creates no task and holds the fixed
-processing-error speech; there is no Steward or other fallback. No register
-compaction runs or register opening context is included; no new delegated recall is routed.
-Configure both groups using the `zoe` menu items **Register model** and
-**Compact model**, then redeploy or restart. A complete group's unreadable or
-empty key file still fails startup, naming the variable without exposing its
-content, even if the other group is incomplete. Compose accepts missing host
-variables and uses `/dev/null` for unset independent secret files. Effort and
-thinking default to empty. Routing timeout defaults to 30000 ms (500-60000);
-compaction timeout defaults to 600000 ms (5000-600000). The single register call
-and any subsequent Steward call share the existing 35-second classification budget.
+Run `zoe` without arguments and select Configure/Test by consumer name, not a
+remembered item number. Worker uses `provider configure` / `provider test`;
+Register, Compact, Steward and memory extraction have separate paired menu
+entries. There are no Register, Compact or Steward CLI subcommands. Use
+[configuration](../design/flows/configuration.md) for consumer variables, model
+wire settings and the atomic probe/save/reload contract, and the
+[stack example](../../deploy/linux/zoe-stack.env.example) to inspect source names.
 
-When tuning compaction, `ZOE_COMPACT_MAX_CHARACTERS` defaults to 8000 (500-100000),
-`ZOE_COMPACT_INTERVAL_MINUTES` defaults to 60 (1-1440), and
-`ZOE_REGISTER_RAW_WINDOW_MINUTES` defaults to 60 (5-1440). Invalid values fail
-startup with the variable name. The raw-window width sets the compact right edge;
-raw starts at the retained compact edge even after a failed rebuild.
+In the existing Register/Compact menu, Enter keeps a field; empty hidden key
+input keeps its credential and nonempty input replaces only that credential.
+Default secret files are `/etc/zoe/secrets/register-api-key` and
+`/etc/zoe/secrets/compact-api-key`, mode `0600`, owner `65532:65532`.
+The env writer preserves unrelated lines and file mode. Those Configure actions
+save without restarting; apply with `zoe update` only within the reviewed
+deployment procedure. Their Test sends one real `/responses` request relative
+to the selected base URL, without a fallback route. A missing-variable Test
+message saying the server cannot start is misleading: incomplete groups permit
+startup with Register disabled; an unreadable/empty key in a complete group
+fails startup. A running process therefore does not prove routing is enabled.
 
-For this wiring, register failures and Steward failures create no task and hold
-the fixed processing-error speech. Memory writes are sent directly to the worker once per
-committed turn; recall retains its holding and answer delivery. Task reports use
-Steward text; active attachments append to the same task without stopping it.
-No high-impact confirmation hold or confirm/decline routing is performed.
+These existing save/test mechanics are not evidence of the approved atomic
+transaction. After any authorized change, check effective consumer and Worker
+provider/agent/session model plus effort, not just menu success. Keep the prior
+configuration and secret references available for reviewed rollback. Do not
+silently substitute another consumer, original utterance, or new task when
+routing fails. Removed triage, call-summary and answer-model entries are not
+configuration recovery paths.
 
 ### Deployment layout
 
@@ -91,7 +84,7 @@ No high-impact confirmation hold or confirm/decline routing is performed.
 - `zoe-runner.service` runs the trusted execution runner.
 - `zoe-opencode.service` runs the Zoe-managed OpenCode server as root,
   bound to `127.0.0.1:4096`, with private state under `/var/lib/zoe/opencode`.
-- `zoe-macair-tunnel.service` maintains private SSH forwarding to the Mac.
+- Site-specific tunnel units, if installed, require independent inventory.
 - `/etc/zoe` contains deployment configuration and secret references.
 - `/var/lib/zoe` contains authority databases and persistent service data.
 
@@ -109,15 +102,15 @@ The following precedence applies to stack discovery (highest first).
 
 Discovery self-heals the resolved descriptor without writing during inspection;
 the next successful provider configuration persists the corrected descriptor.
-Systemd unit status and runner/provider restarts always use systemctl, including
-on Compose hosts. Memory configuration uses Compose; Steward and recall save
-their model settings in the stack environment without a mode gate.
+Systemd unit status and runner/provider restarts use systemctl, including
+on Compose hosts. Memory configuration uses Compose; inspect the selected
+consumer's implementation before applying a configuration change.
 
 The installer creates the external Docker network `zoe` when it is missing. The
 existing remote CLIProxyAPI deployment remains outside Zoe's lifecycle.
 
 Voice account-pool behavior and the fail-closed media boundary are defined in
-[ADR 0005](../architecture/decisions/0005-voice-task-and-lease-boundaries.md).
+[media](../design/flows/media.md).
 `ZOE_VOICE_ACCOUNT_MEDIA_ENABLED=true` pairs with the gateway's
 `VOICE_RELAY_ENABLED=true`; set it with `zoe voice configure --enable-account-media`.
 If the gateway runs client-direct, keep it `false`.
@@ -126,16 +119,30 @@ If the gateway runs client-direct, keep it `false`.
 server-side voice reaping: active sessions with no recent heartbeat are reclaimed
 through the normal release flow; unverified termination remains quarantined and
 keeps the voice pool blocked.
-When upgrading voice deployments, first end active calls and independently confirm the external gateway uses `VOICE_UPSTREAM_ROUTE=avas`. Zoe supports AVAS only, including when `ZOE_VOICE_UPSTREAM_ROUTE` is absent. The compatibility variable accepts only empty or `avas`; `wm` and unknown values fail startup with an actionable error. The env writer preserves an existing `wm` value so an upgrade cannot silently rewrite the operator's route choice. After confirming gateway compatibility, the operator must remove the old value or set `avas` in the Zoe stack environment. Compose still passes the variable (default `avas`) so stale deployments fail visibly. This change does not modify the external gateway, deploy services, or establish its actual route: the gateway's public config has no route attestation, so successful config retrieval or media negotiation is not proof of compatibility. Do not upgrade a WM gateway deployment until AVAS is independently confirmed. Back up the existing stack environment and database before upgrading; no schema, existing session manifests, transcript rows, lease state, or historical delivery status is deleted or rewritten. Unknown media remains quarantined under the existing release policy; do not clear leases to force an upgrade. Roll back the binary and environment together if necessary.
+When upgrading voice deployments, first end active calls and independently
+confirm the external gateway uses `VOICE_UPSTREAM_ROUTE=avas`. The Zoe env writer
+preserves an existing `wm` value rather than silently rewriting the operator's
+choice. After confirming compatibility, remove the old value or set `avas` in
+the stack environment. Compose passes the variable (default `avas`) so stale
+deployments fail visibly under the [AVAS-only contract](../design/flows/media.md#required-behavior).
+
+Gateway public config has no route attestation: successful config retrieval or
+media negotiation is not compatibility proof. Do not upgrade a WM deployment
+until AVAS is independently confirmed. Back up stack environment and database;
+preserve historical manifests, transcripts, leases and delivery records. Do not
+clear quarantine to force an upgrade. Roll back binary and environment together
+if needed; this procedure does not authorize external gateway changes.
 
 When selecting a voice on macOS, Settings loads the gateway's public voice catalog through authenticated Zoe `/v1/voice/config`. The preferred voice is saved locally per normalized server URL, not per credential, and applies only to new calls (including reconnects). A missing/removed preference falls back to the current gateway default while retaining the saved preference; no hard-coded voice list or mid-call update is used. Existing clients that omit a preference continue to use the gateway default. This is client preference storage, not a server-side cross-device preference.
 
 Check service status without printing environment files or secret values:
 
 ```bash
-systemctl is-active zoe-compose zoe-runner zoe-macair-tunnel
- curl --fail 'http://127.0.0.1:${ZOE_SERVER_PORT:-8787}/healthz'
- curl --fail 'http://127.0.0.1:${ZOE_SERVER_PORT:-8787}/readyz'
+systemctl is-active zoe-compose
+systemctl is-active zoe-runner
+systemctl is-active zoe-opencode
+curl --fail "http://127.0.0.1:${ZOE_SERVER_PORT:-8787}/healthz"
+curl --fail "http://127.0.0.1:${ZOE_SERVER_PORT:-8787}/readyz"
 ```
 
 The previously recorded installation binds port 8787 on both host loopback and the authorized
@@ -234,47 +241,16 @@ After the stack starts, steps 1 and 2 may be done in either order; step 3 comes 
    installation and process readiness; model execution, memory processing, and
 end-to-end task completion require a separate acceptance run.
 
-### Routing deadlines and model wire settings
-
-When routing committed voice turns, `ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS`
-(default 35000 ms, range 100-60000) bounds register plus Steward routing and the
-handoff wait. `ZOE_STEWARD_TIMEOUT_MS` bounds the Steward decision, including
-API-style negotiation (default 30000 ms, range 200-60000). Both models share the
-total budget, not additive guarantees. Steward's operator probe invokes `Choose`.
-Register or Steward failure creates no task and sends fixed processing-error speech.
-
-When configuring Go model clients' thinking and reasoning effort, use the wire
-settings below. Effort accepts `none`, `low`, `medium`, `high`, `max`, or empty;
-`minimal` is rejected by the configured OpenAI-style gateway. Values are sent
-unchanged, not mapped locally.
-
-| Thinking value | `/responses` | `/chat/completions` |
-| --- | --- | --- |
-| `disabled` | Sends `{"reasoning":{"effort":"none"}}` for every model, overriding configured effort. | Sends `{"thinking":{"type":"disabled"}}`; separately sends top-level `reasoning_effort` when configured. |
-| `enabled` | Sends `{"reasoning":{"effort":"<configured effort>"}}` for every model when effort is set; otherwise omits `reasoning` and uses the provider default. | Sends `{"thinking":{"type":"enabled"}}`; separately sends top-level `reasoning_effort` when configured. |
-| Empty | Keeps existing model detection: names starting with `gpt-6`, `gpt-5.6`, `o1`, or `o3` send configured effort, or `low` when empty; other models omit `reasoning`. | Omits `thinking`; sends top-level `reasoning_effort` only when configured. |
-
-Responses requests never send the chat `thinking` field. Explicit thinking settings suppress `temperature` on Responses; otherwise existing model-based temperature behavior remains unchanged. Chat requests retain `temperature: 0`. An explicit effort of `none` is still sent unchanged with `enabled`, so avoid that combination when enabling thinking is intended.
-
-[DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode) defaults to enabled with effort `high`; its Responses `none` disables thinking. DeepSeek maps `minimal` to `low`, `medium` and `xhigh` to `high`, and supports `max`; Zoe accepts `medium` but rejects `minimal` and `xhigh` for gateway compatibility. See its [Responses API guide](https://api-docs.deepseek.com/guides/responses_api). Memory effort validation uses the same accepted values; its existing empty-effort fallback remains `medium`.
-
 ### Call recall
 
-For memory and conversation recall, the server searches the memory worker using
-the register restatement and appends retrieved text to the upstream voice model.
-No separate model endpoint or credential is required for recall. Memory extraction
-continues to use `ZOE_MEM0_LLM_*`; see the [stack example](../../deploy/linux/zoe-stack.env.example).
+Recall needs the scoped memory worker and result-delivery transport, not a
+separate answer-model credential. Inspect [memory](../design/flows/memory.md)
+for full-request search/write behavior and [results](../design/flows/results.md)
+for unchanged text, receipts and chunk recovery. Do not provision a holding
+reply or restore removed call-summary commands. Synthetic connectivity probes
+do not establish live retrieval quality, speech, or end-to-end acceptance.
 
-When the register routes recall, retrieved texts use the task-result `/context`
-append path in sequential UTF-8-safe chunks of at most 8000 bytes. Empty results
-append nothing. No answer model, spoken holding reply or fixed not-found speech
-is used. Worker failures speak `Processing error.` and create no task. The
-call-summary pipeline and its Configure/Test commands are removed; see
-[ADR 0013](../architecture/decisions/0013-context-register.md#3-memory-cadence).
-Synthetic probes do not establish live-provider quality, latency, deployment, or
-end-to-end acceptance.
-
-The complete host installation therefore includes the Zoe-owned OpenCode runtime image,
+The complete host installation therefore includes the Zoe-managed host OpenCode binary,
 Zoe server image, trusted runner, memory worker image, Qdrant service, Docker,
 and the three Zoe systemd services. An external model gateway is not installed
 by this procedure. Its URL, selected model, and API-key file are deployment
@@ -331,11 +307,13 @@ credential file rather than the unit environment:
 The credential is private to that unit and must not be copied into logs, source,
 or persistent deployment metadata.
 
-### Configure the OpenCode runtime
-
 ### Scrapling web access
 
-Workers may use `webfetch` and, when enabled, only tools from the `scrapling` MCP server. `websearch` is disabled in every permission tier because this deployment has no search provider.
+Nonresident tiers permit configured `webfetch` and scoped Scrapling tools, not
+`websearch` or unknown MCP servers. The resident Worker's `full` tier allows all
+tool actions; that permission does not configure a search provider or connect an
+MCP service. Use the deployment's working Scrapling integration for web search
+and verify provider/service availability separately from permission grants.
 
 Set `ZOE_SCRAPLING_MODE` to `off` (default), `remote`, or `local`. If the mode is unset and `ZOE_SCRAPLING_URL` is present, remote is selected; local never uses a URL. Remote URLs must be `http` or `https`, include a host, and contain no credentials. Set `ZOE_SCRAPLING_TOKEN_FILE` to the root-readable, non-world-readable token file (default `/etc/zoe/runner-secrets/scrapling-mcp-token`). OpenCode receives a `{file:path}` reference, not the token value. The operator selected token-only authentication over plain HTTP, so protect the network path and rotate the shared token by restarting Scrapling.
 
@@ -345,10 +323,8 @@ For a remote host, copy the release package and run `sudo bash deploy/scrapling/
 
 The runner creates one OpenCode session per run and rotates when the latest assistant message reports input + output + cache read + cache write tokens above `limit.context * ZOE_AGENT_CONTEXT_WINDOW_RATIO`, where the window comes from OpenCode `GET /api/model` for the selected `providerID/modelID`. The ratio defaults to `0.5` and must be in `(0,1)`. If the model is missing, has no limit, or the request fails, the runner does not rotate. `ZOE_AGENT_CONTEXT_TOKEN_BUDGET` is an optional absolute cap (unset/0 means no cap); a claim's `MaxContextTokens` can only lower the threshold. `ZOE_AGENT_MAX_ROTATIONS` defaults to 3. If the first measured assistant usage in a fresh session is at or above the threshold, it ends with `context_threshold_below_baseline`; it does not rotate repeatedly. Optional `ZOE_AGENT_ROTATION_SUMMARY=on` requests a separate all-deny summarizer session; it defaults to off and failures fall back to deterministic context. Runtime profiles select the OpenCode provider/model route; clients cannot override execution routes or grants.
 
-The workspace path must be absolute, private, and available to the runner-created container.
-
-
-
+The workspace path must be absolute, private, and available to the runner and
+the host-installed OpenCode service.
 A missing or invalid workspace fails closed even when server and runner health checks pass. Do not share a workspace across concurrent runs without an explicit ownership grant.
 
 Required settings:
@@ -376,20 +352,25 @@ Data export and destruction procedures are in [data lifecycle operations](data-l
 
 ## Zoe runtime uncertainty reconciliation
 
-Unknown create outcomes keep their execution slots and must never be retried as
-new OpenCode container creates. The operator command changes authority only through the normal
-runner observation API; it does not delete journal rows, task/run history, or
-container records.
+Unknown host-session creation keeps its slot and `effect_unknown` state. Do not
+retry creation, delete journal/history, or release capacity to make it disappear.
+Use server/runner binaries from the same reviewed source, and correlate the
+current run, attempt/fence, journal session identity, and authenticated host
+OpenCode API observations under the [runtime contract](../design/flows/execution.md#host-opencode-lifecycle).
 
-Use a runner built from the same reviewed source as the control server. Stop `zoe-runner` to hold the deployment and journal locks, then inspect Docker by the exact labels `io.zoe.managed=true`, `io.zoe.runtime=opencode`, `io.zoe.run`, `io.zoe.attempt`, and `io.zoe.fence`. Compare two complete, stable inventories. A matching container ID is preserved and reconciled; no match is a no-effect proof only when the complete inventory is authoritative. Any ambiguity, started container, missing identity, or incomplete inventory remains `effect_unknown`; never replay the create.
+Inspect the matching host session and terminal/active-session evidence without
+printing its password or private content. Missing or ambiguous session identity
+cannot be replaced with title matching or an empty Docker inventory. This
+runbook does not assert that a complete automatic reconciliation command exists:
+if authoritative no-effect or terminal evidence cannot be established, retain
+unknown state and request a separately scoped recovery decision. Apply any
+accepted state change through normal fenced runner observations, not direct
+database edits. Docker-backed capability recovery is a separate operation.
 
-An uncertain run is not evidence of either success or absence. Reconcile only a
-current run after recording two complete, stable, authoritative inspections;
-historical uncertain runs are not recovered from old records and no migration is
-required for them. Restart the runner only after any current inspection is
-recorded.
-
-For the authorized host-removal procedure for retired AO components, see [AO host removal](ao-host-removal.md). It is a separate runbook and has not been executed.
+Retired AO removal is not part of this runbook. Historical removal instructions
+were unexecuted and use superseded runtime configuration; they are not a current
+recipe or proof of host cleanup. Any host cleanup needs fresh read-only inventory,
+an explicit target/change window, backup, and separate authorization.
 
 ## Voice gateway
 
@@ -412,7 +393,7 @@ The user must manually import a ChatGPT Web account in the gateway management
 UI. Deploying the gateway does not establish voice functionality in Zoe:
 trusted HTTPS, client media permissions, and voice acceptance remain required.
 Account media is part of the current baseline (see
-[ADR 0005](../architecture/decisions/0005-voice-task-and-lease-boundaries.md)).
+[media](../design/flows/media.md)).
 
 ## Operator CLI deployment metadata
 
@@ -422,8 +403,13 @@ provider endpoint and model, the source of provider configuration, the last
 provider check category, and the secret file mode. Token contents, instance
 keys, and complete installation links are never included in status output.
 
-The canonical OpenCode provider variables are `ZOE_OPENCODE_PROVIDER_BASE_URL`, `ZOE_OPENCODE_PROVIDER_KEY_FILE`, and `ZOE_OPENCODE_MODEL`; the runtime image and bridge use `ZOE_OPENCODE_IMAGE` and `ZOE_OPENCODE_PROVIDER_SOCKET`. The default key file is `/etc/zoe/runner-secrets/cliproxyapi-api-key` with mode `0600`. Provider credentials never enter the OpenCode container environment. The memory model key file `/etc/zoe/secrets/mem0-llm-api-key` is owned by `65532:65532`, like the other Compose secrets.
-
+The host-installed OpenCode service owns its provider configuration and private
+credential files; the runner uses the service connection settings under
+[server and worker settings](#server-and-worker-settings). Do not provision the
+removed runtime-image/provider-socket configuration as a recovery path. The
+memory model key file `/etc/zoe/secrets/mem0-llm-api-key` is owned by
+`65532:65532`, like the other Compose secrets. Never print credential contents
+while inspecting configuration.
 
 Service reloads are performed by the CLI through the detected deployment
 manager. For systemd it runs `daemon-reload` followed by
@@ -645,13 +631,22 @@ or alter external CLIProxyAPI. Run `zoe status` to inspect deployment metadata
 before setup or provider changes. The release staging and PATH tests use fake
 build tools and temporary paths; Go unit/integration/race checks, actual binary
 builds, Apple builds, and physical-device scanning have separate evidence.
-For deployment and physical-device evidence, use the [acceptance evidence register](../acceptance/evidence.md).
+For deployment and physical-device reporting, use [evidence and acceptance](../development.md#evidence-and-acceptance).
 
 ## Native client installation and connection
 
-Install reviewed CI artifacts with the applicable platform signing/provisioning. Keep Mac inputs, signing/install scripts, artifacts, and logs under `~/Developer/Zoe/runs/<task-id>/`; the installed application belongs at `/Applications/Zoe.app`. A launch/signature check establishes installation only. See [Apple module instructions](../../clients/apple/README.md) and [current evidence](../acceptance/evidence.md) for tested revisions and remaining device/distribution gates.
+Install reviewed CI artifacts with the applicable platform signing/provisioning. Keep Mac inputs, signing/install scripts, artifacts, and private logs under `~/Developer/Zoe/runs/<task-id>/`; the installed application belongs at `/Applications/Zoe.app`. A launch/signature check establishes installation only. See [Apple module instructions](../../clients/apple/README.md) and [verification obligations](../development.md#product-verification-obligations) for separate device/distribution gates.
 
-The current client accepts an operator-selected server URL and shared instance key stored only in Keychain. The exact QR/link interaction is defined in [product](../product.md#3-client-requirements). Use HTTPS across an untrusted network; HTTP exposes the key in transit. Key initialization/rotation requires the server's exclusive database lock; stop it first. Rotation preserves the fixed owner/workspace, tasks, and separate worker credentials. Remove any legacy `ZOE_INSTANCE_KEY` or instance-key secret-map configuration before restart; the canonical Compose deployment does not inject a plaintext owner key. Restart closes old streams. Clearing a client removes its local data, not the shared key or durable tasks.
+Clients connect using an operator-selected server URL and shared instance key.
+Follow [configuration](../design/flows/configuration.md) for connection behavior and inspect the
+reviewed client's secure-storage implementation rather than assuming Keychain
+conformance. Use HTTPS across untrusted networks; HTTP exposes the key in transit.
+Key initialization/rotation requires the exclusive database lock; stop the
+server first. Rotation preserves owner/workspace, tasks and separate worker
+credentials. Remove legacy `ZOE_INSTANCE_KEY` or instance-key secret-map
+configuration before restart; canonical Compose does not inject a plaintext owner
+key. Restart closes old streams. Clearing a client removes local data, not the
+shared key or durable tasks.
 
 For export, backup, migration, restore, and destruction, use [data lifecycle operations](data-lifecycle.md).
 
@@ -677,5 +672,5 @@ On the host, apply releases through the [host deployment transaction](#host-depl
 including its backups and health verification; do not switch selectors manually.
 Repeat independent readiness, connectivity and task acceptance checks after
 the scripted operational checks. Record integrity, installation, readiness, connectivity,
-and end-to-end results separately; see the [acceptance evidence register](../acceptance/evidence.md)
+and end-to-end results separately; see [evidence and acceptance](../development.md#evidence-and-acceptance)
 for the acceptance boundary. This does not modify the external CLIProxyAPI deployment.

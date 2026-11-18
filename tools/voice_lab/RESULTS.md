@@ -51,7 +51,7 @@ Same result sentence, three calls per cell.
 
 ## Consequences for design
 
-- Historical proposal, not deployed policy: classify every user turn to avoid missed cancel/progress delegation. The later [delegation decision](../../docs/architecture/decisions/0012-voice-conversation-layer.md#delegation-is-upstreams-responsibility-decided-2026-11-11) classifies only delegated sentences; upstream speech cannot be prevented. The [register target](../../docs/architecture/decisions/0013-context-register.md) is **Accepted, not implemented**.
+- Historical proposal, not deployed policy: classify every user turn to avoid missed cancel/progress delegation. The historical [delegation decision](https://github.com/ronigooja/Zoe/blob/552e4df253b586f23ad74e83ac58fbe9718fa308/docs/architecture/decisions/0012-voice-conversation-layer.md#delegation-is-upstreams-responsibility-decided-2026-11-11) classifies only delegated sentences; upstream speech cannot be prevented. Use the current [Register contract](../../docs/design/flows/register.md) for approved behavior, not this historical implementation assessment.
 - Personal facts placed in `initial_items` are answered by the model without asking Zoe, so a lookup route is reached only for facts that are not in the items.
 - The items are a snapshot taken when the call starts.
 
@@ -81,4 +81,4 @@ Source: operator-supplied AVAS lab investigation following the runs above; exact
 - Verified in supplied public-doc review: GPT-Live calls the create field `input`, not `initial_items`. The `input` lab variant had no observations; it was not confirmed working.
 - Rule placement: `instructions`, first user item, developer item, assistant item and second user item each delegated 7/9 to 9/9, with nine synthetic-speech calls per placement. Per-placement exact counts were not supplied; no ranking is established.
 - The documented `Generate <|SpawnThinking|> when` template did not beat the current rule (two calls per cell). This is not a reliability estimate.
-- Inferred: neither a better placement nor public/AVAS protocol equivalence follows from these samples. Human speech, production acceptance and gateway/upstream context ceilings remain unverified. Real-call attribution failures are recorded separately in the [evidence register](../../docs/acceptance/evidence.md#context-register-real-call-findings--2026-11-12).
+- Inferred: neither a better placement nor public/AVAS protocol equivalence follows from these samples. Human speech, production acceptance and gateway/upstream context ceilings remain unverified. Real-call attribution failures are recorded separately in the [historical evidence](https://github.com/ronigooja/Zoe/blob/552e4df253b586f23ad74e83ac58fbe9718fa308/docs/acceptance/evidence.md#context-register-real-call-findings--2026-11-12).

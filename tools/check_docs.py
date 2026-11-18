@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Check current documentation requirements, English prose, and local links.
+"""Check documentation structure, English prose, and local navigation.
 
-The immutable 75-ID inventory lives in docs_requirements.json. Definitions
-belong in product.md, and acceptance maps each definition exactly once.
+These checks establish structural consistency, not semantic correctness.
 Only the Python standard library is required; no Git history is needed.
 """
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 import unicodedata
@@ -16,7 +14,6 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-CY_ID_RE = re.compile(r"\bCY-\d{2}-(?:\d{2}|[A-E])\b")
 NUMBERED_HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
 MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]]*\]\((<[^>]*>|[^)]*)\)")
 REFERENCE_LINK_RE = re.compile(r"!?\[([^\]]+)\](?:\[([^\]]*)\])")
@@ -26,33 +23,49 @@ FENCE_RE = re.compile(r"^\s{0,3}(```+|~~~+)")
 
 PARAGRAPH_LINE_LIMIT = 1200
 TABLE_CELL_LIMIT = 600
-DISCLAIMER_PHRASES = (
-    "does not establish support or acceptance",
-    "not an implementation or delivery claim",
-    "does not establish those outcomes",
+REQUIRED_DOCUMENTS = (
+    "AGENTS.md", "README.md", "docs/design/data-flows.md",
+    "docs/development.md", "docs/operations.md",
 )
-KNOWN_PENDING_ANCHOR_LINKS = {
-    "acceptance/evidence.md#voice-deployment-configuration-repair-2026-10-29",
-    "acceptance/evidence.md#zoe-rename-2026-10-28",
+REQUIRED_COMPONENTS = (
+    "register", "steward", "execution", "results", "screen", "memory", "media", "configuration",
+)
+CONTRACT_HEADINGS = (
+    "Purpose and boundary", "Inputs and outputs", "Required behavior",
+    "Persistence and idempotency", "Failure and recovery",
+    "Implementation locations", "Verification obligations",
+)
+RETIRED_DOCUMENTS = {
+    "docs/product.md", "docs/architecture.md", "docs/master-plan.md",
+    "docs/design/screen-document.md", "docs/design/target-architecture.md",
+    "docs/design/recovery.md", "docs/development/verification.md",
+    "docs/operations/ao-host-removal.md", "docs/operations/model-menu.md",
 }
+RETIRED_PREFIXES = ("docs/architecture/decisions/", "docs/acceptance/")
+HISTORY_PARTS = {"archive", "archives", "archived", "history"}
+
+
+def unfenced_lines(text: str):
+    """Yield numbered lines outside fences using the same rules for every scan."""
+    state: tuple[str, int] | None = None
+    for number, line in enumerate(text.splitlines(), 1):
+        fence = FENCE_RE.match(line)
+        if state is not None:
+            if (fence and fence.group(1)[0] == state[0]
+                    and len(fence.group(1)) >= state[1]
+                    and not line[fence.end():].strip()):
+                state = None
+            continue
+        if fence:
+            marker = fence.group(1)
+            state = (marker[0], len(marker))
+            continue
+        yield number, line
 
 
 def strip_markdown_for_scan(text: str, *, quoted: bool = False) -> str:
     output: list[str] = []
-    fence_char: str | None = None
-    fence_len = 0
-    for line in text.splitlines():
-        fence = FENCE_RE.match(line)
-        if fence:
-            marker = fence.group(1)
-            char, length = marker[0], len(marker)
-            if fence_char is None:
-                fence_char, fence_len = char, length
-            elif char == fence_char and length >= fence_len:
-                fence_char, fence_len = None, 0
-            continue
-        if fence_char:
-            continue
+    for _, line in unfenced_lines(text):
         if quoted and re.match(r"^\s*>\s?", line):
             continue
         # Inline code and HTML comments commonly hold source literals or paths.
@@ -114,19 +127,7 @@ def slugify(heading: str) -> str:
 def heading_anchors(text: str) -> set[str]:
     anchors: set[str] = set()
     counts: Counter[str] = Counter()
-    in_fence: tuple[str, int] | None = None
-    for line in text.splitlines():
-        fence = FENCE_RE.match(line)
-        if fence:
-            marker = fence.group(1)
-            char, length = marker[0], len(marker)
-            if in_fence is None:
-                in_fence = (char, length)
-            elif char == in_fence[0] and length >= in_fence[1]:
-                in_fence = None
-            continue
-        if in_fence:
-            continue
+    for _, line in unfenced_lines(text):
         heading = NUMBERED_HEADING_RE.match(line)
         if heading:
             title = re.sub(r"\s+#+\s*$", "", heading.group(1)).strip()
@@ -198,11 +199,13 @@ def link_check(root: Path) -> list[str]:
     files = markdown_files(root)
     anchors_by_path = {path.resolve(): heading_anchors(path.read_text(encoding="utf-8")) for path in files}
     for source in files:
-        text = source.read_text(encoding="utf-8")
+        text = navigation_text(source.read_text(encoding="utf-8"))
         definitions = {
             normalize_reference_id(identifier): destination
             for identifier, destination in REFERENCE_DEFINITION_RE.findall(text)
         }
+        for destination in definitions.values():
+            check_destination(root, source, destination, anchors_by_path, errors)
         for match in MARKDOWN_LINK_RE.finditer(text):
             check_destination(root, source, match.group(1), anchors_by_path, errors)
         for match in REFERENCE_LINK_RE.finditer(text):
@@ -228,14 +231,7 @@ def document_scope(root: Path) -> list[Path]:
 def length_warnings(root: Path) -> list[str]:
     warnings: list[str] = []
     for path in document_scope(root):
-        in_fence = False
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            fence = FENCE_RE.match(line)
-            if fence:
-                in_fence = not in_fence
-                continue
-            if in_fence:
-                continue
+        for number, line in unfenced_lines(path.read_text(encoding="utf-8")):
             stripped = line.strip()
             if (
                 len(line) > PARAGRAPH_LINE_LIMIT
@@ -258,97 +254,134 @@ def length_warnings(root: Path) -> list[str]:
     return warnings
 
 
-def disclaimer_warnings(root: Path) -> list[str]:
-    warnings: list[str] = []
-    evidence = (root / "docs/acceptance/evidence.md").resolve()
-    for path in document_scope(root):
-        if path.resolve() == evidence:
+def inline_navigation(line: str) -> str:
+    """Skip code spans without treating destination/title backticks as code."""
+    if REFERENCE_DEFINITION_RE.match(line):
+        return line
+    output: list[str] = []
+    index = 0
+    while index < len(line):
+        link = MARKDOWN_LINK_RE.match(line, index) or REFERENCE_LINK_RE.match(line, index)
+        if link:
+            output.append(link.group())
+            index = link.end()
+        elif line[index] == "\\" and index + 1 < len(line):
+            output.append(line[index:index + 2])
+            index += 2
+        elif line[index] == "`":
+            marker = re.match(r"`+", line[index:]).group()
+            closing = re.search(r"(?<!`)" + marker + r"(?!`)", line[index + len(marker):])
+            if closing:
+                index += len(marker) + closing.end()
+                output.append(" ")
+            else:
+                output.append(marker)
+                index += len(marker)
+        else:
+            output.append(line[index])
+            index += 1
+    return "".join(output)
+
+
+def navigation_text(text: str, *, keep_inline_code: bool = False) -> str:
+    """Ignore example links in code and comments, but retain actual destinations."""
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    return "\n".join(line if keep_inline_code else inline_navigation(line)
+                     for _, line in unfenced_lines(text))
+
+
+def link_destinations(text: str, *, rendered_only: bool = False) -> list[str]:
+    """Resolve used references; optionally include unused definitions for validation."""
+    text = navigation_text(text)
+    definitions = {normalize_reference_id(identifier): destination
+                   for identifier, destination in REFERENCE_DEFINITION_RE.findall(text)}
+    body = REFERENCE_DEFINITION_RE.sub("", text)
+    destinations = [match.group(1) for match in MARKDOWN_LINK_RE.finditer(body)]
+    body = MARKDOWN_LINK_RE.sub("", body)
+    for match in REFERENCE_LINK_RE.finditer(body):
+        destination = definitions.get(normalize_reference_id(match.group(2) or match.group(1)))
+        if destination is not None:
+            destinations.append(destination)
+    if not rendered_only:
+        destinations.extend(definitions.values())
+    return destinations
+
+
+def local_target(source: Path, destination: str) -> Path | None:
+    parsed = urlsplit(unquote(split_link_destination(destination)))
+    if parsed.scheme or parsed.netloc:
+        return None
+    return (source.parent / parsed.path).resolve() if parsed.path else source.resolve()
+
+
+def structure_check(root: Path) -> list[str]:
+    errors: list[str] = []
+    required = list(REQUIRED_DOCUMENTS) + [
+        f"docs/design/flows/{name}.md" for name in REQUIRED_COMPONENTS
+    ]
+    for relative in required:
+        if not (root / relative).is_file():
+            errors.append(f"missing required document: {relative}")
+
+    flows = sorted((root / "docs/design/flows").rglob("*.md"))
+    overview = root / "docs/design/data-flows.md"
+    navigation = {
+        root / "AGENTS.md": [overview, root / "docs/development.md", root / "docs/operations.md"],
+        root / "README.md": [overview, root / "docs/development.md", root / "docs/operations.md"],
+        overview: flows + [root / "docs/development.md", root / "docs/operations.md"],
+    }
+    for source, expected in navigation.items():
+        if not source.is_file():
             continue
-        text = path.read_text(encoding="utf-8")
-        for phrase in DISCLAIMER_PHRASES:
-            if phrase.casefold() in text.casefold():
-                warnings.append(
-                    f"duplicated acceptance disclaimer in {path.relative_to(root)}: {phrase}"
-                )
-    return warnings
+        targets = {local_target(source, value) for value in link_destinations(
+            source.read_text(encoding="utf-8"), rendered_only=True)}
+        for target in expected:
+            if target.resolve() not in targets:
+                errors.append(f"missing navigation in {source.relative_to(root)}: {target.relative_to(root)}")
 
-
-def pending_anchor_warnings(root: Path, errors: list[str]) -> tuple[list[str], list[str]]:
-    """Downgrade the two documented stale links pending coordinated doc edits."""
-    warnings: list[str] = []
-    remaining: list[str] = []
-    source = "docs/master-plan.md"
-    for error in errors:
-        if error.startswith(f"broken Markdown heading link in {source}: "):
-            destination = error.rsplit(": ", 1)[-1]
-            if destination in KNOWN_PENDING_ANCHOR_LINKS:
-                warnings.append(f"{error.removeprefix('broken ')} (pending documentation update)")
+    for path in flows:
+        text = navigation_text(path.read_text(encoding="utf-8"), keep_inline_code=True)
+        sections = list(re.finditer(r"^## (.+?)\s*#*\s*$", text, re.M))
+        for title in CONTRACT_HEADINGS:
+            matches = [(index, section) for index, section in enumerate(sections) if section.group(1) == title]
+            if len(matches) != 1:
+                errors.append(f"contract section {title!r} occurs {len(matches)} times in {path.relative_to(root)}; expected once")
                 continue
-        remaining.append(error)
-    return warnings, remaining
+            index, section = matches[0]
+            end = sections[index + 1].start() if index + 1 < len(sections) else len(text)
+            body = text[section.end():end]
+            # Subheadings or Markdown punctuation alone do not fill a section.
+            body = re.sub(r"^#{1,6}\s+.*$", "", body, flags=re.M)
+            if not re.search(r"[A-Za-z0-9]", body):
+                errors.append(f"empty contract section {title!r} in {path.relative_to(root)}")
+    return errors
 
 
-def requirement_check(root: Path) -> list[str]:
-    errors = []
-    inventory = Path(__file__).with_name("docs_requirements.json")
-    baseline = json.loads(inventory.read_text(encoding="utf-8"))["ids"]
-    expected = set(baseline)
-    if len(baseline) != 75 or len(expected) != 75:
-        errors.append("stable-ID baseline must contain 75 unique IDs")
-    product_path = root / "docs/product.md"
-    matrix_path = root / "docs/acceptance/requirements.md"
-    for path in (product_path, matrix_path):
-        if not path.is_file():
-            errors.append(f"missing required document: {path.relative_to(root)}")
-    if errors:
-        return errors
-    product = product_path.read_text(encoding="utf-8")
-    matrix = matrix_path.read_text(encoding="utf-8")
-    definitions = Counter(re.findall(r'<a id="(cy-\d{2}-(?:\d{2}|[a-e]))"></a>', product))
-    expected_anchors = {value.lower() for value in expected}
-    for anchor in sorted(expected_anchors):
-        count = definitions[anchor]
-        if count != 1:
-            errors.append(f"requirement definition {anchor.upper()} occurs {count} times; expected once")
-    for anchor in sorted(set(definitions) - expected_anchors):
-        errors.append(f"unexpected requirement definition: {anchor}")
-    # Scope is explicit immediately after each definition anchor.
-    for match in re.finditer(r'<a id="(cy-[^\"]+)"></a>(.*?)(?=<a id=|\Z)', product, re.S):
-        anchor, section = match.groups()
-        if not re.match(r'\s*\*\*Disposition: (Required|Optional|Excluded)\.\*\*', section):
-            errors.append(f"requirement definition lacks disposition: {anchor}")
-        section_labels = re.findall(r'^\*\*(CY-\d{2}-(?:\d{2}|[A-E]))\.\*\*', section, re.M)
-        if section_labels != [anchor.upper()]:
-            errors.append(f"requirement anchor {anchor} must identify exactly its matching definition")
-    labels = Counter(re.findall(r'^\*\*(CY-\d{2}-(?:\d{2}|[A-E]))\.\*\*', product, re.M))
-    for value in sorted(expected):
-        if labels[value] != 1:
-            errors.append(f"requirement ID {value} defined {labels[value]} times; expected once")
-    declared = set(CY_ID_RE.findall(product))
-    if declared != expected:
-        errors.append("product stable IDs differ from fixed baseline: " + ", ".join(sorted(declared ^ expected)))
-    mapping_links = re.findall(r'^\| \[(CY-\d{2}-(?:\d{2}|[A-E]))\]\(([^)]+)\)', matrix, re.M)
-    mappings = Counter(value for value, _ in mapping_links)
-    for value, destination in mapping_links:
-        if destination != f"../product.md#{value.lower()}":
-            errors.append(f"acceptance mapping {value} must link to its matching product definition")
-    for value in sorted(expected):
-        if mappings[value] != 1:
-            errors.append(f"acceptance mapping {value} occurs {mappings[value]} times; expected once")
-    for value in sorted(set(mappings) - expected):
-        errors.append(f"unexpected acceptance mapping: {value}")
-    chapters = re.findall(r'^## (\d+)\. ', product, re.M)
-    if Counter(chapters) != Counter(map(str, range(1, 23))):
-        errors.append("product must define chapters 1–22 exactly once")
-    for scenario in "ABCDE":
-        if not re.search(rf'^### Scenario {scenario}:', product, re.M):
-            errors.append(f"missing scenario {scenario}")
-    quality = ("Accuracy", "Continuity", "Persistence", "Reliability", "Extensibility", "Independence",
-               "Interoperability", "Cross-device consistency", "Cross-platform support", "Controllability",
-               "Security", "Observability", "Cost efficiency", "Ease of use", "Long-term evolution")
-    for dimension in quality:
-        if not re.search(rf'^\| {re.escape(dimension)} \|', product, re.M):
-            errors.append(f"missing quality requirement: {dimension}")
+def authority_check(root: Path) -> list[str]:
+    """Current documents cannot delegate normative navigation to retired/history files."""
+    root = root.resolve()
+    errors: list[str] = []
+    for source in document_scope(root):
+        if HISTORY_PARTS.intersection(source.relative_to(root).parts):
+            continue
+        text = source.read_text(encoding="utf-8")
+        for destination in link_destinations(text):
+            target = local_target(source, destination)
+            if target is None or not target.is_relative_to(root):
+                continue
+            relative = target.relative_to(root)
+            value = relative.as_posix()
+            if value in RETIRED_DOCUMENTS or value.startswith(RETIRED_PREFIXES):
+                errors.append(f"retired documentation link in {source.relative_to(root)}: {destination}")
+            elif HISTORY_PARTS.intersection(relative.parts):
+                errors.append(f"archive/history navigation in current document {source.relative_to(root)}: {destination}; use an immutable external Git link for historical context")
+        # Bare repository paths (often inline code) must not preserve retired
+        # instructions. Remove external URLs first: historical Git links are
+        # context, not a dependency on a local normative document.
+        literals = re.sub(r"(?:https?://|//)[^\s<>`]+", "", text)
+        for value in sorted(set(re.findall(r"(?<![\w/])docs/[\w./-]+\.md\b", literals))):
+            if value in RETIRED_DOCUMENTS or value.startswith(RETIRED_PREFIXES):
+                errors.append(f"retired documentation reference in {source.relative_to(root)}: {value}")
     return errors
 
 
@@ -357,13 +390,12 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument(
         "--strict-length", "--strict", dest="strict", action="store_true",
-        help="treat documentation length and duplicated disclaimer warnings as errors",
+        help="treat documentation length warnings as errors",
     )
     args = parser.parse_args()
     root = args.root.resolve()
-    failures = requirement_check(root) + link_check(root) + cjk_check(root)
-    anchor_warnings, failures = pending_anchor_warnings(root, failures)
-    warnings = anchor_warnings + length_warnings(root) + disclaimer_warnings(root)
+    failures = structure_check(root) + authority_check(root) + link_check(root) + cjk_check(root)
+    warnings = length_warnings(root)
     for failure in failures:
         print(f"FAIL: {failure}")
     for warning in warnings:
@@ -374,7 +406,7 @@ def main() -> int:
         print(f"documentation checks failed: {len(failures)} issue(s)")
         return 1
     print(
-        "documentation checks passed (75 IDs, 22 chapters, A–E, 15 quality requirements, English, links)"
+        "documentation checks passed (structure, navigation, English, local links; not semantic correctness)"
         f"; warnings: {len(warnings)}"
     )
     return 0

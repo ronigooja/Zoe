@@ -1,6 +1,6 @@
 # Data lifecycle operations
 
-This runbook applies when exporting, backing up, restoring, migrating, or deleting a Zoe instance. [Architecture](../architecture.md#backup-deletion-and-recovery) defines authority and fencing, and [acceptance evidence](../acceptance/evidence.md) records what has actually been checked; this document is operational guidance, not an acceptance or delivery claim.
+This runbook applies when exporting, backing up, restoring, migrating, or deleting a Zoe instance. [Execution](../design/flows/execution.md) defines runtime authority and fencing, and [memory](../design/flows/memory.md) defines memory ownership. Follow [evidence and acceptance](../development.md#evidence-and-acceptance) when reporting checks; this is operational guidance, not an acceptance or delivery claim.
 
 ## Logical export
 
@@ -31,7 +31,7 @@ The [retention registry](../../tools/data_lifecycle/retention.py) authenticates 
 
 ## Voice transcript authority and ingestion
 
-When voice transcript ingestion is enabled, `voice_transcript_turns` stores both roles verbatim under the local Zoe session ID, ordered by gateway-assigned `seq`. Transcripts are retained without TTL or routine deletion; complete instance destruction removes their containing database and registered backups. Logical export includes owner-visible sessions' transcripts in either scope. SQLite backup and staged restore preserve the database without a table allowlist. The call-summary pipeline is removed on main: migration 220 drops its tables and triggers, and current logical exports and inventories no longer include summaries. Old-schema backups are unsupported and cannot be restored by this release.
+When voice transcript ingestion is enabled, `voice_transcript_turns` stores both roles verbatim under the local Zoe session ID, ordered by gateway-assigned `seq`. Transcripts are retained without TTL or routine deletion. Complete destruction must cover their database and registered backups, subject to the adapter/topology limitations below; a plan does not prove erasure. Logical export includes owner-visible sessions' transcripts in either scope. SQLite backup and staged restore preserve the database without a table allowlist. Migration 220 removes the call-summary tables and triggers; current logical exports and inventories no longer include summaries. Old-schema backups are unsupported and cannot be restored by this release.
 
 The service-only endpoint is `POST /runner/v1/voice/turns` with `Authorization: Bearer TOKEN` and body `{"gateway_session_id":"opaque-gateway-id","media_generation":1,"turns":[{"seq":1,"role":"user","text":"verbatim text","at":"2026-11-06T10:00:00Z"}]}`. Workspace and local session identity come from the stored gateway binding, never the request. Wrong generation returns 409; ended calls accept completion through ten minutes after `ended_at`. A batch contains 1–200 turns, each text at most 64 KiB, and the entire encoded body at most 512 KiB (413 otherwise). Matching session/seq/text retries are no-ops; conflicting text returns 409 and rolls back the entire batch. Timestamps are normalized to UTC RFC3339Nano. `voice.ReadTranscriptTurns` reads an inclusive sequence range in order for a trusted workspace.
 
@@ -39,7 +39,7 @@ To provision, create a deployment-owned private file `/etc/zoe/secrets/voice-ing
 
 ## Migration and staged restore
 
-When using this release, only fresh-schema backups are supported. Databases or backups from the removed claim-memory schema are unsupported; deploy the test host with a new empty database. Memory is not restored through the Go authority database.
+Only fresh-schema backups are supported. Databases or backups from the removed claim-memory schema are unsupported. This limitation is not authorization to wipe or replace an existing database: preserve it and obtain a separate reset/migration decision. Memory is not restored through the Go authority database; its service data requires independent inventory and recovery validation.
 
 1. Resolve outstanding runs, external effects, deployments, and voice sessions under their normal authority paths. Stop/mask every source unit capable of writing or dispatching. Preserve the old instance fence and independently retained current deletion generation/head/hash; an old backup's embedded head is not a freshness authority.
 2. Generate source-isolation proof with the [migration tool](../../tools/zoe_migrate.py). It requires readiness with zero unresolved runs/effects/deployments/voice sessions and every named unit inactive and masked. The optional `--stop-mask-and-fence` performs those local actions before checking; it does not administer remote hosts.
@@ -84,7 +84,7 @@ Keep the old instance fenced. Validate permissions, task/run identities, artifac
 
 ## Deletion and destruction
 
-When integrating owner-memory deletion, the Go client's worker HTTP `delete-all` operation is synchronous and returns failures without durable retry or proof of backup erasure. No user-facing entry point invokes it today; no Go memory deletion command or native memory-management UI exists. See [ADR 0006](../architecture/decisions/0006-memory-authority-and-derived-stores.md). Generic destruction inventory and proof requirements below still cover Mem0/Qdrant and backups.
+When integrating owner-memory deletion, the Go client's worker HTTP `delete-all` operation is synchronous and returns failures without durable retry or proof of backup erasure. No user-facing entry point invokes it today; no Go memory deletion command or native memory-management UI exists. See [memory](../design/flows/memory.md) and the [worker implementation constraints](../../services/memory/README.md). Memory export, user-facing deletion, and old-schema recovery remain unsupported, not completed product capabilities. Generic destruction inventory and proof requirements below still cover Mem0/Qdrant and backups.
 
 For complete instance destruction, start with the [inventory example](../../deploy/linux/destroy-inventory.example.json) and inspect a read-only plan:
 
