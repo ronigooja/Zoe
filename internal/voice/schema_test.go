@@ -68,8 +68,19 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := snapshot()
-	owned := map[string][]string{}
+	baseline := make(map[string][]string, len(after))
 	for name, obj := range after {
+		if strings.HasPrefix(name, "voice_text_inputs") || strings.HasPrefix(name, "voice_input_notices") || strings.HasPrefix(name, "sqlite_autoindex_voice_text_inputs") || strings.HasPrefix(name, "sqlite_autoindex_voice_input_notices") {
+			continue
+		}
+		copyObj := append([]string(nil), obj...)
+		if name == "ui_requests" {
+			copyObj[3] = strings.Replace(copyObj[3], ", voice_input INTEGER NOT NULL DEFAULT 0 CHECK(voice_input IN (0,1))", "", 1)
+		}
+		baseline[name] = copyObj
+	}
+	owned := map[string][]string{}
+	for name, obj := range baseline {
 		if !reflect.DeepEqual(before[name], obj) {
 			owned[name] = obj
 		}
@@ -81,7 +92,7 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 		t.Fatalf("voice-owned schema differs from reference: got=%v want=%v", owned, reference.Objects)
 	}
 	for table, want := range reference.Columns {
-		rows, err := store.DB().Query(`SELECT name,type,"notnull",dflt_value,pk FROM pragma_table_info(?) ORDER BY cid`, table)
+		rows, err := store.DB().Query(`SELECT name,type,"notnull",dflt_value,pk FROM pragma_table_info(?) WHERE NOT (?='ui_requests' AND name='voice_input') ORDER BY cid`, table, table)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -111,7 +122,7 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 	}
 	var version, count int
 	var name string
-	if err = store.DB().QueryRow(`SELECT max(version),count(*),max(name) FROM schema_migrations WHERE namespace='voice'`).Scan(&version, &count, &name); err != nil || version != 200 || count != 1 || name != "voice_baseline" {
+	if err = store.DB().QueryRow(`SELECT max(version),count(*),max(name) FROM schema_migrations WHERE namespace='voice'`).Scan(&version, &count, &name); err != nil || version != 201 || count != 2 || name != "voice_baseline" {
 		t.Fatalf("voice receipt=%d/%d/%s err=%v", version, count, name, err)
 	}
 	var changesBefore, changesAfter int

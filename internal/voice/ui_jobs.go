@@ -467,10 +467,10 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 			return err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE ui_requests SET surface_id=?,surface_version=?,question_id=?,feedback=?,awaiting_input=?,input_note=?,status='generated',updated_at=? WHERE id=?`, o.SurfaceID, version, question, o.Feedback, o.AwaitingInput, o.InputNote, at, j.request); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE ui_requests SET task_id=CASE WHEN ? THEN NULL ELSE task_id END,surface_id=?,surface_version=?,question_id=?,feedback=?,awaiting_input=?,voice_input=?,input_note=?,status='generated',updated_at=? WHERE id=?`, o.VoiceInput, o.SurfaceID, version, question, o.Feedback, o.AwaitingInput, o.VoiceInput, o.InputNote, at, j.request); err != nil {
 		return err
 	}
-	eventPayload := map[string]any{"request_id": j.request, "surface_id": o.SurfaceID, "container": o.Container, "awaiting_input": o.AwaitingInput, "messages": state.Messages}
+	eventPayload := map[string]any{"request_id": j.request, "surface_id": o.SurfaceID, "container": o.Container, "awaiting_input": o.AwaitingInput, "voice_input": o.VoiceInput, "messages": state.Messages}
 	eventPayload["surface_version"] = version
 	eventPayload["deleted"] = state.Deleted
 	if o.AwaitingInput {

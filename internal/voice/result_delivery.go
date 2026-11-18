@@ -24,6 +24,7 @@ func (s *Service) resultDispatcher() {
 			s.consumeUITaskEvents(s.recallCtx)
 			s.dispatchUIJobs(s.recallCtx)
 			s.dispatchUIFeedback(s.recallCtx)
+			s.dispatchVoiceInputs(s.recallCtx)
 			s.consumeResultEvents(s.recallCtx)
 			s.dispatchResults(s.recallCtx)
 			s.dispatchFastReplies(s.recallCtx)

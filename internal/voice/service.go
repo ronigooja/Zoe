@@ -326,6 +326,9 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 	if err := server.RegisterCommand("voice.turn.commit", svc.commandCommitTurn); err != nil {
 		return err
 	}
+	if err := server.RegisterCommand("voice.text_input", svc.commandVoiceTextInput); err != nil {
+		return err
+	}
 	if err := server.RegisterCommand("ui.screen", svc.commandUIScreen); err != nil {
 		return err
 	}

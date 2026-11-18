@@ -14,7 +14,7 @@ const update = `{"version":"v0.9.1","updateDataModel":{"surfaceId":"screen","pat
 const remove = `{"version":"v0.9.1","deleteSurface":{"surfaceId":"screen"}}`
 
 func fixture(messages string) string {
-	return `{"messages":[` + messages + `],"container":"window","feedback":"Shown.","awaiting_input":false,"input_note":""}`
+	return `{"messages":[` + messages + `],"container":"window","feedback":"Shown.","awaiting_input":false,"voice_input":false,"input_note":""}`
 }
 
 func TestRenderingEnvironmentDefinitions(t *testing.T) {
@@ -135,6 +135,10 @@ func TestParse(t *testing.T) {
 		{"valid", valid, true},
 		{"popover", strings.Replace(valid, `"window"`, `"popover"`, 1), true},
 		{"input", strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(valid, `"Shown."`, `""`), `"awaiting_input":false`, `"awaiting_input":true`), `"input_note":""`, `"input_note":"Requested value"`), true},
+		{"voice_input", strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(valid, `"Shown."`, `""`), `"voice_input":false`, `"voice_input":true`), `"input_note":""`, `"input_note":"Enter text"`), true},
+		{"voice_missing", strings.Replace(valid, `,"voice_input":false`, "", 1), false},
+		{"voice_null", strings.Replace(valid, `"voice_input":false`, `"voice_input":null`, 1), false},
+		{"both_input", strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(valid, `"Shown."`, `""`), `"voice_input":false`, `"voice_input":true`), `"awaiting_input":false`, `"awaiting_input":true`), `"input_note":""`, `"input_note":"Enter text"`), false},
 		{"fence_json", "```json\n" + valid + "\n```", true},
 		{"fence_plain", "```\n" + valid + "\n```", true},
 		{"fence_outer_space", "  \n```json\n" + valid + "\n```\n  ", true},

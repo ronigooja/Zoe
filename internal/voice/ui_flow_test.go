@@ -48,7 +48,7 @@ func uiFlowOutput(messages string, await bool) string {
 	if await {
 		feedback, note = "", "Requested input"
 	}
-	b, _ := json.Marshal(map[string]any{"messages": json.RawMessage("[" + messages + "]"), "container": "window", "feedback": feedback, "awaiting_input": await, "input_note": note})
+	b, _ := json.Marshal(map[string]any{"messages": json.RawMessage("[" + messages + "]"), "container": "window", "feedback": feedback, "awaiting_input": await, "voice_input": false, "input_note": note})
 	return string(b)
 }
 func uiFlowModel(t *testing.T, output *string, mu *sync.Mutex) *modelclient.Client {
@@ -114,7 +114,7 @@ func TestUIRegisterJobFlow(t *testing.T) {
 	var e struct {
 		Payload map[string]json.RawMessage `json:"payload"`
 	}
-	if json.Unmarshal(raw, &e) != nil || len(e.Payload) != 7 {
+	if json.Unmarshal(raw, &e) != nil || len(e.Payload) != 8 || string(e.Payload["voice_input"]) != "false" {
 		t.Fatal(string(raw))
 	}
 	r.svc.createRegisterUIJobs(context.Background())
