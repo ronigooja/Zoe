@@ -59,6 +59,7 @@ public struct ConversationTextInputView: View {
         VStack(alignment: .leading, spacing: 12) {
             TextEditor(text: $draft.text)
                 .accessibilityLabel("Conversation text")
+                .frame(minHeight: 120)
                 .border(.secondary)
             let remaining = 20_000 - draft.text.utf8.count
             Text(remaining >= 0 ? "\(remaining) bytes remaining" : "\(-remaining) bytes over the limit")
@@ -74,6 +75,7 @@ public struct ConversationTextInputView: View {
             }
         }
         .padding()
+        .frame(width: 520, height: 360)
     }
 
     private func send() {
