@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"strconv"
 	"time"
 
+	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/memoryapi"
 )
@@ -49,6 +51,18 @@ func (r *Repository) StartBatches(ctx context.Context, client *memoryapi.Client,
 }
 
 func (r *Repository) batchStep(ctx context.Context, client ingestClient, interval time.Duration, now time.Time) (stepErr error) {
+	store := backoff.Store{DB: r.db}
+	if config, ok := client.(interface {
+		ConfigDigest(context.Context) (string, error)
+	}); ok {
+		if digest, err := config.ConfigDigest(ctx); err == nil {
+			for _, consumer := range []string{"memory_ingest", "memory_write"} {
+				if _, err := store.ObserveConfig(ctx, consumer, digest); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	started := time.Now()
 	owners, chunks := 0, 0
 	defer func() {
@@ -79,7 +93,30 @@ func (r *Repository) batchStep(ctx context.Context, client ingestClient, interva
 		return err
 	}
 	for _, o := range all {
+		scope := memoryapi.User(o.workspace, o.principal)
+		due, err := store.Due(ctx, "memory_ingest", scope, now)
+		if err != nil {
+			if stepErr == nil {
+				stepErr = err
+			}
+			continue
+		}
+		if !due {
+			continue
+		}
 		n, err := r.runBatch(ctx, client, o.workspace, o.principal, now, interval)
+		if err != nil {
+			kind := backoff.Classify(err)
+			if kind == backoff.Auth || kind == backoff.Transient {
+				if e := store.Record(ctx, "memory_ingest", scope, kind, now, backoff.Background, rand.Float64); e != nil && stepErr == nil {
+					stepErr = e
+				}
+			}
+		} else if n > 0 {
+			if e := store.Clear(ctx, "memory_ingest", scope); e != nil && stepErr == nil {
+				stepErr = e
+			}
+		}
 		owners++
 		chunks += n
 		if err != nil && stepErr == nil {

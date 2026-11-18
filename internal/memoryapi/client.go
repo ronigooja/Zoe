@@ -111,6 +111,15 @@ func (c *Client) Search(ctx context.Context, user, request string) ([]Item, erro
 	err := c.call(ctx, "search", map[string]string{"user": user, "request": request}, &out)
 	return out.Items, err
 }
+
+// ConfigDigest reads the worker's non-secret model configuration identity.
+func (c *Client) ConfigDigest(ctx context.Context) (string, error) {
+	var out struct {
+		Digest string `json:"config_digest"`
+	}
+	err := c.call(ctx, "config", map[string]string{}, &out)
+	return out.Digest, err
+}
 func (c *Client) Write(ctx context.Context, user, opID, request string) error {
 	var out struct {
 		Operations []json.RawMessage `json:"operations"`

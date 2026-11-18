@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math/rand"
 	"strings"
 	"time"
 
+	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/memoryapi"
 )
@@ -126,19 +128,27 @@ func (s *Service) persistRecallRetryStatus(ctx context.Context, id, text, termin
 // compare-and-set prevents retried handoffs/dispatchers starting twice.
 func (s *Service) dispatchRecall(ctx context.Context) {
 	s.recoverRecall(ctx, false)
-	rows, err := s.db.QueryContext(ctx, `SELECT j.id FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.status='pending' AND h.status='delivered' LIMIT 25`)
+	rows, err := s.db.QueryContext(ctx, `SELECT j.id,j.workspace_id,j.owner_id,h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.status='pending' AND h.status='delivered' LIMIT 25`)
 	if err != nil {
 		return
 	}
-	var ids []string
+	type job struct{ id, workspace, owner, kind string }
+	var ids []job
 	for rows.Next() {
-		var id string
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
+		var j job
+		if rows.Scan(&j.id, &j.workspace, &j.owner, &j.kind) == nil {
+			ids = append(ids, j)
 		}
 	}
 	rows.Close()
-	for _, id := range ids {
+	for _, j := range ids {
+		id := j.id
+		if j.kind == memoryWriteHolding {
+			due, err := (backoff.Store{DB: s.db}).Due(ctx, "memory_write", memoryUser(j.workspace, j.owner), s.now())
+			if err != nil || !due {
+				continue
+			}
+		}
 		s.lifecycleMu.Lock()
 		if s.stopped {
 			s.lifecycleMu.Unlock()
@@ -227,6 +237,9 @@ func (s *Service) runRecall(id string) {
 					status = "write_uncertain"
 				}
 			}
+			if backoff.Classify(err) == backoff.Auth {
+				status = "write_auth_stopped"
+			}
 		}
 		errorKind := ""
 		var failure *memoryapi.Error
@@ -238,11 +251,21 @@ func (s *Service) runRecall(id string) {
 		if _, e := s.db.ExecContext(outcomeCtx, `INSERT INTO memory_write_outcomes(op_id,status,error_kind) VALUES(?,?,?) ON CONFLICT(op_id) DO UPDATE SET status=excluded.status,error_kind=excluded.error_kind`, id, status, errorKind); e != nil {
 			return
 		}
-		if status == "write_uncertain" {
+		if status == "write_uncertain" || status == "write_auth_stopped" {
+			kind := backoff.Transient
+			if status == "write_auth_stopped" {
+				kind = backoff.Auth
+			}
+			if e := (backoff.Store{DB: s.db}).Record(outcomeCtx, "memory_write", memoryUser(workspace, owner), kind, s.now(), backoff.Background, rand.Float64); e != nil {
+				return
+			}
 			// No failure feedback for a recoverable unknown. Preserve the job ID
 			// and request so the next dispatcher round reconciles the same plan.
 			_, _ = s.db.ExecContext(outcomeCtx, `UPDATE voice_recall_jobs SET status='pending' WHERE id=? AND status='running'`, id)
 			return
+		}
+		if err == nil {
+			_ = (backoff.Store{DB: s.db}).Clear(outcomeCtx, "memory_write", memoryUser(workspace, owner))
 		}
 	} else {
 		text, count, status = s.recallAnswer(ctx, workspace, owner, question)

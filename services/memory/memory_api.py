@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import hashlib
 import json
 import logging
 import os
@@ -18,6 +19,16 @@ from .responses_llm import UpstreamUnauthorized
 LOG = logging.getLogger("zoe.memory.api")
 MAX_BODY_BYTES = 64 * 1024
 MAX_INGEST_BODY_BYTES = 256 * 1024
+
+
+def config_fingerprint(endpoint: str, model: str, effort: str, thinking: str, credential: str) -> str:
+    key = hashlib.sha256(b"zoe-model-credential-v1\0" + credential.encode()).hexdigest()
+    data = json.dumps(["zoe-model-config-v1", endpoint, model, effort, thinking, key],
+                      ensure_ascii=False, separators=(",", ":"))
+    # Go's encoding/json additionally escapes these characters.
+    data = data.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+    data = data.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    return hashlib.sha256(data.encode()).hexdigest()
 
 
 def _required_text(body: dict[str, Any], key: str) -> str:
@@ -100,10 +111,18 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
         if self.command == "GET" and self.path == "/healthz":
             return self.server.backend.health(self.deadline)
         if self.command != "POST" or self.path not in {
-            "/v1/memory/search", "/v1/memory/write", "/v1/memory/ingest", "/v1/memory/delete-all",
+            "/v1/memory/search", "/v1/memory/write", "/v1/memory/ingest", "/v1/memory/delete-all", "/v1/memory/config",
         }:
             raise MemoryAPIError(404, "not_found")
         body = self._body()
+        if self.path.endswith("/config"):
+            if body:
+                raise MemoryAPIError(400, "request_invalid")
+            return {"config_digest": config_fingerprint(
+                os.environ.get("ZOE_MEM0_LLM_BASE_URL", ""),
+                os.environ.get("ZOE_MEM0_LLM_MODEL", "").strip(),
+                os.environ.get("ZOE_MEM0_LLM_REASONING_EFFORT", "").strip(), "",
+                os.environ.get("ZOE_MEM0_LLM_API_KEY", ""))}
         user = _required_text(body, "user")
         if self.path.endswith("/ingest"):
             if set(body) != {"user", "text", "batch_id", "chunk_id"}:
@@ -135,7 +154,7 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
         status = 500
         # Only fixed labels reach INFO, including for attacker-controlled URLs.
         kind = {"/healthz": "health", "/v1/memory/search": "search", "/v1/memory/write": "write",
-                "/v1/memory/ingest": "ingest", "/v1/memory/delete-all": "delete_all"}.get(self.path, "unknown")
+                "/v1/memory/ingest": "ingest", "/v1/memory/delete-all": "delete_all", "/v1/memory/config": "config"}.get(self.path, "unknown")
         try:
             authorization = self.headers.get("Authorization", "").encode("utf-8")
             if len(self.headers.get_all("Authorization", [])) != 1 or not hmac.compare_digest(

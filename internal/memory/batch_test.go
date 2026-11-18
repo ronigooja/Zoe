@@ -160,6 +160,8 @@ CREATE TABLE memory_ingest_batches(id TEXT PRIMARY KEY,workspace_id TEXT,princip
 CREATE TABLE memory_ingest_chunks(batch_id TEXT,position INTEGER,id TEXT UNIQUE,text TEXT,done INTEGER DEFAULT 0,PRIMARY KEY(batch_id,position));
 CREATE TABLE memory_ingest_members(workspace_id TEXT,principal_id TEXT,source_id TEXT,batch_id TEXT,PRIMARY KEY(workspace_id,principal_id,source_id));
 CREATE TABLE memory_ingest_state(workspace_id TEXT,principal_id TEXT,boundary_ns INTEGER NOT NULL,next_attempt_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(workspace_id,principal_id));
+CREATE TABLE model_retry_state(consumer TEXT,scope TEXT,failures INTEGER,next_attempt_at TEXT,auth_failed INTEGER,last_error TEXT,updated_at TEXT,PRIMARY KEY(consumer,scope));
+CREATE TABLE model_config_fingerprints(consumer TEXT PRIMARY KEY,fingerprint TEXT);
 INSERT INTO voice_sessions VALUES('session','workspace','owner'),('other','workspace','other');`)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +171,13 @@ INSERT INTO voice_sessions VALUES('session','workspace','owner'),('other','works
 
 func ingestWorker(t *testing.T, handler func(http.ResponseWriter, *http.Request)) *memoryapi.Client {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(handler))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/memory/config" {
+			_, _ = w.Write([]byte(`{"config_digest":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`))
+			return
+		}
+		handler(w, r)
+	}))
 	t.Cleanup(server.Close)
 	token := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(token, []byte("fixture"), 0600); err != nil {
@@ -290,6 +298,7 @@ func TestMemoryIngestFailureResumesPendingChunksAndSuccessOnlyCAS(t *testing.T) 
 		}
 		if fail && calls == 2 {
 			w.WriteHeader(503)
+			_, _ = w.Write([]byte(`{"error_kind":"backend_unavailable"}`))
 			return
 		}
 		w.Write([]byte(`{"added":1,"updated":0}`))
@@ -322,6 +331,47 @@ func TestMemoryIngestFailureResumesPendingChunksAndSuccessOnlyCAS(t *testing.T) 
 	}
 	if err := db.QueryRow(`SELECT boundary_ns FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary); err != nil || boundary != now.UnixNano() {
 		t.Fatalf("boundary=%d err=%v", boundary, err)
+	}
+}
+
+func TestIngestAuthStopClearsOnlyOnConfigChange(t *testing.T) {
+	db, repo, now := ingestFixture(t)
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	digest := strings.Repeat("a", 64)
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/memory/config" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"config_digest": digest})
+			return
+		}
+		calls++
+		if calls == 1 {
+			w.WriteHeader(502)
+			_, _ = w.Write([]byte(`{"error_kind":"upstream_unauthorized"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"added":1}`))
+	}))
+	defer server.Close()
+	token := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(token, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := memoryapi.New(server.URL, token, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.batchStep(context.Background(), client, time.Hour, now); err == nil {
+		t.Fatal("expected auth error")
+	}
+	if err := repo.batchStep(context.Background(), client, time.Hour, now.Add(time.Minute)); err != nil || calls != 1 {
+		t.Fatalf("stop not retained: %d %v", calls, err)
+	}
+	digest = strings.Repeat("b", 64)
+	if err := repo.batchStep(context.Background(), client, time.Hour, now.Add(2*time.Minute)); err != nil || calls != 2 {
+		t.Fatalf("stop not cleared: %d %v", calls, err)
 	}
 }
 

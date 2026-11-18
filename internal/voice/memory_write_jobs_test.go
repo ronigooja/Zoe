@@ -249,7 +249,51 @@ func TestMemoryWriteTransientRetriesSameOperation(t *testing.T) {
 	}
 	svc.dispatchRecall(context.Background())
 	svc.workers.Wait()
+	if calls.Load() != 1 {
+		t.Fatal("retried before backoff elapsed")
+	}
+	if _, err := store.DB().Exec(`UPDATE model_retry_state SET next_attempt_at='' WHERE consumer='memory_write'`); err != nil {
+		t.Fatal(err)
+	}
+	svc.dispatchRecall(context.Background())
+	svc.workers.Wait()
 	if calls.Load() != 2 || writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='done'`) != 1 || writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies WHERE text<>''`) != 0 {
 		t.Fatal("retry did not reconcile silently")
+	}
+}
+
+func TestMemoryWriteAuthStopRetainsOperation(t *testing.T) {
+	store, svc, handoff := memoryWriteJobFixture(t)
+	var calls atomic.Int32
+	var first string
+	svc.recall.MemoryAPI = workerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var input map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&input)
+		if calls.Add(1) == 1 {
+			first = input["op_id"]
+			w.WriteHeader(502)
+			_, _ = w.Write([]byte(`{"error_kind":"upstream_unauthorized"}`))
+			return
+		}
+		if input["op_id"] != first {
+			t.Error("operation identity changed")
+		}
+		_, _ = w.Write([]byte(`{"operations":[]}`))
+	})
+	handoff()
+	svc.dispatchRecall(context.Background())
+	svc.workers.Wait()
+	svc.dispatchRecall(context.Background())
+	svc.workers.Wait()
+	if calls.Load() != 1 || writeJobCount(t, store, `SELECT count(*) FROM memory_write_outcomes WHERE status='write_auth_stopped'`) != 1 {
+		t.Fatal("write not stopped and retained")
+	}
+	if _, err := store.DB().Exec(`DELETE FROM model_retry_state WHERE consumer='memory_write' AND auth_failed=1`); err != nil {
+		t.Fatal(err)
+	}
+	svc.dispatchRecall(context.Background())
+	svc.workers.Wait()
+	if calls.Load() != 2 || writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='done'`) != 1 {
+		t.Fatal("write did not resume")
 	}
 }
