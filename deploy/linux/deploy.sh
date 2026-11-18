@@ -180,7 +180,7 @@ cmp -s "$dl/server/bin/zoe" "$dl/cli/bin/zoe"
 ZOE_MEMORY_API_TOKEN_FILE="$(state_op memory-token-path "$env_file")"
 export ZOE_MEMORY_API_TOKEN_FILE
 bash "$script_dir/deployment-candidate.sh" "$dl/server/release-manifest.json" --compose "$dl/server/deploy-linux/docker-compose.yml" --env-file "$env_file" --output "$scratch/plan.json" >/dev/null 2>&1
-state_op validate "$dl/server" "$env_file" "$units" "$current_prefix"
+state_op validate "$dl/server" "$env_file" "$units" "$current_prefix" "$prompt_dir"
 python3 - "$dl/server/release-manifest.json" "$sha" <<'PY'
 import json, sys
 manifest = json.load(open(sys.argv[1]))

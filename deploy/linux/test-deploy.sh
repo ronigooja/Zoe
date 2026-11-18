@@ -324,11 +324,12 @@ with tempfile.TemporaryDirectory() as directory:
         (units/(unit+'.service')).touch()
     env = root/'stack.env'
     env.touch()
-    def validate():
+    prompt_dir = str(root/'prompts-host')
+    def validate(path=prompt_dir):
         def output(args, **kwargs):
             return json.dumps(config) if args[0] == 'docker' else ''
         with patch.object(subprocess, 'check_output', side_effect=output):
-            operations['validate'](str(release), str(env), str(units), '/unused/current')
+            operations['validate'](str(release), str(env), str(units), '/unused/current', path)
     validate()
     assert not (root/'qdrant').exists(), 'preflight created storage'
     qdrant = config['services'].pop('qdrant')
@@ -351,6 +352,30 @@ with tempfile.TemporaryDirectory() as directory:
             del config['services'][service]
         else:
             config['services'][service] = original
+    mount = {'type':'bind', 'source':prompt_dir, 'target':prompt_dir, 'read_only':True}
+    config['services']['zoe-server'] = {'volumes':[mount]}
+    def reject(path=prompt_dir):
+        try:
+            validate(path)
+        except SystemExit:
+            return
+        raise AssertionError('unsafe prompt bind accepted')
+    reject()  # No release prompts.
+    (release/'prompts').mkdir()
+    (release/'prompts/register.txt').touch()
+    reject()  # Empty release prompts.
+    (release/'prompts/register.txt').write_text('fixture')
+    validate()
+    assert not pathlib.Path(prompt_dir).exists()
+    reject('relative')
+    reject(str(root/'other/../prompts-host'))
+    for key, value in [('source',str(root/'other')), ('target',str(root/'other')), ('read_only',False)]:
+        original = mount[key]; mount[key] = value
+        reject()
+        mount[key] = original
+    config['services']['other'] = config['services'].pop('zoe-server')
+    reject()
+    del config['services']['other']
     # Only the planned memory secret may be absent; configs/other secrets fail.
     secrets_dir = root/'secrets'
     secrets_dir.mkdir()
@@ -516,6 +541,8 @@ config['services']['zoe-memory-worker'] = {'environment': {
     'ZOE_MEMORY_API_TOKEN_FILE': '/run/secrets/memory_api_token'},
     'secrets': [{'source': 'memory_api_token'}],
     'volumes': [{'type': 'bind', 'source': str(p/'data'), 'target': '/var/lib/zoe/memory'}]}
+config['services']['zoe-server']['volumes'].append({'type':'bind', 'source':str(p/'prompts'),
+                                                    'target':str(p/'prompts'), 'read_only':True})
 (p/'config.json').write_text(json.dumps(config))
 for revision in [old, new]:
     root = p/'releases'/revision if revision == old else p/'source'
