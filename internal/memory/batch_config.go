@@ -112,13 +112,21 @@ func (r *Repository) batchStepWithJitter(ctx context.Context, client ingestClien
 		if err != nil {
 			kind := backoff.Classify(err)
 			if kind == backoff.Auth || kind == backoff.Transient {
-				if e := store.Record(ctx, "memory_ingest", scope, kind, now, backoff.Background, jitter); e != nil && stepErr == nil {
-					stepErr = e
+				if e := store.Record(ctx, "memory_ingest", scope, kind, now, backoff.Background, jitter); e != nil {
+					if stepErr == nil {
+						stepErr = e
+					}
+				} else if r.OnRetryChange != nil {
+					r.OnRetryChange()
 				}
 			}
 		} else if n > 0 {
-			if e := store.Clear(ctx, "memory_ingest", scope); e != nil && stepErr == nil {
-				stepErr = e
+			if e := store.Clear(ctx, "memory_ingest", scope); e != nil {
+				if stepErr == nil {
+					stepErr = e
+				}
+			} else if r.OnRetryChange != nil {
+				r.OnRetryChange()
 			}
 		}
 		owners++

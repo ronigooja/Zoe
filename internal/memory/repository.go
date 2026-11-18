@@ -8,7 +8,11 @@ import (
 )
 
 // Repository reads ingestion inputs and tracks successful worker boundaries.
-type Repository struct{ db *sql.DB }
+type Repository struct {
+	db *sql.DB
+	// OnRetryChange requests a retry status publication after retry state changes.
+	OnRetryChange func()
+}
 
 var ErrVersionConflict = errors.New("ingestion boundary changed concurrently")
 

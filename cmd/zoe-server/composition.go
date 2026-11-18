@@ -34,6 +34,9 @@ func composeControlServer(store *storage.Store, controlConfig control.Config, vo
 		return nil, err
 	}
 	voiceRepository := memory.NewRepositoryWithStore(store)
+	if voiceConfig.Ready != nil {
+		voiceRepository.OnRetryChange = voiceConfig.Ready.PublishRetryState
+	}
 	if voiceConfig.RegisterConfig != nil {
 		voiceConfig.RegisterConfig.MemoryBoundary = func(ctx context.Context, o voice.RegisterOwner) (time.Time, error) {
 			return voiceRepository.BoundaryAt(ctx, o.WorkspaceID, o.OwnerSubjectID)

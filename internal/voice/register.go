@@ -41,7 +41,6 @@ type ContextRegister struct {
 	db             *sql.DB
 	retry          *backoff.Store
 	requestPublish func()
-	retryJitter    func() float64
 	model          *modelclient.Client
 	compactModel   *modelclient.Client
 	compactTimeout time.Duration
