@@ -5,11 +5,50 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"strings"
 	"time"
 
+	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/logging"
 )
+
+// RetryComplete applies the interactive policy around individual model calls.
+// A nil jitter or sleep uses production randomness and a context-aware timer.
+func RetryComplete(ctx context.Context, complete func(context.Context) (string, error), jitter func() float64, sleep func(context.Context, time.Duration) error) (string, error) {
+	if jitter == nil {
+		jitter = rand.Float64
+	}
+	if sleep == nil {
+		sleep = func(ctx context.Context, d time.Duration) error {
+			t := time.NewTimer(d)
+			defer t.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-t.C:
+				return nil
+			}
+		}
+	}
+	p := backoff.Interactive
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		output, err := complete(ctx)
+		if err == nil || backoff.Classify(err) != backoff.Transient || attempt >= p.MaxAttempts {
+			return output, err
+		}
+		d := backoff.Delay(attempt, p.Base, p.Cap, jitter)
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= d {
+			return "", err
+		}
+		if sleepErr := sleep(ctx, d); sleepErr != nil {
+			return "", sleepErr
+		}
+	}
+}
 
 // Input applies to one retained register request and scoped authoritative facts.
 type Input struct {
@@ -70,8 +109,11 @@ func (c *Client) Choose(ctx context.Context, input Input) (choice Choice, result
 	defer func() {
 		logging.Infof("steward_call configured_ms=%d effective_ms=%d elapsed_ms=%d error_kind=%s", configured.Milliseconds(), effective.Milliseconds(), time.Since(started).Milliseconds(), errorKind(resultErr))
 	}()
-	ctx, cancel := context.WithTimeout(ctx, effective)
-	defer cancel()
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, effective)
+		defer cancel()
+	}
 	input, refs, err := prepareInput(input)
 	if err != nil {
 		return Choice{}, err
@@ -88,7 +130,11 @@ func (c *Client) Choose(ctx context.Context, input Input) (choice Choice, result
 			logging.Errorf("steward status=choose_failed error_kind=%s", errorKind(resultErr))
 		}
 	}()
-	output, err := c.transport.Complete(ctx, chooseInstructions, string(data))
+	output, err := RetryComplete(ctx, func(ctx context.Context) (string, error) {
+		attemptCtx, cancel := context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+		return c.transport.Complete(attemptCtx, chooseInstructions, string(data))
+	}, c.retryJitter, c.retrySleep)
 	call.Output(output)
 	if ctx.Err() != nil {
 		err = ctx.Err()

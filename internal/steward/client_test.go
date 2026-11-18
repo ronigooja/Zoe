@@ -44,6 +44,9 @@ func TestParsedDefaultStewardTimeout(t *testing.T) {
 		want  time.Duration
 	}{{"", 30 * time.Second}, {"1000", time.Second}, {"10000", 10 * time.Second}, {"60000", 60 * time.Second}} {
 		c := configured(t, "http://localhost", tc.value)
+		// Retries share the overall deadline; avoid spending it on real backoff
+		// while this test checks the configured transport deadline.
+		c.retrySleep = func(context.Context, time.Duration) error { return nil }
 		c.SetHTTPClient(&http.Client{Transport: stewardDeadlineTransport{t, tc.want}})
 		if _, err := c.Choose(context.Background(), Input{Request: "private sentence"}); err == nil {
 			t.Fatal("expected transport error")
