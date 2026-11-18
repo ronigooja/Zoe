@@ -292,7 +292,10 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 		store = backoff.Store{DB: s.db}
 	}
 	due, err := store.Due(ctx, "ui_controller", "", now)
-	if err != nil || !due {
+	if err != nil {
+		logging.Warnf("model_retry_state_unreadable consumer=ui_controller")
+	} else if !due {
+		logging.Warnf("ui_controller_auth_stopped")
 		s.failUIJob(ctx, j, "model_error", false)
 		return
 	}
