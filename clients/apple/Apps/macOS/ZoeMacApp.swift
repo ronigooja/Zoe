@@ -19,6 +19,9 @@ struct ZoeMacApp {
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var textInputWindow: NSWindow?
+    private var historyWindow: NSWindow?
+    private let historyStore = UISurfaceHistoryStore(root: UISurfaceHistoryStore.defaultRoot())
+    private lazy var historyModel = UISurfaceHistoryModel(store: historyStore, scope: { [weak self] in self?.model.historyScope })
     private var subscriptions = Set<AnyCancellable>()
     private lazy var surfaces = SurfaceManager(popoverAnchor: { [weak self] in self?.statusItem?.button })
 
@@ -32,6 +35,9 @@ struct ZoeMacApp {
         let textInput = NSMenuItem(title: "Text Input", action: #selector(showTextInput), keyEquivalent: "")
         textInput.target = self
         menu.addItem(textInput)
+        let history = NSMenuItem(title: "History", action: #selector(showHistory), keyEquivalent: "")
+        history.target = self
+        menu.addItem(history)
         let settings = NSMenuItem(title: "Settings", action: #selector(showSettings), keyEquivalent: "")
         settings.target = self
         menu.addItem(settings)
@@ -66,6 +72,11 @@ struct ZoeMacApp {
             for id in ids { self?.surfaces.close(id: id) }
         }
         model.onUISurfacesReset = { [weak self] in self?.surfaces.reset() }
+        model.onUISurfaceDisplayed = { [weak self] event, scope in
+            guard let self else { return }
+            let store = self.historyStore
+            Task { try? await store.append(scope: scope, id: event.renderedIdempotencyKey, container: event.container, messages: event.messages) }
+        }
         model.$continuousVoiceEnabled.sink { enabled in voice.state = enabled ? .on : .off }.store(in: &subscriptions)
         model.$voiceStatus.sink { status in
             let active: Bool
@@ -97,6 +108,19 @@ struct ZoeMacApp {
         }
         NSApp.activate(ignoringOtherApps: true)
         textInputWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func showHistory() {
+        if historyWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 480), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.title = "History"
+            window.isReleasedWhenClosed = false
+            window.contentViewController = NSHostingController(rootView: UISurfaceHistoryView(model: historyModel))
+            window.center()
+            historyWindow = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        historyWindow?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func showSettings() {
