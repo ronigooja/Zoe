@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -264,6 +266,10 @@ func TestMemoryWriteTransientRetriesSameOperation(t *testing.T) {
 
 func TestMemoryWriteAuthStopRetainsOperation(t *testing.T) {
 	store, svc, handoff := memoryWriteJobFixture(t)
+	retry := backoff.Store{DB: store.DB()}
+	if _, err := retry.ObserveConfig(context.Background(), "memory_write", strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
 	var calls atomic.Int32
 	var first string
 	svc.recall.MemoryAPI = workerClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +294,15 @@ func TestMemoryWriteAuthStopRetainsOperation(t *testing.T) {
 	if calls.Load() != 1 || writeJobCount(t, store, `SELECT count(*) FROM memory_write_outcomes WHERE status='write_auth_stopped'`) != 1 {
 		t.Fatal("write not stopped and retained")
 	}
-	if _, err := store.DB().Exec(`DELETE FROM model_retry_state WHERE consumer='memory_write' AND auth_failed=1`); err != nil {
+	if changed, err := retry.ObserveConfig(context.Background(), "memory_write", strings.Repeat("a", 64)); err != nil || changed {
+		t.Fatalf("unchanged config: %v %v", changed, err)
+	}
+	svc.dispatchRecall(context.Background())
+	svc.workers.Wait()
+	if calls.Load() != 1 {
+		t.Fatal("unchanged config cleared stop")
+	}
+	if changed, err := retry.ObserveConfig(context.Background(), "memory_write", strings.Repeat("b", 64)); err != nil || !changed {
 		t.Fatal(err)
 	}
 	svc.dispatchRecall(context.Background())

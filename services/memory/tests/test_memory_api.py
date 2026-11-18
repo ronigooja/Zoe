@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import hashlib
 import io
 import json
 import logging
@@ -164,6 +165,22 @@ class MemoryAPITests(unittest.TestCase):
         body = {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": "text"}
         self.assertEqual(self.request("/v1/memory/ingest", body),
                          (502, {"error_kind": "upstream_unauthorized"}))
+
+    def test_config_and_upstream_auth_responses_hide_credential(self):
+        key = "synthetic-api-key-absence-check"
+        plain_hash = hashlib.sha256(key.encode()).hexdigest()
+        self.backend.ingest = Mock(side_effect=UpstreamUnauthorized())
+        with patch.dict("os.environ", {"ZOE_MEM0_LLM_API_KEY": key, "ZOE_MEM0_LLM_MODEL": "model",
+                                      "ZOE_MEM0_LLM_BASE_URL": "https://example.test",
+                                      "ZOE_MEM0_LLM_REASONING_EFFORT": "high"}):
+            config = self.request("/v1/memory/config", {})
+            failure = self.request("/v1/memory/ingest", {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": "text"})
+        self.assertEqual(config[0], 200)
+        self.assertEqual(failure, (502, {"error_kind": "upstream_unauthorized"}))
+        self.assertNotEqual(config[1]["config_digest"], plain_hash)
+        for response in (config, failure):
+            self.assertNotIn(key, json.dumps(response))
+            self.assertNotIn(plain_hash, json.dumps(response))
 
     def test_swallowed_auth_rejection_does_not_complete_ingestion(self):
         from services.memory.auth_tracking import reject_auth

@@ -51,6 +51,10 @@ func (r *Repository) StartBatches(ctx context.Context, client *memoryapi.Client,
 }
 
 func (r *Repository) batchStep(ctx context.Context, client ingestClient, interval time.Duration, now time.Time) (stepErr error) {
+	return r.batchStepWithJitter(ctx, client, interval, now, rand.Float64)
+}
+
+func (r *Repository) batchStepWithJitter(ctx context.Context, client ingestClient, interval time.Duration, now time.Time, jitter func() float64) (stepErr error) {
 	store := backoff.Store{DB: r.db}
 	if config, ok := client.(interface {
 		ConfigDigest(context.Context) (string, error)
@@ -108,7 +112,7 @@ func (r *Repository) batchStep(ctx context.Context, client ingestClient, interva
 		if err != nil {
 			kind := backoff.Classify(err)
 			if kind == backoff.Auth || kind == backoff.Transient {
-				if e := store.Record(ctx, "memory_ingest", scope, kind, now, backoff.Background, rand.Float64); e != nil && stepErr == nil {
+				if e := store.Record(ctx, "memory_ingest", scope, kind, now, backoff.Background, jitter); e != nil && stepErr == nil {
 					stepErr = e
 				}
 			}
