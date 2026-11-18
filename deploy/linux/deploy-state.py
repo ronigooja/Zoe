@@ -201,8 +201,11 @@ def masked(ref):
     return ref.split('@')[-1].removeprefix('sha256:')[:12] if '@' in ref else 'unpinned'
 
 
-def validate(release, env, units, current_prefix):
+def validate(release, env, units, current_prefix, prompt_dir):
     root = Path(release)
+    prompt_path = Path(prompt_dir)
+    if not prompt_path.is_absolute() or '..' in prompt_path.parts:
+        fail('prompt directory must be absolute without parent traversal')
     for name in ('zoe', 'zoe-server', 'zoe-runner', 'zoe-secret-entrypoint'):
         path = root / 'bin' / name
         if not path.is_file() or path.is_symlink() or not os.access(path, os.X_OK):
@@ -246,6 +249,11 @@ def validate(release, env, units, current_prefix):
         for volume in spec.get('volumes', []):
             if volume.get('type') == 'bind' and not Path(volume['source']).exists():
                 if service == 'qdrant' and volume.get('target') == '/qdrant/storage' and volume['source'] == storage:
+                    continue
+                prompts = root / 'prompts'
+                if (service == 'zoe-server' and volume['source'] == prompt_dir and
+                        volume.get('target') == prompt_dir and volume.get('read_only') is True and
+                        prompts.is_dir() and any(p.is_file() and p.stat().st_size > 0 for p in prompts.iterdir())):
                     continue
                 fail('missing bind source service=' + service)
     token = memory_token_path(env) if 'memory_api_token' in config.get('secrets', {}) else ''

@@ -324,11 +324,12 @@ with tempfile.TemporaryDirectory() as directory:
         (units/(unit+'.service')).touch()
     env = root/'stack.env'
     env.touch()
-    def validate():
+    prompt_dir = str(root/'prompts-host')
+    def validate(path=prompt_dir):
         def output(args, **kwargs):
             return json.dumps(config) if args[0] == 'docker' else ''
         with patch.object(subprocess, 'check_output', side_effect=output):
-            operations['validate'](str(release), str(env), str(units), '/unused/current')
+            operations['validate'](str(release), str(env), str(units), '/unused/current', path)
     validate()
     assert not (root/'qdrant').exists(), 'preflight created storage'
     qdrant = config['services'].pop('qdrant')
@@ -351,6 +352,30 @@ with tempfile.TemporaryDirectory() as directory:
             del config['services'][service]
         else:
             config['services'][service] = original
+    mount = {'type':'bind', 'source':prompt_dir, 'target':prompt_dir, 'read_only':True}
+    config['services']['zoe-server'] = {'volumes':[mount]}
+    def reject(path=prompt_dir):
+        try:
+            validate(path)
+        except SystemExit:
+            return
+        raise AssertionError('unsafe prompt bind accepted')
+    reject()  # No release prompts.
+    (release/'prompts').mkdir()
+    (release/'prompts/register.txt').touch()
+    reject()  # Empty release prompts.
+    (release/'prompts/register.txt').write_text('fixture')
+    validate()
+    assert not pathlib.Path(prompt_dir).exists()
+    reject('relative')
+    reject(str(root/'other/../prompts-host'))
+    for key, value in [('source',str(root/'other')), ('target',str(root/'other')), ('read_only',False)]:
+        original = mount[key]; mount[key] = value
+        reject()
+        mount[key] = original
+    config['services']['other'] = config['services'].pop('zoe-server')
+    reject()
+    del config['services']['other']
     # Only the planned memory secret may be absent; configs/other secrets fail.
     secrets_dir = root/'secrets'
     secrets_dir.mkdir()
@@ -516,6 +541,8 @@ config['services']['zoe-memory-worker'] = {'environment': {
     'ZOE_MEMORY_API_TOKEN_FILE': '/run/secrets/memory_api_token'},
     'secrets': [{'source': 'memory_api_token'}],
     'volumes': [{'type': 'bind', 'source': str(p/'data'), 'target': '/var/lib/zoe/memory'}]}
+config['services']['zoe-server']['volumes'].append({'type':'bind', 'source':str(p/'prompts'),
+                                                    'target':str(p/'prompts'), 'read_only':True})
 (p/'config.json').write_text(json.dumps(config))
 for revision in [old, new]:
     root = p/'releases'/revision if revision == old else p/'source'
@@ -554,6 +581,16 @@ for revision in [old, new]:
     (root/'deploy-linux/docker-compose.yml').write_text(compose)
 root = p/'source'
 case = os.environ['CASE']
+(root/'prompts').mkdir()
+for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction']:
+    (root/'prompts'/(name+'.txt')).write_text('PROMPT_SECRET_SENTINEL '+name+'\n')
+if case == 'prompt-missing': (root/'prompts/register.txt').unlink()
+if case in ['prompt-keep', 'prompt-overwrite', 'prompt-identical', 'prompt-dry']:
+    (p/'prompts').mkdir()
+    (p/'prompts/register.txt').write_text('PROMPT_SECRET_SENTINEL register\n' if case == 'prompt-identical' else 'old content\n')
+if case == 'prompt-unwritable':
+    (p/'prompts').mkdir(mode=0o555)
+    (p/'prompts').chmod(0o555)
 if case == 'runner-unchanged-error':
     shutil.copy(p/'releases'/old/'bin/zoe-runner', root/'bin/zoe-runner')
 if case == 'happy':
@@ -772,6 +809,7 @@ PY
   export ZOE_RELEASES_DIR="$FIXTURE/releases" ZOE_ENV_FILE="$FIXTURE/stack.env" ZOE_DB_PATH="$FIXTURE/db.sqlite"
   export ZOE_API_URL=http://local/healthz ZOE_UNITS_DIR="$FIXTURE/units" ZOE_BIN_DIR="$FIXTURE/bin"
   export ZOE_DEPLOY_LOG_DIR="$FIXTURE/logs" ZOE_DEPLOY_HEALTH_ATTEMPTS=1
+  export ZOE_PROMPT_DIR="$FIXTURE/prompts"
 }
 deploy() { PATH="$FIXTURE/shims:$PATH" bash "$repo_root/deploy/linux/deploy.sh" --sha "$new" "$@"; }
 unchanged() {
@@ -845,6 +883,35 @@ fixture dry-run
 deploy --dry-run
 unchanged
 [[ ! -e "$FIXTURE/releases/$new" && ! -e "$FIXTURE/releases/$new.dl" ]]
+for failure in prompt-missing prompt-unwritable; do
+  fixture "$failure"
+  if deploy; then echo "expected refusal: $failure"; exit 1; fi
+  unchanged
+  grep -q 'deploy step=prompts status=failed' "$FIXTURE/logs/$new.log"
+done
+fixture prompt-dry
+deploy --dry-run --prompts overwrite
+unchanged
+[[ "$(cat "$FIXTURE/prompts/register.txt")" == 'old content' ]]
+[[ ! -e "$FIXTURE/prompts/register.txt.pre-${new:0:12}" ]]
+grep -q 'action=overwrite' "$FIXTURE/logs/$new.log"
+if grep -q PROMPT_SECRET_SENTINEL "$FIXTURE/logs/$new.log"; then exit 1; fi
+fixture prompt-keep
+deploy
+[[ "$(cat "$FIXTURE/prompts/register.txt")" == 'old content' ]]
+[[ -f "$FIXTURE/prompts/compact.txt" ]]
+[[ "$(stat -c '%a:%u:%g' "$FIXTURE/prompts/compact.txt")" == 644:0:0 ]]
+grep -q 'action=keep(differs)' "$FIXTURE/logs/$new.log"
+fixture prompt-overwrite
+deploy --prompts overwrite
+[[ "$(cat "$FIXTURE/prompts/register.txt.pre-${new:0:12}")" == 'old content' ]]
+[[ "$(cat "$FIXTURE/prompts/register.txt")" == 'PROMPT_SECRET_SENTINEL register' ]]
+fixture prompt-identical
+before="$(stat -c '%i:%Y' "$FIXTURE/prompts/register.txt")"
+deploy --prompts overwrite
+[[ "$before" == "$(stat -c '%i:%Y' "$FIXTURE/prompts/register.txt")" ]]
+[[ ! -e "$FIXTURE/prompts/register.txt.pre-${new:0:12}" ]]
+grep -q 'action=identical' "$FIXTURE/logs/$new.log"
 fixture token-dry-run
 deploy --dry-run
 unchanged

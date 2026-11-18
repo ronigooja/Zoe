@@ -5,12 +5,18 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 task="$(mktemp -d)"
 trap 'rm -rf -- "$task"' EXIT
 mkdir "$task/shims"
-FIXTURE_SHA="$(git -C "$repo" rev-parse HEAD)"
-FIXTURE_TREE="$(git -C "$repo" rev-parse "$FIXTURE_SHA^{tree}")"
-export FIXTURE_SHA FIXTURE_TREE FIXTURE_CALLS="$task/calls"
 # Keep dirty input fixtures out of the developer's working tree.
 git clone --quiet --shared "$repo" "$task/input"
 cp "$repo/deploy/linux/build-release.sh" "$task/input/deploy/linux/"
+mkdir -p "$task/input/deploy/prompts"
+for name in ui_controller register compact steward task_ui_display voice_instruction; do
+  printf 'fixture %s\n' "$name" > "$task/input/deploy/prompts/$name.txt"
+done
+git -C "$task/input" add deploy/prompts deploy/linux/build-release.sh
+git -C "$task/input" -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'fixture release prompts'
+FIXTURE_SHA="$(git -C "$task/input" rev-parse HEAD)"
+FIXTURE_TREE="$(git -C "$task/input" rev-parse "$FIXTURE_SHA^{tree}")"
+export FIXTURE_SHA FIXTURE_TREE FIXTURE_CALLS="$task/calls"
 printf '\nDIRTY INPUT MUST NOT BUILD\n' >> "$task/input/deploy/linux/Dockerfile.memory"
 chmod 0600 "$task/input/services/__init__.py"
 printf 'untracked\n' > "$task/input/untracked-build-input"
@@ -69,9 +75,15 @@ for name,digest in m['files'].items(): assert hashlib.sha256((root/name).read_by
 with tarfile.open(root/'server-linux-amd64.tar.gz') as tar:
     manifest=json.load(tar.extractfile('./release-manifest.json'))
     assert len(manifest['images'])==3
+    sums=tar.extractfile('./SHA256SUMS').read().decode()
+    for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction']:
+        path='prompts/'+name+'.txt'; data=tar.extractfile('./'+path).read()
+        digest=hashlib.sha256(data).hexdigest()
+        assert digest+'  '+path in sums.splitlines()
+        assert any(item['path']==path and item['sha256']==digest for item in manifest['artifacts'])
 PY
 if PATH="$task/shims:$PATH" bash "$repo/deploy/linux/build-release.sh" --sha "$FIXTURE_SHA" --artifact-dir "$task/output"; then exit 1; fi
-if PATH="$task/shims:$PATH" FIXTURE_BUILD_FAIL=true bash "$repo/deploy/linux/build-release.sh" --sha "$FIXTURE_SHA" --artifact-dir "$task/failed"; then exit 1; fi
+if PATH="$task/shims:$PATH" FIXTURE_BUILD_FAIL=true bash "$task/input/deploy/linux/build-release.sh" --sha "$FIXTURE_SHA" --artifact-dir "$task/failed"; then exit 1; fi
 [[ ! -e "$task/failed" ]]
 for mode in file dir; do
   if PATH="$task/shims:$PATH" FIXTURE_MODE_FAIL="$mode" bash "$task/input/deploy/linux/build-release.sh" --sha "$FIXTURE_SHA" --artifact-dir "$task/failed-$mode"; then exit 1; fi

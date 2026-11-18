@@ -51,6 +51,7 @@ for file in docker-compose.yml zoe-compose.service zoe-runner.service zoe-openco
   cp "deploy/linux/$file" "$task/server/deploy-linux/"
 done
 cp deploy/linux/opencode-release.json "$task/server/"
+cp -R deploy/prompts "$task/server/prompts"
 # Archive payloads must remain traversable by the installed service users;
 # outer staging files remain private under umask 077.
 find "$task/server" -type d -exec chmod 0755 {} +
