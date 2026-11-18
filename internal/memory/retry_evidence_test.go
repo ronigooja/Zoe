@@ -219,3 +219,40 @@ func TestIngestAuthRestartAndCredentialAbsence(t *testing.T) {
 		}
 	}
 }
+
+func TestMemoryConfigObservationClearsBothConsumerStops(t *testing.T) {
+	db, repo, now := ingestFixture(t)
+	ctx := context.Background()
+	digest := strings.Repeat("a", 64)
+	client := evidenceClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/memory/config" {
+			t.Error("unexpected ingest request")
+			w.WriteHeader(500)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"config_digest": digest})
+	})
+	if err := repo.batchStep(ctx, client, time.Hour, now); err != nil {
+		t.Fatal(err)
+	}
+	store := backoff.Store{DB: db}
+	// voice.memoryUser is a direct wrapper of memoryapi.User, tested in voice.
+	scope := memoryapi.User("workspace", "owner")
+	for _, consumer := range []string{"memory_ingest", "memory_write"} {
+		if err := store.Record(ctx, consumer, scope, backoff.Auth, now, backoff.Background, nil); err != nil {
+			t.Fatal(err)
+		}
+		if due, err := store.Due(ctx, consumer, scope, now); err != nil || due {
+			t.Fatalf("%s was not stopped: %v", consumer, err)
+		}
+	}
+	digest = strings.Repeat("b", 64)
+	if err := repo.batchStep(ctx, client, time.Hour, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	for _, consumer := range []string{"memory_ingest", "memory_write"} {
+		if due, err := store.Due(ctx, consumer, scope, now); err != nil || !due {
+			t.Fatalf("%s not cleared: %v", consumer, err)
+		}
+	}
+}

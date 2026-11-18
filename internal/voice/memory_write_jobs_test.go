@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/control"
+	"github.com/ronigooja/Zoe/internal/memoryapi"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
 
@@ -309,5 +311,66 @@ func TestMemoryWriteAuthStopRetainsOperation(t *testing.T) {
 	svc.workers.Wait()
 	if calls.Load() != 2 || writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='done'`) != 1 {
 		t.Fatal("write did not resume")
+	}
+}
+
+func TestMemoryWriteScopeIdentity(t *testing.T) {
+	for _, pair := range [][2]string{{"default", "owner"}, {"a/\"b", "c\\d"}, {"", ""}} {
+		if memoryUser(pair[0], pair[1]) != memoryapi.User(pair[0], pair[1]) {
+			t.Fatal("scope differs")
+		}
+	}
+}
+
+func TestMemoryWriteRecordFailureRecoversForReconciliation(t *testing.T) {
+	for _, startup := range []bool{false, true} {
+		t.Run(fmt.Sprintf("startup=%v", startup), func(t *testing.T) {
+			store, svc, handoff := memoryWriteJobFixture(t)
+			var calls atomic.Int32
+			var first string
+			svc.recall.MemoryAPI = workerClient(t, func(w http.ResponseWriter, r *http.Request) {
+				var input map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+					t.Error(err)
+				}
+				if calls.Add(1) == 1 {
+					first = input["op_id"]
+					if _, err := store.DB().Exec(`CREATE TRIGGER retry_record_failure BEFORE INSERT ON model_retry_state BEGIN SELECT RAISE(FAIL, 'injected'); END`); err != nil {
+						t.Error(err)
+					}
+				} else if first == "" || input["op_id"] != first || input["request"] != writeRestatement {
+					t.Error("reconciliation changed operation identity or request")
+				}
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"error_kind":"write_uncertain"}`))
+			})
+			handoff()
+			svc.dispatchRecall(context.Background())
+			svc.workers.Wait()
+			if calls.Load() != 1 || writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='running'`) != 1 || writeJobCount(t, store, `SELECT count(*) FROM memory_write_outcomes WHERE status='write_uncertain'`) != 1 {
+				t.Fatal("record failure did not retain running uncertain job")
+			}
+			if _, err := store.DB().Exec(`DROP TRIGGER retry_record_failure`); err != nil {
+				t.Fatal(err)
+			}
+			if !startup {
+				svc.recoverRecall(context.Background(), false)
+				if writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='running'`) != 1 {
+					t.Fatal("recovered before lease expired")
+				}
+				if _, err := store.DB().Exec(`UPDATE voice_fast_replies SET updated_at='2000-01-01T00:00:00Z'`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			svc.recoverRecall(context.Background(), startup)
+			if writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='pending'`) != 1 {
+				t.Fatal("recovery did not retain job")
+			}
+			svc.dispatchRecall(context.Background())
+			svc.workers.Wait()
+			if calls.Load() != 2 || writeJobCount(t, store, `SELECT count(*) FROM memory_write_outcomes WHERE status='write_uncertain'`) != 1 || writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='pending'`) != 1 {
+				t.Fatal("uncertain reconciliation was not retained")
+			}
+		})
 	}
 }
