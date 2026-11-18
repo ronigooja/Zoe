@@ -17,10 +17,36 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/steward"
 )
+
+func (s *Service) interactiveModel(ctx context.Context, consumer string, call func() error) error {
+	store := s.retry
+	if store.DB == nil {
+		store.DB = s.db
+	}
+	due, err := store.Due(ctx, consumer, "", s.now())
+	if err != nil {
+		return err
+	}
+	if !due {
+		return errors.New("model consumer stopped")
+	}
+	err = call()
+	if err != nil && backoff.Classify(err) == backoff.Auth {
+		if recordErr := store.Record(ctx, consumer, "", backoff.Auth, s.now(), backoff.Interactive, nil); recordErr != nil {
+			logging.Warnf("model_retry_record_failed consumer=%s", consumer)
+		} else {
+			s.PublishRetryState()
+		}
+	} else if err == nil {
+		_ = store.Clear(ctx, consumer, "")
+	}
+	return err
+}
 
 func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 	p, ok := control.PrincipalFromContext(r.Context())
@@ -636,7 +662,11 @@ func (s *Service) classifyCommittedTurn(id string) {
 	} else if s.register == nil {
 		err = errors.New("context register is disabled")
 	} else {
-		route, err = s.register.Route(ctx, RegisterOwner{workspace, owner}, content, s.now())
+		err = s.interactiveModel(ctx, "register", func() error {
+			var callErr error
+			route, callErr = s.register.Route(ctx, RegisterOwner{workspace, owner}, content, s.now())
+			return callErr
+		})
 	}
 	if err == nil && !acceptedRoutes.Valid {
 		// The register boundary is accepted once; subsequent selection refreshes
@@ -679,7 +709,11 @@ func (s *Service) classifyCommittedTurn(id string) {
 			if s.steward == nil {
 				err = errors.New("steward is disabled")
 			} else {
-				choice, err = s.steward.Choose(logging.WithUserHash(ctx, logging.UserHash(owner)), steward.Input{Request: *route.Request, DisplayRequested: route.Has("ui"), Tasks: facts})
+				err = s.interactiveModel(ctx, "steward", func() error {
+					var callErr error
+					choice, callErr = s.steward.Choose(logging.WithUserHash(ctx, logging.UserHash(owner)), steward.Input{Request: *route.Request, DisplayRequested: route.Has("ui"), Tasks: facts})
+					return callErr
+				})
 			}
 			if err == nil && choice.TaskID != nil {
 				matched := false

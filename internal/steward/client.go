@@ -25,9 +25,11 @@ const (
 )
 
 type Client struct {
-	transport *modelclient.Client
-	timeout   time.Duration
-	http      *http.Client
+	transport   *modelclient.Client
+	timeout     time.Duration
+	http        *http.Client
+	retryJitter func() float64
+	retrySleep  func(context.Context, time.Duration) error
 }
 
 // FromEnv applies only to ZOE_STEWARD_*; an empty base URL disables the model.
