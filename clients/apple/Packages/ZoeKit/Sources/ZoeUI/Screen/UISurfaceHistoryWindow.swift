@@ -74,11 +74,15 @@ import ZoeKit
     }
 }
 
-struct UISurfaceHistoryView: View {
+public struct UISurfaceHistoryView: View {
     @ObservedObject var model: UISurfaceHistoryModel
     @State private var confirmingClear = false
 
-    var body: some View {
+    public init(model: UISurfaceHistoryModel) {
+        self.model = model
+    }
+
+    public var body: some View {
         Group {
             if let record = model.selected {
                 VStack(alignment: .leading, spacing: 0) {
