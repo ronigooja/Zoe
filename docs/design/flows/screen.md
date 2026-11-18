@@ -9,15 +9,18 @@ Approved target, not a claim of current implementation, deployment or acceptance
 | Producer / fields | Consumer and transformation |
 |---|---|
 | UI route / display request / redisplay / authoritative result or question | UI_Controller receives full request(s), task state/result/question, current surfaces and current screen facts. No raw-utterance duplicate input. |
-| UI_Controller presentation | Output carries A2UI content, outer container choice (popover/window), optional size, optional awaiting-input linkage to task_id/question_id, and feedback. Use the renderer/catalog and platform shell. |
+| UI_Controller presentation | Output carries A2UI content, outer container choice (popover/window), optional size, optional awaiting-input linkage to task_id/question_id, required boolean `voice_input`, and feedback. Use the renderer/catalog and platform shell. |
 | Mac render acknowledgement: surface/document identity and revision, actual render outcome | Server validates matching current presentation; success feedback is allowed **only after render ACK**. |
 | A2UI user input: bound task/question, surface revision, submitted value and command idempotency identity | Server routes directly to the bound task or pending question; no voice relay, register pass or semantic task reselection is required. |
+| Conversation text input: command idempotency identity, full text. Producers are the menu-bar text window and an A2UI surface presented with `voice_input` | Server persists the command and delivers the text to the voice conversation as defined in [Results](results.md#user-text-and-input-feedback). No register pass, Steward, or task is involved. |
 | ui.screen and surface state: current displays/visible bounds, surfaces and revisions | UI_Controller plans against current facts; Mac uses consistent native style and clamps size/position to chosen screen's visible bounds. Direct user window actions retain precedence. |
 | SSE: stable event identity/cursor, surface and result revision | Client deduplicates events, applies only current revisions and repairs state from authoritative snapshots on gaps/reconnect. |
 
 ## Required behavior
 
 UI-only content requiring research must obtain task execution through the task path; UI_Controller does no research or invented result generation. Redisplay invokes no Worker and remains UI-only; it does not authorize voice playback. A stale surface is not the current task result. Neither a report nor a UI summary replaces the authoritative result. Screen input can complete while voice is unavailable. Voice/UI completion acknowledgements are separate evidence.
+
+`voice_input` is true only for text typed for the conversation and never together with `awaiting_input`. A `voice_input` surface binds no task or question. Stale surface or revision input is rejected as for task input. The menu-bar text window is a platform-shell entry, not server-driven content, and is available whether or not a call is active.
 
 ## Persistence and idempotency
 
@@ -27,6 +30,7 @@ UI-only content requiring research must obtain task execution through the task p
 - Durable command receipt and task/question entry; preserve submitted full value.
 - Surface identity/revision and authoritative desired state; render ACK as above.
 - Durable/recoverable cursor and presentation/result identities.
+- Durable conversation-text command receipt and pending text keyed by the command identity. Duplicate submission neither duplicates delivery nor overwrites the stored text.
 
 ## Failure and recovery
 
@@ -40,4 +44,4 @@ Validate ownership, current pending state, binding/revision and idempotency; sta
 
 ## Verification obligations
 
-Verify the same authoritative result for voice and screen, no Worker for redisplay, render-ACK-gated feedback, direct bound input while voice is unavailable, stale/duplicate input and stale-surface rejection. Verify consistent style, screen clamp, render failures/ACK, SSE replay/gap repair, native accessibility and real device interaction. Valid-activity-only silence verification is defined in [Media](media.md#verification-obligations). Follow the [acceptance boundary](../../development.md#evidence-and-acceptance).
+Verify the same authoritative result for voice and screen, no Worker for redisplay, render-ACK-gated feedback, direct bound input while voice is unavailable, stale/duplicate input and stale-surface rejection. Verify menu-bar submission with and without an active call, `voice_input` surface submission, duplicate and stale input, and that `voice_input` never reaches a task. Verify consistent style, screen clamp, render failures/ACK, SSE replay/gap repair, native accessibility and real device interaction. Valid-activity-only silence verification is defined in [Media](media.md#verification-obligations). Follow the [acceptance boundary](../../development.md#evidence-and-acceptance).

@@ -39,7 +39,19 @@ Every write to the upstream conversation uses one of two checkpointed paths; the
 | Task results | `deliverCheckpointedResult` | result, destination/session generation, chunk |
 | Other persisted texts (fast replies, UI feedback) | `deliverDurableText` | `(workspace, owner, source_kind, source_id)`, chunk ordinal |
 
-Both require an active call with a bound gateway session and the receipt capability above. A new text source adds a `source_kind` and a stable `source_id`; it does not add a transport.
+Both require an active call with a bound gateway session and the receipt capability above. A new text source adds a `source_kind` and a stable `source_id`; it does not add a transport. Conversation-text source kinds are defined in [User text and input feedback](#user-text-and-input-feedback).
+
+## User text and input feedback
+
+Instructions for the voice upstream list background tools only. Message formats and delivery rules are defined here and are not repeated in instructions.
+
+| Source kind | Content sent to upstream | Source identity |
+|---|---|---|
+| `user_text` | `[User text input] <content>` | conversation-text command identity |
+| `ui_input_request` | `The background tool has asked the user for input. Request: <task pending-question text>` | question identity |
+| `ui_input_received` | `The background tool received the user's input. Content: <submitted text>` | answer command identity |
+
+`user_text` is the user's own input, produced by the [screen](screen.md) conversation-text input, and is delivered through `deliverDurableText`. `ui_input_request` and `ui_input_received` apply only to `awaiting_input` surfaces. The request text is the task's authoritative pending question, not UI_Controller `input_note`. When no call is active, each text remains pending and is delivered on the next call. A delivery receipt proves transport writes only, never upstream understanding.
 
 ## Implementation locations
 
@@ -47,4 +59,4 @@ Both require an active call with a bound gateway session and the receipt capabil
 
 ## Verification obligations
 
-Verify the same authoritative result for voice and screen, no-call pending next-call contextual delivery, and partial-chunk restart/dedupe. For contextual-availability verification, check production opening context, candidate facts and the report reply path. Scoped utility tests for `SelectPendingResult` verify explicit original-delivery selection only; a production call to that utility is not an acceptance criterion for contextual availability. Follow the [acceptance boundary](../../development.md#evidence-and-acceptance).
+Verify the same authoritative result for voice and screen, no-call pending next-call contextual delivery, and partial-chunk restart/dedupe. Verify the exact user-text and input-feedback formats, pending retention without a call, chunking under the 8000-byte limit, and idempotent redelivery. For contextual-availability verification, check production opening context, candidate facts and the report reply path. Scoped utility tests for `SelectPendingResult` verify explicit original-delivery selection only; a production call to that utility is not an acceptance criterion for contextual availability. Follow the [acceptance boundary](../../development.md#evidence-and-acceptance).
