@@ -28,7 +28,7 @@ final class ConversationTextDraft: ObservableObject {
             if text == submittedText && key == submittedKey {
                 text = ""
                 key = nil
-                status = "Accepted. It is sent now if a call is active, otherwise when the next call starts."
+                status = "Accepted."
             }
         } catch {
             if text == submittedText && key == submittedKey {
