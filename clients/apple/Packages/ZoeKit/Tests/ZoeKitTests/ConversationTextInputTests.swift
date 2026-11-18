@@ -23,7 +23,7 @@ final class ConversationTextInputTests: XCTestCase {
         await draft.send { _, key in keys.append(key) }
         XCTAssertEqual(keys[0], keys[1])
         XCTAssertEqual(draft.text, "")
-        XCTAssertEqual(draft.status, "Accepted. It is delivered to the conversation when a call is active.")
+        XCTAssertEqual(draft.status, "Accepted. It is sent now if a call is active, otherwise when the next call starts.")
         draft.text = "hello"
         await draft.send { _, key in keys.append(key); throw URLError(.timedOut) }
         XCTAssertNotEqual(keys[1], keys[2])
