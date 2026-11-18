@@ -68,3 +68,20 @@ func TestLoadBoundaryAndNewline(t *testing.T) {
 		t.Fatal("unexpected metadata")
 	}
 }
+
+func TestVoiceInstructionOffIsExact(t *testing.T) {
+	dir := fixture(t)
+	path := filepath.Join(dir, "voice_instruction.txt")
+	for _, value := range []string{"off ", "off\n\n", "OFF"} {
+		if err := os.WriteFile(path, []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.VoiceInstruction(); got != strings.TrimSuffix(value, "\n") {
+			t.Fatal("non-exact off was disabled")
+		}
+	}
+}
