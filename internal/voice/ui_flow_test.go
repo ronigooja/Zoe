@@ -48,7 +48,7 @@ func uiFlowOutput(messages string, await bool) string {
 	if await {
 		feedback = ""
 	}
-	b, _ := json.Marshal(map[string]any{"container": "window", "feedback": feedback, "awaiting_input": await, "voice_input": false})
+	b, _ := json.Marshal(map[string]any{"container": "window", "feedback": feedback, "awaiting_input": await, "voice_input": false, "size": map[string]int{"width": 400, "height": 300}})
 	return "<ui-meta>" + string(b) + "</ui-meta><a2ui-json>[" + messages + "]</a2ui-json>"
 }
 func uiFlowModel(t *testing.T, output *string, mu *sync.Mutex) *modelclient.Client {
@@ -121,7 +121,7 @@ func TestUIRegisterJobFlow(t *testing.T) {
 	var e struct {
 		Payload map[string]json.RawMessage `json:"payload"`
 	}
-	if json.Unmarshal(raw, &e) != nil || len(e.Payload) != 8 || string(e.Payload["voice_input"]) != "false" {
+	if json.Unmarshal(raw, &e) != nil || len(e.Payload) != 9 || string(e.Payload["voice_input"]) != "false" || string(e.Payload["size"]) != `{"width":400,"height":300}` {
 		t.Fatal(string(raw))
 	}
 	r.svc.createRegisterUIJobs(context.Background())

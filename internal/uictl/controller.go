@@ -223,7 +223,7 @@ func Parse(text string, screen *Size) (Output, error) {
 	if err != nil {
 		return o, err
 	}
-	for _, key := range []string{"container", "feedback", "awaiting_input", "voice_input"} {
+	for _, key := range []string{"container", "feedback", "awaiting_input", "voice_input", "size"} {
 		if _, ok := m[key]; !ok {
 			return o, validationField("missing_field", key)
 		}

@@ -16,7 +16,7 @@ const update = `{"version":"v0.9.1","updateDataModel":{"surfaceId":"screen","pat
 const remove = `{"version":"v0.9.1","deleteSurface":{"surfaceId":"screen"}}`
 
 func fixture(messages string) string {
-	return `<ui-meta>{"container":"window","feedback":"Shown.","awaiting_input":false,"voice_input":false}</ui-meta><a2ui-json>[` + messages + `]</a2ui-json>`
+	return `<ui-meta>{"container":"window","feedback":"Shown.","awaiting_input":false,"voice_input":false,"size":{"width":400,"height":300}}</ui-meta><a2ui-json>[` + messages + `]</a2ui-json>`
 }
 
 func TestRenderingEnvironmentDefinitions(t *testing.T) {
@@ -414,7 +414,7 @@ func testUIPrompt(t *testing.T) string {
 
 func TestTaggedBlocks(t *testing.T) {
 	valid := fixture(create + "," + root)
-	meta := `<ui-meta>{"container":"window","feedback":"Shown.","awaiting_input":false,"voice_input":false}</ui-meta>`
+	meta := `<ui-meta>{"container":"window","feedback":"Shown.","awaiting_input":false,"voice_input":false,"size":{"width":400,"height":300}}</ui-meta>`
 	array := `<a2ui-json>[` + create + `,` + root + `]</a2ui-json>`
 	for _, tc := range []struct{ name, text, code string }{
 		{"missing_meta", array, "block_missing"},
@@ -424,6 +424,8 @@ func TestTaggedBlocks(t *testing.T) {
 		{"unclosed", strings.TrimSuffix(meta, "</ui-meta>") + array, "block_unclosed"},
 		{"unknown_meta", strings.Replace(valid, `"container"`, `"extra":1,"container"`, 1), "unknown_field"},
 		{"input_note", strings.Replace(valid, `"container"`, `"input_note":"x","container"`, 1), "unknown_field"},
+		{"size_missing", strings.Replace(valid, `,"size":{"width":400,"height":300}`, "", 1), "missing_field:size"},
+		{"size_outside", strings.Replace(valid, `,"size":{"width":400,"height":300}`, "", 1) + ` {"size":{"width":640,"height":520}}`, "missing_field:size"},
 		{"size_message", fixture(`{"size":{"width":640,"height":520}}`), "unknown_field"},
 		{"production_pattern", meta + `<a2ui-json>[` + create + `],"size":{"width":640,"height":520}</a2ui-json>`, "invalid_array"},
 	} {
@@ -434,7 +436,7 @@ func TestTaggedBlocks(t *testing.T) {
 			}
 		})
 	}
-	withSize := strings.Replace(valid, `"container"`, `"size":{"width":640,"height":520},"container"`, 1)
+	withSize := strings.Replace(valid, `"size":{"width":400,"height":300}`, `"size":{"width":640,"height":520}`, 1)
 	o, err := Parse("prose "+withSize+" more prose", nil)
 	if err != nil || o.Size == nil || o.Size.Width != 640 || o.Size.Height != 520 {
 		t.Fatalf("size: %+v, %v", o.Size, err)
