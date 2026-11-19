@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 func (s *Server) registerCoreRoutes() {
@@ -49,42 +50,66 @@ func (s *Server) registerCoreRoutes() {
 }
 
 func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
+	var req contracts.CommandRequest
+	reject := func(err error) {
+		status, code := http.StatusInternalServerError, "internal"
+		var api *APIError
+		if errors.As(err, &api) {
+			status, code = api.Status, api.Code
+		}
+		logging.Infof("command_rejected kind=%s status=%d code=%s", commandLogSafe(req.Kind), status, commandLogSafe(code))
+		writeError(w, err)
+	}
 	p, ok := PrincipalFromContext(r.Context())
 	if !ok {
-		writeError(w, apiError(401, "unauthenticated", "device authentication required", nil))
+		reject(apiError(401, "unauthenticated", "device authentication required", nil))
 		return
 	}
 	if !HasScope(p, "client:command") {
-		writeError(w, apiError(http.StatusForbidden, "forbidden", "client:command scope is required", nil))
+		reject(apiError(http.StatusForbidden, "forbidden", "client:command scope is required", nil))
 		return
 	}
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if key == "" || len(key) > 200 {
-		writeError(w, apiError(400, "invalid_request", "Idempotency-Key is required and must be at most 200 bytes", nil))
+		reject(apiError(400, "invalid_request", "Idempotency-Key is required and must be at most 200 bytes", nil))
 		return
 	}
-	var req contracts.CommandRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, err)
+		reject(err)
 		return
 	}
 	req.Kind = strings.TrimSpace(req.Kind)
 	if req.Kind == "" || len(req.Payload) == 0 {
-		writeError(w, apiError(400, "invalid_request", "kind and payload are required", nil))
+		reject(apiError(400, "invalid_request", "kind and payload are required", nil))
 		return
 	}
 	canonical, err := canonicalCommand(req)
 	if err != nil {
-		writeError(w, apiError(400, "invalid_request", "payload must be a JSON object", nil))
+		reject(apiError(400, "invalid_request", "payload must be a JSON object", nil))
 		return
 	}
 	h := sha256.Sum256(canonical)
 	receipt, err := s.ExecuteCommand(r.Context(), p, key, req, h[:])
 	if err != nil {
-		writeError(w, err)
+		reject(err)
 		return
 	}
 	writeJSON(w, 200, receipt)
+}
+
+func commandLogSafe(value string) string {
+	var out strings.Builder
+	for _, r := range value {
+		if out.Len() == 64 {
+			break
+		}
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+			out.WriteByte(byte(r))
+		} else {
+			out.WriteByte('_')
+		}
+	}
+	return out.String()
 }
 
 func canonicalCommand(req contracts.CommandRequest) ([]byte, error) {
