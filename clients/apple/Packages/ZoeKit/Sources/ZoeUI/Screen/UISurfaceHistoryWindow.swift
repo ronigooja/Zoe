@@ -16,6 +16,8 @@ import ZoeKit
     private let store: UISurfaceHistoryStore
     private let scope: () -> UISurfaceHistoryScope?
     private var loading = false
+    /// A reload starts a new generation; results from an older generation are discarded.
+    private var generation = 0
 
     public init(store: UISurfaceHistoryStore, scope: @escaping () -> UISurfaceHistoryScope?) {
         self.store = store
@@ -23,20 +25,25 @@ import ZoeKit
     }
 
     public func reload() async {
+        generation += 1
         entries = []
         hasMore = false
+        loading = false
         await loadNextPage()
     }
 
     public func loadNextPage() async {
         guard let scope = scope(), !loading, hasMore || entries.isEmpty else { return }
         loading = true
-        defer { loading = false }
+        let current = generation
+        defer { if current == generation { loading = false } }
         do {
             let page = try await store.page(scope: scope, offset: entries.count)
+            guard current == generation else { return }
             entries += page.entries
             hasMore = page.hasMore
         } catch {
+            guard current == generation else { return }
             notice = uiText("History could not be read.")
             hasMore = false
         }

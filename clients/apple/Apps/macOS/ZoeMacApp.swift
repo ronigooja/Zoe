@@ -26,6 +26,7 @@ struct ZoeMacApp {
     private lazy var surfaces = SurfaceManager(popoverAnchor: { [weak self] in self?.statusItem?.button })
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installMainMenu()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "mic", accessibilityDescription: "Zoe")
         let menu = NSMenu()
@@ -72,10 +73,9 @@ struct ZoeMacApp {
             for id in ids { self?.surfaces.close(id: id) }
         }
         model.onUISurfacesReset = { [weak self] in self?.surfaces.reset() }
-        model.onUISurfaceDisplayed = { [weak self] event, scope in
-            guard let self else { return }
-            let store = self.historyStore
-            Task { try? await store.append(scope: scope, id: event.renderedIdempotencyKey, container: event.container, messages: event.messages) }
+        let store = historyStore
+        model.onUISurfaceDisplayed = { event, scope in
+            try await store.append(scope: scope, id: event.renderedIdempotencyKey, container: event.container, messages: event.messages)
         }
         model.$continuousVoiceEnabled.sink { enabled in voice.state = enabled ? .on : .off }.store(in: &subscriptions)
         model.$voiceStatus.sink { status in
@@ -84,6 +84,29 @@ struct ZoeMacApp {
             item.button?.image = NSImage(systemSymbolName: active ? "mic.fill" : "mic", accessibilityDescription: active ? "Microphone in use" : "Zoe")
         }.store(in: &subscriptions)
         Task { await model.start() }
+    }
+
+    /// LSUIElement apps have no main menu by default, so standard Edit shortcuts need one.
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Quit Zoe", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        mainMenu.addItem(appItem)
+        let editItem = NSMenuItem()
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(NSMenuItem.separator())
+        edit.addItem(withTitle: "Cut", action: Selector(("cut:")), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: Selector(("copy:")), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: Selector(("paste:")), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: Selector(("selectAll:")), keyEquivalent: "a")
+        editItem.submenu = edit
+        mainMenu.addItem(editItem)
+        NSApp.mainMenu = mainMenu
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -118,6 +141,8 @@ struct ZoeMacApp {
             window.contentViewController = NSHostingController(rootView: UISurfaceHistoryView(model: historyModel))
             window.center()
             historyWindow = window
+        } else {
+            Task { await historyModel.reload() }
         }
         NSApp.activate(ignoringOtherApps: true)
         historyWindow?.makeKeyAndOrderFront(nil)

@@ -25,18 +25,5 @@
 "unknown" = "未知";
 
 
-"This installation link is invalid." = "此安装链接无效。";
-"Clear the saved key before connecting to a different server." = "连接其他服务器前，请先清除已存密钥。";
-"Saved key and local connection data cleared." = "已清除密钥和本地连接数据。";
-"The instance key was rejected. Replace it with the current key from your server." = "实例密钥被拒绝。请替换为服务器当前的密钥。";
-"Enter your server address and instance key to connect." = "输入服务器地址和实例密钥以连接。";
-"Enter the 43-character instance key from your server." = "请输入服务器提供的 43 字符实例密钥。";
-"No installation QR code was found in this image." = "此图片中未找到安装二维码。";
-"Choose an image containing one installation QR code." = "请选择只包含一个安装二维码的图片。";
 "The instance key could not be saved in local storage." = "实例密钥无法保存到本地存储。";
 "The previous instance key could not be restored in local storage. Reconnect with your server key." = "无法在本地存储中恢复先前的实例密钥。请使用服务器密钥重新连接。";
-"Something went wrong. Try again." = "出现问题，请重试。";
-"Popover close delay (seconds)" = "气泡关闭延迟（秒）";
-"Window close delay (seconds)" = "窗口关闭延迟（秒）";
-"After focus loss, 0 means never, and the maximum is 3600 seconds." = "失去焦点后，0 表示不自动关闭，最大 3600 秒。";
-"Pending questions never auto-close; outside clicks and Esc close popovers immediately, and the popover delay applies only to other focus loss." = "等待回答的问题不会自动关闭；点击气泡外部或按 Esc 会立即关闭气泡，气泡延迟仅适用于其他失焦情况。";

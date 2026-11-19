@@ -224,7 +224,7 @@ final class InstanceConnectionTests: XCTestCase {
         let connected = await model.connect(serverAddress: "https://zoe.example", key: key())
 
         XCTAssertFalse(connected)
-        XCTAssertEqual(model.notice, uiText("Something went wrong. Try again."))
+        XCTAssertEqual(model.notice, "Something went wrong. Try again.")
     }
 
     @MainActor

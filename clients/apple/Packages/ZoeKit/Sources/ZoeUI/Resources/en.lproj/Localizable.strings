@@ -38,5 +38,3 @@
 "Something went wrong. Try again." = "Something went wrong. Try again.";
 "Popover close delay (seconds)" = "Popover close delay (seconds)";
 "Window close delay (seconds)" = "Window close delay (seconds)";
-"After focus loss, 0 means never, and the maximum is 3600 seconds." = "After focus loss, 0 means never, and the maximum is 3600 seconds.";
-"Pending questions never auto-close; outside clicks and Esc close popovers immediately, and the popover delay applies only to other focus loss." = "Pending questions never auto-close; outside clicks and Esc close popovers immediately, and the popover delay applies only to other focus loss.";

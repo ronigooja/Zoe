@@ -21,8 +21,8 @@ public final class ZoeAppModel: ObservableObject {
     private var recoveryRendered: [UISurfaceBinding: UISurfaceEvent] = [:]
     private var sessionPresentedSurfaces: [String: UISurfaceEvent] = [:]
     public var onUISurfaceInputState: ((UISurfaceEvent) -> Void)?
-    /// Called only after the native host reports a successful display of the event.
-    public var onUISurfaceDisplayed: ((UISurfaceEvent, UISurfaceHistoryScope) -> Void)?
+    /// Called only after the native host reports a successful display of the event. A thrown error is recorded as a diagnostic.
+    public var onUISurfaceDisplayed: ((UISurfaceEvent, UISurfaceHistoryScope) async throws -> Void)?
     private let historyScopeKey = "zoe.history.scope"
     private var recoveryACKTask: Task<Void, Never>?
     #if os(macOS)
@@ -32,6 +32,7 @@ public final class ZoeAppModel: ObservableObject {
     @Published public internal(set) var serverAddress: String
     @Published public private(set) var isConnecting = false
     @Published public private(set) var notice: String?
+    @Published private(set) var savedKeyText = SavedKeyMask.text(for: nil)
     @Published public private(set) var isBusy = false
     @Published public private(set) var authentication: InstanceConnectionState = .checking
     @Published public private(set) var eventRecoveryRequired = false
@@ -416,7 +417,7 @@ public final class ZoeAppModel: ObservableObject {
             connectionImportError = nil
         } catch {
             pendingConnectionImport = nil
-            connectionImportError = uiText("This installation link is invalid.")
+            connectionImportError = "This installation link is invalid."
         }
     }
 
@@ -435,10 +436,11 @@ public final class ZoeAppModel: ObservableObject {
         guard !isBusy, !isConnecting else { return false }
         isBusy = true
         defer { isBusy = false }
+        defer { refreshSavedKeyText() }
         do {
             let candidate = try InstallationConnection(serverAddress: address, key: key)
             if !serverAddress.isEmpty, candidate.serverURL != validServerURL(serverAddress) {
-                notice = uiText("Clear the saved key before connecting to a different server.")
+                notice = "Clear the saved key before connecting to a different server."
                 return false
             }
             let candidateAPI = try connectionAPI(url: candidate.serverURL, key: candidate.key)
@@ -482,10 +484,20 @@ public final class ZoeAppModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         await endVoiceSession(reason: .connectionCleared)
+        defer { refreshSavedKeyText() }
         do {
             try await removeLocalConnection()
-            notice = connectionCleanupWarning ?? uiText("Saved key and local connection data cleared.")
+            notice = connectionCleanupWarning ?? "Saved key and local connection data cleared."
         } catch { notice = userMessage(error) }
+    }
+
+    /// Publishes only the masked text. The decrypted key stays inside this function and is never stored or logged.
+    func refreshSavedKeyText() {
+        var key: String?
+        if let url = try? ServerAddress.normalize(serverAddress), let store = try? keyStore(url: url) {
+            key = try? store.load()?.bearerToken()
+        }
+        savedKeyText = SavedKeyMask.text(for: key)
     }
 
     private func removeLocalConnection(preservingCredential: Bool = false, previousKey: InstanceKey? = nil) async throws {
@@ -1352,10 +1364,10 @@ public final class ZoeAppModel: ObservableObject {
             voiceTurnID = nil
             voiceProviderMessageID = nil
             voiceDraftRevision = 0
-            notice = uiText("Voice turn handed off to Zoe.")
+            notice = "Voice turn handed off to Zoe."
         } catch {
             recordAutomaticVoiceTurnDiagnostic(errorType: "processing_failed", errorSummary: RedactedDiagnostic(error).errorSummary, mediaEpoch: mediaEpoch)
-            notice = uiText("The voice turn could not be handed off; the draft was preserved.")
+            notice = "The voice turn could not be handed off; the draft was preserved."
         }
     }
 
@@ -1442,7 +1454,7 @@ public final class ZoeAppModel: ObservableObject {
                 guard generation == connectionGeneration.value else { return }
                 eventRecoveryRequired = true
                 authentication = .unavailable
-                notice = uiText("Event history recovery is unavailable. Retrying without skipping events.")
+                notice = "Event history recovery is unavailable. Retrying without skipping events."
                 throw error
             }
         }
@@ -1663,10 +1675,32 @@ public final class ZoeAppModel: ObservableObject {
 
     /// History is local and never fed back to the server. The last scope persists so it stays viewable while disconnected.
     private func recordUISurfaceHistory(_ event: UISurfaceEvent) {
-        guard let workspace = workspaceID, !serverAddress.isEmpty else { return }
+        guard let workspace = workspaceID, !serverAddress.isEmpty else {
+            var missing: [String] = []
+            if workspaceID == nil { missing.append("workspace") }
+            if serverAddress.isEmpty { missing.append("server") }
+            recordUITrace(phase: "history_scope_unavailable", summary: "missing=" + missing.joined(separator: ","), level: .warn, upload: true)
+            return
+        }
         let scope = UISurfaceHistoryScope(serverURL: serverAddress, workspaceID: workspace)
         if let data = try? JSONEncoder().encode(scope) { defaults.set(data, forKey: historyScopeKey) }
-        onUISurfaceDisplayed?(event, scope)
+        guard let write = onUISurfaceDisplayed else { return }
+        Task { [weak self] in
+            do {
+                try await write(event, scope)
+                self?.recordUITrace(phase: "history_entry_written", summary: "written", level: .info)
+            } catch {
+                self?.recordUITrace(phase: "history_write_failed", summary: Self.historyFailureCategory(error), level: .warn, upload: true)
+            }
+        }
+    }
+
+    private static func historyFailureCategory(_ error: Error) -> String {
+        guard let historyError = error as? UISurfaceHistoryError else { return "io_error" }
+        switch historyError {
+        case .invalidID: return "invalidID"
+        case .notFound: return "notFound"
+        }
     }
 
     public var historyScope: UISurfaceHistoryScope? {
@@ -1783,12 +1817,12 @@ public final class ZoeAppModel: ObservableObject {
 
     private func userMessage(_ error: Error) -> String {
         reportClientError(error, code: "client_error")
-        if Self.isAccessDenied(error) { return uiText("The instance key was rejected. Replace it with the current key from your server.") }
-        if error is ConnectionInputError { return uiText(error.localizedDescription) }
+        if Self.isAccessDenied(error) { return "The instance key was rejected. Replace it with the current key from your server." }
+        if error is ConnectionInputError { return error.localizedDescription }
         if let failure = error as? ZoeError, case .missingCredential = failure {
-            return uiText("Enter your server address and instance key to connect.")
+            return "Enter your server address and instance key to connect."
         }
-        return uiText("Something went wrong. Try again.")
+        return "Something went wrong. Try again."
     }
 
     private func reportClientError(_ error: Error, code: String) {

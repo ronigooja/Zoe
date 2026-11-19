@@ -48,19 +48,16 @@ public struct MacSettingsView: View {
                     }
                 }
                 Section {
-                    TextField(uiText("Popover close delay (seconds)"), value: Binding(
+                    TextField("Popover close delay (seconds)", value: Binding(
                         get: { model.popoverCloseDelaySeconds }, set: { model.setPopoverCloseDelaySeconds($0) }
                     ), format: .number)
-                    TextField(uiText("Window close delay (seconds)"), value: Binding(
+                    TextField("Window close delay (seconds)", value: Binding(
                         get: { model.windowCloseDelaySeconds }, set: { model.setWindowCloseDelaySeconds($0) }
                     ), format: .number)
+                    Text("Seconds after focus loss. 0 never closes; maximum 3600.")
+                        .font(.caption).foregroundStyle(.secondary)
                 } header: {
                     Text("Screen")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(uiText("After focus loss, 0 means never, and the maximum is 3600 seconds."))
-                        Text(uiText("Pending questions never auto-close; outside clicks and Esc close popovers immediately, and the popover delay applies only to other focus loss."))
-                    }
                 }
             }
             .formStyle(.grouped)
@@ -70,6 +67,9 @@ public struct MacSettingsView: View {
                 Section("Server") {
                     TextField("Server address", text: $address)
                     SecureField("Instance key", text: $key)
+                    Text(model.savedKeyText)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.disabled)
                     HStack {
                         Button {
                             Task {
@@ -125,10 +125,8 @@ public struct MacSettingsView: View {
                 Task { await model.clearCredential(); address = model.serverAddress; key = "" }
             }
             Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The saved instance key will be removed from this Mac.")
         }
-        .onAppear { address = model.serverAddress; refreshSilenceSeconds() }
+        .onAppear { address = model.serverAddress; refreshSilenceSeconds(); model.refreshSavedKeyText() }
         .onChange(of: model.silenceTimeoutSeconds) { _, _ in refreshSilenceSeconds() }
         .task(id: model.connectionEpoch) { await model.refreshVoiceReadiness() }
     }
