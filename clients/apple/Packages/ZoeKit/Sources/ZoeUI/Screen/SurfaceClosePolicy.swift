@@ -6,8 +6,8 @@ struct SurfaceClosePolicy {
         seconds.isFinite ? min(3600, max(0, seconds)) : 60
     }
 
-    static func shouldDismissPopover(isEscape: Bool, isMouseDown: Bool, isInside: Bool) -> Bool {
-        isEscape || (isMouseDown && !isInside)
+    static func shouldDismissPopover(isEscape: Bool) -> Bool {
+        isEscape
     }
 
     static func deadline(lostFocusAt: Date?, delay: Double, awaitingInput: Bool) -> Date? {

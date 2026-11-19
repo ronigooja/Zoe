@@ -19,7 +19,6 @@ import A2UISwiftUI
     private var lostFocusAt: [String: Date] = [:]
     private var closeTasks: [String: Task<Void, Never>] = [:]
     private var localMonitor: Any?
-    private var globalMonitor: Any?
     public var popoverCloseDelaySeconds: Double = 60 { didSet { rescheduleClosures() } }
     public var windowCloseDelaySeconds: Double = 60 { didSet { rescheduleClosures() } }
     private let actionHandler: (String, ResolvedAction) -> Void
@@ -77,8 +76,7 @@ import A2UISwiftUI
         case .popover:
             let popover = NSPopover()
             popover.delegate = self
-            // Explicit dismissal separates outside clicks from delayed non-click focus loss.
-            // Transient behavior cannot provide that distinction for an LSUIElement app.
+            // Outside clicks never close a popover; only Esc, the close control and delayed focus loss do.
             popover.behavior = .applicationDefined
             popover.contentViewController = controller
             popover.contentSize = clampedSize(spec.size, kind: .popover)
@@ -245,31 +243,24 @@ import A2UISwiftUI
     }
 
     private func refreshEventMonitors() {
-        let needsMonitors = entries.values.contains { $0.popover?.isShown == true }
-        if !needsMonitors {
+        let needsMonitor = entries.values.contains { $0.popover?.isShown == true }
+        if !needsMonitor {
             if let localMonitor { NSEvent.removeMonitor(localMonitor) }
-            if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
             localMonitor = nil
-            globalMonitor = nil
         } else if localMonitor == nil {
-            localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 MainActor.assumeIsolated {
-                    let dismissed = self?.handleDismissal(event, global: false) ?? false
-                    return dismissed && event.type == .keyDown ? nil : event
+                    let dismissed = self?.handleEscape(event) ?? false
+                    return dismissed ? nil : event
                 }
-            }
-            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-                MainActor.assumeIsolated { _ = self?.handleDismissal(event, global: true) }
             }
         }
     }
 
-    private func handleDismissal(_ event: NSEvent, global: Bool) -> Bool {
+    private func handleEscape(_ event: NSEvent) -> Bool {
         var dismissed = false
-        for (id, entry) in Array(entries) where entry.popover?.isShown == true {
-            let inside = !global && event.window === entry.popover?.contentViewController?.view.window
-            if SurfaceClosePolicy.shouldDismissPopover(isEscape: event.type == .keyDown && event.keyCode == 53,
-                isMouseDown: event.type == .leftMouseDown || event.type == .rightMouseDown, isInside: inside) {
+        for id in Array(entries.keys) where entries[id]?.popover?.isShown == true {
+            if SurfaceClosePolicy.shouldDismissPopover(isEscape: event.keyCode == 53) {
                 dismiss(id: id)
                 dismissed = true
             }
@@ -343,12 +334,30 @@ import A2UISwiftUI
 
     private func hostingController(_ model: SurfaceViewModel, id: String, kind: SurfaceKind) -> NSViewController {
         let handler = capturedActionHandler(id: id)
-        let controller = NSHostingController(rootView: ScrollView(.vertical) {
+        let surface = ScrollView(.vertical) {
             A2UISurfaceView(viewModel: model, scrolls: false, onAction: handler)
                 .a2uiCatalogItems(SurfaceCatalogOverrides.items(tracker: actionTracker(id: id)))
                 .textSelection(.enabled)
                 .padding(Self.surfacePadding)
-        })
+        }
+        let root: AnyView
+        if kind == .popover {
+            root = AnyView(VStack(spacing: 0) {
+                surface
+                SwiftUI.Button { [weak self] in self?.dismiss(id: id) } label: {
+                    SwiftUI.Image(systemName: "xmark.circle")
+                        .font(.system(size: 15))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Close")
+                .accessibilityLabel("Close")
+                .padding(.bottom, 6)
+            })
+        } else {
+            root = AnyView(surface)
+        }
+        let controller = NSHostingController(rootView: root)
         controller.sizingOptions = []
         if kind == .popover {
             // Let NSPopover's system material show through; windows retain their normal background.

@@ -8,11 +8,9 @@ import ZoeKit
 
 @MainActor
 final class SurfaceManagerTests: XCTestCase {
-    func testOutsideClickAndEscapePolicy() {
-        XCTAssertTrue(SurfaceClosePolicy.shouldDismissPopover(isEscape: false, isMouseDown: true, isInside: false))
-        XCTAssertFalse(SurfaceClosePolicy.shouldDismissPopover(isEscape: false, isMouseDown: true, isInside: true))
-        XCTAssertTrue(SurfaceClosePolicy.shouldDismissPopover(isEscape: true, isMouseDown: false, isInside: true))
-        XCTAssertFalse(SurfaceClosePolicy.shouldDismissPopover(isEscape: false, isMouseDown: false, isInside: false))
+    func testOnlyEscapeDismissesPopoverByPolicy() {
+        XCTAssertTrue(SurfaceClosePolicy.shouldDismissPopover(isEscape: true))
+        XCTAssertFalse(SurfaceClosePolicy.shouldDismissPopover(isEscape: false))
     }
 
     func testFocusDeadlineDisabledPendingAndRegainedFocus() {
