@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2E3380"/>
+      <stop offset="1" stop-color="#100F33"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#8B7BFF" stop-opacity="0.5"/>
+      <stop offset="0.55" stop-color="#6A58F0" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#6A58F0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="orb" cx="0.36" cy="0.3" r="0.85">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.4" stop-color="#CBD3FF"/>
+      <stop offset="0.8" stop-color="#7F76F7"/>
+      <stop offset="1" stop-color="#5646DA"/>
+    </radialGradient>
+    <radialGradient id="warm" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FF7A6B" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#FF7A6B" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="clip"><circle cx="512" cy="512" r="200"/></clipPath>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="380" fill="url(#glow)"/>
+  <circle cx="512" cy="512" r="345" fill="none" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="12"/>
+  <circle cx="512" cy="512" r="275" fill="none" stroke="#FFFFFF" stroke-opacity="0.26" stroke-width="14"/>
+  <circle cx="512" cy="512" r="200" fill="url(#orb)"/>
+  <g clip-path="url(#clip)">
+    <circle cx="610" cy="640" r="150" fill="url(#warm)"/>
+  </g>
+</svg>

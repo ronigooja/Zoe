@@ -9,6 +9,8 @@
 		A10000000000000000000001 /* ZoeMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* ZoeMacApp.swift */; };
 		A10000000000000000000003 /* ZoeUI in Frameworks */ = {isa = PBXBuildFile; productRef = A70000000000000000000001 /* ZoeUI */; };
 		A10000000000000000000005 /* InfoPlist.strings in Resources Mac */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000001 /* InfoPlist.strings */; };
+		A10000000000000000000007 /* Assets.xcassets in Resources Mac */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* Assets.xcassets */; };
+		A10000000000000000000008 /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* MenuBarIcon.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -16,6 +18,8 @@
 		A20000000000000000000003 /* Zoe.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Zoe.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000005 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A20000000000000000000006 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
+		A20000000000000000000007 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A20000000000000000000008 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -26,8 +30,8 @@
 		A40000000000000000000001 = {isa = PBXGroup; children = (A40000000000000000000002 /* Apps */, A40000000000000000000003 /* Products */,); sourceTree = "<group>"; };
 		A40000000000000000000002 /* Apps */ = {isa = PBXGroup; children = (A40000000000000000000004 /* macOS */, A40000000000000000000006 /* Resources */,); path = Apps; sourceTree = "<group>"; };
 		A40000000000000000000003 /* Products */ = {isa = PBXGroup; children = (A20000000000000000000003 /* Zoe.app */, ); name = Products; sourceTree = "<group>"; };
-		A40000000000000000000004 /* macOS */ = {isa = PBXGroup; children = (A20000000000000000000001 /* ZoeMacApp.swift */,); path = macOS; sourceTree = "<group>"; };
-		A40000000000000000000006 /* Resources */ = {isa = PBXGroup; children = (AB0000000000000000000001 /* InfoPlist.strings */,); path = Resources; sourceTree = "<group>"; };
+		A40000000000000000000004 /* macOS */ = {isa = PBXGroup; children = (A20000000000000000000001 /* ZoeMacApp.swift */, A20000000000000000000008 /* MenuBarIcon.swift */,); path = macOS; sourceTree = "<group>"; };
+		A40000000000000000000006 /* Resources */ = {isa = PBXGroup; children = (AB0000000000000000000001 /* InfoPlist.strings */, A20000000000000000000007 /* Assets.xcassets */,); path = Resources; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -39,11 +43,11 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		A30000000000000000000005 /* Resources Mac */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000005 /* InfoPlist.strings in Resources Mac */,); runOnlyForDeploymentPostprocessing = 0; };
+		A30000000000000000000005 /* Resources Mac */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000005 /* InfoPlist.strings in Resources Mac */, A10000000000000000000007 /* Assets.xcassets in Resources Mac */,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A30000000000000000000003 /* Sources Mac */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* ZoeMacApp.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
+		A30000000000000000000003 /* Sources Mac */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* ZoeMacApp.swift in Sources */, A10000000000000000000008 /* MenuBarIcon.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXVariantGroup section */
@@ -53,8 +57,8 @@
 /* Begin XCBuildConfiguration section */
 AA0000000000000000000001 /* Debug Project */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; CURRENT_PROJECT_VERSION = 1; MARKETING_VERSION = 0.1.0; ZOE_SOURCE_REVISION = unknown; SWIFT_VERSION = 5.0; }; name = Debug; };
 AA0000000000000000000002 /* Release Project */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; CURRENT_PROJECT_VERSION = 1; MARKETING_VERSION = 0.1.0; ZOE_SOURCE_REVISION = unknown; SWIFT_VERSION = 5.0; }; name = Release; };
-AA0000000000000000000003 /* Debug Mac */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = Apps/macOS/ZoeMac.entitlements; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = "Apps/macOS/ZoeMac-Info.plist"; INFOPLIST_KEY_CFBundleAllowMixedLocalizations = YES; INFOPLIST_KEY_CFBundleDisplayName = Zoe; INFOPLIST_KEY_CFBundleShortVersionString = "$(MARKETING_VERSION)"; INFOPLIST_KEY_CFBundleVersion = "$(CURRENT_PROJECT_VERSION)"; INFOPLIST_KEY_ZoeSourceRevision = "$(ZOE_SOURCE_REVISION)"; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity"; INFOPLIST_KEY_NSMicrophoneUsageDescription = "Zoe uses the microphone for live voice conversations."; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks"; MACOSX_DEPLOYMENT_TARGET = 14.0; PRODUCT_BUNDLE_IDENTIFIER = "com.zoe.mac"; PRODUCT_NAME = Zoe; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Debug; };
-AA0000000000000000000004 /* Release Mac */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = Apps/macOS/ZoeMac.entitlements; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = "Apps/macOS/ZoeMac-Info.plist"; INFOPLIST_KEY_CFBundleAllowMixedLocalizations = YES; INFOPLIST_KEY_CFBundleDisplayName = Zoe; INFOPLIST_KEY_CFBundleShortVersionString = "$(MARKETING_VERSION)"; INFOPLIST_KEY_CFBundleVersion = "$(CURRENT_PROJECT_VERSION)"; INFOPLIST_KEY_ZoeSourceRevision = "$(ZOE_SOURCE_REVISION)"; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity"; INFOPLIST_KEY_NSMicrophoneUsageDescription = "Zoe uses the microphone for live voice conversations."; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks"; MACOSX_DEPLOYMENT_TARGET = 14.0; PRODUCT_BUNDLE_IDENTIFIER = "com.zoe.mac"; PRODUCT_NAME = Zoe; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Release; };
+AA0000000000000000000003 /* Debug Mac */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_ENTITLEMENTS = Apps/macOS/ZoeMac.entitlements; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = "Apps/macOS/ZoeMac-Info.plist"; INFOPLIST_KEY_CFBundleAllowMixedLocalizations = YES; INFOPLIST_KEY_CFBundleDisplayName = Zoe; INFOPLIST_KEY_CFBundleShortVersionString = "$(MARKETING_VERSION)"; INFOPLIST_KEY_CFBundleVersion = "$(CURRENT_PROJECT_VERSION)"; INFOPLIST_KEY_ZoeSourceRevision = "$(ZOE_SOURCE_REVISION)"; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity"; INFOPLIST_KEY_NSMicrophoneUsageDescription = "Zoe uses the microphone for live voice conversations."; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks"; MACOSX_DEPLOYMENT_TARGET = 14.0; PRODUCT_BUNDLE_IDENTIFIER = "com.zoe.mac"; PRODUCT_NAME = Zoe; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Debug; };
+AA0000000000000000000004 /* Release Mac */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_ENTITLEMENTS = Apps/macOS/ZoeMac.entitlements; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = "Apps/macOS/ZoeMac-Info.plist"; INFOPLIST_KEY_CFBundleAllowMixedLocalizations = YES; INFOPLIST_KEY_CFBundleDisplayName = Zoe; INFOPLIST_KEY_CFBundleShortVersionString = "$(MARKETING_VERSION)"; INFOPLIST_KEY_CFBundleVersion = "$(CURRENT_PROJECT_VERSION)"; INFOPLIST_KEY_ZoeSourceRevision = "$(ZOE_SOURCE_REVISION)"; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity"; INFOPLIST_KEY_NSMicrophoneUsageDescription = "Zoe uses the microphone for live voice conversations."; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks"; MACOSX_DEPLOYMENT_TARGET = 14.0; PRODUCT_BUNDLE_IDENTIFIER = "com.zoe.mac"; PRODUCT_NAME = Zoe; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Release; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */

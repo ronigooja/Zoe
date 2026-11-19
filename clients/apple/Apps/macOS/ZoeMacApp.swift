@@ -28,7 +28,7 @@ struct ZoeMacApp {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "mic", accessibilityDescription: "Zoe")
+        item.button?.image = MenuBarIcon.image()
         let menu = NSMenu()
         let voice = NSMenuItem(title: "Voice", action: #selector(toggleVoice), keyEquivalent: "")
         voice.target = self
@@ -78,11 +78,6 @@ struct ZoeMacApp {
             try await store.append(scope: scope, id: event.renderedIdempotencyKey, container: event.container, messages: event.messages)
         }
         model.$continuousVoiceEnabled.sink { enabled in voice.state = enabled ? .on : .off }.store(in: &subscriptions)
-        model.$voiceStatus.sink { status in
-            let active: Bool
-            if case .active = status { active = true } else { active = false }
-            item.button?.image = NSImage(systemSymbolName: active ? "mic.fill" : "mic", accessibilityDescription: active ? "Microphone in use" : "Zoe")
-        }.store(in: &subscriptions)
         Task { await model.start() }
     }
 

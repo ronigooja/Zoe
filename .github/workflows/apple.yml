@@ -103,6 +103,12 @@ jobs:
             swift --version
           } > "$CI_OUTPUT/logs/environment.txt" 2>&1
 
+      - name: Render app icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift clients/apple/tools/render-app-icon.swift clients/apple/Apps/Resources/Icon/zoe-icon.svg clients/apple/Apps/Resources/Assets.xcassets/AppIcon.appiconset
+
       - name: Build unsigned macOS app
         shell: bash
         run: |

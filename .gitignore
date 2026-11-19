@@ -1,3 +1,4 @@
 .DS_Store
 __pycache__/
 *.pyc
+clients/apple/Apps/Resources/Assets.xcassets/AppIcon.appiconset/*.png
