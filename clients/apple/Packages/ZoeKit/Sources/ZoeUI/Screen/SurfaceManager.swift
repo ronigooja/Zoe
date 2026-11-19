@@ -344,15 +344,8 @@ import A2UISwiftUI
         if kind == .popover {
             root = AnyView(VStack(spacing: 0) {
                 surface
-                SwiftUI.Button { [weak self] in self?.dismiss(id: id) } label: {
-                    SwiftUI.Image(systemName: "xmark.circle")
-                        .font(.system(size: 15))
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .help("Close")
-                .accessibilityLabel("Close")
-                .padding(.bottom, 6)
+                PopoverCloseButton { [weak self] in self?.dismiss(id: id) }
+                    .padding(.bottom, 6)
             })
         } else {
             root = AnyView(surface)
@@ -380,6 +373,64 @@ import A2UISwiftUI
                 }
             }
         }
+    }
+}
+
+/// Pure visual state for the popover close control; free of AppKit so it is unit-testable.
+enum PopoverCloseButtonAppearance {
+    static let iconSize: CGFloat = 15
+    static let circleDiameter: CGFloat = 22
+    static let animationDuration: Double = 0.12
+
+    static func backgroundOpacity(hovering: Bool, pressed: Bool) -> Double {
+        if pressed { return 0.18 }
+        if hovering { return 0.10 }
+        return 0
+    }
+
+    static func iconIsPrimary(hovering: Bool) -> Bool { hovering }
+}
+
+private struct PopoverCloseButton: SwiftUI.View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    init(action: @escaping () -> Void) { self.action = action }
+
+    var body: some SwiftUI.View {
+        SwiftUI.Button(action: action) {
+            SwiftUI.Image(systemName: "xmark.circle")
+                .font(.system(size: PopoverCloseButtonAppearance.iconSize))
+        }
+        .buttonStyle(PopoverCloseButtonStyle(hovering: hovering))
+        .foregroundStyle(PopoverCloseButtonAppearance.iconIsPrimary(hovering: hovering) ? Color.primary : Color.secondary)
+        .onHover { inside in
+            if inside, !hovering { NSCursor.pointingHand.push() }
+            else if !inside, hovering { NSCursor.pop() }
+            hovering = inside
+        }
+        .onDisappear {
+            if hovering { NSCursor.pop() }
+            hovering = false
+        }
+        .help("Close")
+        .accessibilityLabel("Close")
+    }
+}
+
+private struct PopoverCloseButtonStyle: SwiftUI.ButtonStyle {
+    let hovering: Bool
+
+    func makeBody(configuration: Configuration) -> some SwiftUI.View {
+        configuration.label
+            .frame(width: PopoverCloseButtonAppearance.circleDiameter, height: PopoverCloseButtonAppearance.circleDiameter)
+            .background(
+                SwiftUI.Circle().fill(Color.primary.opacity(PopoverCloseButtonAppearance.backgroundOpacity(
+                    hovering: hovering, pressed: configuration.isPressed)))
+            )
+            .contentShape(SwiftUI.Circle())
+            .animation(.easeOut(duration: PopoverCloseButtonAppearance.animationDuration), value: hovering)
+            .animation(.easeOut(duration: PopoverCloseButtonAppearance.animationDuration), value: configuration.isPressed)
     }
 }
 #endif
