@@ -504,3 +504,97 @@ func TestUIDeleteEventAndLease(t *testing.T) {
 		t.Fatalf("event=%s", raw)
 	}
 }
+
+func TestUIValidationRetries(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		retries   int
+		transient bool
+		success   bool
+		calls     int
+		status    string
+		code      string
+	}{
+		{"success", 2, false, true, 3, "done", ""},
+		{"disabled", 0, false, false, 1, "failed", "validation_failed:string_required:version"},
+		{"exhausted", 1, false, false, 2, "failed", "validation_failed:string_required:version"},
+		{"transient", 2, true, false, 2, "pending", "model_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := uiTargetRig(t)
+			uiFlowServer(t, r)
+			r.svc.uiControllerMaxRetries = tc.retries
+			var inputs []string
+			invalid := uiFlowOutput(strings.Replace(uiFlowCreate, `"version":"v0.9.1"`, `"version":123`, 1), false)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				var body struct {
+					Input string `json:"input"`
+				}
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				inputs = append(inputs, body.Input)
+				if tc.transient && len(inputs) == 2 {
+					w.WriteHeader(503)
+					return
+				}
+				output := invalid
+				if tc.success && len(inputs) == 3 {
+					output = uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": output})
+			}))
+			defer server.Close()
+			c, err := modelclient.FromEnv("UI", func(k string) string {
+				switch k {
+				case "UI_BASE_URL":
+					return server.URL
+				case "UI_MODEL", "UI_API_KEY_FILE":
+					return "fixture"
+				}
+				return ""
+			}, func(string) ([]byte, error) { return []byte("fixture"), nil }, 1000, 1, 30000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.svc.uiController = c
+			uiFlowRegister(t, r)
+			var status, code string
+			var attempts int
+			if err := r.store.DB().QueryRow(`SELECT status,coalesce(last_error,''),attempts FROM ui_jobs`).Scan(&status, &code, &attempts); err != nil {
+				t.Fatal(err)
+			}
+			if len(inputs) != tc.calls || status != tc.status || code != tc.code || attempts != 1 {
+				t.Fatalf("calls=%d status=%s code=%s attempts=%d", len(inputs), status, code, attempts)
+			}
+			var base map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(inputs[0]), &base); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := base["previous_error"]; ok {
+				t.Fatal("first call has previous_error")
+			}
+			for _, input := range inputs[1:] {
+				var got map[string]json.RawMessage
+				if err := json.Unmarshal([]byte(input), &got); err != nil {
+					t.Fatal(err)
+				}
+				if string(got["previous_error"]) != `{"category":"string_required","field":"version"}` {
+					t.Fatalf("feedback=%s", got["previous_error"])
+				}
+				delete(got, "previous_error")
+				a, _ := json.Marshal(base)
+				b, _ := json.Marshal(got)
+				if string(a) != string(b) || strings.Contains(input, invalid) {
+					t.Fatal("retry input changed or leaked output")
+				}
+			}
+			if tc.status == "failed" {
+				var feedback string
+				if err := r.store.DB().QueryRow(`SELECT text FROM ui_feedback_deliveries`).Scan(&feedback); err != nil || feedback != stewardErrorSpeech {
+					t.Fatalf("feedback=%q err=%v", feedback, err)
+				}
+			}
+		})
+	}
+}

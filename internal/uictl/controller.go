@@ -31,11 +31,17 @@ type Size struct {
 	Height int `json:"height"`
 }
 type Input struct {
-	Now      string    `json:"now"`
-	Requests []string  `json:"requests"`
-	Task     *Task     `json:"task"`
-	Surfaces []Surface `json:"surfaces"`
-	Screen   *Size     `json:"screen,omitempty"`
+	Now           string         `json:"now"`
+	Requests      []string       `json:"requests"`
+	Task          *Task          `json:"task"`
+	Surfaces      []Surface      `json:"surfaces"`
+	Screen        *Size          `json:"screen,omitempty"`
+	PreviousError *PreviousError `json:"previous_error,omitempty"`
+}
+
+type PreviousError struct {
+	Category string `json:"category"`
+	Field    string `json:"field,omitempty"`
 }
 
 type Task struct {
@@ -67,7 +73,7 @@ func BuildInput(now time.Time, requests []string, task *Task, surfaces []Surface
 	if live > 64 {
 		return nil, errors.New("surface_limit")
 	}
-	b, err := json.Marshal(Input{now.UTC().Format(time.RFC3339), requests, task, surfaces, screen})
+	b, err := json.Marshal(Input{Now: now.UTC().Format(time.RFC3339), Requests: requests, Task: task, Surfaces: surfaces, Screen: screen})
 	if len(b) > 16*MaxState {
 		return nil, errors.New("input_limit")
 	}

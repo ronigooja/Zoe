@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestUIControllerOptionalConfiguration(t *testing.T) {
 	reads := 0
@@ -17,6 +20,25 @@ func TestUIControllerOptionalConfiguration(t *testing.T) {
 		c, err := uiControllerFromEnv(func(k string) string { return env[k] }, read)
 		if (err == nil) != tc.valid || (tc.valid && c == nil) {
 			t.Fatalf("timeout=%q client=%v err=%v", tc.timeout, c, err)
+		}
+	}
+}
+
+func TestUIControllerMaxRetries(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		valid bool
+		want  int
+	}{
+		{"", true, 0}, {"0", true, 0}, {"1", true, 1}, {"2", true, 2}, {"3", true, 3},
+		{"-1", false, 0}, {"4", false, 0}, {"x", false, 0}, {"1.5", false, 0}, {" ", false, 0},
+	} {
+		got, err := uiControllerMaxRetries(func(string) string { return tc.value })
+		if (err == nil) != tc.valid || got != tc.want {
+			t.Fatalf("value %q: got %d err %v", tc.value, got, err)
+		}
+		if err != nil && (!strings.Contains(err.Error(), "ZOE_UI_CONTROLLER_MAX_RETRIES") || strings.Contains(err.Error(), tc.value)) {
+			t.Fatalf("unsafe error %q", err)
 		}
 	}
 }

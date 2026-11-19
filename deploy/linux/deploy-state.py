@@ -516,7 +516,7 @@ try:
                 continue
             if key not in running:
                 fail('missing running environment name=' + key)
-            if key in ('ZOE_VOICE_UPSTREAM_ROUTE', 'ZOE_STEWARD_TIMEOUT_MS', 'ZOE_UI_CONTROLLER_TIMEOUT_MS', 'ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS'):
+            if key in ('ZOE_VOICE_UPSTREAM_ROUTE', 'ZOE_STEWARD_TIMEOUT_MS', 'ZOE_UI_CONTROLLER_TIMEOUT_MS', 'ZOE_UI_CONTROLLER_MAX_RETRIES', 'ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS'):
                 if running[key] != str(rendered[key]):
                     fail('running environment mismatch name=' + key)
             print('container environment name=' + key + ' verified')

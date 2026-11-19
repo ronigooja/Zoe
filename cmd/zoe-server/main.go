@@ -129,13 +129,17 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	uiMaxRetries, err := uiControllerMaxRetries(os.Getenv)
+	if err != nil {
+		return err
+	}
 	classificationTimeout, err := modelclient.Timeout("ZOE_VOICE_CLASSIFICATION", os.Getenv, 35000, 100, 60000)
 	if err != nil {
 		return err
 	}
 	ready := &voice.ReadyHandle{}
 	models := retryModelsFromLoaded(registerConfig, stewardClient, uiController)
-	server, err := composeControlServer(store, cfg, voice.Config{Ready: ready, RetryModels: models, DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: promptSet.VoiceInstruction(), UIControllerInstruction: promptSet.UIController(), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	server, err := composeControlServer(store, cfg, voice.Config{Ready: ready, RetryModels: models, DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: promptSet.VoiceInstruction(), UIControllerInstruction: promptSet.UIController(), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, UIControllerMaxRetries: uiMaxRetries, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	})

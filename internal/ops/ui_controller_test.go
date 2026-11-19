@@ -1,7 +1,9 @@
 package ops
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -31,5 +33,20 @@ func TestUIControllerModelConfiguration(t *testing.T) {
 	got, err := (Deployment{StackEnv: path}).MenuModelConfig("UI_Controller")
 	if err != nil || got.BaseURL != cfg.BaseURL || got.Model != cfg.Model || got.SecretPath != cfg.SecretPath || got.TimeoutMS != cfg.TimeoutMS {
 		t.Fatalf("configuration=%+v err=%v", got, err)
+	}
+}
+
+func TestUIControllerRetryEnvironmentPreserved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stack.env")
+	if err := os.WriteFile(path, []byte("ZOE_UI_CONTROLLER_MAX_RETRIES=2\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ModelConfig{BaseURL: "https://ui.invalid", Model: "ui-model", SecretPath: "/root/secrets/ui_controller-api-key", TimeoutMS: "60000"}
+	if err := WriteMenuModelEnvAtomic(path, cfg, "UI_Controller"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(data), "ZOE_UI_CONTROLLER_MAX_RETRIES=2") {
+		t.Fatalf("retry setting lost: %v", err)
 	}
 }

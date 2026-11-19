@@ -55,6 +55,7 @@ type Config struct {
 	ClassificationTimeout  time.Duration
 	Steward                TaskSteward
 	UIController           *modelclient.Client
+	UIControllerMaxRetries int
 	RecallTimeout          time.Duration
 	RecallLease            time.Duration
 }
@@ -86,6 +87,7 @@ type Service struct {
 	resultDeliveryInterval time.Duration
 	steward                TaskSteward
 	uiController           *modelclient.Client
+	uiControllerMaxRetries int
 	uiEventServer          *control.Server
 	register               *ContextRegister
 	classifying            sync.Map // Voice-turn row IDs currently being classified.
@@ -431,7 +433,7 @@ func newService(db *sql.DB, cfg Config) *Service {
 		interval = time.Second
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	s := &Service{resultReceiptAdapter: cfg.ResultDelivery.ReceiptAdapter, db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	s := &Service{resultReceiptAdapter: cfg.ResultDelivery.ReceiptAdapter, db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, uiControllerMaxRetries: cfg.UIControllerMaxRetries, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
 	if cfg.DiscoverResultReceipts && s.gatewayReady() && s.resultReceiptAdapter == nil {
 		s.resultCapability = &gatewayResultCapability{adapter: NewGatewayResultReceiptAdapter(s)}
 	}

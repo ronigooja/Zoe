@@ -35,3 +35,13 @@ func FailureCode(err error) string {
 	}
 	return failure.class
 }
+
+// PreviousFailure exposes only validator-owned diagnostic identifiers.
+func PreviousFailure(err error) *PreviousError {
+	code := FailureCode(err)
+	var failure *validationError
+	if errors.As(err, &failure) {
+		return &PreviousError{Category: failure.class, Field: failure.field}
+	}
+	return &PreviousError{Category: code}
+}

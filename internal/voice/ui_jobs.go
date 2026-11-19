@@ -304,40 +304,65 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 		s.failUIJob(ctx, j, "input_invalid", false)
 		return
 	}
-	callCtx, cancel := context.WithTimeout(logging.WithUserHash(ctx, logging.UserHash(j.o)), 25*time.Second)
-	defer cancel()
-	prompt := s.recall.UIControllerInstruction
-	call := logging.ModelCallFromContext(callCtx, "ui_controller")
-	call.Input(prompt, string(input))
-	output, err := s.uiController.Complete(callCtx, prompt, string(input))
-	call.Output(output)
-	if err != nil {
-		call.Result(nil, "model_error")
-		kind := backoff.Classify(err)
-		if kind == backoff.Auth {
-			if store.Record(ctx, "ui_controller", "", kind, s.now(), backoff.Interactive, uiRetryJitter) == nil {
-				s.PublishRetryState()
-			}
-		}
-		s.failUIJob(ctx, j, "model_error", kind == backoff.Transient)
-		return
-	}
-	if store.Clear(ctx, "ui_controller", "") == nil {
-		s.PublishRetryState()
-	}
 	var controllerInput uictl.Input
 	if err = json.Unmarshal(input, &controllerInput); err != nil {
 		s.failUIJob(ctx, j, "input_invalid", false)
 		return
 	}
-	parsed, err := uictl.Parse(output, controllerInput.Screen)
-	if err != nil {
+	prompt := s.recall.UIControllerInstruction
+	var parsed uictl.Output
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			now := s.now().UTC()
+			res, err := s.db.ExecContext(ctx, `UPDATE ui_jobs SET next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=?`, now.Add(30*time.Second).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), j.id, j.attempts)
+			if err != nil {
+				return
+			}
+			n, err := res.RowsAffected()
+			if err != nil || n != 1 {
+				return
+			}
+			input, err = json.Marshal(controllerInput)
+			if err != nil {
+				s.failUIJob(ctx, j, "input_invalid", false)
+				return
+			}
+			logging.Infof("ui_controller_retry attempt=%d category=%s", attempt, controllerInput.PreviousError.Category)
+		}
+		callCtx, cancel := context.WithTimeout(logging.WithUserHash(ctx, logging.UserHash(j.o)), 25*time.Second)
+		call := logging.ModelCallFromContext(callCtx, "ui_controller")
+		call.Input(prompt, string(input))
+		output, modelErr := s.uiController.Complete(callCtx, prompt, string(input))
+		call.Output(output)
+		cancel()
+		if modelErr != nil {
+			call.Result(nil, "model_error")
+			kind := backoff.Classify(modelErr)
+			if kind == backoff.Auth {
+				if store.Record(ctx, "ui_controller", "", kind, s.now(), backoff.Interactive, uiRetryJitter) == nil {
+					s.PublishRetryState()
+				}
+			}
+			s.failUIJob(ctx, j, "model_error", kind == backoff.Transient)
+			return
+		}
+		if store.Clear(ctx, "ui_controller", "") == nil {
+			s.PublishRetryState()
+		}
+		parsed, err = uictl.Parse(output, controllerInput.Screen)
+		if err == nil {
+			call.Result(parsed, "")
+			break
+		}
 		code := "validation_failed:" + uictl.FailureCode(err)
 		call.Result(nil, code)
-		s.failUIJob(ctx, j, code, false)
-		return
+		if attempt >= s.uiControllerMaxRetries {
+			s.failUIJob(ctx, j, code, false)
+			return
+		}
+		controllerInput.PreviousError = uictl.PreviousFailure(err)
 	}
-	call.Result(parsed, "")
+
 	if err = s.commitUIJob(ctx, j, parsed, controllerInput.Task, controllerInput.Surfaces); err != nil {
 		code := "storage_error"
 		if errors.Is(err, errUIState) {
