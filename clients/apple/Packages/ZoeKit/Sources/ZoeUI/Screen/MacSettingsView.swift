@@ -66,15 +66,10 @@ public struct MacSettingsView: View {
             Form {
                 Section("Server") {
                     TextField("Server address", text: $address)
-                    SecureField("Instance key", text: $key)
-                    Text(model.savedKeyText)
-                        .font(.caption).foregroundStyle(.secondary)
-                        .textSelection(.disabled)
+                    SecureField("Instance key", text: $key, prompt: Text(verbatim: model.savedKeyText))
                     HStack {
                         Button {
-                            Task {
-                                if await model.connect(serverAddress: address, key: key) { key = "" }
-                            }
+                            Task { _ = await model.connect(serverAddress: address, key: key) }
                         } label: {
                             HStack {
                                 if model.isConnecting { ProgressView().controlSize(.small) }
@@ -102,7 +97,7 @@ public struct MacSettingsView: View {
                         HStack {
                             Button("Use") {
                                 Task {
-                                    if await model.connectImportedConnection(pending) { address = model.serverAddress; key = "" }
+                                    if await model.connectImportedConnection(pending) { address = model.serverAddress }
                                 }
                             }
                             Button("Dismiss") { model.dismissConnectionImport() }
