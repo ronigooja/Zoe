@@ -4,18 +4,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 const (
-	maxDiagnosticBatch  = 50
-	maxDiagnosticEvent  = 16 << 10
-	diagnosticRetention = 30 * 24 * time.Hour
+	maxDiagnosticBatch   = 50
+	maxDiagnosticEvent   = 16 << 10
+	maxDiagnosticDevices = 1024
 )
 
 type clientDiagnosticRequest struct {
@@ -83,14 +85,15 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 	}
 	deviceHash := sha256.Sum256([]byte(deviceInput))
 	deviceHashText := hex.EncodeToString(deviceHash[:])
+	// Serialize the check and reservation, including validation, across requests.
+	s.diagnostics.mu.Lock()
+	defer s.diagnostics.mu.Unlock()
 	now := time.Now().UTC()
-	cutoff := now.Add(-time.Minute).Format(time.RFC3339Nano)
-	var recent int
-	if err := s.store.DB().QueryRowContext(r.Context(), `SELECT count(*) FROM client_diagnostic_events WHERE device_hash=? AND received_at>=?`, deviceHashText, cutoff).Scan(&recent); err != nil {
-		writeError(w, err)
-		return
+	if s.diagnostics.now != nil {
+		now = s.diagnostics.now()
 	}
-	if recent+len(req.Events) > 200 {
+	s.diagnostics.prune(now)
+	if len(s.diagnostics.devices[deviceHashText])+len(req.Events) > 200 {
 		writeError(w, apiError(http.StatusTooManyRequests, "diagnostics_rate_limited", "diagnostic rate limit exceeded", nil))
 		return
 	}
@@ -101,12 +104,11 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 		writeError(w, err)
 		return
 	}
-	tx, err := s.store.DB().BeginTx(r.Context(), nil)
-	if err != nil {
-		writeError(w, err)
-		return
+	type pendingDiagnostic struct {
+		id, level string
+		event     clientDiagnosticEvent
 	}
-	defer tx.Rollback()
+	pending := make([]pendingDiagnostic, 0, len(req.Events))
 	for _, event := range req.Events {
 		encoded, _ := json.Marshal(event)
 		if len(encoded) > maxDiagnosticEvent || !validDiagnosticEvent(event) || !strings.EqualFold(strings.TrimSpace(event.DeviceIDHash), deviceHashText) {
@@ -138,42 +140,75 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 			writeError(w, apiError(http.StatusBadRequest, "invalid_diagnostic", "occurred_at must be RFC3339", nil))
 			return
 		}
-		if _, err = tx.ExecContext(r.Context(), `INSERT INTO client_diagnostic_events(id,workspace_id,subject_id,device_hash,client_request_id,occurred_at,received_at,app_version,build_version,source_revision,os_version,phase,request_path,http_status,response_bytes,error_type,error_summary,level,voice_session_id,voice_generation,voice_media_epoch,voice_peer_state,voice_data_channel_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, p.WorkspaceID, p.SubjectID, deviceHashText, strings.TrimSpace(event.ClientRequestID), occurred, now.Format(time.RFC3339Nano), bounded(event.AppVersion, 128), bounded(event.BuildVersion, 64), bounded(event.SourceRevision, 64), bounded(event.OSVersion, 128), bounded(event.Phase, 64), bounded(event.RequestPath, 256), event.HTTPStatus, event.ResponseBytes, bounded(event.ErrorType, 64), bounded(event.ErrorSummary, 512), level, boundedPtr(event.VoiceSessionID, 128), boundedInt64Ptr(event.VoiceGeneration), boundedUint64Ptr(event.VoiceMediaEpoch), boundedPtr(event.VoicePeerState, 32), boundedPtr(event.VoiceDataChannelState, 32)); err != nil {
-			writeError(w, err)
-			return
-		}
 		ids = append(ids, id)
-		logging.Infof("client diagnostic id=%s device_hash=%s phase=%s status=%d error_type=%s", id, deviceHashText, logSafe(event.Phase, 64), event.HTTPStatus, logSafe(event.ErrorType, 64))
+		pending = append(pending, pendingDiagnostic{id: id, level: level, event: event})
 	}
-	// Keep this table short-lived and independent from the business event stream.
-	_, _ = tx.ExecContext(r.Context(), `DELETE FROM client_diagnostic_events WHERE received_at < ?`, now.Add(-diagnosticRetention).Format(time.RFC3339Nano))
-	if err := tx.Commit(); err != nil {
-		writeError(w, err)
-		return
+	if len(pending) > 0 {
+		s.diagnostics.reserve(deviceHashText, now, len(pending))
+	}
+	for _, item := range pending {
+		event := item.event
+		line := fmt.Sprintf("client diagnostic id=%s device_hash=%s phase=%s status=%d error_type=%s level=%s error_summary=%s app_version=%s build_version=%s source_revision=%s request_path=%s", logSafe(item.id, 128), logSafe(deviceHashText, 64), logSafe(event.Phase, 64), event.HTTPStatus, logSafe(event.ErrorType, 64), logSafe(item.level, 16), logSafe(event.ErrorSummary, 128), logSafe(event.AppVersion, 128), logSafe(event.BuildVersion, 64), logSafe(event.SourceRevision, 64), logSafe(event.RequestPath, 128))
+		if event.VoiceSessionID != nil {
+			line += " voice_session=" + logSafe(*event.VoiceSessionID, 128)
+		}
+		if event.VoiceGeneration != nil {
+			line += fmt.Sprintf(" voice_generation=%d", *event.VoiceGeneration)
+		}
+		if event.VoiceMediaEpoch != nil {
+			line += fmt.Sprintf(" voice_media_epoch=%d", *event.VoiceMediaEpoch)
+		}
+		if event.VoicePeerState != nil {
+			line += " voice_peer_state=" + logSafe(*event.VoicePeerState, 32)
+		}
+		if event.VoiceDataChannelState != nil {
+			line += " voice_data_channel_state=" + logSafe(*event.VoiceDataChannelState, 32)
+		}
+		logging.Infof("%s", line)
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"diagnostic_ids": ids, "dropped": dropped})
 }
 
-func boundedPtr(value *string, max int) any {
-	if value == nil {
-		return nil
-	}
-	return bounded(*value, max)
+// diagnosticLimiter is protected by mu; timestamps are ordered by admission.
+type diagnosticLimiter struct {
+	mu      sync.Mutex
+	devices map[string][]time.Time
+	now     func() time.Time
 }
-func boundedInt64Ptr(value *int64) any {
-	if value == nil {
-		return nil
+
+func (l *diagnosticLimiter) prune(now time.Time) {
+	cutoff := now.Add(-time.Minute)
+	for device, times := range l.devices {
+		i := 0
+		for i < len(times) && times[i].Before(cutoff) {
+			i++
+		}
+		if i == len(times) {
+			delete(l.devices, device)
+		} else {
+			l.devices[device] = times[i:]
+		}
 	}
-	if *value < 0 {
-		return nil
-	}
-	return *value
 }
-func boundedUint64Ptr(value *uint64) any {
-	if value == nil {
-		return nil
+
+func (l *diagnosticLimiter) reserve(device string, now time.Time, count int) {
+	if l.devices == nil {
+		l.devices = make(map[string][]time.Time)
 	}
-	return *value
+	if _, exists := l.devices[device]; !exists && len(l.devices) >= maxDiagnosticDevices {
+		oldest := ""
+		var at time.Time
+		for key, times := range l.devices {
+			last := times[len(times)-1]
+			if oldest == "" || last.Before(at) {
+				oldest, at = key, last
+			}
+		}
+		delete(l.devices, oldest)
+	}
+	for i := 0; i < count; i++ {
+		l.devices[device] = append(l.devices[device], now)
+	}
 }
 
 func validDiagnosticEvent(e clientDiagnosticEvent) bool {
@@ -191,7 +226,7 @@ func bounded(value string, max int) string {
 func logSafe(value string, max int) string {
 	value = bounded(value, max)
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == '%' {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("-._/:", r)) {
 			return '_'
 		}
 		return r

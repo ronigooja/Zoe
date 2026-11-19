@@ -209,6 +209,7 @@ func NewAPIError(status int, code, message string, details any) *APIError {
 
 type Server struct {
 	store              *storage.Store
+	diagnostics        diagnosticLimiter
 	cfg                Config
 	commands           map[string]CommandHandler
 	commandPreflights  map[string]func(context.Context, contracts.Principal, contracts.CommandRequest) error
