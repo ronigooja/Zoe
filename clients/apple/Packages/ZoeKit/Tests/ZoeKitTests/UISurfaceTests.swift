@@ -24,7 +24,7 @@ final class UISurfaceTests: XCTestCase {
 
     private func payload(request: String = "r1", version: Int64 = 1) throws -> JSONValue {
         let messages = #"[{"version":"v0.9.1","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"s1","components":[{"id":"root","component":"Text","text":"Hello"}]}}]"#
-        return try JSONDecoder().decode(JSONValue.self, from: Data("{\"request_id\":\"\(request)\",\"surface_id\":\"s1\",\"surface_version\":\(version),\"container\":\"popover\",\"awaiting_input\":true,\"task_id\":\"t1\",\"question_id\":\"q1\",\"messages\":\(messages)}".utf8))
+        return try JSONDecoder().decode(JSONValue.self, from: Data("{\"request_id\":\"\(request)\",\"surface_id\":\"s1\",\"surface_version\":\(version),\"container\":\"popover\",\"chat_input\":false,\"task_question\":true,\"task_id\":\"t1\",\"question_id\":\"q1\",\"messages\":\(messages)}".utf8))
     }
 
     func testValidPayloadWithoutDeletedDecoding() throws {
@@ -32,11 +32,45 @@ final class UISurfaceTests: XCTestCase {
         XCTAssertEqual(event.requestID, "r1")
         XCTAssertEqual(event.surfaceID, "s1")
         XCTAssertEqual(event.container, .popover)
-        XCTAssertTrue(event.awaitingInput)
+        XCTAssertTrue(event.taskQuestion)
+        XCTAssertFalse(event.chatInput)
         XCTAssertEqual(event.messages.count, 2)
-        XCTAssertEqual(event.diagnosticSummary, "container=popover;messages=2;awaiting_input=1")
+        XCTAssertEqual(event.diagnosticSummary, "container=popover;messages=2;task_question=1")
         XCTAssertFalse(event.diagnosticSummary.contains("Hello"))
         XCTAssertFalse(event.diagnosticSummary.contains("https://"))
+    }
+
+    func testChatInputDecodesInEventsAndSnapshotsWithoutDeleted() throws {
+        guard case var .object(fields) = try payload() else { return XCTFail("object") }
+        fields["task_question"] = .bool(false)
+        fields["chat_input"] = .bool(true)
+        fields.removeValue(forKey: "task_id")
+        fields.removeValue(forKey: "question_id")
+        let event = try XCTUnwrap(UISurfaceEvent.decode(.object(fields)))
+        XCTAssertTrue(event.chatInput)
+        XCTAssertFalse(event.taskQuestion)
+        fields["render_status"] = .string("rendered")
+        let value = JSONValue.object(["cursor": .integer(20), "surfaces": .array([.object(fields)])])
+        let snapshot = try JSONDecoder().decode(UISnapshot.self, from: JSONEncoder().encode(value))
+        XCTAssertTrue(try XCTUnwrap(snapshot.surfaces.first).event.chatInput)
+        XCTAssertFalse(try XCTUnwrap(snapshot.surfaces.first).event.taskQuestion)
+    }
+
+    func testRenamedInputFieldsAreRequiredInEventsAndSnapshots() throws {
+        guard case let .object(fields) = try payload() else { return XCTFail("object") }
+        for (key, legacyKey) in [("task_question", "awaiting_input"), ("chat_input", "voice_input")] {
+            for invalidValue in [JSONValue.null, .string("true"), .integer(1)] {
+                var invalid = fields
+                invalid[key] = invalidValue
+                XCTAssertNil(UISurfaceEvent.decode(.object(invalid)), key)
+            }
+            var invalid = fields
+            invalid[legacyKey] = invalid.removeValue(forKey: key)
+            XCTAssertEqual(UISurfaceEvent.decodeWithDiagnostic(.object(invalid)).failure, "payload_decode", legacyKey)
+            invalid["render_status"] = .string("rendered")
+            let snapshot = JSONValue.object(["cursor": .integer(20), "surfaces": .array([.object(invalid)])])
+            XCTAssertThrowsError(try JSONDecoder().decode(UISnapshot.self, from: JSONEncoder().encode(snapshot)), legacyKey)
+        }
     }
 
     func testLegacyDeletedFieldIsIgnoredInEventsAndSnapshots() throws {
@@ -95,7 +129,7 @@ final class UISurfaceTests: XCTestCase {
         let summary = UISurfaceEvent.receivedSummary(payload: .object(object), cursor: "sk-secret-payload")
         XCTAssertFalse(summary.contains("sk-secret-payload"))
         XCTAssertLessThanOrEqual(summary.count, 200)
-        XCTAssertEqual(UISurfaceEvent.receivedSummary(payload: try payload(), cursor: "10"), "container=popover;messages=2;awaiting_input=1;cursor=10")
+        XCTAssertEqual(UISurfaceEvent.receivedSummary(payload: try payload(), cursor: "10"), "container=popover;messages=2;task_question=1;cursor=10")
     }
 
     func testRequestMapReplacementAndDisconnect() throws {
@@ -125,7 +159,7 @@ final class UISurfaceTests: XCTestCase {
 
     func testRequiredVersionAndInputBinding() throws {
         guard case let .object(fields) = try payload() else { return XCTFail("object") }
-        for key in ["request_id", "surface_id", "surface_version", "container", "awaiting_input", "messages", "task_id", "question_id"] {
+        for key in ["request_id", "surface_id", "surface_version", "container", "task_question", "chat_input", "messages", "task_id", "question_id"] {
             var invalid = fields
             invalid.removeValue(forKey: key)
             XCTAssertNil(UISurfaceEvent.decode(.object(invalid)), key)

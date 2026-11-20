@@ -15,17 +15,17 @@ final class SurfaceManagerTests: XCTestCase {
 
     func testFocusDeadlineDisabledPendingAndRegainedFocus() {
         let lost = Date(timeIntervalSince1970: 100)
-        XCTAssertEqual(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 60, awaitingInput: false), lost.addingTimeInterval(60))
-        XCTAssertNil(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 0, awaitingInput: false))
-        XCTAssertNil(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 60, awaitingInput: true))
-        XCTAssertNil(SurfaceClosePolicy.deadline(lostFocusAt: nil, delay: 60, awaitingInput: false))
-        XCTAssertEqual(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 20, awaitingInput: false), lost.addingTimeInterval(20))
+        XCTAssertEqual(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 60, taskQuestion: false), lost.addingTimeInterval(60))
+        XCTAssertNil(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 0, taskQuestion: false))
+        XCTAssertNil(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 60, taskQuestion: true))
+        XCTAssertNil(SurfaceClosePolicy.deadline(lostFocusAt: nil, delay: 60, taskQuestion: false))
+        XCTAssertEqual(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 20, taskQuestion: false), lost.addingTimeInterval(20))
     }
 
     func testRecoveryPolicyOnlyRestoresPendingOrAlreadyPresented() {
-        XCTAssertFalse(SurfaceClosePolicy.shouldReplay(awaitingInput: false, wasPresented: false))
-        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(awaitingInput: true, wasPresented: false))
-        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(awaitingInput: false, wasPresented: true))
+        XCTAssertFalse(SurfaceClosePolicy.shouldReplay(taskQuestion: false, wasPresented: false))
+        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(taskQuestion: true, wasPresented: false))
+        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(taskQuestion: false, wasPresented: true))
     }
 
     func testFixedStyleUsesTintedCardsAndSemanticCaptionColor() {
@@ -53,12 +53,12 @@ final class SurfaceManagerTests: XCTestCase {
         XCTAssertEqual(style.textStyles["caption"]?.color, Color.secondary)
     }
 
-    private func event(version: Int64, id: String = "versioned", awaitingInput: Bool = false) throws -> UISurfaceEvent {
+    private func event(version: Int64, id: String = "versioned", taskQuestion: Bool = false) throws -> UISurfaceEvent {
         let messages = #"[{"version":"v0.9","createSurface":{"surfaceId":"versioned","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"versioned","components":[{"id":"root","component":"Text","text":"Hello"}]}}]"#
-        let json = "{\"request_id\":\"r1\",\"surface_id\":\"versioned\",\"surface_version\":\(version),\"container\":\"window\",\"awaiting_input\":false,\"messages\":\(messages)}"
+        let json = "{\"request_id\":\"r1\",\"surface_id\":\"versioned\",\"surface_version\":\(version),\"container\":\"window\",\"chat_input\":false,\"task_question\":false,\"messages\":\(messages)}"
         var input = json.replacingOccurrences(of: "versioned", with: id)
-            .replacingOccurrences(of: "\"awaiting_input\":false", with: "\"awaiting_input\":\(awaitingInput)")
-        if awaitingInput {
+            .replacingOccurrences(of: "\"task_question\":false", with: "\"task_question\":\(taskQuestion)")
+        if taskQuestion {
             input = input.replacingOccurrences(of: "\"request_id\":\"r1\"",
                 with: "\"request_id\":\"r1\",\"task_id\":\"task\",\"question_id\":\"question\"")
         }
@@ -85,7 +85,7 @@ final class SurfaceManagerTests: XCTestCase {
         let manager = SurfaceManager(popoverAnchor: { nil })
         manager.newUISurfaceBehavior = .closeOldWindows
         defer { manager.reset() }
-        let old = try event(version: 1, awaitingInput: true)
+        let old = try event(version: 1, taskQuestion: true)
         XCTAssertTrue(manager.display(old))
         var closes = 0
         manager.onUserClosed = { closes += 1 }

@@ -15,7 +15,7 @@ import A2UISwiftUI
 
     private var store = SurfaceStore()
     private var entries: [String: Entry] = [:]
-    private var awaitingInput = Set<String>()
+    private var taskQuestion = Set<String>()
     private var lostFocusAt: [String: Date] = [:]
     private var closeTasks: [String: Task<Void, Never>] = [:]
     private var localMonitor: Any?
@@ -127,7 +127,7 @@ import A2UISwiftUI
         let plan = NewUISurfacePlan(behavior: newUISurfaceBehavior,
             presentedIDs: Set(entries.keys), newSurfaceID: event.surfaceID)
         // Use the same native close/delegate path as explicit dismissal, including
-        // awaiting-input surfaces. Closing is not a render ACK or a task answer.
+        // task-question surfaces. Closing is not a render ACK or a task answer.
         for id in plan.closeIDs {
             dismiss(id: id)
             // A popover may finish its native close animation later. Remove its
@@ -149,8 +149,8 @@ import A2UISwiftUI
     /// Snapshot input state can change without a new presentation revision (answer received).
     public func updateInputState(_ event: UISurfaceEvent) {
         guard entries[event.surfaceID] != nil else { return }
-        if event.awaitingInput { awaitingInput.insert(event.surfaceID) }
-        else { awaitingInput.remove(event.surfaceID) }
+        if event.taskQuestion { taskQuestion.insert(event.surfaceID) }
+        else { taskQuestion.remove(event.surfaceID) }
         scheduleClosure(id: event.surfaceID)
     }
 
@@ -192,7 +192,7 @@ import A2UISwiftUI
     public func close(id: String) {
         closeTasks.removeValue(forKey: id)?.cancel()
         lostFocusAt.removeValue(forKey: id)
-        awaitingInput.remove(id)
+        taskQuestion.remove(id)
         physicalBindings.removeValue(forKey: id)
         store.close(id: id)
         guard let entry = entries.removeValue(forKey: id) else { return }
@@ -293,11 +293,11 @@ import A2UISwiftUI
         closeTasks.removeValue(forKey: id)?.cancel()
         guard let entry = entries[id], let deadline = SurfaceClosePolicy.deadline(lostFocusAt: lostFocusAt[id],
             delay: entry.popover == nil ? windowCloseDelaySeconds : popoverCloseDelaySeconds,
-            awaitingInput: awaitingInput.contains(id)) else { return }
+            taskQuestion: taskQuestion.contains(id)) else { return }
         let seconds = max(0, deadline.timeIntervalSinceNow)
         closeTasks[id] = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
-            guard !Task.isCancelled, let self, !self.awaitingInput.contains(id), self.lostFocusAt[id] != nil else { return }
+            guard !Task.isCancelled, let self, !self.taskQuestion.contains(id), self.lostFocusAt[id] != nil else { return }
             self.dismiss(id: id)
         }
     }
