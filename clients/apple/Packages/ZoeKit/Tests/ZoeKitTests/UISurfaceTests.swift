@@ -22,15 +22,12 @@ final class UISurfaceTests: XCTestCase {
         XCTAssertNotEqual(size.screenIdempotencyKey, SurfaceSize(width: 1440, height: 876).screenIdempotencyKey)
     }
 
-    private func payload(request: String = "r1", deletion: Bool = false, version: Int64 = 1) throws -> JSONValue {
-        let messages = deletion
-            ? #"[{"version":"v0.9","deleteSurface":{"surfaceId":"s1"}}]"#
-            : #"[{"version":"v0.9.1","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"s1","components":[{"id":"root","component":"Text","text":"Hello"}]}}]"#
-        let binding = deletion ? "" : ",\"task_id\":\"t1\",\"question_id\":\"q1\""
-        return try JSONDecoder().decode(JSONValue.self, from: Data("{\"request_id\":\"\(request)\",\"surface_id\":\"s1\",\"surface_version\":\(version),\"deleted\":\(deletion),\"container\":\"popover\",\"awaiting_input\":\(!deletion)\(binding),\"messages\":\(messages)}".utf8))
+    private func payload(request: String = "r1", version: Int64 = 1) throws -> JSONValue {
+        let messages = #"[{"version":"v0.9.1","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"s1","components":[{"id":"root","component":"Text","text":"Hello"}]}}]"#
+        return try JSONDecoder().decode(JSONValue.self, from: Data("{\"request_id\":\"\(request)\",\"surface_id\":\"s1\",\"surface_version\":\(version),\"container\":\"popover\",\"awaiting_input\":true,\"task_id\":\"t1\",\"question_id\":\"q1\",\"messages\":\(messages)}".utf8))
     }
 
-    func testValidAndDeletePayloadDecoding() throws {
+    func testValidPayloadWithoutDeletedDecoding() throws {
         let event = try XCTUnwrap(UISurfaceEvent.decode(payload()))
         XCTAssertEqual(event.requestID, "r1")
         XCTAssertEqual(event.surfaceID, "s1")
@@ -40,8 +37,17 @@ final class UISurfaceTests: XCTestCase {
         XCTAssertEqual(event.diagnosticSummary, "container=popover;messages=2;awaiting_input=1")
         XCTAssertFalse(event.diagnosticSummary.contains("Hello"))
         XCTAssertFalse(event.diagnosticSummary.contains("https://"))
-        XCTAssertFalse(event.isDeletion)
-        XCTAssertTrue(try XCTUnwrap(UISurfaceEvent.decode(payload(deletion: true))).isDeletion)
+    }
+
+    func testLegacyDeletedFieldIsIgnoredInEventsAndSnapshots() throws {
+        guard case var .object(fields) = try payload() else { return XCTFail("object") }
+        for legacyValue in [false, true] {
+            fields["deleted"] = .bool(legacyValue)
+            XCTAssertNotNil(UISurfaceEvent.decode(.object(fields)))
+            fields["render_status"] = .string("rendered")
+            let snapshot = JSONValue.object(["cursor": .integer(20), "surfaces": .array([.object(fields)])])
+            XCTAssertEqual(try JSONDecoder().decode(UISnapshot.self, from: JSONEncoder().encode(snapshot)).surfaces.count, 1)
+        }
     }
 
     func testRemovedStatusContainerIsRejected() throws {
@@ -92,15 +98,12 @@ final class UISurfaceTests: XCTestCase {
         XCTAssertEqual(UISurfaceEvent.receivedSummary(payload: try payload(), cursor: "10"), "container=popover;messages=2;awaiting_input=1;cursor=10")
     }
 
-    func testRequestMapReplacementDeletionAndDisconnect() throws {
+    func testRequestMapReplacementAndDisconnect() throws {
         var map = UISurfaceRequests()
         map.apply(try XCTUnwrap(UISurfaceEvent.decode(payload())))
         XCTAssertEqual(map.requestIDs, ["s1": "r1"])
         map.apply(try XCTUnwrap(UISurfaceEvent.decode(payload(request: "r2", version: 2))))
         XCTAssertEqual(map.requestIDs, ["s1": "r2"])
-        map.apply(try XCTUnwrap(UISurfaceEvent.decode(payload(deletion: true, version: 3))))
-        XCTAssertTrue(map.requestIDs.isEmpty)
-        map.apply(try XCTUnwrap(UISurfaceEvent.decode(payload())))
         map.removeAll()
         XCTAssertTrue(map.requestIDs.isEmpty)
     }
@@ -120,9 +123,9 @@ final class UISurfaceTests: XCTestCase {
         ]))
     }
 
-    func testRequiredVersionDeletedAndInputBinding() throws {
+    func testRequiredVersionAndInputBinding() throws {
         guard case let .object(fields) = try payload() else { return XCTFail("object") }
-        for key in ["request_id", "surface_id", "surface_version", "deleted", "container", "awaiting_input", "messages", "task_id", "question_id"] {
+        for key in ["request_id", "surface_id", "surface_version", "container", "awaiting_input", "messages", "task_id", "question_id"] {
             var invalid = fields
             invalid.removeValue(forKey: key)
             XCTAssertNil(UISurfaceEvent.decode(.object(invalid)), key)
@@ -132,12 +135,9 @@ final class UISurfaceTests: XCTestCase {
             invalid["surface_version"] = version
             XCTAssertNil(UISurfaceEvent.decode(.object(invalid)))
         }
-        guard case var .object(tombstone) = try payload(deletion: true) else { return XCTFail("object") }
-        tombstone["task_id"] = .string("t1")
-        XCTAssertNil(UISurfaceEvent.decode(.object(tombstone)))
     }
 
-    func testStaleReplayDeletionAndFailedACKState() throws {
+    func testStaleReplayAndFailedACKState() throws {
         var state = UISurfaceRequests()
         let first = try XCTUnwrap(UISurfaceEvent.decode(payload(version: 2)))
         XCTAssertTrue(state.apply(first))
@@ -149,16 +149,6 @@ final class UISurfaceTests: XCTestCase {
         XCTAssertEqual(state.outcomes[first.binding], true, "Successful retry replaces the failed outcome")
         XCTAssertFalse(state.apply(first), "A successfully rendered revision must not reopen on duplicate replay")
         XCTAssertFalse(state.apply(try XCTUnwrap(UISurfaceEvent.decode(payload()))))
-        let deleted = try XCTUnwrap(UISurfaceEvent.decode(payload(deletion: true, version: 3)))
-        XCTAssertTrue(state.apply(deleted))
-        state.recordRender(deleted, success: true)
-        XCTAssertTrue(state.requestIDs.isEmpty)
-        XCTAssertFalse(state.apply(first))
-        XCTAssertFalse(state.apply(deleted))
-        XCTAssertEqual(state.outcomes[deleted.binding], true)
-        XCTAssertEqual(deleted.renderedPayload(success: true), .object([
-            "request_id": .string("r1"), "surface_id": .string("s1"), "surface_version": .integer(3), "success": .bool(true)
-        ]))
     }
 
     func testSnapshotValidationAndRepairOrdering() throws {

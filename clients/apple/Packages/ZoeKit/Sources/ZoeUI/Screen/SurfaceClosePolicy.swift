@@ -15,7 +15,7 @@ struct SurfaceClosePolicy {
         return lostFocusAt.addingTimeInterval(delay)
     }
 
-    static func shouldReplay(awaitingInput: Bool, deleted: Bool, wasPresented: Bool) -> Bool {
-        deleted || awaitingInput || wasPresented
+    static func shouldReplay(awaitingInput: Bool, wasPresented: Bool) -> Bool {
+        awaitingInput || wasPresented
     }
 }

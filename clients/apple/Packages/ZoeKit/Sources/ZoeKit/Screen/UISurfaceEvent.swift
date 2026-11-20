@@ -6,7 +6,6 @@ public struct UISurfaceEvent: Decodable, Sendable {
     public let requestID: String
     public let surfaceID: String
     public let surfaceVersion: Int64
-    public let deleted: Bool
     public let taskID: String?
     public let questionID: String?
     public let container: SurfaceKind
@@ -16,12 +15,8 @@ public struct UISurfaceEvent: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case requestID = "request_id", surfaceID = "surface_id", container
-        case surfaceVersion = "surface_version", deleted, taskID = "task_id", questionID = "question_id"
+        case surfaceVersion = "surface_version", taskID = "task_id", questionID = "question_id"
         case awaitingInput = "awaiting_input", messages, size
-    }
-
-    public var isDeletion: Bool {
-        deleted
     }
 
     public static func decode(_ payload: JSONValue) -> UISurfaceEvent? {
@@ -35,18 +30,12 @@ public struct UISurfaceEvent: Decodable, Sendable {
         guard !event.surfaceID.isEmpty else { return (nil, "surface_id") }
         guard event.surfaceVersion > 0 else { return (nil, "surface_version") }
         guard !event.awaitingInput || (event.taskID?.isEmpty == false && event.questionID?.isEmpty == false) else { return (nil, "input_binding") }
-        if event.deleted {
-            guard !event.awaitingInput, event.taskID == nil, event.questionID == nil,
-                  event.messages.count == 1, case .deleteSurface = event.messages[0] else { return (nil, "deletion") }
-        }
         guard !event.messages.isEmpty else { return (nil, "messages_empty") }
-        if !event.isDeletion {
-            guard case .createSurface = event.messages[0] else { return (nil, "first_not_createSurface") }
-            for message in event.messages.dropFirst() {
-                switch message {
-                case .createSurface, .deleteSurface: return (nil, "messages_sequence")
-                default: break
-                }
+        guard case .createSurface = event.messages[0] else { return (nil, "first_not_createSurface") }
+        for message in event.messages.dropFirst() {
+            switch message {
+            case .updateComponents, .updateDataModel: break
+            default: return (nil, "messages_sequence")
             }
         }
         for message in event.messages {
@@ -55,7 +44,7 @@ public struct UISurfaceEvent: Decodable, Sendable {
             case .createSurface(let p): id = p.surfaceId
             case .updateComponents(let p): id = p.surfaceId
             case .updateDataModel(let p): id = p.surfaceId
-            case .deleteSurface(let p): id = p.surfaceId
+            default: return (nil, "messages_sequence")
             }
             guard id == event.surfaceID else { return (nil, "surface_id_mismatch") }
         }
@@ -109,13 +98,12 @@ public struct UISurfaceRequests {
         guard event.surfaceVersion > previous ||
                 (event.surfaceVersion == previous && outcomes[event.binding] == false) else { return false }
         versions[event.surfaceID] = event.surfaceVersion
-        if event.isDeletion { requestIDs.removeValue(forKey: event.surfaceID) }
-        else { requestIDs[event.surfaceID] = event.requestID }
+        requestIDs[event.surfaceID] = event.requestID
         return true
     }
     public mutating func recordRender(_ event: UISurfaceEvent, success: Bool) { outcomes[event.binding] = success }
     public mutating func reconcile(_ snapshot: UISnapshot) -> [String] {
-        let current = Set(snapshot.surfaces.filter { !$0.event.deleted }.map { $0.event.surfaceID })
+        let current = Set(snapshot.surfaces.map { $0.event.surfaceID })
         let removed = requestIDs.keys.filter { !current.contains($0) }
         for id in removed { requestIDs.removeValue(forKey: id) }
         return removed

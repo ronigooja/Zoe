@@ -1561,10 +1561,7 @@ public final class ZoeAppModel: ObservableObject {
         eventCursor = recovery.cursor
         eventRecoveryRequired = false
         authentication = .connected
-        // Tombstones were already applied natively. Closing them again erases the
-        // exact deletion evidence needed by the ACK validity predicate.
-        let tombstones = Set(recovery.ui.surfaces.filter { $0.event.deleted }.map { $0.event.surfaceID })
-        onUISurfacesClosed?(removed.filter { !tombstones.contains($0) })
+        onUISurfacesClosed?(removed)
         let events = recovery.ui.surfaces.map(\.event).filter { staged.outcomes[$0.binding] == true }
         let workspace = recovery.snapshot.workspaceID
         let coordinator = coordinator
@@ -1653,7 +1650,7 @@ public final class ZoeAppModel: ObservableObject {
 
     private func shouldReplaySurface(_ event: UISurfaceEvent) -> Bool {
         let wasPresented = sessionPresentedSurfaces[event.surfaceID].map { isCurrentUIPresentation?($0) != false } ?? false
-        return SurfaceClosePolicy.shouldReplay(awaitingInput: event.awaitingInput, deleted: event.deleted, wasPresented: wasPresented)
+        return SurfaceClosePolicy.shouldReplay(awaitingInput: event.awaitingInput, wasPresented: wasPresented)
     }
 
     private func applyUISurface(_ event: UISurfaceEvent) async {
