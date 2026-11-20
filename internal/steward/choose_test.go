@@ -219,7 +219,7 @@ func TestChooseInstructionsDefinitionOnly(t *testing.T) {
 			t.Fatalf("legacy/example instruction %q", forbidden)
 		}
 	}
-	for _, required := range []string{"new:", "append:", "answer:", "continue:", "report:", "cancel:", "redisplay:", "clarify:", "empty task list does not imply new", "Ambiguity requires clarify", "Replies follow the request's language"} {
+	for _, required := range []string{"new:", "append:", "answer:", "continue:", "report:", "cancel:", "redisplay:", "clarify:", "unresolved references or intent with an empty task list", "Ambiguity requires clarify", "Replies follow the request's language"} {
 		if !strings.Contains(testStewardPrompt(t), required) {
 			t.Fatalf("missing definition %q", required)
 		}
