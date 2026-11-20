@@ -127,7 +127,7 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 	}
 	var version, count int
 	var name string
-	if err = store.DB().QueryRow(`SELECT max(version),count(*),max(name) FROM schema_migrations WHERE namespace='voice'`).Scan(&version, &count, &name); err != nil || version != 203 || count != 4 || name != "voice_baseline" {
+	if err = store.DB().QueryRow(`SELECT max(version),count(*),max(name) FROM schema_migrations WHERE namespace='voice'`).Scan(&version, &count, &name); err != nil || version != 204 || count != 5 || name != "voice_baseline" {
 		t.Fatalf("voice receipt=%d/%d/%s err=%v", version, count, name, err)
 	}
 	var changesBefore, changesAfter int
