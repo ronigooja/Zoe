@@ -21,7 +21,6 @@ type uiSnapshotSurface struct {
 	RequestID      string            `json:"request_id"`
 	SurfaceID      string            `json:"surface_id"`
 	SurfaceVersion int64             `json:"surface_version"`
-	Deleted        bool              `json:"deleted"`
 	Messages       []json.RawMessage `json:"messages"`
 	Container      string            `json:"container"`
 	Size           *uictl.Size       `json:"size,omitempty"`

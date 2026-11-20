@@ -184,7 +184,7 @@
       "table",
       "ui_surfaces",
       "ui_surfaces",
-      "CREATE TABLE ui_surfaces (\nworkspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nsurface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('popover','window')),\nstate_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),\nwidth INTEGER, height INTEGER,\nversion INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,\nrequest_id TEXT REFERENCES ui_requests(id), deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),\nPRIMARY KEY(workspace_id,owner_subject_id,surface_id),\nCHECK((width IS NULL AND height IS NULL) OR (width IS NOT NULL AND height IS NOT NULL)))"
+      "CREATE TABLE ui_surfaces (\nworkspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nsurface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('popover','window')),\nstate_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),\nwidth INTEGER, height INTEGER,\nversion INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,\nrequest_id TEXT REFERENCES ui_requests(id),\nPRIMARY KEY(workspace_id,owner_subject_id,surface_id),\nCHECK((width IS NULL AND height IS NULL) OR (width IS NOT NULL AND height IS NOT NULL)))"
     ],
     "ui_task_cursor": [
       "table",
@@ -1042,13 +1042,6 @@
         "TEXT",
         0,
         null,
-        0
-      ],
-      [
-        "deleted",
-        "INTEGER",
-        1,
-        "0",
         0
       ]
     ],

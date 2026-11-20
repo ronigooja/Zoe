@@ -14,7 +14,7 @@ Approved target, not a claim of current implementation, deployment or acceptance
 | A2UI user input: bound task/question, surface revision, submitted value and command idempotency identity | Server routes directly to the bound task or pending question; no voice relay, register pass or semantic task reselection is required. |
 | Conversation text input: command idempotency identity, full text. Producers are the menu-bar text window and an A2UI surface presented with `voice_input` | Server persists the command and delivers the text to the voice conversation as defined in [Results](results.md#user-text-and-input-feedback). No register pass, Steward, or task is involved. |
 | ui.screen: current displays/visible bounds | UI_Controller plans against current screen facts; Mac uses consistent native style and clamps size/position to chosen screen's visible bounds. Direct user window actions retain precedence. |
-| SSE: stable event identity/cursor, surface and result revision | Client deduplicates events, applies only current revisions and repairs state from authoritative snapshots on gaps/reconnect. |
+| SSE: stable event identity/cursor, surface and result revision | Client deduplicates events, applies only current revisions and repairs state from authoritative snapshots on gaps/reconnect. Surface events and snapshot entries contain full retained documents, with no `deleted` field or deletion records. |
 
 ## Required behavior
 
@@ -28,7 +28,7 @@ UI-only content requiring research must obtain task execution through the task p
 - Create new surfaces only, with server-assigned identities rewritten into every message; retain document revision, originating request/result IDs and input linkage only while needed.
 - Durable ACK and feedback dedupe by presentation identity/revision.
 - Durable command receipt and task/question entry; preserve submitted full value.
-- Delete non-input documents after their revision-bound render ACK, success or failure. Retain task-question and conversation-text input documents while their binding is current; delete them after input or when the question becomes stale. Recovery snapshots contain only retained documents, not tombstones; client-local History is independent.
+- Delete non-input documents after their revision-bound render ACK, success or failure. Retain task-question and conversation-text input documents while their binding is current; delete them after input or when the question becomes stale. Client-local History is independent.
 - Durable/recoverable cursor and presentation/result identities.
 - Durable conversation-text command receipt and pending text keyed by the command identity. Duplicate submission neither duplicates delivery nor overwrites the stored text.
 

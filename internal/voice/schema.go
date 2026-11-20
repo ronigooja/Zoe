@@ -235,10 +235,21 @@ CREATE INDEX voice_input_notices_due ON voice_input_notices(status,next_attempt_
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 203, Name: "model_config_fingerprints", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 203, Name: "model_config_fingerprints", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE model_config_fingerprints (
 			consumer TEXT PRIMARY KEY CHECK(consumer IN ('register','steward','ui_controller','compact','memory_write','memory_ingest')),
 			fingerprint TEXT NOT NULL CHECK(length(fingerprint)=64))`)
 		return err
-	}})
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 205, Name: "ui_surface_retention", Up: migrateUISurfaceRetention})
+}
+
+func migrateUISurfaceRetention(ctx context.Context, tx *sql.Tx) error {
+	// Only the column's own CHECK references it; SQLite removes both together.
+	// Remove legacy deletion records before dropping their discriminator.
+	_, err := tx.ExecContext(ctx, `DELETE FROM ui_surfaces WHERE deleted=1;
+ALTER TABLE ui_surfaces DROP COLUMN deleted;`)
+	return err
 }

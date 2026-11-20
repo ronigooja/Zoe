@@ -434,7 +434,6 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 	}
 	eventPayload := map[string]any{"request_id": j.request, "surface_id": o.SurfaceID, "container": o.Container, "awaiting_input": o.AwaitingInput, "voice_input": o.VoiceInput, "messages": state.Messages}
 	eventPayload["surface_version"] = version
-	eventPayload["deleted"] = false
 	if o.AwaitingInput {
 		eventPayload["task_id"], eventPayload["question_id"] = facts.TaskID, facts.QuestionID
 	}

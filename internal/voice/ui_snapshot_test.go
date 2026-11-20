@@ -133,6 +133,17 @@ func TestUIUnacknowledgedSurfaceRemainsRecoverable(t *testing.T) {
 	if err != nil || len(snapshot.Surfaces) != 1 || snapshot.Surfaces[0].RenderStatus != "generated" {
 		t.Fatalf("pending snapshot=%+v err=%v", snapshot, err)
 	}
+	raw, err := json.Marshal(snapshot.Surfaces[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err = json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := fields["deleted"]; exists {
+		t.Fatal("removed field in snapshot")
+	}
 	foreign, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "other"})
 	if err != nil || len(foreign.Surfaces) != 0 {
 		t.Fatalf("foreign snapshot=%+v err=%v", foreign, err)

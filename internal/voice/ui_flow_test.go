@@ -122,8 +122,11 @@ func TestUIRegisterJobFlow(t *testing.T) {
 	var e struct {
 		Payload map[string]json.RawMessage `json:"payload"`
 	}
-	if json.Unmarshal(raw, &e) != nil || len(e.Payload) != 9 || string(e.Payload["voice_input"]) != "false" || string(e.Payload["size"]) != `{"width":400,"height":300}` {
+	if json.Unmarshal(raw, &e) != nil || len(e.Payload) != 8 || string(e.Payload["voice_input"]) != "false" || string(e.Payload["size"]) != `{"width":400,"height":300}` {
 		t.Fatal(string(raw))
+	}
+	if _, exists := e.Payload["deleted"]; exists {
+		t.Fatal("removed field in surface event")
 	}
 	r.svc.createRegisterUIJobs(context.Background())
 	var jobs int

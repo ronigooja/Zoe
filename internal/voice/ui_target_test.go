@@ -28,8 +28,8 @@ func uiTargetSchema(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('ui_surfaces') WHERE name='deleted'`).Scan(&present); err != nil {
 		t.Fatal(err)
 	}
-	if present != 1 {
-		t.Fatal("production UI baseline missing deleted column")
+	if present != 0 {
+		t.Fatal("production UI schema retains removed column")
 	}
 }
 
