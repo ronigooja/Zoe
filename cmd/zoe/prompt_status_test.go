@@ -9,7 +9,12 @@ import (
 )
 
 func TestPromptStatus(t *testing.T) {
-	dir := t.TempDir()
+	// The status label is capped at 80 characters, so keep the path short.
+	dir, err := os.MkdirTemp("/tmp", "ps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
 	path := filepath.Join(dir, "register.txt")
 	if err := os.WriteFile(path, []byte("private text"), 0600); err != nil {
 		t.Fatal(err)
