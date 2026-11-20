@@ -22,8 +22,6 @@ UI-only content requiring research must obtain task execution through the task p
 
 `voice_input` is true only for text typed for the conversation and never together with `awaiting_input`. A `voice_input` surface binds no task or question. Stale surface or revision input is rejected as for task input. The menu-bar text window is a platform-shell entry, not server-driven content, and is available whether or not a call is active.
 
-The Mac Settings General tab persists "When a new UI arrives" locally. "Add a new window" is the default. "Close old windows, then show" dismisses previously presented surface windows and popovers through the existing close path before presenting a new surface identity; updates and deletions do not dismiss unrelated surfaces. History, Settings and other app windows are excluded. Dismissal leaves local History recording unchanged and neither answers nor cancels an awaiting-input question; it does not emit a render acknowledgement.
-
 ## Persistence and idempotency
 
 - Durable request/job with source and result/question identity, current surface revision and delivery state.
