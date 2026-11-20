@@ -4,13 +4,13 @@ import XCTest
 final class NewUISurfacePolicyTests: XCTestCase {
     func testAddWindowPreservesAllPresentedSurfaces() {
         let plan = NewUISurfacePlan(behavior: .addWindow,
-            presentedIDs: ["window", "popover", "awaiting-input"], newSurfaceID: "new")
+            presentedIDs: ["window", "popover", "task-question"], newSurfaceID: "new")
         XCTAssertEqual(plan.closeIDs, [])
         XCTAssertEqual(plan.showID, "new")
     }
 
     func testReplacementClosesAllOldSurfacePresentations() {
-        let presented: Set<String> = ["window", "popover", "awaiting-input"]
+        let presented: Set<String> = ["window", "popover", "task-question"]
         let plan = NewUISurfacePlan(behavior: .closeOldWindows,
             presentedIDs: presented, newSurfaceID: "new")
         XCTAssertEqual(plan.closeIDs, presented)

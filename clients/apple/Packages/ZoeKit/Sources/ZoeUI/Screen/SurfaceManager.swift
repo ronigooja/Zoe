@@ -127,7 +127,7 @@ import A2UISwiftUI
         let plan = NewUISurfacePlan(behavior: newUISurfaceBehavior,
             presentedIDs: Set(entries.keys), newSurfaceID: event.surfaceID)
         // Use the same native close/delegate path as explicit dismissal, including
-        // awaiting-input surfaces. Closing is not a render ACK or a task answer.
+        // task-question surfaces. Closing is not a render ACK or a task answer.
         for id in plan.closeIDs {
             dismiss(id: id)
             // A popover may finish its native close animation later. Remove its
