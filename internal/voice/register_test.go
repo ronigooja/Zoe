@@ -305,11 +305,13 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 
 func TestRegisterAttributionInstructionChat(t *testing.T) {
 	for _, required := range []string{
-		"Route chat means conversation requiring no execution, screen action or memory operation.",
-		"Route task means perform, modify, answer, continue, inspect or cancel work without a screen request.",
-		"Route ui means pure presentation whose content comes entirely from the user's own words or needs no facts, such as big text or a todo template.",
-		"For chat, request must be null.",
-		"For every other route, request must be a nonempty complete self-contained statement",
+		"chat: the user wants conversation only.",
+		"task: the user wants work performed, modified, answered, continued, inspected or cancelled.",
+		"task_ui: the user wants content that needs lookup or work first, or is an already finished task's result, to be presented to them.",
+		"ui: the user wants content presented that is composed from their own words or on the spot, and needs no lookup or work.",
+		"chat_input: the user wants to type text for the voice conversation.",
+		"For chat, request is null.",
+		"For every other route, request is a nonempty, complete, self-contained statement",
 		"Never output the literal none",
 		"only route and request",
 	} {
