@@ -28,33 +28,35 @@ type RegisterModelConfig struct {
 	Timeout                                           time.Duration
 }
 type RegisterConfig struct {
-	RegisterInstruction string
-	CompactInstruction  string
-	Model               RegisterModelConfig
-	CompactModel        RegisterModelConfig
-	RawWindow           time.Duration
-	MemoryBoundary      func(context.Context, RegisterOwner) (time.Time, error)
-	CompactCharacters   int
-	Interval            time.Duration
+	RegisterInstruction    string
+	CompactInstruction     string
+	TaskSummaryInstruction string
+	Model                  RegisterModelConfig
+	CompactModel           RegisterModelConfig
+	RawWindow              time.Duration
+	MemoryBoundary         func(context.Context, RegisterOwner) (time.Time, error)
+	CompactCharacters      int
+	Interval               time.Duration
 }
 type ContextRegister struct {
-	registerInstruction string
-	compactInstruction  string
-	db                  *sql.DB
-	retry               *backoff.Store
-	requestPublish      func()
-	model               *modelclient.Client
-	compactModel        *modelclient.Client
-	compactTimeout      time.Duration
-	rawWindow           time.Duration
-	boundary            func(context.Context, RegisterOwner) (time.Time, error)
-	limit               int
-	interval            time.Duration
-	mu                  sync.Mutex
-	cancel              context.CancelFunc
-	done                chan struct{}
-	retryJitter         func() float64
-	retrySleep          func(context.Context, time.Duration) error
+	registerInstruction    string
+	compactInstruction     string
+	taskSummaryInstruction string
+	db                     *sql.DB
+	retry                  *backoff.Store
+	requestPublish         func()
+	model                  *modelclient.Client
+	compactModel           *modelclient.Client
+	compactTimeout         time.Duration
+	rawWindow              time.Duration
+	boundary               func(context.Context, RegisterOwner) (time.Time, error)
+	limit                  int
+	interval               time.Duration
+	mu                     sync.Mutex
+	cancel                 context.CancelFunc
+	done                   chan struct{}
+	retryJitter            func() float64
+	retrySleep             func(context.Context, time.Duration) error
 }
 
 func NewRegister(db *sql.DB, cfg RegisterConfig) (*ContextRegister, error) {
@@ -88,7 +90,7 @@ func NewRegister(db *sql.DB, cfg RegisterConfig) (*ContextRegister, error) {
 	if cfg.CompactModel.Timeout == 0 {
 		cfg.CompactModel.Timeout = 10 * time.Minute
 	}
-	return &ContextRegister{registerInstruction: cfg.RegisterInstruction, compactInstruction: cfg.CompactInstruction, db: db, model: client, compactModel: compact, compactTimeout: cfg.CompactModel.Timeout, rawWindow: cfg.RawWindow, boundary: cfg.MemoryBoundary, limit: cfg.CompactCharacters, interval: cfg.Interval}, nil
+	return &ContextRegister{registerInstruction: cfg.RegisterInstruction, compactInstruction: cfg.CompactInstruction, taskSummaryInstruction: cfg.TaskSummaryInstruction, db: db, model: client, compactModel: compact, compactTimeout: cfg.CompactModel.Timeout, rawWindow: cfg.RawWindow, boundary: cfg.MemoryBoundary, limit: cfg.CompactCharacters, interval: cfg.Interval}, nil
 }
 
 type RouteResult struct {

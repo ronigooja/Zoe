@@ -243,6 +243,26 @@ CREATE INDEX voice_input_notices_due ON voice_input_notices(status,next_attempt_
 	}}); err != nil {
 		return err
 	}
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 204, Name: "task_summary_retry_consumer", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE model_retry_state RENAME TO old_model_retry_state;
+CREATE TABLE model_retry_state (
+consumer TEXT NOT NULL CHECK(consumer IN ('register','steward','ui_controller','compact','task_summary','memory_write','memory_ingest')),
+scope TEXT NOT NULL, failures INTEGER NOT NULL CHECK(failures >= 0),
+next_attempt_at TEXT NOT NULL, auth_failed INTEGER NOT NULL CHECK(auth_failed IN (0,1)),
+last_error TEXT NOT NULL CHECK(last_error IN ('','auth','transient','permanent')),
+updated_at TEXT NOT NULL, PRIMARY KEY(consumer,scope));
+INSERT INTO model_retry_state SELECT * FROM old_model_retry_state;
+DROP TABLE old_model_retry_state;
+ALTER TABLE model_config_fingerprints RENAME TO old_model_config_fingerprints;
+CREATE TABLE model_config_fingerprints (
+consumer TEXT PRIMARY KEY CHECK(consumer IN ('register','steward','ui_controller','compact','task_summary','memory_write','memory_ingest')),
+fingerprint TEXT NOT NULL CHECK(length(fingerprint)=64));
+INSERT INTO model_config_fingerprints SELECT * FROM old_model_config_fingerprints;
+DROP TABLE old_model_config_fingerprints;`)
+		return err
+	}}); err != nil {
+		return err
+	}
 	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 205, Name: "ui_surface_retention", Up: migrateUISurfaceRetention})
 }
 

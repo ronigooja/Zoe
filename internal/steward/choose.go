@@ -57,13 +57,13 @@ type Input struct {
 	Tasks            []Candidate `json:"tasks"`
 }
 
-// Candidate preserves full task facts and stable server-owned identities.
+// Candidate preserves task facts and stable identities, with summarized results.
 type Candidate struct {
 	TaskID           string     `json:"task_id"`
 	Goal             string     `json:"goal"`
 	Status           string     `json:"status"`
 	PendingQuestions []Question `json:"pending_questions"`
-	Result           *string    `json:"result"`
+	SummaryResult    *string    `json:"summary_result"`
 	Additions        []string   `json:"additions"`
 }
 

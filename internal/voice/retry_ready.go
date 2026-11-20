@@ -39,7 +39,7 @@ func (s *Service) AfterMigrate(ctx context.Context) error {
 			return context.Canceled
 		}
 	}
-	for _, consumer := range []string{"register", "steward", "ui_controller", "compact"} {
+	for _, consumer := range []string{"register", "steward", "ui_controller", "compact", "task_summary"} {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -61,6 +61,13 @@ func (s *Service) AfterMigrate(ctx context.Context) error {
 	}
 	if s.recallCtx != nil {
 		s.startRetryPublisher()
+		if s.register != nil && s.register.taskSummaryInstruction != "" {
+			s.workers.Add(1)
+			go func() {
+				defer s.workers.Done()
+				s.register.runTaskSummaries(s.recallCtx)
+			}()
+		}
 	}
 	s.retryReady = true
 	return nil

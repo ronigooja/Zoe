@@ -51,7 +51,7 @@ func (s Store) Publish(ctx context.Context, path string, now time.Time) error {
 		group[state.Consumer] = item
 	}
 	snapshot := Snapshot{PublishedAt: now.UTC(), States: []PublishedState{}}
-	for _, consumer := range []string{"register", "steward", "ui_controller", "compact", "memory_write", "memory_ingest"} {
+	for _, consumer := range []string{"register", "steward", "ui_controller", "compact", "task_summary", "memory_write", "memory_ingest"} {
 		if item, ok := group[consumer]; ok {
 			snapshot.States = append(snapshot.States, item)
 		}

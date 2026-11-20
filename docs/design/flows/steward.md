@@ -6,7 +6,7 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 ## Inputs and outputs
 
-The server retrieves owner/workspace-scoped task facts, preserving full goals, pending questions, results and retained additions. Titles, quoted original utterances and per-call aliases are not selectors. The exact schemas are:
+The server retrieves owner/workspace-scoped task facts, preserving full goals, pending questions and retained additions, but sending only the stored result summary. Titles, quoted original utterances and per-call aliases are not selectors. The exact schemas are:
 
 ```typescript
 type StewardInput = {
@@ -17,7 +17,7 @@ type StewardInput = {
     goal: string;
     status: string;
     pending_questions: Array<{ question_id: string; text: string }>;
-    result: string | null;
+    summary_result: string | null;
     additions: string[];
   }>;
 };
@@ -30,7 +30,7 @@ type StewardOutput = {
 };
 ```
 
-Every key is present; irrelevant fields are null. IDs are real stable server-owned identities from the supplied facts. `status` reflects authoritative task state; `result` is null when absent; additions remain in conversational order.
+Every key is present; irrelevant fields are null. IDs are real stable server-owned identities from the supplied facts. `status` reflects authoritative task state; `summary_result` is copied directly from the task column, with no fallback to the full result, preserving null and empty values. Additions remain in conversational order. See [result summaries](results.md#task-result-summaries) for generation and storage.
 
 ## Required behavior
 

@@ -11,7 +11,7 @@ import (
 func retryModelsFromLoaded(register *voice.RegisterConfig, st *steward.Client, ui *modelclient.Client) map[string]voice.RetryModelConfig {
 	models := make(map[string]voice.RetryModelConfig)
 	if register != nil {
-		for consumer, cfg := range map[string]voice.RegisterModelConfig{"register": register.Model, "compact": register.CompactModel} {
+		for consumer, cfg := range map[string]voice.RegisterModelConfig{"register": register.Model, "compact": register.CompactModel, "task_summary": register.CompactModel} {
 			models[consumer] = voice.RetryModelConfig{Endpoint: strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/"), Model: strings.TrimSpace(cfg.Model), Effort: strings.TrimSpace(cfg.ReasoningEffort), Thinking: strings.TrimSpace(cfg.Thinking), Credential: []byte(strings.TrimSpace(cfg.APIKey))}
 		}
 	}

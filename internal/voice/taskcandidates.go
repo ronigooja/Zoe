@@ -15,6 +15,7 @@ import (
 type taskCandidate struct {
 	Version                                                       int64
 	TaskID, Goal, Status, CreatedAt, FinishedAt, Question, Result string
+	SummaryResult                                                 *string
 	PendingQuestions                                              []steward.Question
 	Additions                                                     []string
 }
@@ -28,7 +29,7 @@ type scoredTaskCandidate struct {
 
 const candidateColumns = `t.id,t.goal,t.status,t.created_at,coalesce(t.finished_at,''),
 CASE WHEN t.status IN ('waiting','awaiting_user') AND t.interaction_state IN ('awaiting_message','explicit_confirmation') THEN coalesce(t.interaction_question,'') ELSE '' END,
-coalesce(t.result,''),t.version`
+coalesce(t.result,''),t.summary_result,t.version`
 
 // taskCandidates retrieves bounded lexical candidates across calls. Ranking chooses
 // membership; the final facts are newest first. It performs no writes or inference.
@@ -49,7 +50,7 @@ func (s *Service) taskCandidates(ctx context.Context, q rosterQueryer, workspace
 		var out []scoredTaskCandidate
 		for rows.Next() {
 			var c scoredTaskCandidate
-			if err := rows.Scan(&c.id, &c.Goal, &c.Status, &c.CreatedAt, &c.FinishedAt, &c.Question, &c.Result, &c.Version, &c.score); err != nil {
+			if err := rows.Scan(&c.id, &c.Goal, &c.Status, &c.CreatedAt, &c.FinishedAt, &c.Question, &c.Result, &c.SummaryResult, &c.Version, &c.score); err != nil {
 				return nil, err
 			}
 			c.created, err = time.Parse(time.RFC3339Nano, c.CreatedAt)

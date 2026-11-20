@@ -14,7 +14,7 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 ## Required behavior
 
-When no call is active, pending full results retain source/task/result identity and delivery state and remain available as silent next-call context and authoritative candidate facts, not compulsory playback. A contextual `report` delivers its fact-grounded reply once through the durable reply path; it must not also queue the original result for that report or mark the original delivered merely because a summary was supplied. The original remains pending and available unless its own delivery is acknowledged. `redisplay` remains UI-only and does not authorize voice playback.
+When no call is active, pending full results retain source/task/result identity and delivery state and remain available as silent next-call context, not compulsory playback. Steward receives [task-result summaries](#task-result-summaries). A contextual `report` delivers its fact-grounded reply once through the durable reply path; it must not also queue the original result for that report or mark the original delivered merely because a summary was supplied. The original remains pending and available unless its own delivery is acknowledged. `redisplay` remains UI-only and does not authorize voice playback.
 
 For production receipt delivery, Zoe probes authenticated `GET /v1/health` using the configured gateway URL, owner bearer and HTTP client before checkpoint transactions. Only the exact `result_deliveries` contract `{version:"v1",max_text_bytes:8000,applied_evidence:"local_transport_writes_and_durable_receipt"}` enables the receipt adapter for task results and generic durable texts. Capability evidence is cached for 30 seconds, with one probe in flight and a two-second probe budget. No new deployment setting is required.
 
@@ -52,6 +52,12 @@ Instructions for the voice upstream list background tools only. Message formats 
 | `ui_input_received` | `The background tool received the user's input. Content: <submitted text>` | answer command identity |
 
 `user_text` is the user's own input, produced by the [screen](screen.md) conversation-text input, and is delivered through `deliverDurableText`. `ui_input_request` and `ui_input_received` apply only to `awaiting_input` surfaces. The request text is the task's authoritative pending question, not UI_Controller `input_note`. When no call is active, each text remains pending and is delivered on the next call. A delivery receipt proves transport writes only, never upstream understanding.
+
+## Task result summaries
+
+`tasks.result` remains the authoritative full text for voice, UI_Controller and prior-task context. `tasks.summary_result` is nullable: NULL means not generated, while an empty string means generated and empty. Steward receives only this summary; lexical candidate ranking may still use full results inside SQL.
+
+An asynchronous durable sweep selects complete tasks whose summary is NULL, including after restart. One model call receives the goal, status, ordered user additions and full result and returns only a minimal factual summary in the content's language, at most 200 characters. Completion never waits for generation; no database transaction spans the call. Writes only fill a still-NULL summary and fence changes to the source task. See [configuration](configuration.md#required-behavior) for model reuse and retries.
 
 ## Implementation locations
 

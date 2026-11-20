@@ -76,7 +76,7 @@ with tarfile.open(root/'server-linux-amd64.tar.gz') as tar:
     manifest=json.load(tar.extractfile('./release-manifest.json'))
     assert len(manifest['images'])==3
     sums=tar.extractfile('./SHA256SUMS').read().decode()
-    for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction']:
+    for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction', 'task_summary']:
         path='prompts/'+name+'.txt'; data=tar.extractfile('./'+path).read()
         digest=hashlib.sha256(data).hexdigest()
         assert digest+'  '+path in sums.splitlines()
