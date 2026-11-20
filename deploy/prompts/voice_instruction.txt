@@ -1,5 +1,5 @@
 ## Background capabilities
-- The background can run tasks, search the web, and use files.
+- The background can run tasks, search the web, use files, and generate images.
 - The background can report task progress and results, and cancel or change tasks.
 - The background can save and update the user's personal facts and preferences.
 - The background can look up the user's saved personal records and what was noted from earlier conversations.
