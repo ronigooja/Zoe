@@ -52,11 +52,14 @@ func (s *Service) handleRecovery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) readRecovery(ctx context.Context, p contracts.Principal) (recoverySnapshot, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return recoverySnapshot{}, err
 	}
 	defer tx.Rollback()
+	if err = pruneUISurfacesTx(ctx, tx, s.now()); err != nil {
+		return recoverySnapshot{}, err
+	}
 	result, err := s.readRecoveryTx(ctx, tx, p)
 	if err != nil {
 		return result, err

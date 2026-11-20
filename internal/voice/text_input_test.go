@@ -142,6 +142,7 @@ func TestQuestionNoticesFollowRenderAndAnswer(t *testing.T) {
 	uiFlowServer(t, r)
 	uiTargetQuestion(t, r)
 	uiTargetPresentation(t, r, true)
+	surfaceID := uiStoredID(t, r, "request")
 	ctx := context.Background()
 	cmd := control.CommandContext{CommandID: "answer-command", AcceptedAt: r.now(), Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "device-1", Scopes: []string{"client:command"}}}
 	var count int
@@ -150,7 +151,7 @@ func TestQuestionNoticesFollowRenderAndAnswer(t *testing.T) {
 		t.Fatal("notice before ACK")
 	}
 	tx, _ := r.store.DB().BeginTx(ctx, nil)
-	_, _, err := r.svc.commandUIRendered(ctx, tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(`{"request_id":"request","surface_id":"screen","surface_version":1,"success":true}`)})
+	_, _, err := r.svc.commandUIRendered(ctx, tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(strings.ReplaceAll(`{"request_id":"request","surface_id":"screen","surface_version":1,"success":true}`, `"screen"`, `"`+surfaceID+`"`))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +163,7 @@ func TestQuestionNoticesFollowRenderAndAnswer(t *testing.T) {
 		t.Fatalf("question=%q err=%v", text, err)
 	}
 	tx, _ = r.store.DB().BeginTx(ctx, nil)
-	_, _, err = r.svc.commandUIAction(ctx, tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(`{"request_id":"request","surface_id":"screen","surface_version":1,"name":"submit","source_component_id":"submit","context":{"value":"answer"}}`)})
+	_, _, err = r.svc.commandUIAction(ctx, tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(strings.ReplaceAll(`{"request_id":"request","surface_id":"screen","surface_version":1,"name":"submit","source_component_id":"submit","context":{"value":"answer"}}`, `"screen"`, `"`+surfaceID+`"`))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ func TestVoiceInputCommitUIJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "job", w: "default", o: "owner", request: "request", kind: "task_entry", attempts: 1}, o, &uictl.Task{TaskID: "task", QuestionID: "question", Question: "Which?"}, nil); err != nil {
+	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "job", w: "default", o: "owner", request: "request", kind: "task_entry", attempts: 1}, o, &uictl.Task{TaskID: "task", QuestionID: "question", Question: "Which?"}); err != nil {
 		t.Fatal(err)
 	}
 	var voice, await bool
@@ -207,6 +208,28 @@ func TestVoiceInputCommitUIJob(t *testing.T) {
 	}
 	if json.Unmarshal(payload, &event) != nil || string(event.Payload["voice_input"]) != "true" {
 		t.Fatalf("event=%s", payload)
+	}
+	uiACK(t, r, "request", true)
+	snapshot, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "owner"})
+	if err != nil || len(snapshot.Surfaces) != 1 || !snapshot.Surfaces[0].VoiceInput {
+		t.Fatalf("voice snapshot=%+v err=%v", snapshot, err)
+	}
+	b, _ := json.Marshal(map[string]any{"request_id": "request", "surface_id": uiStoredID(t, r, "request"), "surface_version": 1, "name": "submit", "source_component_id": "submit", "context": map[string]string{"value": "typed text"}})
+	tx, err := r.store.DB().BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	cmd := control.CommandContext{CommandID: "voice-answer", AcceptedAt: r.now(), Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}}
+	if _, _, err = r.svc.commandUIAction(context.Background(), tx, cmd, contracts.CommandRequest{Payload: b}); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = r.svc.readUISnapshot(context.Background(), cmd.Principal)
+	if err != nil || len(snapshot.Surfaces) != 0 {
+		t.Fatalf("answered voice snapshot=%+v err=%v", snapshot, err)
 	}
 }
 

@@ -50,7 +50,7 @@ func TestParseSize(t *testing.T) {
 
 func TestBuildInputScreen(t *testing.T) {
 	for _, screen := range []*Size{nil, {Width: 1440, Height: 900}} {
-		b, err := BuildInput(time.Now(), nil, nil, []Surface{{Container: "window", Messages: []json.RawMessage{}, Size: &Size{400, 300}}}, screen)
+		b, err := BuildInput(time.Now(), nil, nil, screen)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -65,7 +65,7 @@ func TestBuildInputScreen(t *testing.T) {
 		if screen != nil && string(input["screen"]) != `{"width":1440,"height":900}` {
 			t.Fatal(string(b))
 		}
-		if !strings.Contains(string(input["surfaces"]), `"size":{"width":400,"height":300}`) {
+		if _, exists := input["surfaces"]; exists {
 			t.Fatal(string(b))
 		}
 	}

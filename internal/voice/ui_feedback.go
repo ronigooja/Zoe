@@ -12,7 +12,7 @@ type uiFeedback struct {
 }
 
 func (s *Service) dispatchUIFeedback(ctx context.Context) {
-	rows, err := s.db.QueryContext(ctx, `SELECT d.request_id,d.workspace_id,d.owner_subject_id,d.text,d.attempts FROM ui_feedback_deliveries d JOIN ui_requests r ON r.id=d.request_id WHERE d.status='pending' AND coalesce(d.next_attempt_at,'')<=? AND (r.status='failed' OR (r.status='rendered' AND EXISTS(SELECT 1 FROM ui_surfaces s WHERE s.workspace_id=r.workspace_id AND s.owner_subject_id=r.owner_subject_id AND s.surface_id=r.surface_id AND s.request_id=r.id AND s.version=r.surface_version))) ORDER BY d.created_at,d.request_id LIMIT 25`, s.now().UTC().Format(time.RFC3339Nano))
+	rows, err := s.db.QueryContext(ctx, `SELECT d.request_id,d.workspace_id,d.owner_subject_id,d.text,d.attempts FROM ui_feedback_deliveries d JOIN ui_requests r ON r.id=d.request_id WHERE d.status='pending' AND coalesce(d.next_attempt_at,'')<=? AND r.status IN ('failed','rendered') ORDER BY d.created_at,d.request_id LIMIT 25`, s.now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return
 	}
@@ -60,7 +60,7 @@ func (s *Service) deliverUIFeedback(ctx context.Context, d uiFeedback) {
 	}
 	// Revalidate after selection and session lookup, immediately before HTTP.
 	var eligible bool
-	err = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ui_requests r JOIN ui_feedback_deliveries d ON d.request_id=r.id WHERE r.id=? AND r.workspace_id=? AND r.owner_subject_id=? AND d.status='pending' AND d.attempts=? AND (r.status='failed' OR (r.status='rendered' AND EXISTS(SELECT 1 FROM ui_surfaces s WHERE s.workspace_id=r.workspace_id AND s.owner_subject_id=r.owner_subject_id AND s.surface_id=r.surface_id AND s.request_id=r.id AND s.version=r.surface_version))))`, d.id, d.workspace, d.owner, attempt).Scan(&eligible)
+	err = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ui_requests r JOIN ui_feedback_deliveries d ON d.request_id=r.id WHERE r.id=? AND r.workspace_id=? AND r.owner_subject_id=? AND d.status='pending' AND d.attempts=? AND r.status IN ('failed','rendered'))`, d.id, d.workspace, d.owner, attempt).Scan(&eligible)
 	if err != nil {
 		s.retryUIFeedback(ctx, d, attempt, "eligibility_lookup")
 		return

@@ -17,15 +17,6 @@ const CatalogID = "https://a2ui.org/specification/v0_9/basic_catalog.json"
 const MaxOutput = 64 << 10
 const MaxState = 256 << 10
 
-type Surface struct {
-	Deleted   bool              `json:"deleted"`
-	SurfaceID string            `json:"surface_id"`
-	RequestID string            `json:"request_id"`
-	Version   int64             `json:"surface_version"`
-	Container string            `json:"container"`
-	Messages  []json.RawMessage `json:"messages"`
-	Size      *Size             `json:"size,omitempty"`
-}
 type Size struct {
 	Width  int `json:"width"`
 	Height int `json:"height"`
@@ -34,7 +25,6 @@ type Input struct {
 	Now           string         `json:"now"`
 	Requests      []string       `json:"requests"`
 	Task          *Task          `json:"task"`
-	Surfaces      []Surface      `json:"surfaces"`
 	Screen        *Size          `json:"screen,omitempty"`
 	PreviousError *PreviousError `json:"previous_error,omitempty"`
 }
@@ -52,7 +42,7 @@ type Task struct {
 	Question   string  `json:"question"`
 }
 
-func BuildInput(now time.Time, requests []string, task *Task, surfaces []Surface, screen *Size) ([]byte, error) {
+func BuildInput(now time.Time, requests []string, task *Task, screen *Size) ([]byte, error) {
 	if requests == nil {
 		requests = []string{}
 	}
@@ -61,19 +51,7 @@ func BuildInput(now time.Time, requests []string, task *Task, surfaces []Surface
 			return nil, errors.New("request_required")
 		}
 	}
-	if surfaces == nil {
-		surfaces = []Surface{}
-	}
-	live := 0
-	for _, surface := range surfaces {
-		if !surface.Deleted {
-			live++
-		}
-	}
-	if live > 64 {
-		return nil, errors.New("surface_limit")
-	}
-	b, err := json.Marshal(Input{Now: now.UTC().Format(time.RFC3339), Requests: requests, Task: task, Surfaces: surfaces, Screen: screen})
+	b, err := json.Marshal(Input{Now: now.UTC().Format(time.RFC3339), Requests: requests, Task: task, Screen: screen})
 	if len(b) > 16*MaxState {
 		return nil, errors.New("input_limit")
 	}
@@ -284,9 +262,12 @@ func Parse(text string, screen *Size) (Output, error) {
 		return o, errors.New("message_limit")
 	}
 	for i, raw := range o.Messages {
-		_, id, err := validateMessage(raw)
+		kind, id, err := validateMessage(raw)
 		if err != nil {
 			return o, err
+		}
+		if (i == 0) != (kind == "createSurface") {
+			return o, errors.New("create_sequence")
 		}
 		if o.SurfaceID != "" && o.SurfaceID != id {
 			return o, errors.New("mixed_surfaces")
@@ -300,7 +281,7 @@ func Parse(text string, screen *Size) (Output, error) {
 var components = map[string]bool{"Text": true, "Image": true, "Icon": true, "Video": true, "AudioPlayer": true, "Row": true, "Column": true, "List": true, "Card": true, "Tabs": true, "Divider": true, "Modal": true, "Button": true, "CheckBox": true, "TextField": true, "DateTimeInput": true, "ChoicePicker": true, "Slider": true}
 
 func validateMessage(raw []byte) (string, string, error) {
-	m, err := decodeObject(raw, "version", "createSurface", "updateComponents", "updateDataModel", "deleteSurface")
+	m, err := decodeObject(raw, "version", "createSurface", "updateComponents", "updateDataModel")
 	if err != nil {
 		return "", "", err
 	}
@@ -328,7 +309,6 @@ func validateMessage(raw []byte) (string, string, error) {
 		allowed = append(allowed, "components")
 	case "updateDataModel":
 		allowed = append(allowed, "path", "value")
-	case "deleteSurface":
 	default:
 		return "", "", errors.New("message_kind")
 	}
@@ -400,67 +380,66 @@ func canonicalMessage(raw json.RawMessage) json.RawMessage {
 
 type State struct {
 	Messages []json.RawMessage
-	Deleted  bool
 }
 
-// Apply applies a validated batch to one existing surface and checks replay invariants.
-func Apply(stored []json.RawMessage, o Output) (State, error) {
-	state := make([]json.RawMessage, len(stored))
-	exists, root := false, false
-	all := append(append([]json.RawMessage(nil), stored...), o.Messages...)
-	for i, raw := range all {
+// AssignSurfaceID replaces the model's placeholder in every validated message.
+func AssignSurfaceID(o Output, id string) Output {
+	o.SurfaceID = id
+	o.Messages = append([]json.RawMessage(nil), o.Messages...)
+	for i, raw := range o.Messages {
+		var message map[string]json.RawMessage
+		_ = json.Unmarshal(raw, &message)
+		for kind, raw := range message {
+			if kind == "version" {
+				continue
+			}
+			var payload map[string]json.RawMessage
+			_ = json.Unmarshal(raw, &payload)
+			payload["surfaceId"], _ = json.Marshal(id)
+			message[kind], _ = json.Marshal(payload)
+		}
+		o.Messages[i], _ = json.Marshal(message)
+	}
+	return o
+}
+
+// Apply builds one new document; no stored state can be continued or replaced.
+func Apply(o Output) (State, error) {
+	var state []json.RawMessage
+	root := false
+	if len(o.Messages) == 0 {
+		return State{}, errors.New("create_sequence")
+	}
+	for i, raw := range o.Messages {
 		kind, id, err := validateMessage(raw)
 		if err != nil || id != o.SurfaceID {
 			return State{}, errors.New("state_message")
 		}
+		if (i == 0) != (kind == "createSurface") {
+			return State{}, errors.New("create_sequence")
+		}
 		raw = canonicalMessage(raw)
-		if i < len(stored) {
-			state[i] = raw
-		}
-		switch kind {
-		case "createSurface":
-			exists = true
-			root = false
-			if i >= len(stored) {
-				state = []json.RawMessage{raw}
+		if kind == "updateComponents" {
+			var m struct {
+				Update struct {
+					Components []struct {
+						ID string `json:"id"`
+					} `json:"components"`
+				} `json:"updateComponents"`
 			}
-		case "deleteSurface":
-			if !exists {
-				return State{}, errors.New("surface_missing")
-			}
-			exists = false
-			root = false
-			if i >= len(stored) {
-				state = []json.RawMessage{raw}
-			}
-		default:
-			if !exists {
-				return State{}, errors.New("surface_missing")
-			}
-			if kind == "updateComponents" {
-				var m struct {
-					Update struct {
-						Components []struct {
-							ID string `json:"id"`
-						} `json:"components"`
-					} `json:"updateComponents"`
-				}
-				_ = json.Unmarshal(raw, &m)
-				for _, c := range m.Update.Components {
-					root = root || c.ID == "root"
-				}
-			}
-			if i >= len(stored) {
-				state = append(state, raw)
+			_ = json.Unmarshal(raw, &m)
+			for _, c := range m.Update.Components {
+				root = root || c.ID == "root"
 			}
 		}
+		state = append(state, raw)
 	}
-	if exists && !root {
+	if !root {
 		return State{}, errors.New("root_missing")
 	}
 	b, err := json.Marshal(state)
 	if err != nil || len(b) > MaxState {
 		return State{}, errors.New("state_limit")
 	}
-	return State{state, !exists}, nil
+	return State{Messages: state}, nil
 }

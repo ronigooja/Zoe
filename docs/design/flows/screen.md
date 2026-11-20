@@ -8,12 +8,12 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 | Producer / fields | Consumer and transformation |
 |---|---|
-| UI route / display request / redisplay / authoritative result or question | UI_Controller receives full request(s), task state/result/question, current surfaces and current screen facts. No raw-utterance duplicate input. |
+| UI route / display request / redisplay / authoritative result or question | UI_Controller receives full request(s), task state/result/question and current screen facts, never stored surfaces. No raw-utterance duplicate input. |
 | UI_Controller presentation | Output carries A2UI content, outer container choice (popover/window), optional size, optional awaiting-input linkage to task_id/question_id, required boolean `voice_input`, and feedback. Use the renderer/catalog and platform shell. |
 | Mac render acknowledgement: surface/document identity and revision, actual render outcome | Server validates matching current presentation; success feedback is allowed **only after render ACK**. |
 | A2UI user input: bound task/question, surface revision, submitted value and command idempotency identity | Server routes directly to the bound task or pending question; no voice relay, register pass or semantic task reselection is required. |
 | Conversation text input: command idempotency identity, full text. Producers are the menu-bar text window and an A2UI surface presented with `voice_input` | Server persists the command and delivers the text to the voice conversation as defined in [Results](results.md#user-text-and-input-feedback). No register pass, Steward, or task is involved. |
-| ui.screen and surface state: current displays/visible bounds, surfaces and revisions | UI_Controller plans against current facts; Mac uses consistent native style and clamps size/position to chosen screen's visible bounds. Direct user window actions retain precedence. |
+| ui.screen: current displays/visible bounds | UI_Controller plans against current screen facts; Mac uses consistent native style and clamps size/position to chosen screen's visible bounds. Direct user window actions retain precedence. |
 | SSE: stable event identity/cursor, surface and result revision | Client deduplicates events, applies only current revisions and repairs state from authoritative snapshots on gaps/reconnect. |
 
 ## Required behavior
@@ -25,16 +25,16 @@ UI-only content requiring research must obtain task execution through the task p
 ## Persistence and idempotency
 
 - Durable request/job with source and result/question identity, current surface revision and delivery state.
-- Persist surface/document revision, originating request/result IDs and awaited-input linkage.
+- Create new surfaces only, with server-assigned identities rewritten into every message; retain document revision, originating request/result IDs and input linkage only while needed.
 - Durable ACK and feedback dedupe by presentation identity/revision.
 - Durable command receipt and task/question entry; preserve submitted full value.
-- Surface identity/revision and authoritative desired state; render ACK as above.
+- Delete non-input documents after their revision-bound render ACK, success or failure. Retain task-question and conversation-text input documents while their binding is current; delete them after input or when the question becomes stale. Recovery snapshots contain only retained documents, not tombstones; client-local History is independent.
 - Durable/recoverable cursor and presentation/result identities.
 - Durable conversation-text command receipt and pending text keyed by the command identity. Duplicate submission neither duplicates delivery nor overwrites the stored text.
 
 ## Failure and recovery
 
-Generation/dispatch is not display success; retain a pending presentation until render acknowledgement. Rejected/failed/stale ACK does not announce success; reconnect repairs missing state without duplicate presentation/feedback.
+Generation/dispatch is not display success; retain an unacknowledged presentation, including while the client is offline. Rejected/failed/stale ACK does not announce success; reconnect repairs still-retained state without duplicate presentation/feedback.
 
 Validate ownership, current pending state, binding/revision and idempotency; stale/duplicate input cannot answer another question or create another execution. Missing/stale screen facts cannot establish current presentation; failed rendering is not success feedback. Replayed SSE cannot reopen obsolete results, duplicate actions, or reset delivered state.
 

@@ -88,7 +88,7 @@ func TestUIJobSize(t *testing.T) {
 			t.Fatalf("size=%dx%d event=%s", width, height, raw)
 		}
 		mu.Lock()
-		output = strings.Replace(uiFlowOutput(`{"version":"v0.9.1","updateDataModel":{"surfaceId":"screen","value":{}}}`, false), `"size":{"height":300,"width":400}`, `"size":{"width":500,"height":400}`, 1)
+		output = strings.Replace(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false), `"size":{"height":300,"width":400}`, `"size":{"width":500,"height":400}`, 1)
 		mu.Unlock()
 	}
 	var request string
@@ -97,7 +97,7 @@ func TestUIJobSize(t *testing.T) {
 	}
 	j := uiJob{w: "default", o: "owner", request: request}
 	input, err := r.svc.uiInput(context.Background(), j)
-	if err != nil || strings.Contains(string(input), `"screen":`) || !strings.Contains(string(input), `"size":{"width":500,"height":400}`) {
+	if err != nil || strings.Contains(string(input), `"screen":`) || strings.Contains(string(input), `"surfaces":`) {
 		t.Fatalf("input=%s err=%v", input, err)
 	}
 	r.exec(t, `INSERT INTO ui_screens(workspace_id,owner_subject_id,width,height,updated_at) VALUES('default','other',800,600,?)`, r.now().Format(time.RFC3339Nano))

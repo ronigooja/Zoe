@@ -167,6 +167,9 @@ type uiJob struct {
 }
 
 func (s *Service) dispatchUIJobs(ctx context.Context) {
+	if err := s.pruneUISurfaces(ctx); err != nil {
+		return
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts FROM ui_jobs WHERE status='pending' AND julianday(next_attempt_at)<=julianday(?) ORDER BY created_at,rowid LIMIT 25`, s.now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return
@@ -234,38 +237,15 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 			return nil, errors.New("task_result_pending")
 		}
 	}
-	rows, err = s.db.QueryContext(ctx, `SELECT surface_id,coalesce(request_id,''),version,container,state_json,width,height,deleted FROM ui_surfaces WHERE workspace_id=? AND owner_subject_id=? ORDER BY updated_at,surface_id`, j.w, j.o)
-	if err != nil {
-		return nil, err
-	}
-	var surfaces []uictl.Surface
-	for rows.Next() {
-		var sf uictl.Surface
-		var raw []byte
-		var width, height sql.NullInt64
-		if err = rows.Scan(&sf.SurfaceID, &sf.RequestID, &sf.Version, &sf.Container, &raw, &width, &height, &sf.Deleted); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if err = json.Unmarshal(raw, &sf.Messages); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if width.Valid && height.Valid {
-			sf.Size = &uictl.Size{Width: int(width.Int64), Height: int(height.Int64)}
-		}
-		surfaces = append(surfaces, sf)
-	}
-	rows.Close()
 	var screen uictl.Size
 	err = s.db.QueryRowContext(ctx, `SELECT width,height FROM ui_screens WHERE workspace_id=? AND owner_subject_id=?`, j.w, j.o).Scan(&screen.Width, &screen.Height)
 	if err == sql.ErrNoRows {
-		return uictl.BuildInput(s.now(), requests, facts, surfaces, nil)
+		return uictl.BuildInput(s.now(), requests, facts, nil)
 	}
 	if err != nil {
 		return nil, err
 	}
-	return uictl.BuildInput(s.now(), requests, facts, surfaces, &screen)
+	return uictl.BuildInput(s.now(), requests, facts, &screen)
 }
 func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 	now := s.now().UTC()
@@ -362,20 +342,16 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 		controllerInput.PreviousError = uictl.PreviousFailure(err)
 	}
 
-	if err = s.commitUIJob(ctx, j, parsed, controllerInput.Task, controllerInput.Surfaces); err != nil {
+	if err = s.commitUIJob(ctx, j, parsed, controllerInput.Task); err != nil {
 		code := "storage_error"
 		if errors.Is(err, errUIState) {
 			code = "state_invalid"
 		}
-		if errors.Is(err, errUISnapshot) {
-			code = "snapshot_changed"
-		}
-		s.failUIJob(ctx, j, code, code == "storage_error" || code == "snapshot_changed")
+		s.failUIJob(ctx, j, code, code == "storage_error")
 	}
 }
 
 var errUIState = errors.New("ui_state_invalid")
-var errUISnapshot = errors.New("ui_snapshot_changed")
 
 // UI presentation commits and sends for one owner serialize within this process.
 // No database transaction spans gateway HTTP; other processes are not fenced.
@@ -389,7 +365,7 @@ func (s *Service) lockUIOwner(workspace, owner string) func() {
 	return mu.Unlock
 }
 
-func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, facts *uictl.Task, snapshot []uictl.Surface) error {
+func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, facts *uictl.Task) error {
 	unlock := s.lockUIOwner(j.w, j.o)
 	defer unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -404,38 +380,6 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 	}
 	if status != "pending" || attempts != j.attempts {
 		return nil
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT surface_id,coalesce(request_id,''),version,deleted FROM ui_surfaces WHERE workspace_id=? AND owner_subject_id=?`, j.w, j.o)
-	if err != nil {
-		return err
-	}
-	expected := map[string]uictl.Surface{}
-	for _, sf := range snapshot {
-		expected[sf.SurfaceID] = sf
-	}
-	matched := 0
-	for rows.Next() {
-		var id, request string
-		var version int64
-		var deleted bool
-		if err = rows.Scan(&id, &request, &version, &deleted); err != nil {
-			rows.Close()
-			return err
-		}
-		sf, ok := expected[id]
-		if !ok || sf.Version != version || sf.RequestID != request || sf.Deleted != deleted {
-			rows.Close()
-			return errUISnapshot
-		}
-		matched++
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	if matched != len(expected) {
-		return errUISnapshot
 	}
 	if facts != nil {
 		var currentResult string
@@ -464,69 +408,38 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 		}
 		question = facts.QuestionID
 	}
-	var raw []byte
-	var version int64
-	var deleted bool
-	var width, height sql.NullInt64
-	err = tx.QueryRowContext(ctx, `SELECT state_json,version,width,height,deleted FROM ui_surfaces WHERE workspace_id=? AND owner_subject_id=? AND surface_id=?`, j.w, j.o, o.SurfaceID).Scan(&raw, &version, &width, &height, &deleted)
-	if err != nil && err != sql.ErrNoRows {
+	id, err := randomID()
+	if err != nil {
 		return err
 	}
-	var stored []json.RawMessage
-	if len(raw) > 0 && json.Unmarshal(raw, &stored) != nil {
-		return errUIState
-	}
-	// Tombstones retain identity/version, not an existing renderable document.
-	if deleted {
-		stored = nil
-	}
-	state, err := uictl.Apply(stored, o)
+	o = uictl.AssignSurfaceID(o, id)
+	state, err := uictl.Apply(o)
 	if err != nil {
 		return errUIState
-	}
-	if (len(raw) == 0 || deleted) && !state.Deleted {
-		var count int
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM ui_surfaces WHERE workspace_id=? AND owner_subject_id=? AND deleted=0`, j.w, j.o).Scan(&count); err != nil {
-			return err
-		}
-		if count >= 64 {
-			return errUIState
-		}
 	}
 	at := s.now().UTC().Format(time.RFC3339Nano)
-	version++
-	if state.Deleted {
-		data, _ := json.Marshal(state.Messages)
-		_, err = tx.ExecContext(ctx, `INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,request_id,deleted,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?) ON CONFLICT(workspace_id,owner_subject_id,surface_id) DO UPDATE SET state_json=excluded.state_json,deleted=1,version=excluded.version,request_id=excluded.request_id,updated_at=excluded.updated_at`, j.w, j.o, o.SurfaceID, o.Container, string(data), version, j.request, at, at)
-	} else {
-		data, _ := json.Marshal(state.Messages)
-		var newWidth, newHeight any
-		if o.Size != nil {
-			newWidth, newHeight = o.Size.Width, o.Size.Height
-			width, height = sql.NullInt64{Int64: int64(o.Size.Width), Valid: true}, sql.NullInt64{Int64: int64(o.Size.Height), Valid: true}
-		}
-		// Omitted size preserves the previously stored dimensions on updates.
-		_, err = tx.ExecContext(ctx, `INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,created_at,updated_at,width,height) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,owner_subject_id,surface_id) DO UPDATE SET container=excluded.container,state_json=excluded.state_json,version=excluded.version,updated_at=excluded.updated_at,width=COALESCE(excluded.width,ui_surfaces.width),height=COALESCE(excluded.height,ui_surfaces.height)`, j.w, j.o, o.SurfaceID, o.Container, string(data), version, at, at, newWidth, newHeight)
+	const version int64 = 1
+	data, _ := json.Marshal(state.Messages)
+	var width, height any
+	if o.Size != nil {
+		width, height = o.Size.Width, o.Size.Height
 	}
+	// Plain INSERT ensures even an ID collision can never replace another document.
+	_, err = tx.ExecContext(ctx, `INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,request_id,created_at,updated_at,width,height) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, j.w, j.o, o.SurfaceID, o.Container, string(data), version, j.request, at, at, width, height)
 	if err != nil {
 		return err
-	}
-	if !state.Deleted {
-		if _, err = tx.ExecContext(ctx, `UPDATE ui_surfaces SET request_id=?,deleted=0 WHERE workspace_id=? AND owner_subject_id=? AND surface_id=?`, j.request, j.w, j.o, o.SurfaceID); err != nil {
-			return err
-		}
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE ui_requests SET task_id=CASE WHEN ? THEN NULL ELSE task_id END,surface_id=?,surface_version=?,question_id=?,feedback=?,awaiting_input=?,voice_input=?,input_note=?,status='generated',updated_at=? WHERE id=?`, o.VoiceInput, o.SurfaceID, version, question, o.Feedback, o.AwaitingInput, o.VoiceInput, "", at, j.request); err != nil {
 		return err
 	}
 	eventPayload := map[string]any{"request_id": j.request, "surface_id": o.SurfaceID, "container": o.Container, "awaiting_input": o.AwaitingInput, "voice_input": o.VoiceInput, "messages": state.Messages}
 	eventPayload["surface_version"] = version
-	eventPayload["deleted"] = state.Deleted
+	eventPayload["deleted"] = false
 	if o.AwaitingInput {
 		eventPayload["task_id"], eventPayload["question_id"] = facts.TaskID, facts.QuestionID
 	}
-	if !state.Deleted && width.Valid && height.Valid {
-		eventPayload["size"] = uictl.Size{Width: int(width.Int64), Height: int(height.Int64)}
+	if o.Size != nil {
+		eventPayload["size"] = o.Size
 	}
 	payload, _ := json.Marshal(eventPayload)
 	if s.uiEventServer == nil {

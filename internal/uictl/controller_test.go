@@ -228,20 +228,11 @@ func TestServerOwnedMessageVersion(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			state, err := Apply(nil, o)
+			state, err := Apply(o)
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Stored replay is normalized too, even when supplied without Parse.
-			var stored []json.RawMessage
-			if err := json.Unmarshal([]byte("["+messages+"]"), &stored); err != nil {
-				t.Fatal(err)
-			}
-			replayed, err := Apply(stored, Output{SurfaceID: "screen"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, batch := range [][]json.RawMessage{o.Messages, state.Messages, replayed.Messages} {
+			for _, batch := range [][]json.RawMessage{o.Messages, state.Messages} {
 				for _, raw := range batch {
 					var message map[string]json.RawMessage
 					_ = json.Unmarshal(raw, &message)
@@ -296,7 +287,7 @@ func TestCatalogComponentNames(t *testing.T) {
 		}
 		b, _ := json.Marshal(c)
 		message := `{"version":"v0.9.1","updateComponents":{"surfaceId":"screen","components":[` + string(b) + `]}}`
-		if _, err := Parse(fixture(message), nil); err != nil {
+		if _, err := Parse(fixture(create+","+message), nil); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
@@ -304,36 +295,27 @@ func TestCatalogComponentNames(t *testing.T) {
 
 func TestApply(t *testing.T) {
 	initial, _ := Parse(fixture(create+","+root), nil)
-	state, err := Apply(nil, initial)
+	state, err := Apply(initial)
 	if err != nil || len(state.Messages) != 2 {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name, messages   string
-		stored           []json.RawMessage
-		count            int
-		deleted, wantErr bool
+		name, messages string
+		wantErr        bool
 	}{
-		{"append", update, state.Messages, 3, false, false},
-		{"reset", create + "," + root, state.Messages, 2, false, false},
-		{"delete", remove, state.Messages, 1, true, false},
-		{"missing", update, nil, 0, false, true},
-		{"missing_root", create, nil, 0, false, true},
-		{"delete_missing", remove, nil, 0, false, true},
-		{"update_deleted", remove + "," + update, state.Messages, 0, false, true},
-		{"recreate", remove + "," + create + "," + root, state.Messages, 2, false, false},
+		{"new", create + "," + root + "," + update, false},
+		{"missing_create", update, true},
+		{"missing_root", create, true},
+		{"delete", remove, true},
+		{"recreate", create + "," + root + "," + create + "," + root, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o, e := Parse(fixture(tc.messages), nil)
-			if e != nil {
-				t.Fatal(e)
+			if e == nil {
+				_, e = Apply(o)
 			}
-			got, e := Apply(tc.stored, o)
 			if (e != nil) != tc.wantErr {
 				t.Fatal(e)
-			}
-			if e == nil && (len(got.Messages) != tc.count || got.Deleted != tc.deleted) {
-				t.Fatalf("state=%+v", got)
 			}
 		})
 	}
@@ -341,28 +323,24 @@ func TestApply(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		large = append(large, json.RawMessage(strings.Replace(update, `"data"`, `"`+strings.Repeat("x", 8000)+`"`, 1)))
 	}
-	o, _ := Parse(fixture(update), nil)
-	if _, err := Apply(large, o); err == nil {
+	if _, err := Apply(Output{SurfaceID: "screen", Messages: large}); err == nil {
 		t.Fatal("accepted oversized state")
 	}
 }
 
 func TestBuildInput(t *testing.T) {
-	b, err := BuildInput(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), nil, nil, nil, nil)
+	b, err := BuildInput(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(b) != `{"now":"2026-01-02T03:04:05Z","requests":[],"task":null,"surfaces":[]}` {
+	if string(b) != `{"now":"2026-01-02T03:04:05Z","requests":[],"task":null}` {
 		t.Fatal(string(b))
 	}
-	if _, err = BuildInput(time.Now(), nil, nil, make([]Surface, 65), nil); err == nil {
-		t.Fatal("accepted too many surfaces")
-	}
-	if _, err = BuildInput(time.Now(), []string{strings.Repeat("x", 16*MaxState+1)}, nil, nil, nil); err == nil {
+	if _, err = BuildInput(time.Now(), []string{strings.Repeat("x", 16*MaxState+1)}, nil, nil); err == nil {
 		t.Fatal("accepted oversized input")
 	}
 	for _, request := range []string{"", "  ", "none"} {
-		if _, err = BuildInput(time.Now(), []string{request}, nil, nil, nil); err == nil {
+		if _, err = BuildInput(time.Now(), []string{request}, nil, nil); err == nil {
 			t.Fatalf("accepted incomplete request %q", request)
 		}
 	}

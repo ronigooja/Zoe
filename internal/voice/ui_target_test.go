@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -82,7 +81,7 @@ func uiTargetPresentation(t *testing.T, r *deliveryRig, awaiting bool) {
 		t.Fatal(err)
 	}
 	facts := &uictl.Task{TaskID: "task", QuestionID: "question", Question: "Which?"}
-	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "job", w: "default", o: "owner", request: "request", kind: "task_entry", attempts: 1}, o, facts, nil); err != nil {
+	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "job", w: "default", o: "owner", request: "request", kind: "task_entry", attempts: 1}, o, facts); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -94,6 +93,7 @@ func TestUITargetRenderACKBarrier(t *testing.T) {
 	r.seedCall(t, "call", "owner", 1)
 	r.enableReceiptFixture(t)
 	uiTargetPresentation(t, r, false)
+	surfaceID := uiStoredID(t, r, "request")
 	r.svc.dispatchUIFeedback(context.Background())
 	if r.posts.Load() != 0 {
 		t.Fatal("feedback before ACK")
@@ -109,15 +109,20 @@ func TestUITargetRenderACKBarrier(t *testing.T) {
 			t.Fatal("stale or failed ACK accepted")
 		}
 	}
-	for i := 0; i < 2; i++ {
-		tx, _ := r.store.DB().BeginTx(context.Background(), nil)
-		_, _, err := r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(`{"request_id":"request","surface_id":"screen","surface_version":1,"success":true}`)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = tx.Commit(); err != nil {
-			t.Fatal(err)
-		}
+	tx, _ := r.store.DB().BeginTx(context.Background(), nil)
+	_, _, err := r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(strings.ReplaceAll(`{"request_id":"request","surface_id":"screen","surface_version":1,"success":true}`, `"screen"`, `"`+surfaceID+`"`))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh command cannot acknowledge a consumed document again.
+	tx, _ = r.store.DB().BeginTx(context.Background(), nil)
+	_, _, err = r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(strings.ReplaceAll(`{"request_id":"request","surface_id":"screen","surface_version":1,"success":true}`, `"screen"`, `"`+surfaceID+`"`))})
+	_ = tx.Rollback()
+	if err == nil {
+		t.Fatal("duplicate ACK accepted")
 	}
 	r.svc.dispatchUIFeedback(context.Background())
 	if r.posts.Load() != 1 {
@@ -149,14 +154,14 @@ func TestUITargetDirectQuestionInput(t *testing.T) {
 				r.exec(t, `UPDATE tasks SET interaction_action_digest='new-question' WHERE id='task'`)
 			}
 			if mode == "stale-surface" {
-				r.exec(t, `UPDATE ui_surfaces SET version=version+1 WHERE surface_id='screen'`)
+				r.exec(t, `UPDATE ui_surfaces SET version=version+1 WHERE surface_id=?`, uiStoredID(t, r, "request"))
 			}
 			content := "  full answer\n中文  "
 			version := 1
 			if mode == "stale-client-version" {
 				version = 2
 			}
-			b, _ := json.Marshal(map[string]any{"request_id": "request", "surface_id": "screen", "surface_version": version, "name": "submit", "source_component_id": "submit", "context": map[string]string{"value": content}})
+			b, _ := json.Marshal(map[string]any{"request_id": "request", "surface_id": uiStoredID(t, r, "request"), "surface_version": version, "name": "submit", "source_component_id": "submit", "context": map[string]string{"value": content}})
 			submit := func() error {
 				tx, _ := r.store.DB().BeginTx(context.Background(), nil)
 				defer tx.Rollback()
@@ -180,6 +185,10 @@ func TestUITargetDirectQuestionInput(t *testing.T) {
 			want := 0
 			if wantSuccess {
 				want = 1
+				var retained int
+				if err := r.store.DB().QueryRow(`SELECT count(*) FROM ui_surfaces`).Scan(&retained); err != nil || retained != 0 {
+					t.Fatalf("answered surface retained=%d err=%v", retained, err)
+				}
 				var got string
 				_ = r.store.DB().QueryRow(`SELECT e.content FROM task_entries e JOIN task_question_answers a ON a.entry_id=e.id WHERE a.question_id='question'`).Scan(&got)
 				if got != content {
@@ -190,118 +199,6 @@ func TestUITargetDirectQuestionInput(t *testing.T) {
 				t.Fatalf("answers=%d feedback=%d", answers, feedback)
 			}
 		})
-	}
-}
-
-func uiTargetDelete(t *testing.T, r *deliveryRig) {
-	t.Helper()
-	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,request,created_at,updated_at) VALUES('delete','default','owner','register','Close the screen.',?,?)`, at, at)
-	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('delete-job','default','owner','register','register:delete','delete',1,?,?,?)`, at, at, at)
-	input, err := r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", request: "delete"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var snapshot uictl.Input
-	if err = json.Unmarshal(input, &snapshot); err != nil {
-		t.Fatal(err)
-	}
-	o, err := uictl.Parse(uiFlowOutput(`{"version":"v0.9.1","deleteSurface":{"surfaceId":"screen"}}`, false), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "delete-job", w: "default", o: "owner", request: "delete", attempts: 1}, o, nil, snapshot.Surfaces); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestUITargetDeletionACK(t *testing.T) {
-	r := uiTargetRig(t)
-	uiFlowServer(t, r)
-	r.seedTask(t, "task", "owner")
-	uiTargetPresentation(t, r, false)
-	uiTargetDelete(t, r)
-	var deleted, version int
-	var raw string
-	if err := r.store.DB().QueryRow(`SELECT deleted,version,state_json FROM ui_surfaces WHERE surface_id='screen'`).Scan(&deleted, &version, &raw); err != nil {
-		t.Fatal(err)
-	}
-	if deleted != 1 || version != 2 || strings.Contains(raw, "Title") || !strings.Contains(raw, "deleteSurface") {
-		t.Fatalf("%d %d %s", deleted, version, raw)
-	}
-	tx, _ := r.store.DB().BeginTx(context.Background(), nil)
-	defer tx.Rollback()
-	cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
-	_, _, err := r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(`{"request_id":"delete","surface_id":"screen","surface_version":2,"success":true}`)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestUITargetConcurrentSnapshot(t *testing.T) {
-	r := uiTargetRig(t)
-	uiFlowServer(t, r)
-	r.seedTask(t, "task", "owner")
-	uiTargetPresentation(t, r, false)
-	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,request,created_at,updated_at) VALUES('update','default','owner','register','Update the presentation.',?,?)`, at, at)
-	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('update-job','default','owner','register','register:update','update',1,?,?,?)`, at, at, at)
-	b, err := r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", request: "update"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var in uictl.Input
-	_ = json.Unmarshal(b, &in)
-	r.exec(t, `UPDATE ui_surfaces SET version=version+1 WHERE surface_id='screen'`)
-	o, err := uictl.Parse(uiFlowOutput(uiFlowRoot, false), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	j := uiJob{id: "update-job", w: "default", o: "owner", request: "update", attempts: 1}
-	err = r.svc.commitUIJob(context.Background(), j, o, nil, in.Surfaces)
-	if !errors.Is(err, errUISnapshot) {
-		t.Fatal(err)
-	}
-	r.svc.failUIJob(context.Background(), j, "snapshot_changed", true)
-	var status string
-	var version int
-	_ = r.store.DB().QueryRow(`SELECT status FROM ui_jobs WHERE id='update-job'`).Scan(&status)
-	_ = r.store.DB().QueryRow(`SELECT version FROM ui_surfaces WHERE surface_id='screen'`).Scan(&version)
-	if status != "pending" || version != 2 {
-		t.Fatalf("%s %d", status, version)
-	}
-	// Snapshot churn is regenerated only within the existing three-call budget.
-	r.exec(t, `UPDATE ui_jobs SET attempts=3 WHERE id='update-job'`)
-	j.attempts = 3
-	r.svc.failUIJob(context.Background(), j, "snapshot_changed", true)
-	_ = r.store.DB().QueryRow(`SELECT status FROM ui_jobs WHERE id='update-job'`).Scan(&status)
-	if status != "failed" {
-		t.Fatal("unbounded snapshot regeneration")
-	}
-}
-
-func TestUITargetReplacedAfterFeedbackSelection(t *testing.T) {
-	r := uiTargetRig(t)
-	uiFlowServer(t, r)
-	r.seedTask(t, "task", "owner")
-	r.seedCall(t, "call", "owner", 1)
-	uiTargetPresentation(t, r, false)
-	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `UPDATE ui_requests SET status='rendered' WHERE id='request'`)
-	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('request','default','owner','Shown.',?,?)`, at, at)
-	d := uiFeedback{id: "request", workspace: "default", owner: "owner", text: "Shown."}
-	r.exec(t, `UPDATE ui_surfaces SET version=version+1 WHERE surface_id='screen'`)
-	r.svc.deliverUIFeedback(context.Background(), d)
-	if r.posts.Load() != 0 {
-		t.Fatal("superseded feedback sent")
-	}
-	var status string
-	_ = r.store.DB().QueryRow(`SELECT status FROM ui_feedback_deliveries`).Scan(&status)
-	if status != "failed" {
-		t.Fatal(status)
 	}
 }
 
@@ -325,9 +222,10 @@ func TestUITargetFailedACK(t *testing.T) {
 	uiFlowServer(t, r)
 	r.seedTask(t, "task", "owner")
 	uiTargetPresentation(t, r, false)
+	surfaceID := uiStoredID(t, r, "request")
 	cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
 	tx, _ := r.store.DB().BeginTx(context.Background(), nil)
-	_, _, err := r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(`{"request_id":"request","surface_id":"screen","surface_version":1,"success":false}`)})
+	_, _, err := r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(strings.ReplaceAll(`{"request_id":"request","surface_id":"screen","surface_version":1,"success":false}`, `"screen"`, `"`+surfaceID+`"`))})
 	if err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
@@ -361,7 +259,7 @@ func TestUITargetCommandReceiptReplay(t *testing.T) {
 	r.exec(t, `UPDATE actors SET subject_id='owner' WHERE id='instance'`)
 	server := httptest.NewServer(r.svc.uiEventServer.Handler())
 	defer server.Close()
-	payload := json.RawMessage(`{"request_id":"request","surface_id":"screen","surface_version":1,"name":"submit","source_component_id":"submit","context":{"value":"Bound answer"}}`)
+	payload := json.RawMessage(strings.ReplaceAll(`{"request_id":"request","surface_id":"screen","surface_version":1,"name":"submit","source_component_id":"submit","context":{"value":"Bound answer"}}`, `"screen"`, `"`+uiStoredID(t, r, "request")+`"`))
 	status, receipt, raw := handoffCommand(t, server.Client(), server.URL, key, "same-command", "ui.action", payload)
 	if status != 200 && status != 202 {
 		t.Fatalf("%d %s", status, raw)

@@ -200,7 +200,7 @@ func TestUITaskJobsAccumulate(t *testing.T) {
 	r.svc.consumeUITaskEvents(context.Background())
 	r.svc.dispatchUIJobs(context.Background())
 	mu.Lock()
-	output = uiFlowOutput(`{"version":"v0.9.1","updateDataModel":{"surfaceId":"screen","value":{"text":"second"}}}`, false)
+	output = uiFlowOutput(uiFlowCreate+","+uiFlowRoot+`,{"version":"v0.9.1","updateDataModel":{"surfaceId":"screen","value":{"text":"second"}}}`, false)
 	mu.Unlock()
 	r.seedEntry(t, "task", "entry-two", "second result")
 	r.exec(t, `UPDATE tasks SET result='second result' WHERE id='task'`)
@@ -214,7 +214,7 @@ func TestUITaskJobsAccumulate(t *testing.T) {
 	_ = r.store.DB().QueryRow(`SELECT count(*) FROM events WHERE event_type='ui.surface'`).Scan(&events)
 	_ = r.store.DB().QueryRow(`SELECT count(*) FROM ui_feedback_deliveries`).Scan(&feedback)
 	_ = r.store.DB().QueryRow(`SELECT count(*) FROM ui_jobs`).Scan(&jobs)
-	_ = r.store.DB().QueryRow(`SELECT state_json FROM ui_surfaces`).Scan(&raw)
+	_ = r.store.DB().QueryRow(`SELECT state_json FROM ui_surfaces ORDER BY rowid DESC LIMIT 1`).Scan(&raw)
 	var messages []json.RawMessage
 	_ = json.Unmarshal(raw, &messages)
 	if events != 2 || feedback != 0 || jobs != 2 || len(messages) != 3 {
@@ -469,7 +469,7 @@ func TestUIOpeningFeedbackOrderAndBudget(t *testing.T) {
 	}
 }
 
-func TestUIDeleteEventAndLease(t *testing.T) {
+func TestUINewSurfaceJobLease(t *testing.T) {
 	r := uiTargetRig(t)
 	uiFlowServer(t, r)
 	var mu sync.Mutex
@@ -480,7 +480,7 @@ func TestUIDeleteEventAndLease(t *testing.T) {
 	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES('delete','default','owner','register',?,?)`, at, at)
 	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('delete-job','default','owner','register','register:delete','delete',1,?,?,?)`, r.now().Add(30*time.Second).Format(time.RFC3339Nano), at, at)
 	mu.Lock()
-	output = uiFlowOutput(`{"version":"v0.9.1","deleteSurface":{"surfaceId":"screen"}}`, false)
+	output = uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false)
 	mu.Unlock()
 	r.svc.dispatchUIJobs(context.Background())
 	var count int
@@ -490,9 +490,9 @@ func TestUIDeleteEventAndLease(t *testing.T) {
 	}
 	r.advance(31 * time.Second)
 	r.svc.dispatchUIJobs(context.Background())
-	_ = r.store.DB().QueryRow(`SELECT count(*) FROM ui_surfaces WHERE deleted=0`).Scan(&count)
-	if count != 0 {
-		t.Fatal("surface was not tombstoned")
+	_ = r.store.DB().QueryRow(`SELECT count(*) FROM ui_surfaces`).Scan(&count)
+	if count != 2 {
+		t.Fatal("new surface was not created")
 	}
 	var raw []byte
 	_ = r.store.DB().QueryRow(`SELECT payload FROM events WHERE event_type='ui.surface' ORDER BY cursor DESC LIMIT 1`).Scan(&raw)
@@ -501,7 +501,7 @@ func TestUIDeleteEventAndLease(t *testing.T) {
 			Messages []json.RawMessage `json:"messages"`
 		} `json:"payload"`
 	}
-	if json.Unmarshal(raw, &e) != nil || len(e.Payload.Messages) != 1 || !strings.Contains(string(e.Payload.Messages[0]), "deleteSurface") {
+	if json.Unmarshal(raw, &e) != nil || len(e.Payload.Messages) != 2 || !strings.Contains(string(e.Payload.Messages[0]), "createSurface") {
 		t.Fatalf("event=%s", raw)
 	}
 }
