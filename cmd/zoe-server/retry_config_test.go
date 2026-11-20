@@ -47,12 +47,12 @@ func TestRetryModelsFromLoaded(t *testing.T) {
 	before := retryModelsFromLoaded(register, nil, nil)
 	register.RegisterInstruction, register.CompactInstruction = "first", "second"
 	after := retryModelsFromLoaded(register, nil, nil)
-	for _, name := range []string{"register", "compact"} {
+	for _, name := range []string{"register", "compact", "task_summary"} {
 		if fingerprint(before[name]) != fingerprint(after[name]) {
 			t.Fatal("prompt changed model configuration identity")
 		}
 	}
-	for consumer, prefix := range map[string]string{"register": "ZOE_REGISTER", "compact": "ZOE_COMPACT", "steward": "ZOE_STEWARD", "ui_controller": "ZOE_UI_CONTROLLER"} {
+	for consumer, prefix := range map[string]string{"register": "ZOE_REGISTER", "compact": "ZOE_COMPACT", "task_summary": "ZOE_COMPACT", "steward": "ZOE_STEWARD", "ui_controller": "ZOE_UI_CONTROLLER"} {
 		t.Run(consumer, func(t *testing.T) {
 			cfg := loaded[consumer]
 			if cfg.Endpoint == "" || cfg.Model == "" || cfg.Effort == "" || cfg.Thinking == "" || len(cfg.Credential) == 0 {

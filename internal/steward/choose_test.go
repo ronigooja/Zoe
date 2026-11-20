@@ -41,7 +41,7 @@ func encoded(value any) string {
 func facts() Input {
 	return Input{Request: "full retained request", Tasks: []Candidate{
 		{TaskID: "stable-task-1", Goal: "duplicate goal", Status: "active", PendingQuestions: []Question{{QuestionID: "stable-question-1", Text: "Which?"}}},
-		{TaskID: "stable-task-2", Goal: "duplicate goal", Status: "completed", PendingQuestions: []Question{{QuestionID: "stable-question-2", Text: "Which?"}}, Result: text("full result")},
+		{TaskID: "stable-task-2", Goal: "duplicate goal", Status: "completed", PendingQuestions: []Question{{QuestionID: "stable-question-2", Text: "Which?"}}, SummaryResult: text("short result summary")},
 	}}
 }
 
@@ -137,7 +137,7 @@ func TestChooseIdentityAndQuestionMembership(t *testing.T) {
 func TestChooseFullInputNoTruncationOrAliases(t *testing.T) {
 	input := Input{Request: strings.Repeat("request🙂\n", 2000), DisplayRequested: true}
 	for i := 0; i < 12; i++ {
-		input.Tasks = append(input.Tasks, Candidate{TaskID: "real-" + strconv.Itoa(i), Goal: strings.Repeat("goal🙂", 500), Status: "arbitrary-authoritative-state", Result: text(strings.Repeat("result", 500)), Additions: []string{"first", "second", "third", "fourth", "fifth", "sixth"}})
+		input.Tasks = append(input.Tasks, Candidate{TaskID: "real-" + strconv.Itoa(i), Goal: strings.Repeat("goal🙂", 500), Status: "arbitrary-authoritative-state", SummaryResult: text("summary"), Additions: []string{"first", "second", "third", "fourth", "fifth", "sixth"}})
 	}
 	before := encoded(input)
 	want, _, err := prepareInput(input)
@@ -152,6 +152,9 @@ func TestChooseFullInputNoTruncationOrAliases(t *testing.T) {
 		}
 		if outer.Input != encoded(want) || outer.Instructions != testStewardPrompt(t) {
 			t.Error("wire input differs from complete canonical facts")
+		}
+		if strings.Contains(outer.Input, `"result":`) || !strings.Contains(outer.Input, `"summary_result":`) {
+			t.Error("Steward wire input must contain summaries, never full results")
 		}
 	})
 	defer s.Close()

@@ -201,7 +201,7 @@ prompts() {
 import hashlib, json, os, pathlib, re, shutil, sys, tempfile
 release, host, mode, sha, action = sys.argv[1:]
 release, host = pathlib.Path(release), pathlib.Path(host)
-required = {'ui_controller.txt', 'register.txt', 'compact.txt', 'steward.txt', 'task_ui_display.txt', 'voice_instruction.txt'}
+required = {'ui_controller.txt', 'register.txt', 'compact.txt', 'steward.txt', 'task_ui_display.txt', 'voice_instruction.txt', 'task_summary.txt'}
 try:
     source = release/'prompts'
     files = sorted(source.iterdir())

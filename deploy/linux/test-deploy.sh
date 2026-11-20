@@ -582,7 +582,7 @@ for revision in [old, new]:
 root = p/'source'
 case = os.environ['CASE']
 (root/'prompts').mkdir()
-for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction']:
+for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction', 'task_summary']:
     (root/'prompts'/(name+'.txt')).write_text('PROMPT_SECRET_SENTINEL '+name+'\n')
 if case == 'prompt-missing': (root/'prompts/register.txt').unlink()
 if case in ['prompt-keep', 'prompt-overwrite', 'prompt-identical', 'prompt-dry']:
@@ -900,6 +900,7 @@ fixture prompt-keep
 deploy
 [[ "$(cat "$FIXTURE/prompts/register.txt")" == 'old content' ]]
 [[ -f "$FIXTURE/prompts/compact.txt" ]]
+[[ -f "$FIXTURE/prompts/task_summary.txt" ]]
 [[ "$(stat -c '%a:%u:%g' "$FIXTURE/prompts/compact.txt")" == 644:0:0 ]]
 grep -q 'action=keep(differs)' "$FIXTURE/logs/$new.log"
 fixture prompt-overwrite

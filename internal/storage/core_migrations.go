@@ -6,6 +6,13 @@ import (
 )
 
 func RegisterCoreMigrations(s *Store) error {
+	if err := s.RegisterMigration(Migration{Namespace: "core", Version: 17, Name: "task_summary_result", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE tasks ADD COLUMN summary_result TEXT;
+CREATE INDEX tasks_pending_summary ON tasks(created_at,id) WHERE status='complete' AND summary_result IS NULL;`)
+		return err
+	}}); err != nil {
+		return err
+	}
 	if err := s.RegisterMigration(Migration{Namespace: "core", Version: 16, Name: "run_entry_deliveries", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE run_entry_deliveries (
 run_id TEXT NOT NULL REFERENCES runs(id), entry_id TEXT NOT NULL REFERENCES task_entries(id),

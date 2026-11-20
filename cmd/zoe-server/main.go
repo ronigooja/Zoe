@@ -63,6 +63,7 @@ func run() error {
 	if registerConfig != nil {
 		registerConfig.RegisterInstruction = promptSet.Register()
 		registerConfig.CompactInstruction = promptSet.Compact()
+		registerConfig.TaskSummaryInstruction = promptSet.TaskSummary()
 	}
 	profiles, err := loadProfiles(os.Getenv("ZOE_RUNTIME_PROFILES"))
 	if err != nil {

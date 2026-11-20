@@ -704,12 +704,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 		if err == nil {
 			facts := make([]steward.Candidate, 0, len(candidates))
 			for _, c := range candidates {
-				var result *string
-				if c.Result != "" {
-					value := c.Result
-					result = &value
-				}
-				facts = append(facts, steward.Candidate{TaskID: c.TaskID, Goal: c.Goal, Status: c.Status, PendingQuestions: c.PendingQuestions, Result: result, Additions: c.Additions})
+				facts = append(facts, steward.Candidate{TaskID: c.TaskID, Goal: c.Goal, Status: c.Status, PendingQuestions: c.PendingQuestions, SummaryResult: c.SummaryResult, Additions: c.Additions})
 			}
 			if s.steward == nil {
 				err = errors.New("steward is disabled")

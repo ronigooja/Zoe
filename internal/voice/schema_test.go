@@ -77,6 +77,11 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 		if name == "ui_requests" {
 			copyObj[3] = strings.Replace(copyObj[3], ", voice_input INTEGER NOT NULL DEFAULT 0 CHECK(voice_input IN (0,1))", "", 1)
 		}
+		// Task summary is a core-owned additive column, not part of the
+		// historical voice baseline captured by this reference.
+		if name == "tasks" {
+			copyObj[3] = strings.Replace(copyObj[3], ", summary_result TEXT", "", 1)
+		}
 		baseline[name] = copyObj
 	}
 	owned := map[string][]string{}
@@ -92,7 +97,7 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 		t.Fatalf("voice-owned schema differs from reference: got=%v want=%v", owned, reference.Objects)
 	}
 	for table, want := range reference.Columns {
-		rows, err := store.DB().Query(`SELECT name,type,"notnull",dflt_value,pk FROM pragma_table_info(?) WHERE NOT (?='ui_requests' AND name='voice_input') ORDER BY cid`, table, table)
+		rows, err := store.DB().Query(`SELECT name,type,"notnull",dflt_value,pk FROM pragma_table_info(?) WHERE NOT (?='ui_requests' AND name='voice_input') AND NOT (?='tasks' AND name='summary_result') ORDER BY cid`, table, table, table)
 		if err != nil {
 			t.Fatal(err)
 		}
