@@ -25,8 +25,8 @@ type RegisterOutput = {
 | `memory_write` | Save or update personal information; send the full request to the memory worker. |
 | `recall` | Retrieve personal memory; send the full request to scoped search. |
 | `task` | Perform, modify, answer, continue, inspect or cancel work; send request and candidate facts to Steward. A question about readiness is task only. |
-| `task_ui` | Present content that needs lookup or work first, or an already finished task's result; call Steward with display_requested=true, then UI_Controller. |
-| `ui` | Present content composed from the user's own words or on the spot, needing no lookup or work; send the full request to UI_Controller without task work. |
+| `task_ui` | Present content that has to be obtained or created first, or an already finished task's result; call Steward with display_requested=true, then UI_Controller. |
+| `ui` | Present content that already exists in the user's own words, needing nothing obtained or created; send the full request to UI_Controller without task work. |
 | `chat_input` | Show an input box for conversation text, without a task or pending question. |
 
 Display routes (`task_ui`, `ui`, `chat_input`) require the request to state that content is to be shown on the screen; for `chat_input`, specify an input box for typing conversation text.

@@ -4,6 +4,7 @@ task contains task_id, status, result, question_id and question when task work i
 previous_error contains the fixed category and field of an invalid output only when a retry is configured; correct that error.
 
 Choose screen content and controls to deliver the requested outcome in the active mode.
+Choose popover for content that is read at a glance, and window for content that is large or kept on screen.
 Content taller than the container scrolls vertically.
 
 Button.action contains only event, which has a nonempty string name and optional object context.

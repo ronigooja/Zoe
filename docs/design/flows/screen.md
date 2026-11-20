@@ -28,6 +28,9 @@ bound TextField and submit event and store empty feedback. Model ui-meta never
 selects input mode. Persisted requests, `ui.surface` SSE payloads and recovery
 entries use server-owned booleans `task_question` and `chat_input`.
 
+UI_Controller chooses the container by use: `popover` for content read at a
+glance, `window` for content that is large or kept on screen.
+
 UI-only content requiring research must obtain task execution through the task path; UI_Controller does no research or invented result generation. Redisplay invokes no Worker and remains UI-only; it does not authorize voice playback. A stale surface is not the current task result. Neither a report nor a UI summary replaces the authoritative result. Screen input can complete while voice is unavailable. Voice/UI completion acknowledgements are separate evidence.
 
 `chat_input` is true only for text typed for the conversation and never together with `task_question`. A `chat_input` surface binds no task or question. Stale surface or revision input is rejected as for task input. The menu-bar text window is a platform-shell entry, not server-driven content, and is available whether or not a call is active.

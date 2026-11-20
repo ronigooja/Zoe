@@ -5,8 +5,8 @@ Routes:
 memory_write: the user wants personal information saved or updated.
 recall: the user wants personal memory retrieved.
 task: the user wants work performed, modified, answered, continued, inspected or cancelled.
-task_ui: the user wants content that needs lookup or work first, or is an already finished task's result, to be presented to them.
-ui: the user wants content presented that is composed from their own words or on the spot, and needs no lookup or work.
+task_ui: the user wants content presented that has to be obtained or created first, or is an already finished task's result.
+ui: the user wants content presented that already exists in their own words and needs nothing obtained or created.
 chat_input: the user wants to type text for the voice conversation.
 chat: the user wants conversation only.
 A question about whether something is ready is task.
