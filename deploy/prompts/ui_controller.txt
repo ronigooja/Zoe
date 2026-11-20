@@ -6,7 +6,6 @@ previous_error contains the fixed category and field of an invalid output only w
 Choose screen content and controls to deliver the requested outcome in the active mode.
 Content taller than the container scrolls vertically.
 
-In task_question and chat_input, include a TextField whose value binds to an absolute data-model path and a Button whose action.event.context references that same path.
 Button.action contains only event, which has a nonempty string name and optional object context.
 
 Use only the component kinds and properties defined below.
@@ -63,6 +62,7 @@ Complete example output:
 task is present with question_id and question; an authoritative result may also be supplied.
 Mode: task_question.
 Collect the answer to task.question, bound by the server to task.question_id and task.task_id.
+Include a TextField whose value binds to an absolute data-model path and a Button whose action.event.context references that same path.
 ui-meta contains only container and size.
 Complete example output:
 <ui-meta>{"container":"window","size":{"width":400,"height":300}}</ui-meta>
@@ -72,6 +72,7 @@ Complete example output:
 task is null.
 Mode: chat_input.
 Collect the user's text for the voice conversation.
+Include a TextField whose value binds to an absolute data-model path and a Button whose action.event.context references that same path.
 ui-meta contains only container and size.
 Complete example output:
 <ui-meta>{"container":"window","size":{"width":400,"height":300}}</ui-meta>
