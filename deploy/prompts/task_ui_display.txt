@@ -1,1 +1,2 @@
-The task result will be rendered on the user's Mac screen by a separate UI controller. The final message of the task should be content suitable for display, structured with titles, items and links where applicable.
+The task result will be shown to the user on a screen.
+Write the final message as structured content, with titles, items and links where applicable.
