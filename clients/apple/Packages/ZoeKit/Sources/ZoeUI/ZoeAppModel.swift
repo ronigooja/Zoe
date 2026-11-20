@@ -52,6 +52,7 @@ public final class ZoeAppModel: ObservableObject {
     @Published public private(set) var silenceTimeoutSeconds: Double
     @Published public private(set) var popoverCloseDelaySeconds: Double
     @Published public private(set) var windowCloseDelaySeconds: Double
+    @Published public private(set) var newUISurfaceBehavior: NewUISurfaceBehavior
     @Published public var voiceDraft = ""
     @Published public private(set) var voiceDraftRevision: Int64 = 0
     private let defaults: UserDefaults
@@ -209,6 +210,8 @@ public final class ZoeAppModel: ObservableObject {
         self.defaults = defaults
         popoverCloseDelaySeconds = SurfaceClosePolicy.validatedDelay((defaults.object(forKey: "zoe.ui.popoverCloseDelaySeconds") as? NSNumber)?.doubleValue ?? 60)
         windowCloseDelaySeconds = SurfaceClosePolicy.validatedDelay((defaults.object(forKey: "zoe.ui.windowCloseDelaySeconds") as? NSNumber)?.doubleValue ?? 60)
+        newUISurfaceBehavior = defaults.string(forKey: "zoe.ui.newUISurfaceBehavior")
+            .flatMap(NewUISurfaceBehavior.init(rawValue:)) ?? .addWindow
         let savedEnabled = defaults.object(forKey: "zoe.voice.silenceHangupEnabled") == nil ? true : defaults.bool(forKey: "zoe.voice.silenceHangupEnabled")
         silenceHangupEnabled = savedEnabled
         let savedTimeout = (defaults.object(forKey: "zoe.voice.silenceTimeoutSeconds") as? NSNumber)?.doubleValue ?? 60
@@ -337,6 +340,11 @@ public final class ZoeAppModel: ObservableObject {
         defaults.set(silenceTimeoutSeconds, forKey: "zoe.voice.silenceTimeoutSeconds")
         silence.timeoutSeconds = silenceTimeoutSeconds
         recordSilenceSettingChange(from: before)
+    }
+
+    public func setNewUISurfaceBehavior(_ behavior: NewUISurfaceBehavior) {
+        newUISurfaceBehavior = behavior
+        defaults.set(behavior.rawValue, forKey: "zoe.ui.newUISurfaceBehavior")
     }
 
     public func setPopoverCloseDelaySeconds(_ seconds: Double) {
@@ -1553,10 +1561,7 @@ public final class ZoeAppModel: ObservableObject {
         eventCursor = recovery.cursor
         eventRecoveryRequired = false
         authentication = .connected
-        // Tombstones were already applied natively. Closing them again erases the
-        // exact deletion evidence needed by the ACK validity predicate.
-        let tombstones = Set(recovery.ui.surfaces.filter { $0.event.deleted }.map { $0.event.surfaceID })
-        onUISurfacesClosed?(removed.filter { !tombstones.contains($0) })
+        onUISurfacesClosed?(removed)
         let events = recovery.ui.surfaces.map(\.event).filter { staged.outcomes[$0.binding] == true }
         let workspace = recovery.snapshot.workspaceID
         let coordinator = coordinator
@@ -1645,7 +1650,7 @@ public final class ZoeAppModel: ObservableObject {
 
     private func shouldReplaySurface(_ event: UISurfaceEvent) -> Bool {
         let wasPresented = sessionPresentedSurfaces[event.surfaceID].map { isCurrentUIPresentation?($0) != false } ?? false
-        return SurfaceClosePolicy.shouldReplay(awaitingInput: event.awaitingInput, deleted: event.deleted, wasPresented: wasPresented)
+        return SurfaceClosePolicy.shouldReplay(awaitingInput: event.awaitingInput, wasPresented: wasPresented)
     }
 
     private func applyUISurface(_ event: UISurfaceEvent) async {

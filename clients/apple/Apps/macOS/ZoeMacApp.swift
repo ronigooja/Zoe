@@ -57,6 +57,7 @@ struct ZoeMacApp {
         surfaces.onUserClosed = { [weak self] in self?.model.noteUISurfaceUserClosed() }
         model.$popoverCloseDelaySeconds.sink { [weak self] in self?.surfaces.popoverCloseDelaySeconds = $0 }.store(in: &subscriptions)
         model.$windowCloseDelaySeconds.sink { [weak self] in self?.surfaces.windowCloseDelaySeconds = $0 }.store(in: &subscriptions)
+        model.$newUISurfaceBehavior.sink { [weak self] in self?.surfaces.newUISurfaceBehavior = $0 }.store(in: &subscriptions)
         surfaces.onRenderError = { [weak self] _, errors in self?.model.noteUISurfaceRenderErrors(errors) }
         surfaces.onBoundAction = { [weak self] binding, action in
             self?.model.sendUISurfaceAction(binding: binding, action: action)

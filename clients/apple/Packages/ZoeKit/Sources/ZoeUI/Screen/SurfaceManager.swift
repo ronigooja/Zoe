@@ -21,6 +21,7 @@ import A2UISwiftUI
     private var localMonitor: Any?
     public var popoverCloseDelaySeconds: Double = 60 { didSet { rescheduleClosures() } }
     public var windowCloseDelaySeconds: Double = 60 { didSet { rescheduleClosures() } }
+    public var newUISurfaceBehavior: NewUISurfaceBehavior = .addWindow
     private let actionHandler: (String, ResolvedAction) -> Void
     public var onBoundAction: ((UISurfaceBinding, ResolvedAction) -> Void)?
     private var bindings: [String: UISurfaceBinding] = [:]
@@ -28,7 +29,7 @@ import A2UISwiftUI
     private var physicalBindings: [String: UISurfaceBinding] = [:]
     public func isCurrentPresentation(_ event: UISurfaceEvent) -> Bool {
         physicalBindings[event.surfaceID] == event.binding &&
-            (event.deleted ? entries[event.surfaceID] == nil : entries[event.surfaceID] != nil)
+            entries[event.surfaceID] != nil
     }
     private var renderFailed = Set<String>()
     private var actionTrackers: [String: SurfaceActionTracker] = [:]
@@ -123,15 +124,17 @@ import A2UISwiftUI
     /// Only a newer server revision presents a dismissed surface again.
     @discardableResult public func display(_ event: UISurfaceEvent) -> Bool {
         guard event.surfaceVersion > (revisions[event.surfaceID] ?? 0) else { return false }
-        if event.deleted {
-            close(id: event.surfaceID)
-            guard entries[event.surfaceID] == nil else { return false }
-            revisions[event.surfaceID] = event.surfaceVersion
-            physicalBindings[event.surfaceID] = event.binding
-            bindings.removeValue(forKey: event.surfaceID)
-            return true
+        let plan = NewUISurfacePlan(behavior: newUISurfaceBehavior,
+            presentedIDs: Set(entries.keys), newSurfaceID: event.surfaceID)
+        // Use the same native close/delegate path as explicit dismissal, including
+        // awaiting-input surfaces. Closing is not a render ACK or a task answer.
+        for id in plan.closeIDs {
+            dismiss(id: id)
+            // A popover may finish its native close animation later. Remove its
+            // presentation evidence before showing the next surface regardless.
+            close(id: id)
         }
-        let previousBinding = bindings[event.surfaceID]
+        let previousBinding = bindings[plan.showID]
         bindings[event.surfaceID] = event.binding
         guard display(SurfaceSpec(id: event.surfaceID, kind: event.container, messages: event.messages, size: event.size)) else {
             bindings[event.surfaceID] = previousBinding

@@ -22,11 +22,10 @@ final class SurfaceManagerTests: XCTestCase {
         XCTAssertEqual(SurfaceClosePolicy.deadline(lostFocusAt: lost, delay: 20, awaitingInput: false), lost.addingTimeInterval(20))
     }
 
-    func testRecoveryPolicyOnlyRestoresPendingOrAlreadyPresentedAndAppliesDeletion() {
-        XCTAssertFalse(SurfaceClosePolicy.shouldReplay(awaitingInput: false, deleted: false, wasPresented: false))
-        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(awaitingInput: true, deleted: false, wasPresented: false))
-        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(awaitingInput: false, deleted: false, wasPresented: true))
-        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(awaitingInput: false, deleted: true, wasPresented: false))
+    func testRecoveryPolicyOnlyRestoresPendingOrAlreadyPresented() {
+        XCTAssertFalse(SurfaceClosePolicy.shouldReplay(awaitingInput: false, wasPresented: false))
+        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(awaitingInput: true, wasPresented: false))
+        XCTAssertTrue(SurfaceClosePolicy.shouldReplay(awaitingInput: false, wasPresented: true))
     }
 
     func testFixedStyleUsesTintedCardsAndSemanticCaptionColor() {
@@ -54,16 +53,20 @@ final class SurfaceManagerTests: XCTestCase {
         XCTAssertEqual(style.textStyles["caption"]?.color, Color.secondary)
     }
 
-    private func event(version: Int64, deleted: Bool = false) throws -> UISurfaceEvent {
-        let messages = deleted
-            ? #"[{"version":"v0.9","deleteSurface":{"surfaceId":"versioned"}}]"#
-            : #"[{"version":"v0.9","createSurface":{"surfaceId":"versioned","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"versioned","components":[{"id":"root","component":"Text","text":"Hello"}]}}]"#
-        let json = "{\"request_id\":\"r1\",\"surface_id\":\"versioned\",\"surface_version\":\(version),\"deleted\":\(deleted),\"container\":\"window\",\"awaiting_input\":false,\"messages\":\(messages)}"
-        let value = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
+    private func event(version: Int64, id: String = "versioned", awaitingInput: Bool = false) throws -> UISurfaceEvent {
+        let messages = #"[{"version":"v0.9","createSurface":{"surfaceId":"versioned","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"versioned","components":[{"id":"root","component":"Text","text":"Hello"}]}}]"#
+        let json = "{\"request_id\":\"r1\",\"surface_id\":\"versioned\",\"surface_version\":\(version),\"container\":\"window\",\"awaiting_input\":false,\"messages\":\(messages)}"
+        var input = json.replacingOccurrences(of: "versioned", with: id)
+            .replacingOccurrences(of: "\"awaiting_input\":false", with: "\"awaiting_input\":\(awaitingInput)")
+        if awaitingInput {
+            input = input.replacingOccurrences(of: "\"request_id\":\"r1\"",
+                with: "\"request_id\":\"r1\",\"task_id\":\"task\",\"question_id\":\"question\"")
+        }
+        let value = try JSONDecoder().decode(JSONValue.self, from: Data(input.utf8))
         return try XCTUnwrap(UISurfaceEvent.decode(value))
     }
 
-    func testClosedRevisionDoesNotReopenAndDeletionRendersSuccessfully() throws {
+    func testEventWithoutDeletedPresentsAndClosedRevisionDoesNotReopen() throws {
         _ = NSApplication.shared
         let manager = SurfaceManager(popoverAnchor: { nil })
         defer { manager.reset() }
@@ -72,14 +75,45 @@ final class SurfaceManagerTests: XCTestCase {
         XCTAssertFalse(manager.display(try event(version: 1)))
         XCTAssertNil(manager.viewModel(for: "versioned"))
         XCTAssertTrue(manager.display(try event(version: 2)))
-        XCTAssertTrue(manager.display(try event(version: 3, deleted: true)))
-        XCTAssertNil(manager.viewModel(for: "versioned"))
         XCTAssertFalse(manager.display(try event(version: 2)))
         manager.reset()
         XCTAssertTrue(manager.display(try event(version: 1)))
     }
 
-    func testActualNativePresentationFailureRetriesExactRevisionAndKeepsTombstone() throws {
+    func testNewSurfaceReplacementUsesClosePathAndInvalidatesOldRenderEvidence() throws {
+        _ = NSApplication.shared
+        let manager = SurfaceManager(popoverAnchor: { nil })
+        manager.newUISurfaceBehavior = .closeOldWindows
+        defer { manager.reset() }
+        let old = try event(version: 1, awaitingInput: true)
+        XCTAssertTrue(manager.display(old))
+        var closes = 0
+        manager.onUserClosed = { closes += 1 }
+        let next = try event(version: 1, id: "next")
+        XCTAssertTrue(manager.display(next))
+        XCTAssertEqual(closes, 1)
+        XCTAssertNil(manager.viewModel(for: old.surfaceID))
+        XCTAssertFalse(manager.isCurrentPresentation(old))
+        XCTAssertTrue(manager.isCurrentPresentation(next))
+        XCTAssertFalse(manager.display(old), "Closing must preserve the revision fence")
+        XCTAssertNotNil(manager.viewModel(for: next.surfaceID))
+    }
+
+    func testDefaultAndStaleArrivalsDoNotCloseOtherSurfaces() throws {
+        _ = NSApplication.shared
+        let manager = SurfaceManager(popoverAnchor: { nil })
+        defer { manager.reset() }
+        let first = try event(version: 1)
+        let second = try event(version: 1, id: "second")
+        XCTAssertTrue(manager.display(first))
+        XCTAssertTrue(manager.display(second))
+        XCTAssertTrue(manager.isCurrentPresentation(first))
+        manager.newUISurfaceBehavior = .closeOldWindows
+        XCTAssertFalse(manager.display(first))
+        XCTAssertTrue(manager.isCurrentPresentation(second))
+    }
+
+    func testActualNativePresentationFailureRetriesExactRevision() throws {
         _ = NSApplication.shared
         let manager = SurfaceManager(popoverAnchor: { nil })
         defer { manager.reset() }
@@ -91,10 +125,8 @@ final class SurfaceManagerTests: XCTestCase {
         XCTAssertTrue(manager.display(try event(version: 1)))
         XCTAssertEqual(manager.presentationVersionForTesting("versioned"), 1)
         XCTAssertNotNil(manager.viewModel(for: "versioned"))
-        XCTAssertTrue(manager.display(try event(version: 2, deleted: true)))
-        XCTAssertEqual(manager.presentationVersionForTesting("versioned"), 2)
         XCTAssertFalse(manager.display(try event(version: 1)))
-        XCTAssertNil(manager.viewModel(for: "versioned"))
+        XCTAssertNotNil(manager.viewModel(for: "versioned"))
     }
 
     func testPhysicalEvidenceInvalidatedByFailedAndSuccessfulReplacements() throws {

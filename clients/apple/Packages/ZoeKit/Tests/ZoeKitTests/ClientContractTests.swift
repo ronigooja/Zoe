@@ -129,7 +129,7 @@ final class ClientContractTests: XCTestCase {
         func frame(_ cursor: Int64, _ type: String, payload: String = "{}", version: Int64 = 1) -> String {
             "id: \(cursor)\nevent: \(type)\ndata: \(envelope(cursor, type, payload: payload, version: version))\n\n"
         }
-        let surface = #"{"request_id":"r1","surface_id":"s1","surface_version":2,"deleted":true,"container":"window","awaiting_input":false,"messages":[{"version":"v0.9","deleteSurface":{"surfaceId":"s1"}}]}"#
+        let surface = #"{"request_id":"r1","surface_id":"s1","surface_version":2,"container":"window","awaiting_input":true,"task_id":"task","question_id":"question","messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}]}"#
         let snapshot = "{\"cursor\":12,\"surfaces\":[\(surface.dropLast()),\"render_status\":\"rendered\"}]}"
         var renderCount = 0
         var consumed: [String] = []
@@ -310,7 +310,7 @@ final class ClientContractTests: XCTestCase {
         model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10"))
         var renders = 0
         model.onUISurface = { _ in renders += 1; return renders > 1 }
-        let surface = #"{"request_id":"delete","surface_id":"s1","surface_version":2,"deleted":true,"container":"window","awaiting_input":false,"render_status":"rendered","messages":[{"version":"v0.9","deleteSurface":{"surfaceId":"s1"}}]}"#
+        let surface = #"{"request_id":"pending","surface_id":"s1","surface_version":2,"container":"window","awaiting_input":true,"task_id":"task","question_id":"question","render_status":"rendered","messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}]}"#
         let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!
             .replacingOccurrences(of: "\"surfaces\":[]", with: "\"surfaces\":[\(surface)]")
         ContractURLProtocol.responseHandler = { request in
@@ -326,7 +326,7 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(renders, 2)
         XCTAssertEqual(model.eventCursorForTesting, "20")
         try await model.recoverGlobalStateForTesting(api: api)
-        XCTAssertEqual(renders, 2, "Successful tombstone revision is not rendered twice")
+        XCTAssertEqual(renders, 2, "Successful presentation revision is not rendered twice")
     }
 
     @MainActor func testRecoverySuppressesHistoricalSurfaceButLiveRevisionStillDisplays() async throws {
@@ -335,7 +335,7 @@ final class ClientContractTests: XCTestCase {
         model.setAuthenticationForTesting(.connected)
         var renders = 0
         model.onUISurface = { _ in renders += 1; return true }
-        let surface = #"{"request_id":"old","surface_id":"s1","surface_version":1,"deleted":false,"container":"window","awaiting_input":false,"render_status":"rendered","messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}]}"#
+        let surface = #"{"request_id":"old","surface_id":"s1","surface_version":1,"container":"window","awaiting_input":false,"render_status":"rendered","messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}]}"#
         let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!
             .replacingOccurrences(of: "\"surfaces\":[]", with: "\"surfaces\":[\(surface)]")
         ContractURLProtocol.responseHandler = { _ in (200, [:], Data(body.utf8)) }
@@ -350,7 +350,7 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(renders, 1, "Reconnect must not hide or recreate the already-presented live surface")
     }
 
-    @MainActor func testRecoveryPresentsPendingQuestionOnLaunch() async throws {
+    @MainActor func testRecoveryWithoutDeletedPresentsPendingQuestionOnLaunch() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let model = ZoeAppModel()
         var renders = 0
@@ -361,7 +361,7 @@ final class ClientContractTests: XCTestCase {
             renders += 1
             return true
         }
-        let surface = #"{"request_id":"pending","surface_id":"s1","surface_version":1,"deleted":false,"container":"popover","awaiting_input":true,"task_id":"task","question_id":"question","render_status":"rendered","messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}]}"#
+        let surface = #"{"request_id":"pending","surface_id":"s1","surface_version":1,"container":"popover","awaiting_input":true,"task_id":"task","question_id":"question","render_status":"rendered","messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}]}"#
         let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!
             .replacingOccurrences(of: "\"surfaces\":[]", with: "\"surfaces\":[\(surface)]")
         ContractURLProtocol.responseHandler = { _ in (200, [:], Data(body.utf8)) }
@@ -372,7 +372,7 @@ final class ClientContractTests: XCTestCase {
     }
 
     #if os(macOS)
-    @MainActor func testActiveNativeSurfaceRecoveryTombstoneReachesACKTransport() async throws {
+    @MainActor func testNativeSurfaceWithoutDeletedPresentsFromEventAndSnapshotAndACKReachesTransport() async throws {
         _ = NSApplication.shared
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -387,13 +387,13 @@ final class ClientContractTests: XCTestCase {
         model.onUISurface = { manager.display($0) }
         model.isCurrentUIPresentation = { manager.isCurrentPresentation($0) }
         model.onUISurfacesClosed = { ids in ids.forEach { manager.close(id: $0) } }
-        let live = #"{"request_id":"live","surface_id":"s1","surface_version":1,"deleted":false,"container":"window","awaiting_input":false,"messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"s1","components":[{"id":"root","component":"Text","text":"Before deletion"}]}}]}"#
+        let live = #"{"request_id":"live","surface_id":"s1","surface_version":1,"container":"window","awaiting_input":false,"messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"s1","components":[{"id":"root","component":"Text","text":"Hello"}]}}]}"#
         let payload = try JSONDecoder().decode(JSONValue.self, from: Data(live.utf8))
         await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "live", cursor: "10", type: "ui.surface", occurredAt: "", workspaceId: "default", aggregateType: "ui_surface", aggregateId: "s1", aggregateVersion: 1, payload: payload))
         XCTAssertNotNil(manager.viewModel(for: "s1"))
-        let deleted = #"{"request_id":"delete","surface_id":"s1","surface_version":2,"deleted":true,"container":"window","awaiting_input":false,"render_status":"rendered","messages":[{"version":"v0.9","deleteSurface":{"surfaceId":"s1"}}]}"#
-        let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!.replacingOccurrences(of: "\"surfaces\":[]", with: "\"surfaces\":[\(deleted)]")
-        let ack = expectation(description: "Native deletion ACK reaches transport")
+        let pending = #"{"request_id":"pending","surface_id":"s2","surface_version":1,"container":"window","awaiting_input":true,"task_id":"task","question_id":"question","render_status":"rendered","messages":[{"version":"v0.9","createSurface":{"surfaceId":"s2","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"s2","components":[{"id":"root","component":"Text","text":"Question"}]}}]}"#
+        let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!.replacingOccurrences(of: "\"surfaces\":[]", with: "\"surfaces\":[\(pending)]")
+        let ack = expectation(description: "Native presentation ACK reaches transport")
         ContractURLProtocol.responseHandler = { request in
             if request.url?.path == "/v1/recovery" { return (200, [:], Data(body.utf8)) }
             if request.httpMethod == "POST" {
@@ -403,7 +403,8 @@ final class ClientContractTests: XCTestCase {
         }
         try await model.recoverGlobalStateForTesting(api: api)
         XCTAssertNil(manager.viewModel(for: "s1"))
-        XCTAssertEqual(manager.presentationVersionForTesting("s1"), 2)
+        XCTAssertNotNil(manager.viewModel(for: "s2"))
+        XCTAssertEqual(manager.presentationVersionForTesting("s2"), 1)
         await fulfillment(of: [ack], timeout: 3)
         XCTAssertEqual(model.eventCursorForTesting, "20")
     }
