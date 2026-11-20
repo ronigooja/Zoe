@@ -10,8 +10,6 @@ The server retrieves owner/workspace-scoped task facts, preserving full goals, p
 
 ```typescript
 type StewardInput = {
-  request: string;
-  display_requested: boolean;
   tasks: Array<{
     task_id: string;
     goal: string;
@@ -20,6 +18,8 @@ type StewardInput = {
     summary_result: string | null;
     additions: string[];
   }>;
+  display_requested: boolean;
+  request: string;
 };
 type StewardOutput = {
   action: "new" | "append" | "answer" | "continue" | "report" |

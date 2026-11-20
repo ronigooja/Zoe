@@ -23,10 +23,10 @@ type Size struct {
 	Height int `json:"height"`
 }
 type Input struct {
-	Now           string         `json:"now"`
-	Requests      []string       `json:"requests"`
-	Task          *Task          `json:"task"`
 	Screen        *Size          `json:"screen,omitempty"`
+	Task          *Task          `json:"task"`
+	Requests      []string       `json:"requests"`
+	Now           string         `json:"now"`
 	PreviousError *PreviousError `json:"previous_error,omitempty"`
 }
 

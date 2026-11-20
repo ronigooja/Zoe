@@ -32,7 +32,7 @@ CASE WHEN t.status IN ('waiting','awaiting_user') AND t.interaction_state IN ('a
 coalesce(t.result,''),t.summary_result,t.version`
 
 // taskCandidates retrieves bounded lexical candidates across calls. Ranking chooses
-// membership; the final facts are newest first. It performs no writes or inference.
+// membership; the final facts are oldest first. It performs no writes or inference.
 func (s *Service) taskCandidates(ctx context.Context, q rosterQueryer, workspace, owner, text string, now time.Time, limit int) ([]taskCandidate, error) {
 	if limit <= 0 {
 		limit = 8
@@ -123,9 +123,9 @@ ORDER BY r.score DESC,julianday(t.created_at) DESC,t.id DESC`, string(encodedPat
 	}
 	sort.Slice(selected, func(i, j int) bool {
 		if selected[i].created.Equal(selected[j].created) {
-			return selected[i].id > selected[j].id
+			return selected[i].id < selected[j].id
 		}
-		return selected[i].created.After(selected[j].created)
+		return selected[i].created.Before(selected[j].created)
 	})
 	var out []taskCandidate
 	for _, c := range selected {

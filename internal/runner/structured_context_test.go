@@ -11,6 +11,7 @@ func TestStructuredWorkerInitialResumePayloads(t *testing.T) {
 		t.Run(map[bool]string{false: "initial", true: "resume"}[resume], func(t *testing.T) {
 			c := testClaim()
 			c.Goal = "complete current request"
+			c.Instructions = []string{"instruction one", "instruction two"}
 			result := "prior authoritative result"
 			c.PriorContexts = []contracts.TaskPriorContext{{TaskID: "prior-id", Goal: "prior goal", Status: "completed", Result: &result, Additions: []string{"old first", "old second"}}}
 			c.Entries = []contracts.RunEntry{{ID: "addition-one", Content: "new first"}, {ID: "answer-two", Content: "bound answer", Question: &contracts.RunQuestionBinding{QuestionID: "server-question", RunID: "old-run", RequestID: "runtime-question", ActionDigest: "digest", Text: "which option?"}}, {ID: "addition-three", Content: "new last"}}
@@ -27,6 +28,7 @@ func TestStructuredWorkerInitialResumePayloads(t *testing.T) {
 				t.Fatalf("creates=%d", len(f.createdSpecs))
 			}
 			prompt := f.createdSpecs[0].Prompt
+			assertInstructionsBeforeGoal(t, prompt, c.Instructions, c.Goal)
 			if prompt != f.promptText {
 				t.Fatal("Create/Prompt payload mismatch")
 			}
@@ -43,6 +45,26 @@ func TestStructuredWorkerInitialResumePayloads(t *testing.T) {
 			}
 		})
 	}
+}
+
+func assertInstructionsBeforeGoal(t *testing.T, prompt string, instructions []string, goal string) {
+	t.Helper()
+	last := -1
+	for _, instruction := range append(append([]string{}, instructions...), "\n\nGoal:\n"+goal) {
+		pos := strings.Index(prompt, instruction)
+		if pos <= last || strings.Count(prompt, instruction) != 1 {
+			t.Fatalf("missing, repeated or out-of-order block %q", instruction)
+		}
+		last = pos
+	}
+}
+
+func TestBuildPromptInstructionsBeforeGoal(t *testing.T) {
+	c := testClaim()
+	c.Instructions = []string{"instruction one", "instruction two"}
+	assertInstructionsBeforeGoal(t, buildPrompt(c), c.Instructions, c.Goal)
+	e := &Engine{}
+	assertInstructionsBeforeGoal(t, e.buildRotationPrompt(testContext(t), c, nil), c.Instructions, c.Goal)
 }
 
 func TestStructuredWorkerRotationPayload(t *testing.T) {

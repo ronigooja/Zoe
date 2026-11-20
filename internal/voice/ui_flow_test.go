@@ -653,6 +653,9 @@ func TestUIValidationRetries(t *testing.T) {
 				t.Fatal("first call has previous_error")
 			}
 			for _, input := range inputs[1:] {
+				if !strings.HasPrefix(input, strings.TrimSuffix(inputs[0], "}")+`,"previous_error":`) {
+					t.Fatal("retry did not preserve the byte-identical input prefix")
+				}
 				var got map[string]json.RawMessage
 				if err := json.Unmarshal([]byte(input), &got); err != nil {
 					t.Fatal(err)

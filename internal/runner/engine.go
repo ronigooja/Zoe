@@ -184,10 +184,7 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err err
 	}
 	prompt := buildPrompt(claim)
 	if claim.ResumeQuestion != "" {
-		prompt = buildResumePrompt(claim.Goal, claim.ResumeQuestion, claim.ResumeAnswer)
-		for _, instruction := range claim.Instructions {
-			prompt += "\n\n" + instruction
-		}
+		prompt = buildResumePrompt(claim.Goal, claim.ResumeQuestion, claim.ResumeAnswer, claim.Instructions)
 		prompt += structuredContext(claim.Entries, claim.PriorContexts)
 	}
 	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: fmt.Sprint(claim.Fence), Model: route.Model, ModelRouteID: claim.ModelRouteID, Agent: claim.Agent, Permissions: claim.PermissionRules, Prompt: prompt, Workspace: claim.WorkspaceID}
@@ -840,14 +837,14 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 		}
 	}
 	var b strings.Builder
-	b.WriteString("Continue the assigned goal in a fresh session.\n\nGoal:\n")
-	b.WriteString(c.Goal + "\n\nUser instructions in order:\n")
+	b.WriteString("Continue the assigned goal in a fresh session.\n\nUser instructions in order:\n")
 	for _, instruction := range c.Instructions {
 		b.WriteString("- " + instruction + "\n")
 	}
 	for _, instruction := range ctxData.Instructions {
 		b.WriteString("- " + instruction + "\n")
 	}
+	b.WriteString("\n\nGoal:\n" + c.Goal)
 	if ctxData.SchemaVersion != 1 {
 		return ""
 	}
@@ -1252,11 +1249,11 @@ func validateClaim(c contracts.JobClaim) error {
 	return nil
 }
 func buildPrompt(c contracts.JobClaim) string {
-	prompt := "Work only on the assigned goal.\n\nGoal:\n" + c.Goal
+	prompt := "Work only on the assigned goal."
 	for _, instruction := range c.Instructions {
 		prompt += "\n\n" + instruction
 	}
-	return prompt + structuredContext(c.Entries, c.PriorContexts)
+	return prompt + "\n\nGoal:\n" + c.Goal + structuredContext(c.Entries, c.PriorContexts)
 }
 
 func structuredContext(entries []contracts.RunEntry, prior []contracts.TaskPriorContext) string {
@@ -1272,8 +1269,12 @@ func structuredContext(entries []contracts.RunEntry, prior []contracts.TaskPrior
 	return out.String()
 }
 
-func buildResumePrompt(goal, question, answer string) string {
-	return "Continue the assigned goal.\n\nGoal:\n" + goal + "\n\nThe user was asked:\n" + question + "\n\nThe user answered:\n" + answer
+func buildResumePrompt(goal, question, answer string, instructions []string) string {
+	prompt := "Continue the assigned goal."
+	for _, instruction := range instructions {
+		prompt += "\n\n" + instruction
+	}
+	return prompt + "\n\nGoal:\n" + goal + "\n\nThe user was asked:\n" + question + "\n\nThe user answered:\n" + answer
 }
 func observationID(run, attempt string, fence uint64, kind, disc string) string {
 	h := sha256.Sum256([]byte(strings.Join([]string{run, attempt, fmt.Sprint(fence), kind, disc}, "\x00")))

@@ -45,6 +45,46 @@ func facts() Input {
 	}}
 }
 
+func TestInputFieldOrder(t *testing.T) {
+	input, _, err := prepareInput(facts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := func(data []byte) []string {
+		d := json.NewDecoder(bytes.NewReader(data))
+		_, _ = d.Token()
+		var out []string
+		for d.More() {
+			key, err := d.Token()
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, key.(string))
+			var value json.RawMessage
+			if err := d.Decode(&value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return out
+	}
+	if got := keys(data); !reflect.DeepEqual(got, []string{"tasks", "display_requested", "request"}) {
+		t.Fatalf("input fields=%v", got)
+	}
+	var wire struct{ Tasks []json.RawMessage }
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range wire.Tasks {
+		if got := keys(task); !reflect.DeepEqual(got, []string{"task_id", "goal", "status", "pending_questions", "summary_result", "additions"}) {
+			t.Fatalf("candidate fields=%v", got)
+		}
+	}
+}
+
 func TestChooseAllActionsStableIDs(t *testing.T) {
 	for _, action := range []Action{ActionNew, ActionAppend, ActionAnswer, ActionContinue, ActionReport, ActionCancel, ActionRedisplay, ActionClarify} {
 		t.Run(string(action), func(t *testing.T) {
@@ -171,7 +211,7 @@ func TestChooseEmptyCandidatesDoesNotDecideOrFallback(t *testing.T) {
 		s := choiceServer(t, encoded(validChoice(action)), func(body []byte) {
 			var outer struct{ Input string }
 			_ = json.Unmarshal(body, &outer)
-			if outer.Input != `{"request":"unresolved request","display_requested":false,"tasks":[]}` {
+			if outer.Input != `{"tasks":[],"display_requested":false,"request":"unresolved request"}` {
 				t.Error("wrong empty input")
 			}
 		})

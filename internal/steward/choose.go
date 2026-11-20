@@ -52,9 +52,9 @@ func RetryComplete(ctx context.Context, complete func(context.Context) (string, 
 
 // Input applies to one retained register request and scoped authoritative facts.
 type Input struct {
-	Request          string      `json:"request"`
-	DisplayRequested bool        `json:"display_requested"`
 	Tasks            []Candidate `json:"tasks"`
+	DisplayRequested bool        `json:"display_requested"`
+	Request          string      `json:"request"`
 }
 
 // Candidate preserves task facts and stable identities, with summarized results.

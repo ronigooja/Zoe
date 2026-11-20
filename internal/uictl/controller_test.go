@@ -292,7 +292,7 @@ func TestBuildInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(b) != `{"now":"2026-01-02T03:04:05Z","requests":[],"task":null}` {
+	if string(b) != `{"task":null,"requests":[],"now":"2026-01-02T03:04:05Z"}` {
 		t.Fatal(string(b))
 	}
 	if _, err = BuildInput(time.Now(), []string{strings.Repeat("x", 16*MaxState+1)}, nil, nil); err == nil {
@@ -301,6 +301,45 @@ func TestBuildInput(t *testing.T) {
 	for _, request := range []string{"", "  ", "none"} {
 		if _, err = BuildInput(time.Now(), []string{request}, nil, nil); err == nil {
 			t.Fatalf("accepted incomplete request %q", request)
+		}
+	}
+}
+
+func TestBuildInputFieldOrderAndRetryPrefix(t *testing.T) {
+	for _, screen := range []*Size{nil, {Width: 800, Height: 600}} {
+		b, err := BuildInput(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), []string{"request <one>"}, &Task{TaskID: "task"}, screen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var input Input
+		if err := json.Unmarshal(b, &input); err != nil {
+			t.Fatal(err)
+		}
+		var fields []string
+		d := json.NewDecoder(strings.NewReader(string(b)))
+		_, _ = d.Token()
+		for d.More() {
+			key, err := d.Token()
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields = append(fields, key.(string))
+			var value json.RawMessage
+			if err := d.Decode(&value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		want := "task,requests,now"
+		if screen != nil {
+			want = "screen," + want
+		}
+		if strings.Join(fields, ",") != want {
+			t.Fatalf("fields=%v want=%s", fields, want)
+		}
+		input.PreviousError = &PreviousError{Category: "invalid"}
+		retry, err := json.Marshal(input)
+		if err != nil || string(retry) != strings.TrimSuffix(string(b), "}")+`,"previous_error":{"category":"invalid"}}` {
+			t.Fatalf("retry=%s err=%v", retry, err)
 		}
 	}
 }

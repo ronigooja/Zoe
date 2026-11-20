@@ -77,7 +77,7 @@ func TestCandidatesChineseEnglishAndCrossSession(t *testing.T) {
 	}
 }
 
-func TestCandidatesTitleWeightRankingAndNewestPresentation(t *testing.T) {
+func TestCandidatesTitleWeightRankingAndOldestPresentation(t *testing.T) {
 	db, svc, now := rosterFixture(t)
 	candidateSeed(t, db, now, rosterSeed{id: "title", status: "complete", created: now.Add(-4 * time.Hour)}, "budget")
 	candidateSeed(t, db, now, rosterSeed{id: "result", status: "complete", result: "budget", created: now.Add(-2 * time.Hour)}, "unrelated")
@@ -86,13 +86,44 @@ func TestCandidatesTitleWeightRankingAndNewestPresentation(t *testing.T) {
 		t.Fatalf("title weight got=%+v err=%v", got, err)
 	}
 	got, err = svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 2)
-	if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{"unrelated", "budget"}) {
-		t.Fatalf("newest presentation got=%+v err=%v", got, err)
+	if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{"budget", "unrelated"}) {
+		t.Fatalf("oldest presentation got=%+v err=%v", got, err)
 	}
 	candidateSeed(t, db, now, rosterSeed{id: "new-title", status: "complete", created: now.Add(-3 * time.Hour)}, "budget latest")
 	got, err = svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 1)
 	if err != nil || len(got) != 1 || got[0].Goal != "budget latest" {
 		t.Fatalf("score tie recency got=%+v err=%v", got, err)
+	}
+}
+
+func TestCandidatesOldestPresentationPreservesNewestSelection(t *testing.T) {
+	db, svc, now := rosterFixture(t)
+	rosterExec(t, db, `UPDATE voice_sessions SET created_at=? WHERE id='other-call'`, now.Add(-time.Hour).Format(time.RFC3339Nano))
+	for _, seed := range []rosterSeed{
+		{id: "excluded-old", status: "active", created: now.Add(-3 * time.Minute)},
+		{id: "a", status: "active", created: now.Add(-2 * time.Minute)},
+		{id: "b", status: "active", created: now.Add(-2 * time.Minute)},
+		{id: "new", status: "active", created: now.Add(-time.Minute)},
+	} {
+		candidateSeed(t, db, now, seed, "budget")
+	}
+	for _, status := range []string{"active", "complete"} {
+		rosterExec(t, db, `UPDATE tasks SET status=?`, status)
+		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, c := range got {
+			ids = append(ids, c.TaskID)
+		}
+		if !reflect.DeepEqual(ids, []string{"a", "b", "new"}) {
+			t.Fatalf("status=%s selected/presented IDs=%v", status, ids)
+		}
+		got, err = svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 2)
+		if err != nil || len(got) != 2 || got[0].TaskID != "b" || got[1].TaskID != "new" {
+			t.Fatalf("status=%s newest selection/tie break changed: got=%+v err=%v", status, got, err)
+		}
 	}
 }
 
@@ -120,7 +151,7 @@ func TestCandidatesOwnerStatusAndNoAgeLimit(t *testing.T) {
 			t.Fatalf("unexpected candidate=%+v", c)
 		}
 	}
-	if got[len(got)-1].Goal != "budget old" {
+	if got[0].Goal != "budget old" {
 		t.Fatalf("year-old match missing: %+v", got)
 	}
 }
@@ -135,7 +166,7 @@ func TestCandidatesPausedLatestSessionAndCrossSession(t *testing.T) {
 		want []string
 	}{
 		{"", []string{"unrelated latest task"}},
-		{"budget", []string{"unrelated latest task", "budget research"}},
+		{"budget", []string{"budget research", "unrelated latest task"}},
 	} {
 		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", tc.text, now, 8)
 		if err != nil || !reflect.DeepEqual(candidateRequests(got), tc.want) {
@@ -166,7 +197,7 @@ func TestCandidatesAlwaysIncludeLatestSessionEmptyTermsAndDedup(t *testing.T) {
 	}
 	for _, text := range []string{"", "the is %_", "budget"} {
 		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", text, now, 5)
-		if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{"budget 0", "budget 1", "budget 2", "budget 3", "budget 4"}) {
+		if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{"budget 4", "budget 3", "budget 2", "budget 1", "budget 0"}) {
 			t.Fatalf("text=%q always=%+v err=%v", text, got, err)
 		}
 	}
@@ -265,7 +296,7 @@ func TestCandidatesFieldsAdditionsAndNullHandling(t *testing.T) {
 	for _, c := range got {
 		ids = append(ids, c.TaskID)
 	}
-	if want := []string{"waiting", "null-title", "hidden", "confirmation", "complete", "approval"}; !reflect.DeepEqual(ids, want) {
+	if want := []string{"approval", "complete", "confirmation", "hidden", "null-title", "waiting"}; !reflect.DeepEqual(ids, want) {
 		t.Fatalf("stable candidate IDs=%v want=%v", ids, want)
 	}
 	for _, c := range got {
