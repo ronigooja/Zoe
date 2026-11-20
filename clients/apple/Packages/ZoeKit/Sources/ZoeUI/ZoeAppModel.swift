@@ -52,6 +52,7 @@ public final class ZoeAppModel: ObservableObject {
     @Published public private(set) var silenceTimeoutSeconds: Double
     @Published public private(set) var popoverCloseDelaySeconds: Double
     @Published public private(set) var windowCloseDelaySeconds: Double
+    @Published public private(set) var newUISurfaceBehavior: NewUISurfaceBehavior
     @Published public var voiceDraft = ""
     @Published public private(set) var voiceDraftRevision: Int64 = 0
     private let defaults: UserDefaults
@@ -209,6 +210,8 @@ public final class ZoeAppModel: ObservableObject {
         self.defaults = defaults
         popoverCloseDelaySeconds = SurfaceClosePolicy.validatedDelay((defaults.object(forKey: "zoe.ui.popoverCloseDelaySeconds") as? NSNumber)?.doubleValue ?? 60)
         windowCloseDelaySeconds = SurfaceClosePolicy.validatedDelay((defaults.object(forKey: "zoe.ui.windowCloseDelaySeconds") as? NSNumber)?.doubleValue ?? 60)
+        newUISurfaceBehavior = defaults.string(forKey: "zoe.ui.newUISurfaceBehavior")
+            .flatMap(NewUISurfaceBehavior.init(rawValue:)) ?? .addWindow
         let savedEnabled = defaults.object(forKey: "zoe.voice.silenceHangupEnabled") == nil ? true : defaults.bool(forKey: "zoe.voice.silenceHangupEnabled")
         silenceHangupEnabled = savedEnabled
         let savedTimeout = (defaults.object(forKey: "zoe.voice.silenceTimeoutSeconds") as? NSNumber)?.doubleValue ?? 60
@@ -337,6 +340,11 @@ public final class ZoeAppModel: ObservableObject {
         defaults.set(silenceTimeoutSeconds, forKey: "zoe.voice.silenceTimeoutSeconds")
         silence.timeoutSeconds = silenceTimeoutSeconds
         recordSilenceSettingChange(from: before)
+    }
+
+    public func setNewUISurfaceBehavior(_ behavior: NewUISurfaceBehavior) {
+        newUISurfaceBehavior = behavior
+        defaults.set(behavior.rawValue, forKey: "zoe.ui.newUISurfaceBehavior")
     }
 
     public func setPopoverCloseDelaySeconds(_ seconds: Double) {

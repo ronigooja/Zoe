@@ -21,6 +21,7 @@ import A2UISwiftUI
     private var localMonitor: Any?
     public var popoverCloseDelaySeconds: Double = 60 { didSet { rescheduleClosures() } }
     public var windowCloseDelaySeconds: Double = 60 { didSet { rescheduleClosures() } }
+    public var newUISurfaceBehavior: NewUISurfaceBehavior = .addWindow
     private let actionHandler: (String, ResolvedAction) -> Void
     public var onBoundAction: ((UISurfaceBinding, ResolvedAction) -> Void)?
     private var bindings: [String: UISurfaceBinding] = [:]
@@ -131,7 +132,17 @@ import A2UISwiftUI
             bindings.removeValue(forKey: event.surfaceID)
             return true
         }
-        let previousBinding = bindings[event.surfaceID]
+        let plan = NewUISurfacePlan(behavior: newUISurfaceBehavior,
+            presentedIDs: Set(entries.keys), newSurfaceID: event.surfaceID)
+        // Use the same native close/delegate path as explicit dismissal, including
+        // awaiting-input surfaces. Closing is not a render ACK or a task answer.
+        for id in plan.closeIDs {
+            dismiss(id: id)
+            // A popover may finish its native close animation later. Remove its
+            // presentation evidence before showing the next surface regardless.
+            close(id: id)
+        }
+        let previousBinding = bindings[plan.showID]
         bindings[event.surfaceID] = event.binding
         guard display(SurfaceSpec(id: event.surfaceID, kind: event.container, messages: event.messages, size: event.size)) else {
             bindings[event.surfaceID] = previousBinding

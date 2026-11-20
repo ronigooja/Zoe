@@ -48,6 +48,13 @@ public struct MacSettingsView: View {
                     }
                 }
                 Section {
+                    Picker("When a new UI arrives", selection: Binding(
+                        get: { model.newUISurfaceBehavior }, set: { model.setNewUISurfaceBehavior($0) }
+                    )) {
+                        ForEach(NewUISurfaceBehavior.allCases, id: \.self) { behavior in
+                            Text(behavior.title).tag(behavior)
+                        }
+                    }
                     TextField("Popover close delay (seconds)", value: Binding(
                         get: { model.popoverCloseDelaySeconds }, set: { model.setPopoverCloseDelaySeconds($0) }
                     ), format: .number)
