@@ -47,6 +47,21 @@ func TestShippedExamples(t *testing.T) {
 	}
 }
 
+func TestBlockEdgeSpacingIsIgnored(t *testing.T) {
+	valid := fixture(create + "," + root)
+	for _, edge := range []string{"\u200a", "\u200b", "\u00a0", "\n"} {
+		text := strings.Replace(valid, "</ui-meta>", edge+"</ui-meta>", 1)
+		text = strings.Replace(text, "</a2ui-json>", edge+"</a2ui-json>", 1)
+		if _, err := Parse(text, nil, Show); err != nil {
+			t.Fatalf("edge %q rejected: %v", edge, err)
+		}
+	}
+	inside := strings.Replace(valid, `"container":`, "\u200b"+`"container":`, 1)
+	if _, err := Parse(inside, nil, Show); err == nil {
+		t.Fatal("character inside the JSON was accepted")
+	}
+}
+
 func TestModelCannotSelectInputMode(t *testing.T) {
 	valid := fixture(create + "," + root)
 	for _, key := range []string{"awaiting_input", "voice_input", "task_question", "chat_input"} {

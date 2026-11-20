@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -163,6 +164,11 @@ func stripFence(text string) string {
 	return strings.TrimSpace(inner)
 }
 
+// isBlockSpace is Unicode whitespace or a zero-width format character; only a block's edges are trimmed, never its JSON.
+func isBlockSpace(r rune) bool {
+	return unicode.IsSpace(r) || unicode.Is(unicode.Cf, r)
+}
+
 // extractBlocks recognizes only the two protocol tags; diagnostics never contain model text.
 func extractBlocks(text string) (string, string, error) {
 	tags := []string{"<ui-meta>", "</ui-meta>", "<a2ui-json>", "</a2ui-json>"}
@@ -186,7 +192,9 @@ func extractBlocks(text string) (string, string, error) {
 	if positions[1] > positions[2] {
 		return "", "", errors.New("block_order")
 	}
-	return text[positions[0]+len(tags[0]) : positions[1]], text[positions[2]+len(tags[2]) : positions[3]], nil
+	meta := strings.TrimFunc(text[positions[0]+len(tags[0]):positions[1]], isBlockSpace)
+	messages := strings.TrimFunc(text[positions[2]+len(tags[2]):positions[3]], isBlockSpace)
+	return meta, messages, nil
 }
 
 // Parse permits exactly one target surface per invocation; multi-surface changes
