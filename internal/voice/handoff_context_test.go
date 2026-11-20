@@ -17,14 +17,14 @@ func TestHandoffStableIdentityAndQuestionFence(t *testing.T) {
 	}
 	defer tx.Rollback()
 	p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner"}
-	prior, _, err := readPriorTaskContext(context.Background(), tx, p, "first")
+	prior, _, err := readPriorTaskContext(context.Background(), tx, p, "first", "turn")
 	if err != nil || prior.TaskID != "first" || prior.Goal != "shared complete goal" {
 		t.Fatalf("prior=%+v err=%v", prior, err)
 	}
-	if _, _, err := readPriorTaskContext(context.Background(), tx, p, "second"); err == nil {
+	if _, _, err := readPriorTaskContext(context.Background(), tx, p, "second", "turn"); err == nil {
 		t.Fatal("foreign duplicate goal selected")
 	}
-	if err := validatePendingQuestionTx(context.Background(), tx, p, "first", "invented-question", now); err == nil {
+	if err := validatePendingQuestionTx(context.Background(), tx, p, "first", "invented-question", now, "turn"); err == nil {
 		t.Fatal("stale/invented question accepted")
 	}
 	if liveTaskStatus("complete") || !liveTaskStatus("active") {

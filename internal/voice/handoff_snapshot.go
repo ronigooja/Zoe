@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 // stewardSnapshot applies to the whole owner's task fact set, including absence.
@@ -41,8 +42,8 @@ func stewardSnapshot(ctx context.Context, q rosterQueryer, workspace, owner stri
 }
 
 func (s *Service) validateStewardSnapshotTx(ctx context.Context, tx *sql.Tx, p contracts.Principal, source handoffPayload) error {
-	var accepted string
-	if err := tx.QueryRowContext(ctx, `SELECT steward_snapshot FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, p.WorkspaceID, source.SessionID, source.Generation, source.TurnID, source.Revision).Scan(&accepted); err != nil {
+	var accepted, id string
+	if err := tx.QueryRowContext(ctx, `SELECT steward_snapshot,id FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, p.WorkspaceID, source.SessionID, source.Generation, source.TurnID, source.Revision).Scan(&accepted, &id); err != nil {
 		return err
 	}
 	current, err := stewardSnapshot(ctx, tx, p.WorkspaceID, p.SubjectID)
@@ -50,6 +51,11 @@ func (s *Service) validateStewardSnapshotTx(ctx context.Context, tx *sql.Tx, p c
 		return err
 	}
 	if accepted == "" || current != accepted {
+		branch := "snapshot_mismatch"
+		if accepted == "" {
+			branch = "snapshot_empty"
+		}
+		logging.Infof("selection_stale branch=%s turn=%s accepted_empty=%t equal=%t", branch, id, accepted == "", current == accepted)
 		return apiError(409, "selection_stale", "task facts changed; retry handoff to refresh Steward selection", nil)
 	}
 	return nil

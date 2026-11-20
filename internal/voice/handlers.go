@@ -387,7 +387,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if state != "active" || generation != p.Generation {
 		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_generation_stale", "voice handoff belongs to an inactive media generation", nil)
 	}
-	var taskID, content, storedCategory, stewardAction, stewardTaskID, questionID string
+	var taskID, content, storedCategory, stewardAction, stewardTaskID, questionID, turnID string
 	var resolved sql.NullString
 	var selectedVersion int64
 	var storedHash []byte
@@ -417,7 +417,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if handled != 0 {
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, nil
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT request,steward_question_id,steward_task_version FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&resolved, &questionID, &selectedVersion); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT request,steward_question_id,steward_task_version,id FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&resolved, &questionID, &selectedVersion, &turnID); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	if category == "ui" {
@@ -473,12 +473,12 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if stewardTaskID != "" {
 		var version int64
 		var err error
-		prior, version, err = readPriorTaskContext(ctx, tx, cmd.Principal, stewardTaskID)
+		prior, version, err = readPriorTaskContext(ctx, tx, cmd.Principal, stewardTaskID, turnID)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 		if version != selectedVersion {
-			return contracts.CommandResult{}, nil, s.staleDecisionTx(ctx, tx, cmd.Principal.WorkspaceID, p)
+			return contracts.CommandResult{}, nil, s.staleDecisionTx(ctx, tx, cmd.Principal.WorkspaceID, p, turnID, true)
 		}
 	}
 	{
@@ -537,6 +537,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 		}
 		if stewardAction == string(steward.ActionAppend) || stewardAction == string(steward.ActionAnswer) {
 			if prior == nil || !liveTaskStatus(prior.Status) {
+				logging.Infof("selection_stale branch=task_not_live turn=%s", turnID)
 				return contracts.CommandResult{}, nil, apiError(409, "selection_stale", "selected task is no longer live", nil)
 			}
 			input := control.TaskInput{Content: content}
@@ -641,6 +642,7 @@ func (s *Service) commandCommitTurn(ctx context.Context, tx *sql.Tx, cmd control
 
 func (s *Service) classifyCommittedTurn(id string) {
 	if _, loaded := s.classifying.LoadOrStore(id, struct{}{}); loaded {
+		logging.Infof("classify_in_flight turn=%s", id)
 		return
 	}
 	defer s.classifying.Delete(id)

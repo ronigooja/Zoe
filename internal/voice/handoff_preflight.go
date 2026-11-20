@@ -83,9 +83,11 @@ func (s *Service) prepareHandoff(ctx context.Context, p contracts.Principal, req
 				}
 				if handled == 0 && (accepted == "" || accepted != current) {
 					if refreshes >= 3 {
+						logging.Infof("selection_stale branch=refresh_exhausted turn=%s refreshes=%d accepted_empty=%t equal=%t", id, refreshes, accepted == "", accepted == current)
 						return apiError(409, "selection_stale", "task facts keep changing; retry handoff", nil)
 					}
 					refreshes++
+					logging.Infof("voice_selection_refresh turn=%s refreshes=%d accepted_empty=%t equal=%t", id, refreshes, accepted == "", accepted == current)
 					if _, err := s.db.ExecContext(waitCtx, `UPDATE voice_turns SET steward_snapshot='',steward_action='',steward_task_id='',steward_question_id='',steward_task_version=0,report_text='' WHERE id=? AND handoff_handled=0`, id); err != nil {
 						return err
 					}
