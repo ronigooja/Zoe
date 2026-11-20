@@ -35,7 +35,7 @@ func newClassificationRig(t *testing.T, routeHook func()) *classificationRig {
 		if routeHook != nil {
 			routeHook()
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"routes":["task"],"request":"Perform the private requested work."}`})
+		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"route":"task","request":"Perform the private requested work."}`})
 	}))
 	t.Cleanup(model.Close)
 	register, err := NewRegister(r.store.DB(), RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(),

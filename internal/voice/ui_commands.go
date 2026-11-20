@@ -84,7 +84,7 @@ func uiScope(cmd control.CommandContext) error {
 func uiOwned(ctx context.Context, tx *sql.Tx, p contracts.Principal, id string) (string, string, bool, string, error) {
 	var surface, status, note string
 	var awaiting bool
-	err := tx.QueryRowContext(ctx, `SELECT coalesce(surface_id,''),status,awaiting_input,coalesce(input_note,'') FROM ui_requests WHERE id=? AND workspace_id=? AND owner_subject_id=?`, id, p.WorkspaceID, p.SubjectID).Scan(&surface, &status, &awaiting, &note)
+	err := tx.QueryRowContext(ctx, `SELECT coalesce(surface_id,''),status,task_question,coalesce(input_note,'') FROM ui_requests WHERE id=? AND workspace_id=? AND owner_subject_id=?`, id, p.WorkspaceID, p.SubjectID).Scan(&surface, &status, &awaiting, &note)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = apiError(http.StatusNotFound, "not_found", "UI request not found", nil)
 	}
@@ -136,7 +136,7 @@ func (s *Service) commandUIRendered(ctx context.Context, tx *sql.Tx, cmd control
 	}
 	at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
 	if !*p.Success {
-		_, err := tx.ExecContext(ctx, `UPDATE ui_requests SET status='failed',awaiting_input=0,updated_at=? WHERE id=? AND status='generated'`, at, p.RequestID)
+		_, err := tx.ExecContext(ctx, `UPDATE ui_requests SET status='failed',task_question=0,updated_at=? WHERE id=? AND status='generated'`, at, p.RequestID)
 		if err == nil {
 			err = removeAcknowledgedUISurface(ctx, tx, p.RequestID)
 		}
@@ -144,10 +144,10 @@ func (s *Service) commandUIRendered(ctx context.Context, tx *sql.Tx, cmd control
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE ui_requests SET status='rendered',updated_at=? WHERE id=? AND status='generated'`, at, p.RequestID)
 	if err == nil {
-		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) SELECT id,workspace_id,owner_subject_id,feedback,?,?,? FROM ui_requests WHERE id=? AND awaiting_input=0 AND trim(coalesce(feedback,''))<>''`, at, at, at, p.RequestID)
+		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) SELECT id,workspace_id,owner_subject_id,feedback,?,?,? FROM ui_requests WHERE id=? AND task_question=0 AND trim(coalesce(feedback,''))<>''`, at, at, at, p.RequestID)
 	}
 	if err == nil {
-		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_input_notices(kind,source_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) SELECT 'ui_input_request',q.id,r.workspace_id,r.owner_subject_id,q.question,?,?,? FROM ui_requests r JOIN pending_runtime_actions q ON q.id=r.question_id WHERE r.id=? AND r.awaiting_input=1 AND r.voice_input=0`, at, at, at, p.RequestID)
+		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_input_notices(kind,source_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) SELECT 'ui_input_request',q.id,r.workspace_id,r.owner_subject_id,q.question,?,?,? FROM ui_requests r JOIN pending_runtime_actions q ON q.id=r.question_id WHERE r.id=? AND r.task_question=1 AND r.chat_input=0`, at, at, at, p.RequestID)
 	}
 	if err == nil {
 		err = removeAcknowledgedUISurface(ctx, tx, p.RequestID)
@@ -177,14 +177,14 @@ func (s *Service) commandUIAction(ctx context.Context, tx *sql.Tx, cmd control.C
 		return contracts.CommandResult{}, nil, err
 	}
 	var voiceInput bool
-	if err = tx.QueryRowContext(ctx, `SELECT voice_input FROM ui_requests WHERE id=?`, p.RequestID).Scan(&voiceInput); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT chat_input FROM ui_requests WHERE id=?`, p.RequestID).Scan(&voiceInput); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	if surface != p.SurfaceID || (status != "generated" && status != "rendered") || (!awaiting && !voiceInput) {
 		return contracts.CommandResult{}, nil, apiError(409, "ui_request_not_awaiting_input", "UI request is not awaiting input", nil)
 	}
 	var task, question string
-	err = tx.QueryRowContext(ctx, `SELECT coalesce(r.task_id,''),coalesce(r.question_id,'') FROM ui_requests r JOIN ui_surfaces s ON s.workspace_id=r.workspace_id AND s.owner_subject_id=r.owner_subject_id AND s.surface_id=r.surface_id AND s.request_id=r.id AND s.version=r.surface_version WHERE r.id=? AND r.workspace_id=? AND r.owner_subject_id=? AND r.surface_id=? AND r.surface_version=? AND ((r.awaiting_input=1 AND r.question_id IS NOT NULL AND r.question_id<>'') OR (r.voice_input=1 AND r.question_id IS NULL AND r.task_id IS NULL))`, p.RequestID, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.SurfaceID, p.SurfaceVersion).Scan(&task, &question)
+	err = tx.QueryRowContext(ctx, `SELECT coalesce(r.task_id,''),coalesce(r.question_id,'') FROM ui_requests r JOIN ui_surfaces s ON s.workspace_id=r.workspace_id AND s.owner_subject_id=r.owner_subject_id AND s.surface_id=r.surface_id AND s.request_id=r.id AND s.version=r.surface_version WHERE r.id=? AND r.workspace_id=? AND r.owner_subject_id=? AND r.surface_id=? AND r.surface_version=? AND ((r.task_question=1 AND r.question_id IS NOT NULL AND r.question_id<>'') OR (r.chat_input=1 AND r.question_id IS NULL AND r.task_id IS NULL))`, p.RequestID, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.SurfaceID, p.SurfaceVersion).Scan(&task, &question)
 	if err == sql.ErrNoRows {
 		return contracts.CommandResult{}, nil, apiError(409, "ui_input_stale", "UI input binding is unavailable", nil)
 	}
@@ -210,7 +210,7 @@ func (s *Service) commandUIAction(ctx context.Context, tx *sql.Tx, cmd control.C
 		if err := insertTextInput(ctx, tx, cmd, text); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE ui_requests SET status='input_received',voice_input=0,updated_at=? WHERE id=?`, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), p.RequestID)
+		_, err := tx.ExecContext(ctx, `UPDATE ui_requests SET status='input_received',chat_input=0,updated_at=? WHERE id=?`, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), p.RequestID)
 		if err == nil {
 			err = pruneUISurfacesTx(ctx, tx, cmd.AcceptedAt)
 		}
@@ -227,7 +227,7 @@ func (s *Service) commandUIAction(ctx context.Context, tx *sql.Tx, cmd control.C
 	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_input_notices(kind,source_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES('ui_input_received',?,?,?,?,?,?,?)`, cmd.CommandID, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, text, at, at, at); err != nil {
 		return result, nil, err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE ui_requests SET status='input_received',awaiting_input=0,updated_at=? WHERE id=?`, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), p.RequestID)
+	_, err = tx.ExecContext(ctx, `UPDATE ui_requests SET status='input_received',task_question=0,updated_at=? WHERE id=?`, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), p.RequestID)
 	if err == nil {
 		err = pruneUISurfacesTx(ctx, tx, cmd.AcceptedAt)
 	}

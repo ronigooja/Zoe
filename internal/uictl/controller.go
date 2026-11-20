@@ -59,13 +59,11 @@ func BuildInput(now time.Time, requests []string, task *Task, screen *Size) ([]b
 }
 
 type Output struct {
-	Messages      []json.RawMessage `json:"messages"`
-	Container     string            `json:"container"`
-	Feedback      string            `json:"feedback"`
-	AwaitingInput bool              `json:"awaiting_input"`
-	VoiceInput    bool              `json:"voice_input"`
-	SurfaceID     string            `json:"-"`
-	Size          *Size             `json:"size,omitempty"`
+	Messages  []json.RawMessage `json:"messages"`
+	Container string            `json:"container"`
+	Feedback  string            `json:"feedback"`
+	SurfaceID string            `json:"-"`
+	Size      *Size             `json:"size,omitempty"`
 }
 
 // object rejects duplicate fields at every nesting level before typed decoding.
@@ -193,8 +191,19 @@ func extractBlocks(text string) (string, string, error) {
 
 // Parse permits exactly one target surface per invocation; multi-surface changes
 // require separate jobs so every presentation has one version and render outcome.
-func Parse(text string, screen *Size) (Output, error) {
+type Mode string
+
+const (
+	Show         Mode = "show"
+	TaskQuestion Mode = "task_question"
+	ChatInput    Mode = "chat_input"
+)
+
+func Parse(text string, screen *Size, mode Mode) (Output, error) {
 	var o Output
+	if mode != Show && mode != TaskQuestion && mode != ChatInput {
+		return o, errors.New("mode_invalid")
+	}
 	if len(text) > MaxOutput || !utf8.ValidString(text) {
 		return o, errors.New("output_limit_or_utf8")
 	}
@@ -203,11 +212,11 @@ func Parse(text string, screen *Size) (Output, error) {
 	if err != nil {
 		return o, err
 	}
-	m, err := decodeObject([]byte(meta), "container", "feedback", "awaiting_input", "voice_input", "size")
+	m, err := decodeObject([]byte(meta), "container", "feedback", "size")
 	if err != nil {
 		return o, err
 	}
-	for _, key := range []string{"container", "feedback", "awaiting_input", "voice_input", "size"} {
+	for _, key := range []string{"container", "size"} {
 		if _, ok := m[key]; !ok {
 			return o, validationField("missing_field", key)
 		}
@@ -222,13 +231,14 @@ func Parse(text string, screen *Size) (Output, error) {
 	if err = json.Unmarshal([]byte(meta), &o); err != nil {
 		return o, err
 	}
-	for _, k := range []string{"container", "feedback"} {
+	keys := []string{"container"}
+	if mode == Show || m["feedback"] != nil {
+		keys = append(keys, "feedback")
+	}
+	for _, k := range keys {
 		if _, err = stringField(m, k); err != nil {
 			return o, err
 		}
-	}
-	if (string(m["awaiting_input"]) != "true" && string(m["awaiting_input"]) != "false") || (string(m["voice_input"]) != "true" && string(m["voice_input"]) != "false") {
-		return o, errors.New("bool_required")
 	}
 	if o.Container != "popover" && o.Container != "window" {
 		return o, errors.New("container_invalid")
@@ -242,13 +252,8 @@ func Parse(text string, screen *Size) (Output, error) {
 			return o, errors.New("size_invalid")
 		}
 	}
-	if o.AwaitingInput && o.VoiceInput {
-		return o, errors.New("input_semantics")
-	}
-	if o.AwaitingInput || o.VoiceInput {
-		if o.Feedback != "" {
-			return o, errors.New("input_semantics")
-		}
+	if mode != Show {
+		o.Feedback = ""
 	} else {
 		o.Feedback = strings.TrimSpace(o.Feedback)
 		if o.Feedback == "" || len(o.Feedback) > 8000 {
@@ -275,7 +280,67 @@ func Parse(text string, screen *Size) (Output, error) {
 		o.SurfaceID = id
 		o.Messages[i] = canonicalMessage(raw)
 	}
+	if mode != Show && !hasInputBinding(o.Messages) {
+		return o, errors.New("input_binding_required")
+	}
 	return o, nil
+}
+
+// hasInputBinding requires one text field and an event context referencing its path.
+func hasInputBinding(messages []json.RawMessage) bool {
+	paths := map[string]bool{}
+	var contexts []any
+	for _, raw := range messages {
+		var m struct {
+			Update struct {
+				Components []map[string]any `json:"components"`
+			} `json:"updateComponents"`
+		}
+		_ = json.Unmarshal(raw, &m)
+		for _, c := range m.Update.Components {
+			if c["component"] == "TextField" {
+				if value, ok := c["value"].(map[string]any); ok {
+					if path, ok := value["path"].(string); ok && strings.HasPrefix(path, "/") {
+						paths[path] = true
+					}
+				}
+			}
+			if c["component"] == "Button" {
+				if action, ok := c["action"].(map[string]any); ok {
+					if event, ok := action["event"].(map[string]any); ok {
+						contexts = append(contexts, event["context"])
+					}
+				}
+			}
+		}
+	}
+	var references func(any) bool
+	references = func(v any) bool {
+		switch v := v.(type) {
+		case map[string]any:
+			if path, ok := v["path"].(string); ok && paths[path] {
+				return true
+			}
+			for _, child := range v {
+				if references(child) {
+					return true
+				}
+			}
+		case []any:
+			for _, child := range v {
+				if references(child) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, context := range contexts {
+		if references(context) {
+			return true
+		}
+	}
+	return false
 }
 
 var components = map[string]bool{"Text": true, "Image": true, "Icon": true, "Video": true, "AudioPlayer": true, "Row": true, "Column": true, "List": true, "Card": true, "Tabs": true, "Divider": true, "Modal": true, "Button": true, "CheckBox": true, "TextField": true, "DateTimeInput": true, "ChoicePicker": true, "Slider": true}

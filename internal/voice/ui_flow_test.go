@@ -15,6 +15,7 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/modelclient"
+	"github.com/ronigooja/Zoe/internal/prompts"
 )
 
 const uiFlowCreate = `{"version":"v0.9.1","createSurface":{"surfaceId":"screen","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}`
@@ -48,8 +49,9 @@ func uiFlowOutput(messages string, await bool) string {
 	feedback := "Shown."
 	if await {
 		feedback = ""
+		messages += `,{"updateComponents":{"surfaceId":"screen","components":[{"id":"input","component":"TextField","label":"Answer","value":{"path":"/answer"}},{"id":"send","component":"Button","child":"label","action":{"event":{"name":"submit","context":{"text":{"path":"/answer"}}}}},{"id":"label","component":"Text","text":"Send"}]}}`
 	}
-	b, _ := json.Marshal(map[string]any{"container": "window", "feedback": feedback, "awaiting_input": await, "voice_input": false, "size": map[string]int{"width": 400, "height": 300}})
+	b, _ := json.Marshal(map[string]any{"container": "window", "feedback": feedback, "size": map[string]int{"width": 400, "height": 300}})
 	return "<ui-meta>" + string(b) + "</ui-meta><a2ui-json>[" + messages + "]</a2ui-json>"
 }
 func uiFlowModel(t *testing.T, output *string, mu *sync.Mutex) *modelclient.Client {
@@ -59,7 +61,15 @@ func uiFlowModel(t *testing.T, output *string, mu *sync.Mutex) *modelclient.Clie
 		var body struct {
 			Instructions string `json:"instructions"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Instructions != wantPrompt {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		matched := false
+		for _, mode := range []string{"show", "task_question", "chat_input"} {
+			instruction, err := prompts.UIInstruction(wantPrompt, mode)
+			matched = matched || (err == nil && instruction == body.Instructions)
+		}
+		if !matched {
 			t.Error("UI controller did not receive the loaded prompt")
 		}
 		mu.Lock()
@@ -108,7 +118,7 @@ func TestUIRegisterJobFlow(t *testing.T) {
 	uiFlowRegister(t, r)
 	var id, status, state string
 	var awaiting, handled, events int
-	if err := r.store.DB().QueryRow(`SELECT id,status,awaiting_input FROM ui_requests`).Scan(&id, &status, &awaiting); err != nil {
+	if err := r.store.DB().QueryRow(`SELECT id,status,task_question FROM ui_requests`).Scan(&id, &status, &awaiting); err != nil {
 		t.Fatal(err)
 	}
 	_ = r.store.DB().QueryRow(`SELECT state_json FROM ui_surfaces`).Scan(&state)
@@ -122,7 +132,7 @@ func TestUIRegisterJobFlow(t *testing.T) {
 	var e struct {
 		Payload map[string]json.RawMessage `json:"payload"`
 	}
-	if json.Unmarshal(raw, &e) != nil || len(e.Payload) != 8 || string(e.Payload["voice_input"]) != "false" || string(e.Payload["size"]) != `{"width":400,"height":300}` {
+	if json.Unmarshal(raw, &e) != nil || len(e.Payload) != 8 || string(e.Payload["chat_input"]) != "false" || string(e.Payload["size"]) != `{"width":400,"height":300}` {
 		t.Fatal(string(raw))
 	}
 	if _, exists := e.Payload["deleted"]; exists {
@@ -291,7 +301,7 @@ func TestUIJobFailures(t *testing.T) {
 func TestUICommands(t *testing.T) {
 	r := uiTargetRig(t)
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,awaiting_input,input_note,created_at,updated_at) VALUES('request','default','owner','register','screen',1,'Requested input',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,task_question,input_note,created_at,updated_at) VALUES('request','default','owner','register','screen',1,'Requested input',?,?)`, at, at)
 	cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}}
 	ctx := context.Background()
 	tx, err := r.store.DB().BeginTx(ctx, nil)
@@ -333,7 +343,7 @@ func TestUICommands(t *testing.T) {
 	if api, ok := err.(*control.APIError); !ok || api.Status != 409 {
 		t.Fatalf("double submit=%v", err)
 	}
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,awaiting_input,input_note,created_at,updated_at) VALUES('compact','default','owner','register','screen',1,'Fields',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,task_question,input_note,created_at,updated_at) VALUES('compact','default','owner','register','screen',1,'Fields',?,?)`, at, at)
 	request.Payload = json.RawMessage(`{"request_id":"compact","surface_id":"screen","surface_version":1,"name":"submit","source_component_id":"submit","context":{"a":"<raw>","b":2}}`)
 	tx, _ = r.store.DB().BeginTx(ctx, nil)
 	if _, _, err = r.svc.commandUIAction(ctx, tx, cmd, request); err == nil {
@@ -346,7 +356,7 @@ func TestUICommands(t *testing.T) {
 	if text != "" {
 		t.Fatalf("compact=%q", text)
 	}
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,awaiting_input,created_at,updated_at) VALUES('not-awaiting','default','owner','register','screen',0,?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,task_question,created_at,updated_at) VALUES('not-awaiting','default','owner','register','screen',0,?,?)`, at, at)
 	request.Payload = json.RawMessage(`{"request_id":"not-awaiting","surface_id":"screen","surface_version":1,"name":"submit","source_component_id":"submit","context":{}}`)
 	tx, _ = r.store.DB().BeginTx(ctx, nil)
 	_, _, err = r.svc.commandUIAction(ctx, tx, cmd, request)

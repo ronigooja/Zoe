@@ -14,6 +14,7 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/logging"
+	"github.com/ronigooja/Zoe/internal/prompts"
 	"github.com/ronigooja/Zoe/internal/uictl"
 )
 
@@ -25,7 +26,7 @@ func (s *Service) createRegisterUIJobs(ctx context.Context) {
 		return
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT v.id,v.workspace_id,s.owner_id,v.request FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id WHERE v.exits='ui' AND v.ui_handled=0 AND trim(coalesce(v.request,''))<>'' AND NOT EXISTS(SELECT 1 FROM ui_requests r WHERE r.voice_turn_id=v.id) ORDER BY v.confirmed_at LIMIT 25`)
+	rows, err := tx.QueryContext(ctx, `SELECT v.id,v.workspace_id,s.owner_id,v.request FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id WHERE v.exits IN ('ui','chat_input') AND v.ui_handled=0 AND trim(coalesce(v.request,''))<>'' AND NOT EXISTS(SELECT 1 FROM ui_requests r WHERE r.voice_turn_id=v.id) ORDER BY v.confirmed_at LIMIT 25`)
 	if err != nil {
 		return
 	}
@@ -289,7 +290,16 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 		s.failUIJob(ctx, j, "input_invalid", false)
 		return
 	}
-	prompt := s.recall.UIControllerInstruction
+	mode, err := s.uiMode(ctx, j, controllerInput.Task)
+	if err != nil {
+		s.failUIJob(ctx, j, "input_invalid", false)
+		return
+	}
+	prompt, err := prompts.UIInstruction(s.recall.UIControllerInstruction, string(mode))
+	if err != nil {
+		s.failUIJob(ctx, j, "input_invalid", false)
+		return
+	}
 	var parsed uictl.Output
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
@@ -328,7 +338,7 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 		if store.Clear(ctx, "ui_controller", "") == nil {
 			s.PublishRetryState()
 		}
-		parsed, err = uictl.Parse(output, controllerInput.Screen)
+		parsed, err = uictl.Parse(output, controllerInput.Screen, mode)
 		if err == nil {
 			call.Result(parsed, "")
 			break
@@ -366,6 +376,14 @@ func (s *Service) lockUIOwner(workspace, owner string) func() {
 }
 
 func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, facts *uictl.Task) error {
+	mode, err := s.uiMode(ctx, j, facts)
+	if err != nil {
+		return err
+	}
+	taskQuestion, chatInput := mode == uictl.TaskQuestion, mode == uictl.ChatInput
+	if mode != uictl.Show {
+		o.Feedback = ""
+	}
 	unlock := s.lockUIOwner(j.w, j.o)
 	defer unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -395,7 +413,7 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 		}
 	}
 	var question any
-	if o.AwaitingInput {
+	if taskQuestion {
 		if facts == nil || facts.QuestionID == "" {
 			return errUIState
 		}
@@ -429,12 +447,12 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE ui_requests SET task_id=CASE WHEN ? THEN NULL ELSE task_id END,surface_id=?,surface_version=?,question_id=?,feedback=?,awaiting_input=?,voice_input=?,input_note=?,status='generated',updated_at=? WHERE id=?`, o.VoiceInput, o.SurfaceID, version, question, o.Feedback, o.AwaitingInput, o.VoiceInput, "", at, j.request); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE ui_requests SET task_id=CASE WHEN ? THEN NULL ELSE task_id END,surface_id=?,surface_version=?,question_id=?,feedback=?,task_question=?,chat_input=?,input_note=?,status='generated',updated_at=? WHERE id=?`, chatInput, o.SurfaceID, version, question, o.Feedback, taskQuestion, chatInput, "", at, j.request); err != nil {
 		return err
 	}
-	eventPayload := map[string]any{"request_id": j.request, "surface_id": o.SurfaceID, "container": o.Container, "awaiting_input": o.AwaitingInput, "voice_input": o.VoiceInput, "messages": state.Messages}
+	eventPayload := map[string]any{"request_id": j.request, "surface_id": o.SurfaceID, "container": o.Container, "task_question": taskQuestion, "chat_input": chatInput, "messages": state.Messages}
 	eventPayload["surface_version"] = version
-	if o.AwaitingInput {
+	if taskQuestion {
 		eventPayload["task_id"], eventPayload["question_id"] = facts.TaskID, facts.QuestionID
 	}
 	if o.Size != nil {
@@ -456,6 +474,24 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *Service) uiMode(ctx context.Context, j uiJob, facts *uictl.Task) (uictl.Mode, error) {
+	if facts != nil && facts.QuestionID != "" {
+		return uictl.TaskQuestion, nil
+	}
+	var route string
+	err := s.db.QueryRowContext(ctx, `SELECT coalesce(v.exits,'') FROM ui_requests r LEFT JOIN voice_turns v ON v.id=r.voice_turn_id WHERE r.id=? AND r.workspace_id=? AND r.owner_subject_id=?`, j.request, j.w, j.o).Scan(&route)
+	if err != nil {
+		return "", err
+	}
+	if route == "chat_input" {
+		if facts != nil {
+			return "", errUIState
+		}
+		return uictl.ChatInput, nil
+	}
+	return uictl.Show, nil
 }
 func (s *Service) failUIJob(ctx context.Context, j uiJob, code string, retry bool) {
 	logging.Warnf("ui_controller error_kind=%s", code)

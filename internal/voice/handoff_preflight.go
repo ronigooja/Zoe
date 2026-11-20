@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
@@ -71,7 +70,7 @@ func (s *Service) prepareHandoff(ctx context.Context, p contracts.Principal, req
 			}
 		}
 		if err == nil && (category != "" || existing != "") {
-			if existing == "" && (RouteResult{Routes: strings.Split(category, ",")}).Has("task") {
+			if existing == "" && (RouteResult{Route: category}).Has("task") {
 				var accepted string
 				var handled int
 				if err := s.db.QueryRowContext(waitCtx, `SELECT steward_snapshot,handoff_handled FROM voice_turns WHERE id=?`, id).Scan(&accepted, &handled); err != nil {

@@ -76,11 +76,14 @@ func uiTargetPresentation(t *testing.T, r *deliveryRig, awaiting bool) {
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,created_at,updated_at) VALUES('request','default','owner','task','task',?,?)`, at, at)
 	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('job','default','owner','task_entry','task_entry:result','request',1,?,?,?)`, at, at, at)
-	o, err := uictl.Parse(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, awaiting), nil)
+	o, err := uictl.Parse(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, awaiting), nil, uiTestMode(awaiting))
 	if err != nil {
 		t.Fatal(err)
 	}
 	facts := &uictl.Task{TaskID: "task", QuestionID: "question", Question: "Which?"}
+	if !awaiting {
+		facts.QuestionID, facts.Question = "", ""
+	}
 	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "job", w: "default", o: "owner", request: "request", kind: "task_entry", attempts: 1}, o, facts); err != nil {
 		t.Fatal(err)
 	}

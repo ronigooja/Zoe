@@ -32,7 +32,7 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
-				out, _ := json.Marshal(map[string]any{"routes": routes, "request": "Research and show the lunar mission information."})
+				out, _ := json.Marshal(map[string]any{"route": strings.Join(routes, "_"), "request": "Research and show the lunar mission information."})
 				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": string(out)})
 			}))
 			defer model.Close()
@@ -72,7 +72,7 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 			if name == "ui" {
 				routes = []string{"ui"}
 			} else if withUI {
-				routes = []string{"ui", "task"}
+				routes = []string{"task", "ui"}
 			}
 			mu.Unlock()
 			r := commitAndHandoff(t, ts, key, "display", "show the lunar mission information")
@@ -85,7 +85,7 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 			if name == "ui" {
 				wantExits = "ui"
 			} else if withUI {
-				wantExits = "task,ui"
+				wantExits = "task_ui"
 			}
 			wantHandled := 0
 			if withUI {
@@ -175,7 +175,7 @@ func TestUIDisplaySchema(t *testing.T) {
 	for _, query := range []string{
 		`UPDATE ui_surfaces SET container='unknown'`, `UPDATE ui_surfaces SET state_json='{}'`,
 		`UPDATE ui_surfaces SET width=400`, `UPDATE ui_surfaces SET height=300`,
-		`UPDATE ui_requests SET source='unknown'`, `UPDATE ui_requests SET status='pending'`, `UPDATE ui_requests SET awaiting_input=2`,
+		`UPDATE ui_requests SET source='unknown'`, `UPDATE ui_requests SET status='pending'`, `UPDATE ui_requests SET task_question=2`,
 		`UPDATE ui_feedback_deliveries SET status='generated'`, `UPDATE ui_feedback_deliveries SET attempts=-1`,
 		`INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('missing','default','owner','input','now','now')`,
 	} {
@@ -207,7 +207,7 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
-				out, _ := json.Marshal(map[string]any{"routes": routes, "request": "Show the earlier lunar mission result."})
+				out, _ := json.Marshal(map[string]any{"route": strings.Join(routes, "_"), "request": "Show the earlier lunar mission result."})
 				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": string(out)})
 			}))
 			defer model.Close()

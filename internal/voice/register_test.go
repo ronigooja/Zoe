@@ -154,7 +154,7 @@ func TestRegisterCrossCallStableOrderingAndOwnerIsolation(t *testing.T) {
 	if strings.Index(input, "user: first") > strings.Index(input, "assistant: second") || strings.Index(input, "assistant: second") > strings.Index(input, "assistant: third") || strings.Contains(input, "SECRET_") {
 		t.Fatal("source order/isolation violated")
 	}
-	f.output = `{"routes":["task"],"request":"It refers to first."}`
+	f.output = `{"route":"task","request":"It refers to first."}`
 	if _, err := f.r.Route(context.Background(), f.owner, "that", f.now); err != nil {
 		t.Fatal(err)
 	}
@@ -222,19 +222,19 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 		out   string
 		valid bool
 	}{
-		{`{"routes":["task"],"request":"Perform the complete request."}`, true},
-		{`{"routes":["task"],"request":"It refers to the user's trip."}`, true},
-		{`{"routes":["memory_write"],"request":"Save the user's travel preference."}`, true},
-		{`{"routes":["recall"],"request":"Retrieve the user's travel preference."}`, true},
-		{`{"routes":["memory_write"],"request":""}`, false},
-		{`{"routes":["recall"],"request":""}`, false},
-		{`{"routes":["chat"],"request":null}`, true},
-		{`{"routes":["chat"],"request":"none"}`, false},
-		{`{"routes":["chat"],"request":" "}`, false},
-		{`{"routes":["chat"]}`, false},
-		{`{"routes":["ui"],"request":"Show the complete requested content."}`, true},
-		{`{"routes":["task","ui"],"request":"Show the complete requested content."}`, true},
-		{`{"routes":["ui","task"],"request":"Show the complete requested content."}`, true},
+		{`{"route":"task","request":"Perform the complete request."}`, true},
+		{`{"route":"task","request":"It refers to the user's trip."}`, true},
+		{`{"route":"memory_write","request":"Save the user's travel preference."}`, true},
+		{`{"route":"recall","request":"Retrieve the user's travel preference."}`, true},
+		{`{"route":"memory_write","request":""}`, false},
+		{`{"route":"recall","request":""}`, false},
+		{`{"route":"chat","request":null}`, true},
+		{`{"route":"chat","request":"none"}`, false},
+		{`{"route":"chat","request":" "}`, false},
+		{`{"route":"chat"}`, false},
+		{`{"route":"ui","request":"Show the complete requested content."}`, true},
+		{`{"route":"task_ui","request":"Show the complete requested content."}`, true},
+		{`{"route":"task_ui","request":"Show the complete requested content."}`, true},
 		{`{"routes":[],"request":"none"}`, false},
 		{`{"routes":null,"request":"none"}`, false},
 		{`{"routes":"task","request":"none"}`, false},
@@ -249,32 +249,32 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 		{`{"routes":["memory_write","task"],"request":"Store it."}`, false},
 		{`{"routes":["recall","task"],"request":"Retrieve it."}`, false},
 		{`{"routes":["memory_write","recall"],"request":"Store it."}`, false},
-		{`{"routes":["ui"],"request":""}`, false},
-		{`{"routes":["task","ui"],"request":""}`, false},
-		{`{"routes":["unknown"],"request":"none"}`, false},
-		{`{"routes":["task"],"request":null}`, false},
-		{`{"routes":["task"],"request":1}`, false},
-		{`{"routes":["task"],"request":"none","extra":"x"}`, false},
-		{`{"routes":["task"],"routes":["ui"],"request":"none"}`, false},
-		{`{"routes":["task"],"request":"none","request":"none"}`, false},
-		{`{"routes":["task"],"request":"none"} {}`, false},
-		{`{"routes":["task"],"request":"none"} extra`, false},
+		{`{"route":"ui","request":""}`, false},
+		{`{"route":"task_ui","request":""}`, false},
+		{`{"route":"unknown","request":"none"}`, false},
+		{`{"route":"task","request":null}`, false},
+		{`{"route":"task","request":1}`, false},
+		{`{"route":"task","request":"none","extra":"x"}`, false},
+		{`{"route":"task","route":"ui","request":"none"}`, false},
+		{`{"route":"task","request":"none","request":"none"}`, false},
+		{`{"route":"task","request":"none"} {}`, false},
+		{`{"route":"task","request":"none"} extra`, false},
 		{`{"memory_key":"trip"}`, false},
-		{`{"routes":["confirm"],"request":"none"}`, false},
-		{`{"routes":["decline"],"request":"none"}`, false},
-		{`{"routes":["cancel"],"request":"none"}`, false},
-		{`{"routes":["progress"],"request":"none"}`, false},
-		{`{"routes":["task"],"request":""}`, false},
-		{`{"routes":["task"]}`, false},
-		{`{"routes":["recall"]}`, false},
-		{`{"routes":["memory_write"],"request":"none"}`, false},
-		{`{"routes":["recall"],"request":"none"}`, false},
-		{`{"routes":["task"],"request":null}`, false},
-		{`{"routes":["task"],"request":1}`, false},
-		{`{"routes":["task"],"request":" none"}`, false},
-		{`{"routes":["task"],"request":"First complete instruction.\nSecond complete instruction."}`, true},
-		{`{"routes":["task"],"request":"- Preserve the complete structured request."}`, true},
-		{`{"routes":["task"],"request":"none","extra":"x"}`, false},
+		{`{"route":"confirm","request":"none"}`, false},
+		{`{"route":"decline","request":"none"}`, false},
+		{`{"route":"cancel","request":"none"}`, false},
+		{`{"route":"progress","request":"none"}`, false},
+		{`{"route":"task","request":""}`, false},
+		{`{"route":"task"}`, false},
+		{`{"route":"recall"}`, false},
+		{`{"route":"memory_write","request":"none"}`, false},
+		{`{"route":"recall","request":"none"}`, false},
+		{`{"route":"task","request":null}`, false},
+		{`{"route":"task","request":1}`, false},
+		{`{"route":"task","request":" none"}`, false},
+		{`{"route":"task","request":"First complete instruction.\nSecond complete instruction."}`, true},
+		{`{"route":"task","request":"- Preserve the complete structured request."}`, true},
+		{`{"route":"task","request":"none","extra":"x"}`, false},
 		{`{"route":"task","request":"none"}`, false},
 		{`{"memory_key":"absent"}`, false},
 		{`{"memory_key":"travel"}`, false},
@@ -306,12 +306,12 @@ func TestRegisterRouteExactParsing(t *testing.T) {
 func TestRegisterAttributionInstructionChat(t *testing.T) {
 	for _, required := range []string{
 		"Route chat means conversation requiring no execution, screen action or memory operation.",
-		"Route task means perform, modify, answer, continue, inspect, cancel or redisplay work.",
-		"Route ui means present content or collect input on the screen.",
+		"Route task means perform, modify, answer, continue, inspect or cancel work without a screen request.",
+		"Route ui means pure presentation whose content comes entirely from the user's own words or needs no facts, such as big text or a todo template.",
 		"For chat, request must be null.",
 		"For every other route, request must be a nonempty complete self-contained statement",
 		"Never output the literal none",
-		"only routes and request",
+		"only route and request",
 	} {
 		if !strings.Contains(testPrompts(t).Register(), required) {
 			t.Errorf("missing instruction: %s", required)
@@ -335,7 +335,7 @@ func TestRegisterAttributionInstructionChat(t *testing.T) {
 func TestRegisterRequestTextValidation(t *testing.T) {
 	for _, route := range []string{"task", "memory_write", "recall", "ui"} {
 		for _, text := range []string{"", "none", " NONE ", "  "} {
-			output, err := json.Marshal(map[string]any{"routes": []string{route}, "request": text})
+			output, err := json.Marshal(map[string]any{"route": route, "request": text})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -426,13 +426,13 @@ func TestRegisterRouteSingleCall(t *testing.T) {
 		name, output string
 		valid        bool
 	}{
-		{"task", `{"routes":["task"],"request":"Perform the complete request."}`, true},
-		{"memory_write", `{"routes":["memory_write"],"request":"Save the user's travel preference."}`, true},
-		{"recall", `{"routes":["recall"],"request":"Retrieve the user's travel preference."}`, true},
-		{"chat", `{"routes":["chat"],"request":null}`, true},
-		{"empty_memory_write", `{"routes":["memory_write"],"request":""}`, false},
-		{"empty_recall", `{"routes":["recall"],"request":""}`, false},
-		{"nonempty_chat", `{"routes":["chat"],"request":"Hello."}`, false},
+		{"task", `{"route":"task","request":"Perform the complete request."}`, true},
+		{"memory_write", `{"route":"memory_write","request":"Save the user's travel preference."}`, true},
+		{"recall", `{"route":"recall","request":"Retrieve the user's travel preference."}`, true},
+		{"chat", `{"route":"chat","request":null}`, true},
+		{"empty_memory_write", `{"route":"memory_write","request":""}`, false},
+		{"empty_recall", `{"route":"recall","request":""}`, false},
+		{"nonempty_chat", `{"route":"chat","request":"Hello."}`, false},
 		{"old_memory_key", `{"memory_key":"x"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

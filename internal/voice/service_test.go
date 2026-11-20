@@ -405,7 +405,7 @@ func handoffHTTPServerWithScopes(t *testing.T, voiceCfg Config, scopes []string)
 			var body struct{ Input string }
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			_, request, _ := strings.Cut(body.Input, "Current sentence:\n")
-			out, _ := json.Marshal(map[string]any{"routes": []string{"task"}, "request": request})
+			out, _ := json.Marshal(map[string]any{"route": "task", "request": request})
 			_ = json.NewEncoder(w).Encode(map[string]string{"output_text": string(out)})
 		}))
 		t.Cleanup(model.Close)

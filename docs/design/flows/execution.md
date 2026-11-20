@@ -10,7 +10,7 @@ Approved target, not a claim of current implementation, deployment or acceptance
 |---|---|
 | Gateway final: turn_id, revision, transcript; client adds session_id, generation, content, user_confirmed | Commit validates current identity/revision and content; server retains original provenance, not a later execution fallback. |
 | Client handoff: session_id, generation, turn_id, revision, content_hash | Server checks committed source and classifies outside the authority transaction; handoff contains no client-authored goal. |
-| Register output and source identity | Server persists request and routes, sends only request to route consumers; original remains separately linked provenance. |
+| Register output and source identity | Server persists request and route, sends only request to route consumers; original remains separately linked provenance. |
 | Task route: retained request, display_requested, retrieved facts | Steward decision, then transactional admission/append/answer/cancel/report/redisplay. |
 | New admission: full request | Task goal becomes Worker goal; source reference is metadata, not another initial user instruction. |
 | Append/answer: full request, task_id and question_id for answers | Original live OpenCode session receives ordered additional request or bound answer; active append uses steer, not stop-and-recreate. |

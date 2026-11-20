@@ -59,7 +59,7 @@ func TestUIServerAssignedIDsAndNoRoster(t *testing.T) {
 	if _, ok := fields["surfaces"]; ok {
 		t.Fatal("controller received stored surfaces")
 	}
-	o, err := uictl.Parse(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false), nil)
+	o, err := uictl.Parse(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false), nil, uictl.Show)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestUIQuestionRetention(t *testing.T) {
 			uiACK(t, r, "request", true)
 			p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner"}
 			snapshot, err := r.svc.readUISnapshot(context.Background(), p)
-			if err != nil || len(snapshot.Surfaces) != 1 || !snapshot.Surfaces[0].AwaitingInput {
+			if err != nil || len(snapshot.Surfaces) != 1 || !snapshot.Surfaces[0].TaskQuestion {
 				t.Fatalf("snapshot=%+v err=%v", snapshot, err)
 			}
 			switch stale {

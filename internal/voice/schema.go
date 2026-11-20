@@ -263,7 +263,14 @@ DROP TABLE old_model_config_fingerprints;`)
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 205, Name: "ui_surface_retention", Up: migrateUISurfaceRetention})
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 205, Name: "ui_surface_retention", Up: migrateUISurfaceRetention}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 206, Name: "ui_input_modes", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE ui_requests RENAME COLUMN awaiting_input TO task_question;
+ALTER TABLE ui_requests RENAME COLUMN voice_input TO chat_input;`)
+		return err
+	}})
 }
 
 func migrateUISurfaceRetention(ctx context.Context, tx *sql.Tx) error {

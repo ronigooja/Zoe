@@ -69,9 +69,55 @@ func Load(dir string) (*Set, error) {
 		if text == "" {
 			return nil, &Error{"prompt_empty", name}
 		}
+		if name == "ui_controller" {
+			if _, err := UISections(text); err != nil {
+				return nil, err
+			}
+		}
 		s.entries[name] = entry{text: text, path: path, size: len(data)}
 	}
 	return s, nil
+}
+
+// UISections validates the complete mode-partitioned instruction at startup.
+func UISections(text string) (map[string]string, error) {
+	sections := map[string]string{}
+	current := ""
+	for _, line := range strings.Split(text, "\n") {
+		switch line {
+		case "[common]", "[show]", "[task_question]", "[chat_input]":
+			current = strings.Trim(line, "[]")
+			if _, exists := sections[current]; exists {
+				return nil, &Error{"prompt_sections_invalid", "ui_controller"}
+			}
+			sections[current] = ""
+		default:
+			if current == "" && strings.TrimSpace(line) != "" {
+				return nil, &Error{"prompt_sections_invalid", "ui_controller"}
+			}
+			if current != "" {
+				sections[current] += line + "\n"
+			}
+		}
+	}
+	for _, name := range []string{"common", "show", "task_question", "chat_input"} {
+		if strings.TrimSpace(sections[name]) == "" {
+			return nil, &Error{"prompt_sections_invalid", "ui_controller"}
+		}
+	}
+	return sections, nil
+}
+
+// UIInstruction supplies the shared contract and exactly one server-selected mode.
+func UIInstruction(text, mode string) (string, error) {
+	sections, err := UISections(text)
+	if err != nil {
+		return "", err
+	}
+	if mode != "show" && mode != "task_question" && mode != "chat_input" {
+		return "", &Error{"prompt_sections_invalid", "ui_controller"}
+	}
+	return strings.TrimSpace(sections["common"]) + "\n\n" + strings.TrimSpace(sections[mode]), nil
 }
 
 func (s *Set) UIController() string  { return s.entries["ui_controller"].text }

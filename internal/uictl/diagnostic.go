@@ -23,7 +23,7 @@ func FailureCode(err error) string {
 		switch err.Error() {
 		case "block_missing", "block_duplicate", "block_order", "block_unclosed", "duplicate_field", "invalid_object", "invalid_array", "invalid_json",
 			"trailing_data", "object_required", "unknown_field", "output_limit_or_utf8",
-			"size_invalid", "bool_required", "container_invalid", "input_semantics",
+			"size_invalid", "mode_invalid", "container_invalid", "input_binding_required",
 			"feedback_semantics", "message_limit", "mixed_surfaces", "message_kind",
 			"surface_id", "catalog", "send_data_model", "theme", "components", "component":
 			return err.Error()

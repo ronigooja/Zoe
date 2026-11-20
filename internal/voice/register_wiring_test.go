@@ -61,7 +61,7 @@ func TestHandoffSnapshotRefreshRetainsRegister(t *testing.T) {
 			var routes, choices atomic.Int32
 			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				routes.Add(1)
-				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"routes":["task"],"request":"A complete accepted request."}`})
+				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"route":"task","request":"A complete accepted request."}`})
 			}))
 			defer model.Close()
 			modelCfg := RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
@@ -147,15 +147,15 @@ func TestResolvedRequestHandoffFoundation(t *testing.T) {
 			var received steward.Input
 			questionID := "pending-question"
 			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				output := `{"routes":["task"],"request":` + string(resolvedRequestJSON(full)) + `}`
+				output := `{"route":"task","request":` + string(resolvedRequestJSON(full)) + `}`
 				if action == "chat" {
-					output = `{"routes":["chat"],"request":null}`
+					output = `{"route":"chat","request":null}`
 				}
 				if action == "none" {
-					output = `{"routes":["task"],"request":"none"}`
+					output = `{"route":"task","request":"none"}`
 				}
 				if action == "missing" {
-					output = `{"routes":["task"]}`
+					output = `{"route":"task"}`
 				}
 				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": output})
 			}))
@@ -332,12 +332,12 @@ func resolvedRequestJSON(value any) []byte {
 }
 
 func TestRegisterApprovedRequestSchema(t *testing.T) {
-	for _, output := range []string{`{"routes":["chat"],"request":null}`, `{"routes":["task","ui"],"request":"First action. Then retain [all] details.\nDo not truncate."}`, `{"routes":["memory_write"],"request":"Remember the airport is LHR."}`} {
+	for _, output := range []string{`{"route":"chat","request":null}`, `{"route":"task_ui","request":"First action. Then retain [all] details.\nDo not truncate."}`, `{"route":"memory_write","request":"Remember the airport is LHR."}`} {
 		if _, err := parseRegisterRoute(output); err != nil {
 			t.Fatalf("valid %s: %v", output, err)
 		}
 	}
-	for _, output := range []string{`{"routes":["chat"],"request":""}`, `{"routes":["task"],"request":null}`, `{"routes":["task"],"request":"none"}`, `{"routes":["ui"],"request":" NONE "}`, `{"routes":["task"],"request":"  "}`, `{"routes":["task"],"restatement":"old"}`, `{"routes":["task"],"request":"a","request":"b"}`, `{"routes":["chat","ui"],"request":null}`} {
+	for _, output := range []string{`{"route":"chat","request":""}`, `{"route":"task","request":null}`, `{"route":"task","request":"none"}`, `{"route":"ui","request":" NONE "}`, `{"route":"task","request":"  "}`, `{"route":"task","restatement":"old"}`, `{"route":"task","request":"a","request":"b"}`, `{"routes":["chat","ui"],"request":null}`} {
 		if _, err := parseRegisterRoute(output); err == nil {
 			t.Fatalf("accepted %s", output)
 		}

@@ -94,23 +94,16 @@ func NewRegister(db *sql.DB, cfg RegisterConfig) (*ContextRegister, error) {
 }
 
 type RouteResult struct {
-	Routes  []string `json:"routes"`
-	Request *string  `json:"request"`
+	Route   string  `json:"route"`
+	Request *string `json:"request"`
 }
 
 func (r RouteResult) Has(name string) bool {
-	for _, exit := range r.Routes {
-		if exit == name {
-			return true
-		}
-	}
-	return false
+	return r.Route == name || (r.Route == "task_ui" && (name == "task" || name == "ui")) || (r.Route == "chat_input" && name == "ui")
 }
 
 func (r RouteResult) Exits() string {
-	exits := append([]string(nil), r.Routes...)
-	sort.Strings(exits)
-	return strings.Join(exits, ",")
+	return r.Route
 }
 
 func (r *ContextRegister) Route(ctx context.Context, owner RegisterOwner, sentence string, now time.Time) (result RouteResult, resultErr error) {
@@ -211,33 +204,22 @@ func parseRegisterRoute(output string) (RouteResult, error) {
 	if d.Decode(&extra) != io.EOF {
 		return bad()
 	}
-	rawRoutes, hasRoute := fields["routes"]
+	rawRoute, hasRoute := fields["route"]
 	rawText, hasText := fields["request"]
 	if len(fields) != 2 || !hasRoute || !hasText {
 		return bad()
 	}
-	var routes []string
+	var route string
 	var text *string
-	if len(rawRoutes) == 0 || rawRoutes[0] != '[' || json.Unmarshal(rawRoutes, &routes) != nil || len(routes) == 0 || json.Unmarshal(rawText, &text) != nil {
+	if json.Unmarshal(rawRoute, &route) != nil || json.Unmarshal(rawText, &text) != nil {
 		return bad()
 	}
-	seen := map[string]bool{}
-	for _, route := range routes {
-		if seen[route] {
-			return bad()
-		}
-		seen[route] = true
-		switch route {
-		case "chat", "memory_write", "recall":
-			if len(routes) != 1 {
-				return bad()
-			}
-		case "task", "ui":
-		default:
-			return bad()
-		}
+	switch route {
+	case "chat", "memory_write", "recall", "task", "task_ui", "ui", "chat_input":
+	default:
+		return bad()
 	}
-	if seen["chat"] {
+	if route == "chat" {
 		if text != nil {
 			return bad()
 		}
@@ -247,7 +229,7 @@ func parseRegisterRoute(output string) (RouteResult, error) {
 		}
 	}
 	// Semantic completeness and fidelity require model-quality acceptance.
-	return RouteResult{Routes: routes, Request: text}, nil
+	return RouteResult{Route: route, Request: text}, nil
 }
 
 type RegisterLayers struct {

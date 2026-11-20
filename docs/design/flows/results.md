@@ -51,7 +51,7 @@ Instructions for the voice upstream list background tools only. Message formats 
 | `ui_input_request` | `The background tool has asked the user for input. Request: <task pending-question text>` | question identity |
 | `ui_input_received` | `The background tool received the user's input. Content: <submitted text>` | answer command identity |
 
-`user_text` is the user's own input, produced by the [screen](screen.md) conversation-text input, and is delivered through `deliverDurableText`. `ui_input_request` and `ui_input_received` apply only to `awaiting_input` surfaces. The request text is the task's authoritative pending question, not UI_Controller `input_note`. When no call is active, each text remains pending and is delivered on the next call. A delivery receipt proves transport writes only, never upstream understanding.
+`user_text` is the user's own input, produced by the [screen](screen.md) conversation-text input, and is delivered through `deliverDurableText`. `ui_input_request` and `ui_input_received` apply only to `task_question` surfaces. The request text is the task's authoritative pending question, not UI_Controller `input_note`. When no call is active, each text remains pending and is delivered on the next call. A delivery receipt proves transport writes only, never upstream understanding.
 
 ## Task result summaries
 

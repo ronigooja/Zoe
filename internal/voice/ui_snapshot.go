@@ -25,8 +25,8 @@ type uiSnapshotSurface struct {
 	Container      string            `json:"container"`
 	Size           *uictl.Size       `json:"size,omitempty"`
 	RenderStatus   string            `json:"render_status"`
-	AwaitingInput  bool              `json:"awaiting_input"`
-	VoiceInput     bool              `json:"voice_input"`
+	TaskQuestion   bool              `json:"task_question"`
+	ChatInput      bool              `json:"chat_input"`
 	TaskID         string            `json:"task_id,omitempty"`
 	QuestionID     string            `json:"question_id,omitempty"`
 }
@@ -72,7 +72,7 @@ func (s *Service) readUISnapshot(ctx context.Context, p contracts.Principal) (ui
 
 func readUISnapshotSurfaces(ctx context.Context, tx *sql.Tx, p contracts.Principal) ([]uiSnapshotSurface, error) {
 	result := []uiSnapshotSurface{}
-	rows, err := tx.QueryContext(ctx, `SELECT s.surface_id,s.version,s.state_json,s.container,s.width,s.height,r.id,r.status,r.awaiting_input,r.voice_input,coalesce(r.task_id,''),coalesce(r.question_id,'') FROM ui_surfaces s LEFT JOIN ui_requests r ON r.id=s.request_id AND r.workspace_id=s.workspace_id AND r.owner_subject_id=s.owner_subject_id AND r.surface_id=s.surface_id AND r.surface_version=s.version WHERE s.workspace_id=? AND s.owner_subject_id=? ORDER BY s.surface_id`, p.WorkspaceID, p.SubjectID)
+	rows, err := tx.QueryContext(ctx, `SELECT s.surface_id,s.version,s.state_json,s.container,s.width,s.height,r.id,r.status,r.task_question,r.chat_input,coalesce(r.task_id,''),coalesce(r.question_id,'') FROM ui_surfaces s LEFT JOIN ui_requests r ON r.id=s.request_id AND r.workspace_id=s.workspace_id AND r.owner_subject_id=s.owner_subject_id AND r.surface_id=s.surface_id AND r.surface_version=s.version WHERE s.workspace_id=? AND s.owner_subject_id=? ORDER BY s.surface_id`, p.WorkspaceID, p.SubjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -99,9 +99,9 @@ func readUISnapshotSurfaces(ctx context.Context, tx *sql.Tx, p contracts.Princip
 			sf.Size = &uictl.Size{Width: int(width.Int64), Height: int(height.Int64)}
 		}
 		sf.TaskID = task
-		sf.AwaitingInput = awaiting.Bool && (status.String == "generated" || status.String == "rendered")
-		sf.VoiceInput = voiceInput.Bool && (status.String == "generated" || status.String == "rendered")
-		if sf.AwaitingInput {
+		sf.TaskQuestion = awaiting.Bool && (status.String == "generated" || status.String == "rendered")
+		sf.ChatInput = voiceInput.Bool && (status.String == "generated" || status.String == "rendered")
+		if sf.TaskQuestion {
 			if task == "" || question == "" {
 				return nil, errors.New("ui_snapshot_input_mapping_invalid")
 			}

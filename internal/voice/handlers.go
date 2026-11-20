@@ -399,7 +399,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 	if storedCategory != "" {
 		category = storedCategory
 	}
-	exits := RouteResult{Routes: strings.Split(storedCategory, ",")}
+	exits := RouteResult{Route: storedCategory}
 	if exits.Has("task") {
 		category = "task"
 	}
@@ -657,13 +657,13 @@ func (s *Service) classifyCommittedTurn(id string) {
 		return
 	}
 	// A completed selection is reused until preflight explicitly invalidates it.
-	if acceptedSnapshot != "" || (acceptedRoutes.Valid && !(RouteResult{Routes: strings.Split(acceptedRoutes.String, ",")}).Has("task")) {
+	if acceptedSnapshot != "" || (acceptedRoutes.Valid && !(RouteResult{Route: acceptedRoutes.String}).Has("task")) {
 		return
 	}
-	route := RouteResult{Routes: []string{"task"}}
+	route := RouteResult{Route: "task"}
 	var err error
 	if acceptedRoutes.Valid {
-		route = RouteResult{Routes: strings.Split(acceptedRoutes.String, ","), Request: acceptedRequest}
+		route = RouteResult{Route: acceptedRoutes.String, Request: acceptedRequest}
 	} else if s.register == nil {
 		err = errors.New("context register is disabled")
 	} else {
@@ -746,7 +746,7 @@ func (s *Service) classifyCommittedTurn(id string) {
 	if err != nil {
 		// Internal failure sentinel, never a model route: fail closed on replay.
 		if !acceptedRoutes.Valid {
-			route.Routes = []string{"error"}
+			route.Route = "error"
 		}
 		choice = steward.Choice{}
 		taskID = ""
@@ -946,7 +946,7 @@ func (s *Service) admitVoiceTask(ctx context.Context, tx *sql.Tx, principal cont
 	request.Title = title
 	request.Goal = content
 	request.InitialMessage = content
-	if (RouteResult{Routes: strings.Split(storedExits.String, ",")}).Has("ui") {
+	if (RouteResult{Route: storedExits.String}).Has("ui") {
 		if err := s.recordTaskUITx(ctx, tx, principal, taskID, ref.SessionID, ref.Generation, ref.TurnID, ref.Revision, acceptedAt); err != nil {
 			return nil, err
 		}

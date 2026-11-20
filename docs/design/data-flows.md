@@ -17,14 +17,16 @@ Original dialogue -> Register
   memory_write ---> memory worker
   recall ---------> scoped search -> unchanged text delivery
   task -----------> Steward -> task handling -> Worker when required
+  task_ui --------> Steward -> task handling -> UI_Controller
   ui -------------> UI_Controller -> presentation -> render ACK
+  chat_input -----> UI_Controller -> conversation-text input
 
 Authoritative results -> voice delivery and requested UI
 Bound screen input --> the identified task or pending question
 Original dialogue and completed-task records -> scheduled memory ingestion
 ```
 
-The component contracts define route combinations, action semantics, identities,
+The component contracts define route semantics, action semantics, identities,
 persistence, and recovery.
 
 ## Read by task

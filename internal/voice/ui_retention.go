@@ -34,6 +34,6 @@ func (s *Service) pruneUISurfaces(ctx context.Context) error {
 }
 
 func removeAcknowledgedUISurface(ctx context.Context, tx *sql.Tx, request string) error {
-	_, err := tx.ExecContext(ctx, `DELETE FROM ui_surfaces WHERE request_id=? AND EXISTS(SELECT 1 FROM ui_requests r WHERE r.id=ui_surfaces.request_id AND r.awaiting_input=0 AND (r.voice_input=0 OR r.status='failed') AND r.question_id IS NULL)`, request)
+	_, err := tx.ExecContext(ctx, `DELETE FROM ui_surfaces WHERE request_id=? AND EXISTS(SELECT 1 FROM ui_requests r WHERE r.id=ui_surfaces.request_id AND r.task_question=0 AND (r.chat_input=0 OR r.status='failed') AND r.question_id IS NULL)`, request)
 	return err
 }

@@ -11,7 +11,11 @@ func fixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	for _, name := range Names() {
-		if err := os.WriteFile(filepath.Join(dir, name+".txt"), []byte("value\n"), 0600); err != nil {
+		value := "value\n"
+		if name == "ui_controller" {
+			value = "[common]\nshared\n[show]\nshow\n[task_question]\nquestion\n[chat_input]\nchat\n"
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+".txt"), []byte(value), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}

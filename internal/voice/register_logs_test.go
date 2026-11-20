@@ -41,7 +41,7 @@ func TestRegisterRouteLogs(t *testing.T) {
 		name, output, want string
 		fail               bool
 	}{
-		{"success", `{"routes":["task"],"request":"PRIVATE_RESTATEMENT"}`, "status=ok route=task elapsed_ms=[0-9]+ error_kind=none", false},
+		{"success", `{"route":"task","request":"PRIVATE_RESTATEMENT"}`, "status=ok route=task elapsed_ms=[0-9]+ error_kind=none", false},
 		{"model_error", "PRIVATE_MODEL_OUTPUT", "status=error route=none elapsed_ms=[0-9]+ error_kind=model_http", true},
 		{"invalid_output", "PRIVATE_MODEL_OUTPUT", "status=error route=none elapsed_ms=[0-9]+ error_kind=output_invalid", false},
 	} {
@@ -144,7 +144,7 @@ func TestRegisterDebugFullModelCalls(t *testing.T) {
 	logs := captureRegisterLogs(t)
 	logging.SetLevel(logging.Debug)
 	f.rebuild(f.now)
-	f.output = `{"routes":["task"],"request":"PRIVATE_RESTATEMENT"}`
+	f.output = `{"route":"task","request":"PRIVATE_RESTATEMENT"}`
 	sentence := strings.Repeat("s", 20000)
 	if _, err := f.r.Route(context.Background(), f.owner, sentence, f.now); err != nil {
 		t.Fatal(err)
@@ -168,7 +168,7 @@ func TestRegisterDebugFullModelCalls(t *testing.T) {
 
 func TestRegisterDebugSingleCall(t *testing.T) {
 	f := newRegisterFixture(t)
-	f.output = `{"routes":["recall"],"request":"Retrieve the user's travel preference."}`
+	f.output = `{"route":"recall","request":"Retrieve the user's travel preference."}`
 	logs := captureRegisterLogs(t)
 	logging.SetLevel(logging.Debug)
 	if _, err := f.r.Route(context.Background(), f.owner, "PRIVATE_SENTENCE", f.now); err != nil {
