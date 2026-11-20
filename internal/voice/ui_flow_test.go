@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -502,6 +503,70 @@ func TestUIDeleteEventAndLease(t *testing.T) {
 	}
 	if json.Unmarshal(raw, &e) != nil || len(e.Payload.Messages) != 1 || !strings.Contains(string(e.Payload.Messages[0]), "deleteSurface") {
 		t.Fatalf("event=%s", raw)
+	}
+}
+
+func TestUIControllerConfiguredTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout string
+		delay   time.Duration
+	}{
+		{"past_old_cap", "30000", 26 * time.Second},
+		{"timeout_retries", "500", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := uiTargetRig(t)
+			uiFlowServer(t, r)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				_, _ = io.Copy(io.Discard, req.Body)
+				if tc.delay == 0 {
+					<-req.Context().Done()
+					return
+				}
+				select {
+				case <-time.After(tc.delay):
+					_ = json.NewEncoder(w).Encode(map[string]string{"output_text": uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false)})
+				case <-req.Context().Done():
+				}
+			}))
+			defer server.Close()
+			env := map[string]string{"ZOE_UI_CONTROLLER_BASE_URL": server.URL, "ZOE_UI_CONTROLLER_MODEL": "fixture", "ZOE_UI_CONTROLLER_API_KEY_FILE": "fixture", "ZOE_UI_CONTROLLER_TIMEOUT_MS": tc.timeout}
+			c, err := modelclient.FromEnv("ZOE_UI_CONTROLLER", func(k string) string { return env[k] }, func(string) ([]byte, error) { return []byte("fixture"), nil }, 30000, 500, 120000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.svc.uiController = c
+			uiFlowRegister(t, r)
+			for attempt := 1; attempt <= 3; attempt++ {
+				var status, code string
+				var attempts int
+				var next time.Time
+				var nextRaw string
+				if err := r.store.DB().QueryRow(`SELECT status,coalesce(last_error,''),attempts,next_attempt_at FROM ui_jobs`).Scan(&status, &code, &attempts, &nextRaw); err != nil {
+					t.Fatal(err)
+				}
+				wantStatus, wantCode := "done", ""
+				if tc.delay == 0 {
+					wantStatus, wantCode = "pending", "model_error"
+					if attempt == 3 {
+						wantStatus = "failed"
+					}
+				}
+				if status != wantStatus || code != wantCode || attempts != attempt {
+					t.Fatalf("status=%s code=%s attempts=%d want=%s/%s/%d", status, code, attempts, wantStatus, wantCode, attempt)
+				}
+				if tc.delay != 0 || attempt == 3 {
+					break
+				}
+				next, err = time.Parse(time.RFC3339Nano, nextRaw)
+				if err != nil || !next.After(r.now()) {
+					t.Fatalf("next_attempt_at=%q now=%s err=%v", nextRaw, r.now(), err)
+				}
+				r.advance(next.Sub(r.now()) + time.Millisecond)
+				r.svc.dispatchUIJobs(context.Background())
+			}
+		})
 	}
 }
 

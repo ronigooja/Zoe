@@ -329,12 +329,11 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 			}
 			logging.Infof("ui_controller_retry attempt=%d category=%s", attempt, controllerInput.PreviousError.Category)
 		}
-		callCtx, cancel := context.WithTimeout(logging.WithUserHash(ctx, logging.UserHash(j.o)), 25*time.Second)
+		callCtx := logging.WithUserHash(ctx, logging.UserHash(j.o))
 		call := logging.ModelCallFromContext(callCtx, "ui_controller")
 		call.Input(prompt, string(input))
 		output, modelErr := s.uiController.Complete(callCtx, prompt, string(input))
 		call.Output(output)
-		cancel()
 		if modelErr != nil {
 			call.Result(nil, "model_error")
 			kind := backoff.Classify(modelErr)
