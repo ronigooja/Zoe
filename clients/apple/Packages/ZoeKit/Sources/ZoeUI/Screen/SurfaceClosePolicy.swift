@@ -10,12 +10,12 @@ struct SurfaceClosePolicy {
         isEscape
     }
 
-    static func deadline(lostFocusAt: Date?, delay: Double, awaitingInput: Bool) -> Date? {
-        guard !awaitingInput, delay > 0, let lostFocusAt else { return nil }
+    static func deadline(lostFocusAt: Date?, delay: Double, taskQuestion: Bool) -> Date? {
+        guard !taskQuestion, delay > 0, let lostFocusAt else { return nil }
         return lostFocusAt.addingTimeInterval(delay)
     }
 
-    static func shouldReplay(awaitingInput: Bool, wasPresented: Bool) -> Bool {
-        awaitingInput || wasPresented
+    static func shouldReplay(taskQuestion: Bool, wasPresented: Bool) -> Bool {
+        taskQuestion || wasPresented
     }
 }

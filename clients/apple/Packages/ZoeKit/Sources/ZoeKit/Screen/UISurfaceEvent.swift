@@ -9,14 +9,15 @@ public struct UISurfaceEvent: Decodable, Sendable {
     public let taskID: String?
     public let questionID: String?
     public let container: SurfaceKind
-    public let awaitingInput: Bool
+    public let taskQuestion: Bool
+    public let chatInput: Bool
     public let messages: [A2uiMessage]
     public let size: SurfaceSize?
 
     private enum CodingKeys: String, CodingKey {
         case requestID = "request_id", surfaceID = "surface_id", container
         case surfaceVersion = "surface_version", taskID = "task_id", questionID = "question_id"
-        case awaitingInput = "awaiting_input", messages, size
+        case taskQuestion = "task_question", chatInput = "chat_input", messages, size
     }
 
     public static func decode(_ payload: JSONValue) -> UISurfaceEvent? {
@@ -29,7 +30,7 @@ public struct UISurfaceEvent: Decodable, Sendable {
         guard !event.requestID.isEmpty else { return (nil, "request_id") }
         guard !event.surfaceID.isEmpty else { return (nil, "surface_id") }
         guard event.surfaceVersion > 0 else { return (nil, "surface_version") }
-        guard !event.awaitingInput || (event.taskID?.isEmpty == false && event.questionID?.isEmpty == false) else { return (nil, "input_binding") }
+        guard !event.taskQuestion || (event.taskID?.isEmpty == false && event.questionID?.isEmpty == false) else { return (nil, "input_binding") }
         guard !event.messages.isEmpty else { return (nil, "messages_empty") }
         guard case .createSurface = event.messages[0] else { return (nil, "first_not_createSurface") }
         for message in event.messages.dropFirst() {
@@ -61,7 +62,7 @@ public struct UISurfaceEvent: Decodable, Sendable {
     }
 
     public var diagnosticSummary: String {
-        return "container=\(container.rawValue);messages=\(messages.count);awaiting_input=\(awaitingInput ? 1 : 0)"
+        return "container=\(container.rawValue);messages=\(messages.count);task_question=\(taskQuestion ? 1 : 0)"
     }
 
     /// Cursor values are identifiers, never arbitrary payload text.
@@ -72,11 +73,11 @@ public struct UISurfaceEvent: Decodable, Sendable {
         if case let .string(value) = fields["container"], SurfaceKind(rawValue: value) != nil { container = value } else { container = "unknown" }
         let count: Int
         if case let .array(messages) = fields["messages"] { count = messages.count } else { count = 0 }
-        let awaiting: Int
-        if case let .bool(value) = fields["awaiting_input"] { awaiting = value ? 1 : 0 } else { awaiting = 0 }
+        let taskQuestion: Int
+        if case let .bool(value) = fields["task_question"] { taskQuestion = value ? 1 : 0 } else { taskQuestion = 0 }
         // Do not copy an opaque server string into diagnostics: only numeric cursors are safe.
         let safeCursor = !cursor.isEmpty && cursor.allSatisfy({ $0.isASCII && $0.isNumber }) ? String(cursor.prefix(48)) : "opaque"
-        return "container=\(container);messages=\(count);awaiting_input=\(awaiting);cursor=\(safeCursor)"
+        return "container=\(container);messages=\(count);task_question=\(taskQuestion);cursor=\(safeCursor)"
     }
 
     public var renderedIdempotencyKey: String {

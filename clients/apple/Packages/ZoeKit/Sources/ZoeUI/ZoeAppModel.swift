@@ -1650,7 +1650,7 @@ public final class ZoeAppModel: ObservableObject {
 
     private func shouldReplaySurface(_ event: UISurfaceEvent) -> Bool {
         let wasPresented = sessionPresentedSurfaces[event.surfaceID].map { isCurrentUIPresentation?($0) != false } ?? false
-        return SurfaceClosePolicy.shouldReplay(awaitingInput: event.awaitingInput, wasPresented: wasPresented)
+        return SurfaceClosePolicy.shouldReplay(taskQuestion: event.taskQuestion, wasPresented: wasPresented)
     }
 
     private func applyUISurface(_ event: UISurfaceEvent) async {
