@@ -8,16 +8,19 @@
   documentation maintenance, and [operations](docs/operations.md) for
   implementation entry points.
 
-## Preserve the approved design
+## Follow the design, record only what lasts
 
-- Implement the approved contracts; do not change them merely to match existing
-  code or make a check pass.
-- Report conflicts, missing requirements, and source-to-contract differences.
-  Obtain approval before changing intended product behavior.
-- Keep each rule in one authoritative location. Update its definition and
-  affected links when behavior changes; remove superseded normative text.
-- Write repository documentation in English for selective reading. Do not add
-  task journals, duplicated specifications, or historical verification logs.
+- Implement the approved contracts. Do not change a contract to match existing
+  code or to make a check pass; report conflicts, missing requirements and
+  source-to-contract differences, and get approval before changing intended
+  behavior.
+- Documentation records only key behavior, data flows, contracts and how the
+  system works, enough for an agent to act without reading the code. Leave out
+  simple implementation, presentation detail, task journals, change history,
+  option comparisons and verification logs.
+- Keep each rule in one authoritative location. When behavior changes, update
+  that definition and its links, and remove superseded text.
+- Write documentation in English for selective reading.
 
 ## Verify honestly
 
