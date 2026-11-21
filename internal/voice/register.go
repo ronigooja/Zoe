@@ -239,6 +239,8 @@ type RegisterLayers struct {
 }
 type registerTurn struct {
 	key        string
+	eventKind  string
+	eventID    string
 	eventOrder int64
 	at         time.Time
 	received   time.Time
@@ -328,7 +330,7 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 			return s, err
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT t.at,t.received_at,t.session_id,t.seq,t.role,t.text,'',0 FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id AND v.workspace_id=t.workspace_id WHERE v.workspace_id=? AND v.owner_id=? UNION ALL SELECT at,received_at,source_kind,0,role,text,source_id,rowid FROM voice_context_events WHERE workspace_id=? AND owner_id=?`, o.WorkspaceID, o.OwnerSubjectID, o.WorkspaceID, o.OwnerSubjectID)
+	rows, err := tx.QueryContext(ctx, `SELECT t.at,t.received_at,t.session_id,t.seq,t.role,t.text,'','',0 FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id AND v.workspace_id=t.workspace_id WHERE v.workspace_id=? AND v.owner_id=? UNION ALL SELECT at,received_at,session_id,0,role,text,source_kind,source_id,rowid FROM voice_context_events WHERE workspace_id=? AND owner_id=?`, o.WorkspaceID, o.OwnerSubjectID, o.WorkspaceID, o.OwnerSubjectID)
 	if err != nil {
 		return s, err
 	}
@@ -336,8 +338,7 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 		s.sourceCount++
 		var t registerTurn
 		var at, received string
-		var eventID string
-		if err = rows.Scan(&at, &received, &t.session, &t.seq, &t.role, &t.text, &eventID, &t.eventOrder); err != nil {
+		if err = rows.Scan(&at, &received, &t.session, &t.seq, &t.role, &t.text, &t.eventKind, &t.eventID, &t.eventOrder); err != nil {
 			rows.Close()
 			return s, err
 		}
@@ -355,7 +356,7 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 		// records even when their semantic timestamp precedes M.
 		t.key = fmt.Sprintf("turn:%q:%d", t.session, t.seq)
 		if t.eventOrder != 0 {
-			t.key = fmt.Sprintf("event:%q:%q", t.session, eventID)
+			t.key = fmt.Sprintf("event:%q:%q", t.eventKind, t.eventID)
 			s.currentEventWatermark = max(s.currentEventWatermark, t.eventOrder)
 		}
 		unseen := membership && !consumed[t.key]
@@ -377,7 +378,20 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 		if !a.at.Equal(b.at) {
 			return a.at.Before(b.at)
 		}
-		return a.key < b.key
+		// Equal-time events precede turns; turn sequence ordering is numeric.
+		if (a.eventKind != "") != (b.eventKind != "") {
+			return a.eventKind != ""
+		}
+		if a.eventKind != "" {
+			if a.eventKind != b.eventKind {
+				return a.eventKind < b.eventKind
+			}
+			return a.eventID < b.eventID
+		}
+		if a.session != b.session {
+			return a.session < b.session
+		}
+		return a.seq < b.seq
 	})
 	for _, t := range s.turns {
 		late := t.received.After(s.BuiltAt)

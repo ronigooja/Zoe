@@ -122,6 +122,38 @@ func TestRegisterEventMergeCoverageWatermarkFingerprintAndFence(t *testing.T) {
 	}
 }
 
+func TestRegisterEqualTimestampNumericTurnAndEventOrder(t *testing.T) {
+	f := newRegisterFixture(t)
+	at := f.now.Add(-2 * time.Hour)
+	f.turn("handoff-session", 10, "assistant", "ten", at)
+	f.turn("handoff-session", 9, "user", "nine", at)
+	f.event("ui_feedback", "a", "feedback", at)
+	f.event("task_result", "z", "result z", at)
+	f.event("task_result", "a", "result a", at)
+	s, err := f.r.snapshot(context.Background(), f.owner, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`event:"task_result":"a"`, `event:"task_result":"z"`, `event:"ui_feedback":"a"`, `turn:"handoff-session":9`, `turn:"handoff-session":10`}
+	if len(s.turns) != len(want) {
+		t.Fatalf("sources=%d", len(s.turns))
+	}
+	for i, turn := range s.turns {
+		if turn.key != want[i] {
+			t.Fatalf("source %d=%s want=%s", i, turn.key, want[i])
+		}
+		if turn.session != "handoff-session" {
+			t.Fatalf("source %s session=%q", turn.key, turn.session)
+		}
+	}
+	if !f.rebuild(f.now) {
+		t.Fatal("no compact")
+	}
+	if strings.Index(f.inputs[0], "user: nine") > strings.Index(f.inputs[0], "assistant: ten") {
+		t.Fatal("compact reversed numeric turn order")
+	}
+}
+
 func TestVoiceInputEventsAtomicUnwrappedAndIdempotent(t *testing.T) {
 	for _, kind := range []string{"user_text", "ui_input_request", "ui_input_received"} {
 		t.Run(kind, func(t *testing.T) {

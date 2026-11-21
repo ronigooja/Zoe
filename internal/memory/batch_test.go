@@ -197,6 +197,28 @@ func ingestWorker(t *testing.T, handler func(http.ResponseWriter, *http.Request)
 	return client
 }
 
+func TestMemoryEqualTimestampNumericTurnAndEventOrder(t *testing.T) {
+	db, _, now := ingestFixture(t)
+	at := now.Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',10,'assistant','ten',?),('workspace','session',9,'user','nine',?);
+INSERT INTO voice_context_events VALUES('workspace','owner','session','ui_feedback','a','background','feedback',?,?),('workspace','owner','session','task_result','z','background','result z',?,?),('workspace','owner','session','task_result','a','background','result a',?,?)`, at, at, at, at, at, at, at, at); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := batchSources(context.Background(), db, "workspace", "owner", time.Time{}, now, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`event:"task_result":"a"`, `event:"task_result":"z"`, `event:"ui_feedback":"a"`, `turn:"session":9`, `turn:"session":10`}
+	if len(entries) != len(want) {
+		t.Fatalf("sources=%d", len(entries))
+	}
+	for i, entry := range entries {
+		if entry.source != want[i] {
+			t.Fatalf("source %d=%s want=%s", i, entry.source, want[i])
+		}
+	}
+}
+
 func TestMemoryIngestTranscriptEventsWindowAndCadence(t *testing.T) {
 	db, repo, now := ingestFixture(t)
 	for _, turn := range []struct {

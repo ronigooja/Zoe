@@ -27,11 +27,12 @@ type ingestClient interface {
 }
 
 type batchEntry struct {
-	at     time.Time
-	id     string
-	seq    int64
-	text   string
-	source string
+	eventKind string
+	at        time.Time
+	id        string
+	seq       int64
+	text      string
+	source    string
 }
 
 // BoundaryAt returns the last successful worker ingestion boundary, without
@@ -107,15 +108,15 @@ func batchSources(ctx context.Context, q batchQuerier, workspace, principal stri
 	}
 	for rows.Next() {
 		var e batchEntry
-		var at, kind, role, text string
-		if err = rows.Scan(&kind, &e.id, &at, &role, &text); err != nil {
+		var at, role, text string
+		if err = rows.Scan(&e.eventKind, &e.id, &at, &role, &text); err != nil {
 			break
 		}
 		e.at, err = time.Parse(time.RFC3339Nano, at)
 		if err != nil {
 			break
 		}
-		e.source = fmt.Sprintf("event:%q:%q", kind, e.id)
+		e.source = fmt.Sprintf("event:%q:%q", e.eventKind, e.id)
 		if !seen[e.source] && (unseen || e.at.After(from)) && !e.at.After(until) {
 			e.text = fmt.Sprintf("[%s] %s: %s\n", e.at.UTC().Format(time.RFC3339Nano), role, text)
 			events = append(events, e)
@@ -134,7 +135,17 @@ func batchSources(ctx context.Context, q batchQuerier, workspace, principal stri
 			if !a.at.Equal(b.at) {
 				return a.at.Before(b.at)
 			}
-			return a.source < b.source
+			// Equal-time events precede turns; turn sequence ordering is numeric.
+			if (a.eventKind != "") != (b.eventKind != "") {
+				return a.eventKind != ""
+			}
+			if a.eventKind != b.eventKind {
+				return a.eventKind < b.eventKind
+			}
+			if a.id != b.id {
+				return a.id < b.id
+			}
+			return a.seq < b.seq
 		})
 	}
 	entries := append(turns, events...)
