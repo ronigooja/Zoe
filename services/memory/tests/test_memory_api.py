@@ -13,7 +13,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from services.memory.memory_api import LOG, MemoryAPIServer, create_memory_api
-from services.memory.person_memory import INGEST_INSTRUCTIONS, PersonMemory, WRITE_INSTRUCTIONS, person_user_id
+from services.memory.person_memory import PersonMemory, person_user_id
+from services.memory.prompts import MemoryPrompts
+
+PROMPTS = MemoryPrompts("fixture ingest policy", "fixture write policy", "fixture custom policy")
 from services.memory.worker import configure_logging
 from services.memory.responses_llm import ResponsesLLM, UpstreamUnauthorized
 
@@ -126,7 +129,7 @@ class FakeMemory:
 class MemoryAPITests(unittest.TestCase):
     def setUp(self):
         self.memory = FakeMemory()
-        self.backend = PersonMemory(self.memory)
+        self.backend = PersonMemory(self.memory, PROMPTS)
         self.server = MemoryAPIServer(("127.0.0.1", 0), self.backend, "secret-marker", 2)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -242,7 +245,7 @@ class MemoryAPITests(unittest.TestCase):
             self.assertEqual(self.request("/v1/memory/ingest", {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": "transcript"}),
                              (502, {"error_kind": "ingest_unplanned"}))
         add.assert_called_once_with("transcript", user_id=person_user_id("u"), infer=True,
-                                    prompt=INGEST_INSTRUCTIONS)
+                                    prompt=PROMPTS.memory_ingest)
 
     def test_ingest_person_isolation_and_ownership_history(self):
         self.memory.llm.generate_response.return_value = '{"memory":[{"text":"private-fact"}]}'
@@ -299,7 +302,7 @@ class MemoryAPITests(unittest.TestCase):
                 # active until that server thread has emitted the request log.
                 self.assertTrue(request_logged.wait(2), "request log was not emitted")
             output = "\n".join(logs.output)
-            for content in ("private-transcript", "private-fact", INGEST_INSTRUCTIONS):
+            for content in ("private-transcript", "private-fact", PROMPTS.memory_ingest):
                 self.assertEqual(content in output, level.lower() == "debug")
             for private in ("secret-marker", "workspace/owner"):
                 self.assertNotIn(private, output)
@@ -432,7 +435,7 @@ class MemoryAPITests(unittest.TestCase):
                 self.assertNotIn("workspace/owner", output)
                 self.assertEqual("model_input=" in output, level == "debug")
                 self.assertEqual("model_output=" in output, level == "debug")
-                self.assertEqual(WRITE_INSTRUCTIONS in output, level == "debug")
+                self.assertEqual(PROMPTS.memory_write in output, level == "debug")
                 self.assertIn("memory_api llm_call component=memory_write status=ok error_kind=none elapsed_ms=", output)
                 self.assertIn("memory_api request kind=write status=200 elapsed_ms=", output)
         finally:

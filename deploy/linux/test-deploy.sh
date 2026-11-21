@@ -367,6 +367,14 @@ with tempfile.TemporaryDirectory() as directory:
     (release/'prompts/register.txt').write_text('fixture')
     validate()
     assert not pathlib.Path(prompt_dir).exists()
+    config['services']['zoe-memory-worker']['volumes'].append(dict(mount))
+    validate()
+    worker_mount = config['services']['zoe-memory-worker']['volumes'][-1]
+    for key, value in [('source',str(root/'other')), ('target',str(root/'other')), ('read_only',False)]:
+        original = worker_mount[key]; worker_mount[key] = value
+        reject()
+        worker_mount[key] = original
+    config['services']['zoe-memory-worker']['volumes'].pop()
     reject('relative')
     reject(str(root/'other/../prompts-host'))
     for key, value in [('source',str(root/'other')), ('target',str(root/'other')), ('read_only',False)]:
@@ -582,7 +590,7 @@ for revision in [old, new]:
 root = p/'source'
 case = os.environ['CASE']
 (root/'prompts').mkdir()
-for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction', 'task_summary']:
+for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction', 'task_summary', 'memory_ingest', 'memory_write', 'memory_custom']:
     (root/'prompts'/(name+'.txt')).write_text('PROMPT_SECRET_SENTINEL '+name+'\n')
 if case == 'prompt-missing': (root/'prompts/register.txt').unlink()
 if case in ['prompt-keep', 'prompt-overwrite', 'prompt-identical', 'prompt-dry']:
@@ -901,6 +909,9 @@ deploy
 [[ "$(cat "$FIXTURE/prompts/register.txt")" == 'old content' ]]
 [[ -f "$FIXTURE/prompts/compact.txt" ]]
 [[ -f "$FIXTURE/prompts/task_summary.txt" ]]
+for name in memory_ingest memory_write memory_custom; do
+  [[ -f "$FIXTURE/prompts/$name.txt" ]]
+done
 [[ "$(stat -c '%a:%u:%g' "$FIXTURE/prompts/compact.txt")" == 644:0:0 ]]
 grep -q 'action=keep(differs)' "$FIXTURE/logs/$new.log"
 fixture prompt-overwrite

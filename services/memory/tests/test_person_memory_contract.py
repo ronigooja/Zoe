@@ -13,6 +13,9 @@ from unittest.mock import Mock, patch
 
 from services.memory.person_memory import MemoryAPIError, PersonMemory
 from services.memory.memory_api import MemoryAPIHandler
+from services.memory.prompts import MemoryPrompts
+
+PROMPTS = MemoryPrompts("fixture ingest policy", "fixture write policy", "fixture custom policy")
 
 
 class PersonMemoryContractTests(unittest.TestCase):
@@ -56,7 +59,7 @@ class PersonMemoryContractTests(unittest.TestCase):
             add=Mock(return_value={"results": [{"event": "ADD"}]}),
             llm=SimpleNamespace(generate_response=Mock(return_value='{"operations":[]}')),
         )
-        self.backend = PersonMemory(self.memory)
+        self.backend = PersonMemory(self.memory, PROMPTS)
         self.memory.add.side_effect = self.inferred_add
         self.memory.update = Mock(side_effect=self.update_memory)
         self.addCleanup(lambda: self.db.connection.close())
@@ -77,7 +80,7 @@ class PersonMemoryContractTests(unittest.TestCase):
                 update=self.raw_update, search=lambda *a, **k: self.existing_vectors),
             _delete_memory=Mock(), search=old.search, add=old.add, llm=old.llm,
             update=Mock(side_effect=self.update_memory))
-        self.backend = PersonMemory(self.memory)
+        self.backend = PersonMemory(self.memory, PROMPTS)
 
     def raw_update(self, *, vector_id, vector, payload):
         return self.raw_insert(ids=[vector_id], vectors=[vector], payloads=[payload])

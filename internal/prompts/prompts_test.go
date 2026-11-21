@@ -23,28 +23,47 @@ func fixture(t *testing.T) string {
 }
 
 func TestLoadFailures(t *testing.T) {
-	for _, tc := range []struct{ name, data, category string }{
-		{"missing", "", "prompt_missing"},
-		{"empty", "", "prompt_empty"},
-		{"newline", "\n", "prompt_empty"},
-		{"invalid", "\xffsecret", "prompt_invalid_utf8"},
-		{"large", strings.Repeat("x", 16001), "prompt_too_large"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := fixture(t)
-			path := filepath.Join(dir, "register.txt")
-			if tc.name == "missing" {
-				if err := os.Remove(path); err != nil {
+	for _, name := range Names() {
+		for _, tc := range []struct{ name, data, category string }{
+			{"missing", "", "prompt_missing"},
+			{"empty", "", "prompt_empty"},
+			{"newline", "\n", "prompt_empty"},
+			{"invalid", "\xffsecret", "prompt_invalid_utf8"},
+			{"large", strings.Repeat("x", 16001), "prompt_too_large"},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				dir := fixture(t)
+				path := filepath.Join(dir, name+".txt")
+				if tc.name == "missing" {
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(path, []byte(tc.data), 0600); err != nil {
 					t.Fatal(err)
 				}
-			} else if err := os.WriteFile(path, []byte(tc.data), 0600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := Load(dir)
-			if err == nil || err.Error() != tc.category+": register" {
-				t.Fatalf("error = %v", err)
-			}
-		})
+				_, err := Load(dir)
+				if err == nil || err.Error() != tc.category+": "+name {
+					t.Fatalf("error = %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRequiredMemoryPrompts(t *testing.T) {
+	if len(Names()) != 10 {
+		t.Fatal("expected ten required prompts")
+	}
+	dir := fixture(t)
+	s, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"memory_ingest", "memory_write", "memory_custom"} {
+		path, size, ok := s.Metadata(name)
+		if !ok || path != filepath.Join(dir, name+".txt") || size != 6 {
+			t.Fatalf("unexpected metadata for %s", name)
+		}
 	}
 }
 

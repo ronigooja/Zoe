@@ -9,7 +9,7 @@ mkdir "$task/shims"
 git clone --quiet --shared "$repo" "$task/input"
 cp "$repo/deploy/linux/build-release.sh" "$task/input/deploy/linux/"
 mkdir -p "$task/input/deploy/prompts"
-for name in ui_controller register compact steward task_ui_display voice_instruction; do
+for name in ui_controller register compact steward task_ui_display voice_instruction task_summary memory_ingest memory_write memory_custom; do
   printf 'fixture %s\n' "$name" > "$task/input/deploy/prompts/$name.txt"
 done
 git -C "$task/input" add deploy/prompts deploy/linux/build-release.sh
@@ -76,7 +76,7 @@ with tarfile.open(root/'server-linux-amd64.tar.gz') as tar:
     manifest=json.load(tar.extractfile('./release-manifest.json'))
     assert len(manifest['images'])==3
     sums=tar.extractfile('./SHA256SUMS').read().decode()
-    for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction', 'task_summary']:
+    for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction', 'task_summary', 'memory_ingest', 'memory_write', 'memory_custom']:
         path='prompts/'+name+'.txt'; data=tar.extractfile('./'+path).read()
         digest=hashlib.sha256(data).hexdigest()
         assert digest+'  '+path in sums.splitlines()

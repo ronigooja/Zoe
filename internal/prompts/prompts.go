@@ -13,7 +13,7 @@ import (
 const DefaultDir = "/etc/zoe/prompts"
 const MaxBytes = 16000
 
-var names = [...]string{"ui_controller", "register", "compact", "steward", "task_ui_display", "voice_instruction", "task_summary"}
+var names = [...]string{"ui_controller", "register", "compact", "steward", "task_ui_display", "voice_instruction", "task_summary", "memory_ingest", "memory_write", "memory_custom"}
 
 // Names returns the required prompt names in startup order.
 func Names() []string { return append([]string(nil), names[:]...) }

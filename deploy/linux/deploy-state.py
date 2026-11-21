@@ -251,7 +251,7 @@ def validate(release, env, units, current_prefix, prompt_dir):
                 if service == 'qdrant' and volume.get('target') == '/qdrant/storage' and volume['source'] == storage:
                     continue
                 prompts = root / 'prompts'
-                if (service == 'zoe-server' and volume['source'] == prompt_dir and
+                if (service in ('zoe-server', 'zoe-memory-worker') and volume['source'] == prompt_dir and
                         volume.get('target') == prompt_dir and volume.get('read_only') is True and
                         prompts.is_dir() and any(p.is_file() and p.stat().st_size > 0 for p in prompts.iterdir())):
                     continue

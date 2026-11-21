@@ -13,7 +13,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from services.memory.person_memory import INGEST_INSTRUCTIONS, WRITE_INSTRUCTIONS, PersonMemory, person_user_id
+from services.memory.person_memory import PersonMemory, person_user_id
+from services.memory.prompts import MemoryPrompts
+
+PROMPTS = MemoryPrompts("fixture ingest policy", "fixture write policy", "fixture custom policy")
 
 
 @unittest.skipUnless(os.environ.get("ZOE_TEST_PINNED_MEM0") == "1", "designated Linux pinned-dependency test")
@@ -86,7 +89,7 @@ class PinnedWriteRecoveryTests(unittest.TestCase):
         memory.vector_store = SimpleNamespace(insert=insert, update=update, get=get,
             search=lambda **kwargs: [], list=lambda **kwargs: ([], None))
         self.memory = memory
-        self.backend = PersonMemory(memory)
+        self.backend = PersonMemory(memory, PROMPTS)
 
     def restart(self):
         self.memory.db.connection.close()
@@ -124,7 +127,7 @@ class PinnedWriteRecoveryTests(unittest.TestCase):
                 self.assertEqual(intent["preimage"]["data"] if replace else intent["preimage"],
                                  "new" if replace else None)
                 messages = self.memory.llm.generate_response.call_args.args[0]
-                self.assertEqual(messages[0]["content"], WRITE_INSTRUCTIONS)
+                self.assertEqual(messages[0]["content"], PROMPTS.memory_write)
                 self.assertEqual(json.loads(messages[1]["content"])["request"], "request")
                 calls = len(self.calls)
                 self.restart()
@@ -142,7 +145,7 @@ class PinnedWriteRecoveryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.backend.ingest("owner", "batch", "chunk", "source", time.monotonic() + 5)
         messages = self.memory.llm.generate_response.call_args.kwargs["messages"]
-        self.assertIn(INGEST_INSTRUCTIONS, messages[1]["content"])
+        self.assertIn(PROMPTS.memory_ingest, messages[1]["content"])
         records = json.loads(self.memory.db.connection.execute("SELECT manifest FROM zoe_person_ingest_manifests").fetchone()[0])
         self.assertEqual(len(records), 2)
         self.assertEqual(len(self.calls), 1)

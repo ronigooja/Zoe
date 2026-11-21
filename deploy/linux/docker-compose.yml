@@ -168,6 +168,10 @@ services:
       ZOE_MEM0_HISTORY_DB: /var/lib/zoe/memory/mem0-history.sqlite
     volumes:
       - type: bind
+        source: /etc/zoe/prompts
+        target: /etc/zoe/prompts
+        read_only: true
+      - type: bind
         source: ${ZOE_MEMORY_DATA_ROOT:?set a private memory data root}
         target: /var/lib/zoe/memory
     secrets:

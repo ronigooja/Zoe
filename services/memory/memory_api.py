@@ -207,4 +207,4 @@ def create_memory_api(controlled: Any) -> MemoryAPIServer:
     timeout = float(os.environ.get("ZOE_MEMORY_API_TIMEOUT_SECONDS", "60"))
     if not 0 < timeout <= 120:
         raise ValueError("memory API timeout must be positive and at most 120 seconds")
-    return MemoryAPIServer((host, int(port)), PersonMemory(controlled.memory), token, timeout)
+    return MemoryAPIServer((host, int(port)), PersonMemory(controlled.memory, controlled.prompts), token, timeout)

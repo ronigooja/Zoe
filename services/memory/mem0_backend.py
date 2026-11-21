@@ -11,6 +11,7 @@ os.environ["MEM0_TELEMETRY"] = "false"
 from mem0 import Memory
 
 from .config import WorkerConfig
+from .prompts import MemoryPrompts
 from .embedding import LocalEmbedder
 from .mem0_embedder import register_pinned_embedder
 from .responses_llm import register_responses_provider
@@ -19,8 +20,9 @@ from .responses_llm import register_responses_provider
 class ControlledMem0:
     """Construct the pinned Mem0 backend used by the person memory API."""
 
-    def __init__(self, config: WorkerConfig, embedder: LocalEmbedder | None = None):
+    def __init__(self, config: WorkerConfig, prompts: MemoryPrompts, embedder: LocalEmbedder | None = None):
         self.config = config
+        self.prompts = prompts
         if embedder is None:
             embedder = LocalEmbedder(config.embedder_model, config.embedder_revision, config.embedding_dimensions)
         register_pinned_embedder(embedder)
@@ -59,10 +61,7 @@ class ControlledMem0:
             },
             "llm": llm_config,
             "history_db_path": str(history_path),
-            "custom_instructions": (
-                "Extract only stable facts directly supported by the current source. "
-                "Never treat retrieved memories as evidence for a new fact. Do not infer preferences or identity."
-            ),
+            "custom_instructions": prompts.memory_custom,
         })
         os.chmod(history_path, 0o600)
         self.memory.db.connection.execute("PRAGMA journal_mode=WAL")
