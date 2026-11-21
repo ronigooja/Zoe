@@ -15,7 +15,7 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 ## Required behavior
 
-Successful write is silent. Empty retrieval appends nothing. No new content makes no worker call. Call opening reads persisted compact plus raw without waiting for a new model/ingestion call.
+Successful write is silent. Empty retrieval appends nothing. No new content makes no worker call. [Call opening](results.md#required-behavior) reads persisted Register context without waiting for a new model or ingestion call.
 
 ## Persistence and idempotency
 

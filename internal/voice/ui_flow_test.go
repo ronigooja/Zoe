@@ -387,10 +387,6 @@ func TestUIFeedbackContinuity(t *testing.T) {
 	if status != "delivered" || attempts != 1 || r.posts.Load() != 1 {
 		t.Fatalf("%s/%d posts=%d", status, attempts, r.posts.Load())
 	}
-	opening := r.svc.buildAVASOpeningContext(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "owner"})
-	if len(opening.Items) != 1 || opening.Items[0].Text != "Shown text" || opening.Items[0].Role != "user" {
-		t.Fatalf("opening=%+v", opening)
-	}
 }
 
 func TestUIFeedbackGatewayRetries(t *testing.T) {
@@ -463,21 +459,16 @@ func TestUIModelRetries(t *testing.T) {
 	}
 }
 
-func TestUIOpeningFeedbackOrderAndBudget(t *testing.T) {
+func TestUIOpeningHasNoStandaloneFeedbackGroup(t *testing.T) {
 	r := newDeliveryRig(t)
 	for i, id := range []string{"old", "new"} {
 		at := r.now().Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)
-		r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES(?,'default','owner','register',?,?)`, id, at, at)
-		r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,status,created_at,updated_at) VALUES(?,'default','owner',?,'delivered',?,?)`, id, id, at, at)
+		r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES(?,'default','user-1','register',?,?)`, id, at, at)
+		r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,status,created_at,updated_at) VALUES(?,'default','user-1',?,'delivered',?,?)`, id, id, at, at)
 	}
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner"}
-	opening := r.svc.buildAVASOpeningContext(context.Background(), p)
-	if len(opening.Items) != 2 || opening.Items[0].Text != "old" || opening.Items[1].Text != "new" {
-		t.Fatalf("items=%+v", opening.Items)
-	}
-	r.svc.openingBudget = 3
-	opening = r.svc.buildAVASOpeningContext(context.Background(), p)
-	if len(opening.Items) != 1 || opening.Items[0].Text != "new" {
+	r.seedCall(t, "opening", "user-1", 1)
+	opening := reserveTestOpening(t, r, "opening")
+	if len(opening.Items) != 0 {
 		t.Fatalf("budget items=%+v", opening.Items)
 	}
 }

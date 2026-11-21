@@ -243,6 +243,18 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 				if _, err := store.DB().Exec(`UPDATE event_counters SET current_cursor=current_cursor+1 WHERE workspace_id='default'`); err != nil {
 					t.Fatal(err)
 				}
+				if mode == "show" || mode == "report" {
+					if _, err := store.DB().Exec(`INSERT INTO voice_result_deliveries(entry_id,workspace_id,task_id,run_id,subject_id,status,next_attempt_at,created_at,updated_at) SELECT 'older',workspace_id,id,'redisplay-run',owner_subject_id,'pending','9999','now','now' FROM tasks WHERE id=?`, target); err != nil {
+						t.Fatal(err)
+					}
+					openingState := "consumed"
+					if mode == "report" {
+						openingState = "reserved"
+					}
+					if _, err := store.DB().Exec(`INSERT INTO voice_result_opening(entry_id,session_id,text,state,created_at) VALUES('older','handoff-session','silent result',?,'now')`, openingState); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
 			count := func(query string) int {
 				t.Helper()
@@ -273,6 +285,9 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 			wantAction := string(steward.ActionRedisplay)
 			if mode == "report" {
 				wantAction = string(steward.ActionReport)
+				if count(`SELECT count(*) FROM voice_result_deliveries WHERE entry_id='older' AND status='pending' AND last_error_code=''`) != 1 {
+					t.Fatal("report changed a reserved result's pending state")
+				}
 			}
 			if storedAction != wantAction {
 				t.Fatalf("stored action=%q want=%q", storedAction, wantAction)

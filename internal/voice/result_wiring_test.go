@@ -2,48 +2,42 @@ package voice
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
-
-	"github.com/ronigooja/Zoe/contracts"
 )
 
-func TestResultWiringDisabledAndOpeningAvailability(t *testing.T) {
+func TestResultWiringOpeningFencesVoiceDispatch(t *testing.T) {
 	r := checkpointRig(t)
 	r.setup(t, "Full authoritative result, not a summary.")
-	r.run(t)
-	status, _, _ := r.row(t, "entry-1")
-	if status != "pending" || r.posts.Load() != 0 {
-		t.Fatalf("default sent status=%s posts=%d", status, r.posts.Load())
-	}
+	ctx := context.Background()
+	r.svc.consumeResultEvents(ctx)
 	r.seedCall(t, "opening", "user-1", 1)
-	r.svc.openingBudget = 10000
-	principal := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
-	opening := r.svc.buildAVASOpeningContext(context.Background(), principal)
-	if len(opening.PendingResults) != 1 || opening.PendingResults[0].EntryID != "entry-1" {
-		t.Fatalf("pending=%+v", opening.PendingResults)
+	opening := reserveTestOpening(t, r, "opening")
+	if len(opening.Items) != 1 {
+		t.Fatal(opening.Items)
 	}
-	receipt := &openingContextResult{Applied: true, Silent: true, Version: opening.Version, ContentHash: "wrong"}
-	if err := r.svc.acknowledgeOpeningResults(context.Background(), principal, "opening", 1, opening, receipt); err != nil {
+	assertExcluded := func() {
+		t.Helper()
+		r.svc.dispatchResults(ctx)
+		adapter := &checkpointAdapter{}
+		r.checkpointSend(adapter)
+		if status, _, attempts := r.row(t, "entry-1"); status != "pending" || attempts != 0 || r.posts.Load() != 0 || adapter.submits != 0 {
+			t.Fatalf("status=%s attempts=%d HTTP posts=%d direct submits=%d", status, attempts, r.posts.Load(), adapter.submits)
+		}
+		if err := r.svc.SelectPendingResult(ctx, openingTestOwner, "entry-1", "opening", 1); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("explicit selection = %v", err)
+		}
+		pending, err := pendingResultsForContext(ctx, r.store.DB(), "default", "user-1")
+		if err != nil || len(pending) != 0 {
+			t.Fatalf("pending=%+v error=%v", pending, err)
+		}
+	}
+	assertExcluded()
+	if err := acknowledgeTestOpening(r, "opening", opening, appliedTestOpening(opening)); err != nil {
 		t.Fatal(err)
 	}
-	var n int
-	r.store.DB().QueryRow(`SELECT count(*) FROM voice_result_availability`).Scan(&n)
-	if n != 0 {
-		t.Fatal("wrong receipt accepted")
-	}
-	receipt.ContentHash = openingContextHash(opening)
-	if err := r.svc.acknowledgeOpeningResults(context.Background(), principal, "opening", 1, opening, receipt); err != nil {
-		t.Fatal(err)
-	}
-	r.store.DB().QueryRow(`SELECT count(*) FROM voice_result_availability WHERE entry_id='entry-1' AND session_id='opening' AND generation=1`).Scan(&n)
-	if n != 1 {
-		t.Fatal("availability missing")
-	}
-	status, _, _ = r.row(t, "entry-1")
-	if status != "pending" {
-		t.Fatal("availability marked delivered")
-	}
-	if err := r.svc.acknowledgeOpeningResults(context.Background(), principal, "opening", 2, opening, receipt); err == nil {
-		t.Fatal("wrong session generation accepted")
-	}
+	assertExcluded()
+	r.exec(t, `UPDATE voice_sessions SET state='ended' WHERE id='opening'`)
+	assertExcluded()
 }

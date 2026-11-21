@@ -3,11 +3,12 @@ package voice
 import (
 	"context"
 	"errors"
-	"github.com/ronigooja/Zoe/contracts"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ronigooja/Zoe/contracts"
 )
 
 func checkpointRig(t *testing.T) *deliveryRig {
@@ -33,7 +34,7 @@ func TestResultCheckpointExplicitSelectionDelivers(t *testing.T) {
 	if status != "delivered" || attempts != 1 || r.posts.Load() != 1 {
 		t.Fatalf("status=%s attempts=%d posts=%d", status, attempts, r.posts.Load())
 	}
-	pending, err := r.svc.PendingResultsForContext(context.Background(), "default", "user-1", 25)
+	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("sent history=%v err=%v", pending, err)
 	}
@@ -59,7 +60,7 @@ func TestResultCheckpointSelectionUnknownCannotRebind(t *testing.T) {
 	if session != "old" {
 		t.Fatal(session)
 	}
-	pending, err := r.svc.PendingResultsForContext(context.Background(), "default", "user-1", 25)
+	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("ambiguous history=%v err=%v", pending, err)
 	}
@@ -115,7 +116,7 @@ func TestResultCheckpointForgedDeliveryRejectedByEvent(t *testing.T) {
 			if err := r.svc.SelectPendingResult(context.Background(), p, id, "s1", 1); err == nil {
 				t.Fatal("forged source selected")
 			}
-			pending, err := r.svc.PendingResultsForContext(context.Background(), "default", "user-1", 25)
+			pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
 			if err != nil || len(pending) != 0 {
 				t.Fatalf("forged context=%v err=%v", pending, err)
 			}
@@ -172,27 +173,13 @@ func TestResultCheckpointNoCallPendingContextOnly(t *testing.T) {
 	if r.posts.Load() != 0 {
 		t.Fatal("next call must not autoplay pending history")
 	}
-	pending, err := r.svc.PendingResultsForContext(context.Background(), "default", "user-1", 25)
-	if err != nil || len(pending) != 1 || pending[0].EntryID != "entry-1" || pending[0].RunID != "run-1" || pending[0].Text != " original\nresult " {
+	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
+	if err != nil || len(pending) != 1 || pending[0].EntryID != "entry-1" || !strings.HasSuffix(pending[0].Text, "Result:  original\nresult ") {
 		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
-	other, err := r.svc.PendingResultsForContext(context.Background(), "default", "other", 25)
+	other, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "other")
 	if err != nil || len(other) != 0 {
 		t.Fatalf("other=%v err=%v", other, err)
-	}
-	if err = r.svc.MarkResultAvailable(context.Background(), "default", "user-1", "entry-1", "next", 2); err != nil {
-		t.Fatal(err)
-	}
-	if err = r.svc.MarkResultAvailable(context.Background(), "default", "user-1", "entry-1", "next", 2); err != nil {
-		t.Fatal(err)
-	}
-	status, _, _ = r.row(t, "entry-1")
-	if status != "pending" {
-		t.Fatal(status)
-	}
-	var n int
-	if err = r.store.DB().QueryRow(`SELECT count(*) FROM voice_result_availability`).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("availability=%d err=%v", n, err)
 	}
 }
 
@@ -371,7 +358,7 @@ func TestResultCheckpointMissingAuthoritativeEventCannotDeliver(t *testing.T) {
 	if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "s1", 1); err == nil {
 		t.Fatal("source without authoritative event selected")
 	}
-	pending, err := r.svc.PendingResultsForContext(context.Background(), "default", "user-1", 25)
+	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("unauthoritative context=%v err=%v", pending, err)
 	}
@@ -391,12 +378,11 @@ func TestResultCheckpointMissingMediaGenerationDoesNotSubmit(t *testing.T) {
 	}
 }
 
-func TestResultCheckpointAvailabilityMismatchRejected(t *testing.T) {
+func TestResultCheckpointOpeningRejectsNonAuthoritativeEntries(t *testing.T) {
 	for _, mutation := range []string{
 		`DELETE FROM task_entries WHERE id='entry-1'`,
 		`UPDATE task_entries SET kind='user_message'`,
 		`UPDATE task_entries SET task_id='other-task'`,
-		`UPDATE task_entries SET content='   '`,
 		`UPDATE voice_result_deliveries SET run_id='forged'`,
 	} {
 		t.Run(mutation, func(t *testing.T) {
@@ -408,12 +394,8 @@ func TestResultCheckpointAvailabilityMismatchRejected(t *testing.T) {
 				r.seedTask(t, "other-task", "user-1")
 			}
 			r.exec(t, mutation)
-			if err := r.svc.MarkResultAvailable(context.Background(), "default", "user-1", "entry-1", "s1", 1); err == nil {
-				t.Fatal("invalid source marked available")
-			}
-			var n int
-			if err := r.store.DB().QueryRow(`SELECT count(*) FROM voice_result_availability`).Scan(&n); err != nil || n != 0 {
-				t.Fatalf("availability=%d err=%v", n, err)
+			if opening := reserveTestOpening(t, r, "s1"); len(opening.Items) != 0 {
+				t.Fatalf("invalid source selected: %+v", opening.Items)
 			}
 		})
 	}

@@ -33,6 +33,36 @@ CREATE TABLE voice_text_chunks (
  PRIMARY KEY(workspace_id,owner_id,source_kind,source_id,ordinal),
  FOREIGN KEY(workspace_id,owner_id,source_kind,source_id) REFERENCES voice_text_checkpoints(workspace_id,owner_id,source_kind,source_id));`
 
+// A new conversation needs the whole reply, including any prefix accepted in
+// the closed call. Incrementing the old claim fences its late receipt writers.
+func rebindFastReplyCheckpoint(ctx context.Context, tx *sql.Tx, workspace, id, hash string, dest fastReplyDestination) error {
+	var old fastReplyDestination
+	var oldHash string
+	var claim int64
+	err := tx.QueryRowContext(ctx, `SELECT session_id,generation,gateway_session_id,media_generation,content_hash,claim FROM voice_text_checkpoints WHERE workspace_id=? AND owner_id=? AND source_kind='fast_reply' AND source_id=?`, workspace, dest.owner, id).Scan(&old.session, &old.generation, &old.gateway, &old.media, &oldHash, &claim)
+	if err == sql.ErrNoRows {
+		return nil // deliverDurableText creates the first binding.
+	}
+	if err != nil {
+		return err
+	}
+	if oldHash != hash {
+		return errors.New("fast_reply_source_changed")
+	}
+	if old.session == dest.session && old.generation == dest.generation {
+		return nil // Same conversation: retain the existing chunk progress.
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE voice_text_checkpoints AS c SET session_id=?,generation=?,gateway_session_id=?,media_generation=?,claim=claim+1,lease_until='' WHERE workspace_id=? AND owner_id=? AND source_kind='fast_reply' AND source_id=? AND session_id=? AND generation=? AND gateway_session_id=? AND media_generation=? AND claim=? AND NOT EXISTS(SELECT 1 FROM voice_sessions v WHERE v.id=c.session_id AND v.generation=c.generation AND v.state='active')`, dest.session, dest.generation, dest.gateway, dest.media, workspace, dest.owner, id, old.session, old.generation, old.gateway, old.media, claim)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return errors.New("fast_reply_destination_fenced")
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM voice_text_chunks WHERE workspace_id=? AND owner_id=? AND source_kind='fast_reply' AND source_id=?`, workspace, dest.owner, id)
+	return err
+}
+
 // deliverDurableText applies to persisted non-task speech sources. No transaction
 // is held during HTTP. Attempted chunks are reconciled, never blindly resubmitted.
 func (s *Service) deliverDurableText(ctx context.Context, workspace, owner, kind, id, session string, generation int64, text string) (bool, string) {

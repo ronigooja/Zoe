@@ -379,7 +379,7 @@ func TestFastReplyLongTextChunks(t *testing.T) {
 	text := " \n\t" + strings.Repeat("界🙂", 10000) + "\x00\n "
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('reply','default','s1',1,'turn',?,'pending',?,?,?)`, text, at, at, at)
-	r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, text, "task_report", 0)
+	r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, 0)
 	assertContextChunks(t, r.texts, text)
 	var status string
 	if err := r.store.DB().QueryRow(`SELECT status FROM voice_fast_replies WHERE id='reply'`).Scan(&status); err != nil || status != "delivered" {

@@ -177,7 +177,7 @@ func TestFastReplyOwnerMismatchDoesNotSpendRetries(t *testing.T) {
 	r.exec(t, `UPDATE voice_sessions SET owner_id='replacement' WHERE id='text-call'`)
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('source','default','text-call',1,'turn','hello','pending',?,?,?)`, at, at, at)
-	r.svc.deliverFastReply(context.Background(), "source", "default", "text-call", 1, "hello", "progress", 0)
+	r.svc.deliverFastReply(context.Background(), "source", "default", "text-call", 1, 0)
 	var attempts int
 	var status, code string
 	if err := r.store.DB().QueryRow(`SELECT attempts,status,last_error_code FROM voice_fast_replies WHERE id='source'`).Scan(&attempts, &status, &code); err != nil {
@@ -268,7 +268,7 @@ func TestFastReplyGenerationMismatchDoesNotSpendRetries(t *testing.T) {
 	r, _ := textTestRig(t)
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('reply','default','text-call',99,'turn','hello','pending',?,?,?)`, at, at, at)
-	r.svc.deliverFastReply(context.Background(), "reply", "default", "text-call", 99, "hello", "progress", 0)
+	r.svc.deliverFastReply(context.Background(), "reply", "default", "text-call", 99, 0)
 	var attempts int
 	var status, code string
 	if err := r.store.DB().QueryRow(`SELECT attempts,status,last_error_code FROM voice_fast_replies WHERE id='reply'`).Scan(&attempts, &status, &code); err != nil {
@@ -276,5 +276,53 @@ func TestFastReplyGenerationMismatchDoesNotSpendRetries(t *testing.T) {
 	}
 	if attempts != 0 || status != "pending" || code != "awaiting_context" {
 		t.Fatalf("%d %s %s", attempts, status, code)
+	}
+}
+
+func TestFastReplyRebindReplaysWholeAnswerOnce(t *testing.T) {
+	r := checkpointRig(t)
+	ctx := context.Background()
+	adapter := &checkpointAdapter{failAt: 2}
+	r.svc.resultReceiptAdapter = adapter
+	r.seedCall(t, "origin", "user-1", 1)
+	text := strings.Repeat("界", 3000)
+	at := r.now().Format(time.RFC3339Nano)
+	for _, item := range []struct{ id, kind, text string }{
+		{"answer", "recall_answer", text},
+		{"holding", "recall_holding", "not an answer"},
+		{"empty", "recall_answer", " \t\n"},
+	} {
+		r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,'default','origin',1,?,?,?,'pending',?,?,?)`, item.id, item.id, item.text, item.kind, at, at, at)
+	}
+	r.svc.dispatchFastReplies(ctx)
+	if adapter.submits != 2 || adapter.lookups != 0 {
+		t.Fatalf("origin submits=%d lookups=%d", adapter.submits, adapter.lookups)
+	}
+	oldFirstID := adapter.requests[0].DeliveryID
+	r.exec(t, `UPDATE voice_sessions SET state='ended' WHERE id='origin'`)
+	r.seedCall(t, "other", "other-owner", 2)
+	r.svc.dispatchFastReplies(ctx)
+	if adapter.submits != 2 {
+		t.Fatal("answer crossed owners")
+	}
+	r.seedCall(t, "next", "user-1", 3)
+	r.exec(t, `UPDATE voice_sessions SET gateway_media_generation=42 WHERE id='next'`)
+	r.svc.dispatchFastReplies(ctx)
+	r.advance(31 * time.Second)
+	r.svc.dispatchFastReplies(ctx)
+	if adapter.submits != 4 || adapter.lookups != 0 || adapter.requests[2].Text+adapter.requests[3].Text != text || adapter.requests[2].DeliveryID == oldFirstID || adapter.requests[2].MediaGeneration != 42 {
+		t.Fatalf("expected full send under new identity; submits=%d lookups=%d", adapter.submits, adapter.lookups)
+	}
+	var n int
+	for _, query := range []string{
+		`SELECT count(*) FROM voice_fast_replies WHERE id='answer' AND session_id='origin' AND generation=1 AND voice_session_id='next' AND voice_generation=3 AND status='delivered'`,
+		`SELECT count(*) FROM voice_context_events WHERE source_kind='fast_reply' AND source_id='answer' AND session_id='next' AND owner_id='user-1'`,
+		`SELECT count(*) FROM voice_text_checkpoints WHERE source_kind='fast_reply' AND source_id='answer' AND session_id='next' AND generation=3 AND gateway_session_id='gw-next' AND media_generation=42`,
+		`SELECT count(*) FROM voice_text_checkpoints WHERE source_kind='fast_reply'`,
+		`SELECT count(*) FROM voice_context_events WHERE source_kind='fast_reply'`,
+	} {
+		if err := r.store.DB().QueryRow(query).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("%s: %d, %v", query, n, err)
+		}
 	}
 }

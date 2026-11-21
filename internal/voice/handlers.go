@@ -489,7 +489,7 @@ func (s *Service) commandHandoff(ctx context.Context, tx *sql.Tx, cmd control.Co
 			if stewardAction == string(steward.ActionReport) {
 				// This turn speaks the Steward reply only. Preserve any original
 				// result pending contextual selection; a report summary is not its ACK.
-				if _, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries SET last_error_code='awaiting_context' WHERE workspace_id=? AND subject_id=? AND task_id=? AND status='pending' AND NOT EXISTS(SELECT 1 FROM voice_result_chunks c WHERE c.entry_id=voice_result_deliveries.entry_id AND c.state!='pending')`, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, stewardTaskID); err != nil {
+				if _, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET last_error_code='awaiting_context' WHERE workspace_id=? AND subject_id=? AND task_id=? AND status='pending' AND `+resultNotInOpening+` AND NOT EXISTS(SELECT 1 FROM voice_result_chunks c WHERE c.entry_id=d.entry_id AND c.state!='pending')`, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, stewardTaskID); err != nil {
 					return contracts.CommandResult{}, nil, err
 				}
 			}

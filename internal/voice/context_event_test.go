@@ -231,17 +231,17 @@ func TestFastReplyEventsBothProducersRollbackAndRetry(t *testing.T) {
 			r.seedCall(t, "s1", "user-1", 1)
 			at := r.now().Format(time.RFC3339Nano)
 			text := strings.Repeat("answer", 3000)
-			r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('reply','default','s1',1,'turn',?,'pending',?,?,?)`, text, at, at, at)
+			r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('reply','default','s1',1,'turn',?,?,'pending',?,?,?)`, text, intent, at, at, at)
 			r.exec(t, `CREATE TRIGGER reject_event BEFORE INSERT ON voice_context_events BEGIN SELECT RAISE(ABORT,'fixture'); END`)
-			r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, text, intent, 0)
+			r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, 0)
 			var status string
 			if err := r.store.DB().QueryRow(`SELECT status FROM voice_fast_replies`).Scan(&status); err != nil || status != "pending" {
 				t.Fatalf("rollback status=%s err=%v", status, err)
 			}
 			r.exec(t, `DROP TRIGGER reject_event`)
 			r.advance(31 * time.Second)
-			r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, text, intent, 0)
-			r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, text, intent, 0)
+			r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, 0)
+			r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, 0)
 			assertRecordedEvent(t, r, "fast_reply", text, 1)
 		})
 	}

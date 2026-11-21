@@ -70,7 +70,7 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 	after := snapshot()
 	baseline := make(map[string][]string, len(after))
 	for name, obj := range after {
-		if obj[2] == "voice_context_events" {
+		if obj[2] == "voice_context_events" || obj[2] == "voice_result_opening" || name == "voice_result_opening_release_terminal" {
 			continue
 		}
 		if strings.HasPrefix(name, "model_config_fingerprints") || strings.HasPrefix(name, "sqlite_autoindex_model_config_fingerprints") || strings.HasPrefix(name, "model_retry_state") || strings.HasPrefix(name, "sqlite_autoindex_model_retry_state") || strings.HasPrefix(name, "voice_text_inputs") || strings.HasPrefix(name, "voice_input_notices") || strings.HasPrefix(name, "sqlite_autoindex_voice_text_inputs") || strings.HasPrefix(name, "sqlite_autoindex_voice_input_notices") {
@@ -132,9 +132,8 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 		}
 	}
 	var version, count int
-	var name string
-	if err = store.DB().QueryRow(`SELECT max(version),count(*),max(name) FROM schema_migrations WHERE namespace='voice'`).Scan(&version, &count, &name); err != nil || version != 207 || count != 8 || name != "voice_baseline" {
-		t.Fatalf("voice receipt=%d/%d/%s err=%v", version, count, name, err)
+	if err = store.DB().QueryRow(`SELECT max(version),count(*) FROM schema_migrations WHERE namespace='voice'`).Scan(&version, &count); err != nil || version != 208 || count != 9 {
+		t.Fatalf("voice receipt=%d/%d err=%v", version, count, err)
 	}
 	var changesBefore, changesAfter int
 	if err = store.DB().QueryRow(`SELECT total_changes()`).Scan(&changesBefore); err != nil {

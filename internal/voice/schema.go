@@ -273,8 +273,14 @@ ALTER TABLE ui_requests RENAME COLUMN voice_input TO chat_input;`)
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 207, Name: "conversation_context_events", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 207, Name: "conversation_context_events", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, contextEventSchema)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 208, Name: "opening_result_reservations", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, openingResultSchema)
 		return err
 	}})
 }

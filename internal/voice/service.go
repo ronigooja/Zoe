@@ -181,10 +181,9 @@ type openingContextItem struct {
 	Text string `json:"text"`
 }
 type openingContext struct {
-	PendingResults []PendingResultContext `json:"-"`
-	Kind           string                 `json:"kind"`
-	Version        int                    `json:"version"`
-	Items          []openingContextItem   `json:"items"`
+	Kind    string               `json:"kind"`
+	Version int                  `json:"version"`
+	Items   []openingContextItem `json:"items"`
 }
 type openingContextResult struct {
 	ContentHash string `json:"content_hash,omitempty"`
@@ -209,107 +208,6 @@ func openingCharsFor(c *openingContext) int {
 func openingContextHash(c *openingContext) string {
 	data, _ := json.Marshal(c)
 	return resultHash(string(data))
-}
-
-func (s *Service) acknowledgeOpeningResults(ctx context.Context, p contracts.Principal, session string, generation int64, opening *openingContext, receipt *openingContextResult) error {
-	if opening == nil || receipt == nil || !receipt.Applied || receipt.Silent != true || receipt.Version != opening.Version || receipt.ContentHash != openingContextHash(opening) {
-		return nil
-	}
-	for _, result := range opening.PendingResults {
-		var text string
-		if err := s.db.QueryRowContext(ctx, `SELECT e.content FROM task_entries e JOIN tasks t ON t.id=e.task_id AND t.workspace_id=e.workspace_id WHERE e.id=? AND e.task_id=? AND e.workspace_id=? AND t.owner_subject_id=?`, result.EntryID, result.TaskID, p.WorkspaceID, p.SubjectID).Scan(&text); err != nil {
-			return err
-		}
-		if resultHash(text) != result.ContentHash {
-			return errors.New("opening_result_source_changed")
-		}
-		if err := s.MarkResultAvailable(ctx, p.WorkspaceID, p.SubjectID, result.EntryID, session, generation); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) buildOpeningContext(ctx context.Context, p contracts.Principal) *openingContext {
-	return s.buildAVASOpeningContext(ctx, p)
-}
-
-func (s *Service) buildAVASOpeningContext(ctx context.Context, p contracts.Principal) *openingContext {
-	version := 1
-	_ = s.db.QueryRowContext(ctx, `SELECT coalesce(max(opening_context_version),0)+1 FROM voice_sessions WHERE workspace_id=? AND owner_id=?`, p.WorkspaceID, p.SubjectID).Scan(&version)
-	c := &openingContext{Kind: "full", Version: version, Items: []openingContextItem{}}
-	used := 0
-	appendItem := func(text string) bool {
-		cost := len([]rune(text))
-		if len(c.Items) >= 128 || used+cost > s.openingBudget {
-			return false
-		}
-		c.Items = append(c.Items, openingContextItem{Role: "user", Text: text})
-		used += cost
-		return true
-	}
-	// Full authoritative texts are silent model context, never automatic playback.
-	if pending, err := s.PendingResultsForContext(ctx, p.WorkspaceID, p.SubjectID, 25); err == nil {
-		for _, result := range pending {
-			data, _ := json.Marshal(result)
-			if !appendItem("Pending authoritative result (availability only; respond contextually, do not automatically read all history):\n" + string(data)) {
-				break
-			}
-			c.PendingResults = append(c.PendingResults, result)
-		}
-	}
-	if s.register != nil {
-		text, err := s.register.AssembleContext(ctx, RegisterOwner{p.WorkspaceID, p.SubjectID}, s.now(), max(0, s.openingBudget-used))
-		if err == nil && text != "" {
-			appendItem(text)
-		}
-	}
-	feedbackRows, feedbackErr := s.db.QueryContext(ctx, `SELECT text FROM ui_feedback_deliveries WHERE workspace_id=? AND owner_subject_id=? AND status='delivered' ORDER BY updated_at DESC,request_id DESC LIMIT 128`, p.WorkspaceID, p.SubjectID)
-	if feedbackErr == nil {
-		var selected []string
-		remaining := s.openingBudget - used
-		for feedbackRows.Next() {
-			var text string
-			if feedbackRows.Scan(&text) != nil {
-				continue
-			}
-			cost := len([]rune(text))
-			if cost > remaining || len(c.Items)+len(selected) >= 128 {
-				break
-			}
-			selected = append(selected, text)
-			remaining -= cost
-		}
-		feedbackRows.Close()
-		for i := len(selected) - 1; i >= 0; i-- {
-			appendItem(selected[i])
-		}
-	}
-	// Running or queued tasks are always listed; waiting tasks only when updated
-	// within the last 30 minutes, so abandoned tasks do not read as current work.
-	recent := s.now().Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT title FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND (status IN ('active','queued') OR (status IN ('waiting','awaiting_user') AND updated_at>=?)) ORDER BY updated_at DESC,id LIMIT 32`, p.WorkspaceID, p.SubjectID, recent)
-	if err == nil {
-		defer rows.Close()
-		seen := map[string]bool{}
-		listed := 0
-		for rows.Next() && listed < 8 {
-			var title string
-			if rows.Scan(&title) != nil {
-				continue
-			}
-			title = strings.TrimSpace(title)
-			if title == "" || seen[title] {
-				continue
-			}
-			seen[title] = true
-			if !appendItem("进行中的任务:" + title) {
-				break
-			}
-			listed++
-		}
-	}
-	return c
 }
 
 func Register(server *control.Server, store *storage.Store, cfg Config) error {
@@ -729,13 +627,13 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	var generation int64
 	var accountLeaseGeneration int64
 	var gatewayMediaGeneration, gatewayContextChars int64
-	var openingDelivery, openingManifest []byte
+	var openingDelivery string
 	var openingVersion, openingChars int
 	var accountLeaseAccountHash []byte
 	var answer []byte
 	var existingHash []byte
-	err = s.db.QueryRowContext(ctx, `SELECT id,generation,state,gateway_session_id,offer_answer,request_hash,account_lease_id,account_lease_generation,account_id_hash,gateway_media_generation,opening_context_delivery,opening_context_version,opening_context_chars,opening_context_manifest,gateway_context_chars FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND request_id=?`, p.WorkspaceID, p.SubjectID, req.RequestID).
-		Scan(&id, &generation, &state, &gatewayID, &answer, &existingHash, &accountLeaseID, &accountLeaseGeneration, &accountLeaseAccountHash, &gatewayMediaGeneration, &openingDelivery, &openingVersion, &openingChars, &openingManifest, &gatewayContextChars)
+	err = s.db.QueryRowContext(ctx, `SELECT id,generation,state,gateway_session_id,offer_answer,request_hash,account_lease_id,account_lease_generation,account_id_hash,gateway_media_generation,opening_context_delivery,opening_context_version,opening_context_chars,gateway_context_chars FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND request_id=?`, p.WorkspaceID, p.SubjectID, req.RequestID).
+		Scan(&id, &generation, &state, &gatewayID, &answer, &existingHash, &accountLeaseID, &accountLeaseGeneration, &accountLeaseAccountHash, &gatewayMediaGeneration, &openingDelivery, &openingVersion, &openingChars, &gatewayContextChars)
 	if err == nil {
 		if !bytes.Equal(existingHash, hash[:]) {
 			return sessionResponse{}, apiError(http.StatusConflict, "idempotency_conflict", "request_id was already used with different session input", nil)
@@ -750,7 +648,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 		if err := json.Unmarshal(answer, &saved); err != nil {
 			return sessionResponse{}, err
 		}
-		return sessionResponse{SessionID: id, Generation: generation, State: state, AnswerSDP: saved.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, OpeningContextDelivery: string(openingDelivery), OpeningContextVersion: openingVersion, OpeningContextChars: openingChars, GatewayContextChars: int(gatewayContextChars)}, nil
+		return sessionResponse{SessionID: id, Generation: generation, State: state, AnswerSDP: saved.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, OpeningContextDelivery: openingDelivery, OpeningContextVersion: openingVersion, OpeningContextChars: openingChars, GatewayContextChars: int(gatewayContextChars)}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return sessionResponse{}, err
@@ -759,6 +657,8 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 		return sessionResponse{}, err
 	}
 	id = uuid.NewString()
+	gatewayRequestID := uuid.NewString()
+	registerText := s.openingRegisterText(ctx, p)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -772,7 +672,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	if blocked != 0 {
 		return sessionResponse{}, apiError(http.StatusServiceUnavailable, "voice_pool_quarantined", "Space account pool is blocked pending operator reconciliation", nil)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES(?,?,?,?,?,?,1,'allocating',?,?)`, id, p.WorkspaceID, p.SubjectID, p.DeviceID, req.RequestID, hash[:], now, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,gateway_request_id,generation,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,'allocating',?,?)`, id, p.WorkspaceID, p.SubjectID, p.DeviceID, req.RequestID, hash[:], gatewayRequestID, now, now); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return sessionResponse{}, apiError(http.StatusConflict, "voice_lease_busy", "another voice media generation is active or awaiting negotiation for this user", nil)
 		}
@@ -781,19 +681,17 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	if _, err := tx.ExecContext(ctx, `UPDATE voice_pool_state SET blocked=1,reason_code='negotiation_in_progress',source_session_id=?,updated_at=?,updated_by='system' WHERE id=1`, id, now); err != nil {
 		return sessionResponse{}, err
 	}
+	opening, err := s.buildAVASOpeningContext(ctx, tx, p, id, registerText, s.now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return sessionResponse{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return sessionResponse{}, err
 	}
-	opening := s.buildOpeningContext(ctx, p)
 	// The gateway owns account selection and returns only its opaque sticky
 	// session handle. Zoe never receives or records an account credential/id.
 	instructions := s.recall.InstructionText
 	gatewayBody, _ := json.Marshal(gatewaySessionRequest{OfferSDP: req.OfferSDP, Voice: req.Voice, VoiceMode: req.VoiceMode, LanguageCode: req.LanguageCode, OpeningContext: opening, Instructions: instructions})
-	gatewayRequestID := uuid.NewString()
-	if err := s.persistGatewayRequestID(ctx, id, gatewayRequestID); err != nil {
-		_ = s.markSession(context.WithoutCancel(ctx), id, 1, "allocating", "failed", "gateway_request_id_persist_failed", nil, "")
-		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_unavailable", "voice gateway request could not be durably prepared", nil)
-	}
 	response, _, callErr := s.callGateway(withGatewayRequestID(ctx, gatewayRequestID), http.MethodPost, "/v1/voice/sessions", gatewayBody)
 	if callErr != nil {
 		return sessionResponse{}, s.failedGatewayCreate(ctx, id, gatewayRequestID)
@@ -808,7 +706,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 		if state == "quarantined" {
 			return sessionResponse{}, s.failedGatewayCreate(ctx, id, gatewayRequestID)
 		}
-		_ = s.markSession(ctx, id, 1, "allocating", state, code, nil, "")
+		_ = s.markSession(context.WithoutCancel(ctx), id, 1, "allocating", state, code, nil, "")
 		return sessionResponse{}, apiError(http.StatusBadGateway, "voice_gateway_rejected", "Space gateway rejected media negotiation", map[string]any{"status": response.StatusCode, "request_id": gatewayRequestID})
 	}
 	var upstream gatewaySessionResponse
@@ -820,40 +718,29 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 		_ = s.markSession(ctx, id, 1, "allocating", "quarantined", "gateway_media_generation_invalid", nil, "")
 		return sessionResponse{}, apiError(http.StatusBadGateway, "voice_outcome_unknown", "Space gateway returned an invalid media generation; media lease quarantined", nil)
 	}
-	openingDelivery = []byte("unsupported")
-	if opening != nil {
-		openingDelivery = []byte("unverified")
-		openingVersion = opening.Version
-		openingChars = openingCharsFor(opening)
-	}
-	if upstream.OpeningContext != nil && upstream.OpeningContext.Silent == "unverified" {
-		openingDelivery = []byte("unverified")
-	}
-	if upstream.OpeningContext != nil && (upstream.OpeningContext.Silent == nil || upstream.OpeningContext.Silent == true) && upstream.OpeningContext.Applied {
-		openingDelivery = []byte("delivered")
-	}
-	if upstream.OpeningContext != nil && upstream.OpeningContext.Supported != nil && !*upstream.OpeningContext.Supported {
-		openingDelivery = []byte("unsupported")
+	openingDelivery = "unverified"
+	openingVersion = opening.Version
+	openingChars = openingCharsFor(opening)
+	if strictOpeningReceipt(opening, upstream.OpeningContext) {
+		openingDelivery = "delivered"
+	} else if upstream.OpeningContext != nil && upstream.OpeningContext.Supported != nil && !*upstream.OpeningContext.Supported {
+		openingDelivery = "unsupported"
 	}
 	// The gateway's account ID is sensitive correlation data. Persist only the
 	// answer and opaque lease identity; the account ID is hashed below.
 	answerJSON, _ := json.Marshal(struct {
 		AnswerSDP string `json:"answer_sdp"`
 	}{AnswerSDP: upstream.AnswerSDP})
-	if err := s.markSession(ctx, id, 1, "allocating", "active", "", answerJSON, upstream.VoiceSessionID); err != nil {
+	if err := s.markSessionWith(ctx, id, 1, "allocating", "active", "", answerJSON, upstream.VoiceSessionID, func(tx *sql.Tx) error {
+		if err := s.acknowledgeOpeningResults(ctx, tx, p, id, opening, upstream.OpeningContext); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE voice_sessions SET opening_context_delivery=?,gateway_context_chars=? WHERE id=?`, openingDelivery, upstream.ContextChars, id)
+		return err
+	}); err != nil {
 		// The gateway created a session, but Zoe could not durably bind it. Keep
 		// the allocating lease; do not free a potentially live media resource.
 		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_outcome_unknown", "media was negotiated but its durable binding failed; lease remains isolated", nil)
-	}
-	if opening != nil {
-		manifest, _ := json.Marshal(opening)
-		_, _ = s.db.ExecContext(ctx, `UPDATE voice_sessions SET opening_context_delivery=?,opening_context_version=?,opening_context_chars=?,opening_context_manifest=?,gateway_context_chars=? WHERE id=?`, string(openingDelivery), openingVersion, openingChars, manifest, upstream.ContextChars, id)
-	}
-	if err := s.acknowledgeOpeningResults(ctx, p, id, 1, opening, upstream.OpeningContext); err != nil {
-		logging.Warnf("opening_result_availability_failed")
-	}
-	if opening == nil {
-		openingDelivery = []byte("unsupported")
 	}
 	// The Space gateway intentionally keeps account_id server-side. Its
 	// downstream contract exposes only the opaque lease identity and
@@ -878,7 +765,7 @@ func (s *Service) create(ctx context.Context, p contracts.Principal, req createR
 	} else if _, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET gateway_media_generation=? WHERE id=? AND state='active'`, upstream.VoiceSessionGeneration, id); err != nil {
 		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_outcome_unknown", "media generation could not be durably bound; account pool remains isolated", nil)
 	}
-	return sessionResponse{SessionID: id, Generation: 1, State: "active", AnswerSDP: upstream.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, OpeningContextDelivery: string(openingDelivery), OpeningContextVersion: openingVersion, OpeningContextChars: openingChars, GatewayContextChars: upstream.ContextChars}, nil
+	return sessionResponse{SessionID: id, Generation: 1, State: "active", AnswerSDP: upstream.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, OpeningContextDelivery: openingDelivery, OpeningContextVersion: openingVersion, OpeningContextChars: openingChars, GatewayContextChars: upstream.ContextChars}, nil
 }
 
 // failedGatewayCreate applies only to uncertain create failures. Persist recovery
@@ -947,18 +834,6 @@ func (s *Service) recoverPoolStatus(ctx context.Context) {
 	}
 }
 
-func (s *Service) persistGatewayRequestID(ctx context.Context, sessionID, requestID string) error {
-	result, err := s.db.ExecContext(context.WithoutCancel(ctx), `UPDATE voice_sessions SET gateway_request_id=?,updated_at=? WHERE id=? AND state='allocating'`, requestID, s.now().UTC().Format(time.RFC3339Nano), sessionID)
-	if err == nil {
-		if changed, rowsErr := result.RowsAffected(); rowsErr != nil {
-			err = rowsErr
-		} else if changed != 1 {
-			err = fmt.Errorf("voice gateway request id was not persisted for allocating session %s", sessionID)
-		}
-	}
-	return err
-}
-
 // resolveGatewayCreateOutcome applies only to attested failed, unbound creates.
 // Released evidence attests gateway-local closure, not upstream reclamation.
 func (s *Service) resolveGatewayCreateOutcome(ctx context.Context, sessionID string, generation int64, expectedState, requestID string, outcome gatewayCreationOutcome) error {
@@ -1017,6 +892,10 @@ func (s *Service) resolveGatewayCreateOutcome(ctx context.Context, sessionID str
 // markSession applies a generation/state-fenced transition only while the session
 // owns the pool. A stale caller cannot mutate either the session or another fence.
 func (s *Service) markSession(ctx context.Context, id string, generation int64, expectedState, state, code string, answer []byte, gatewayID string) error {
+	return s.markSessionWith(ctx, id, generation, expectedState, state, code, answer, gatewayID, nil)
+}
+
+func (s *Service) markSessionWith(ctx context.Context, id string, generation int64, expectedState, state, code string, answer []byte, gatewayID string, beforeCommit func(*sql.Tx) error) error {
 	if expectedState != "allocating" && expectedState != "active" && expectedState != "ending" && expectedState != "quarantined" {
 		return nil
 	}
@@ -1048,6 +927,11 @@ func (s *Service) markSession(ctx context.Context, id string, generation int64, 
 		}
 	} else if state == "failed" {
 		if _, err := tx.ExecContext(ctx, `UPDATE voice_pool_state SET blocked=0,reason_code='',source_session_id='',updated_at=?,updated_by='system' WHERE id=1 AND source_session_id=? AND reason_code='negotiation_in_progress'`, now, id); err != nil {
+			return err
+		}
+	}
+	if beforeCommit != nil {
+		if err := beforeCommit(tx); err != nil {
 			return err
 		}
 	}

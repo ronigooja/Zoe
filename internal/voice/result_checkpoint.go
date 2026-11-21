@@ -155,7 +155,7 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 	// Owner/task/run identity is checked against the durable source row, not caller trust.
 	var text, session, gateway string
 	var generation, media int64
-	err := s.db.QueryRowContext(ctx, `SELECT e.content FROM voice_result_deliveries d JOIN task_entries e ON e.id=d.entry_id AND e.workspace_id=d.workspace_id AND e.task_id=d.task_id JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id WHERE d.entry_id=? AND d.workspace_id=? AND d.task_id=? AND d.run_id=? AND d.subject_id=? AND d.status='pending' AND e.kind='assistant_message' AND `+authoritativeResultPredicate, id, workspace, task, run, owner).Scan(&text)
+	err := s.db.QueryRowContext(ctx, `SELECT e.content FROM voice_result_deliveries d JOIN task_entries e ON e.id=d.entry_id AND e.workspace_id=d.workspace_id AND e.task_id=d.task_id JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id WHERE d.entry_id=? AND d.workspace_id=? AND d.task_id=? AND d.run_id=? AND d.subject_id=? AND d.status='pending' AND e.kind='assistant_message' AND `+authoritativeResultPredicate+` AND `+resultNotInOpening, id, workspace, task, run, owner).Scan(&text)
 	if err != nil {
 		return
 	}
@@ -169,7 +169,7 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 	}
 	err = s.db.QueryRowContext(ctx, `SELECT id,gateway_session_id,generation,gateway_media_generation FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND state='active' AND gateway_session_id!='' AND (NOT EXISTS(SELECT 1 FROM voice_result_checkpoints WHERE entry_id=?) OR id=(SELECT session_id FROM voice_result_checkpoints WHERE entry_id=?)) ORDER BY created_at,id LIMIT 1`, workspace, owner, id, id).Scan(&session, &gateway, &generation, &media)
 	if err == sql.ErrNoRows {
-		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries SET next_attempt_at=?,last_error_code='awaiting_context',updated_at=? WHERE entry_id=? AND status='pending' AND attempts=?`, now.Add(resultDeliveryLease).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts)
+		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET next_attempt_at=?,last_error_code='awaiting_context',updated_at=? WHERE entry_id=? AND status='pending' AND attempts=? AND `+resultNotInOpening, now.Add(resultDeliveryLease).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts)
 		return
 	}
 	if err != nil || (adapter != nil && media <= 0) {
@@ -209,7 +209,7 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 			return
 		}
 	}
-	res, err = tx.ExecContext(ctx, `UPDATE voice_result_deliveries SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE entry_id=? AND status='pending' AND attempts=? AND next_attempt_at<=? AND last_error_code!='awaiting_context'`, now.Add(resultDeliveryLease).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts, now.Format(time.RFC3339Nano))
+	res, err = tx.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE entry_id=? AND status='pending' AND attempts=? AND next_attempt_at<=? AND last_error_code!='awaiting_context' AND `+resultNotInOpening, now.Add(resultDeliveryLease).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts, now.Format(time.RFC3339Nano))
 	if err != nil {
 		return
 	}
@@ -232,7 +232,7 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 				return
 			}
 			defer tx.Rollback()
-			res, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries SET status='delivered',voice_session_id=?,generation=?,last_error_code='gateway_accepted',updated_at=? WHERE entry_id=? AND status='pending' AND EXISTS(SELECT 1 FROM voice_result_checkpoints WHERE entry_id=? AND claim=? AND lease_until>?) AND NOT EXISTS(SELECT 1 FROM voice_result_chunks WHERE entry_id=? AND state!='confirmed')`, session, generation, completed.Format(time.RFC3339Nano), id, id, claim, completed.Format(time.RFC3339Nano), id)
+			res, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET status='delivered',voice_session_id=?,generation=?,last_error_code='gateway_accepted',updated_at=? WHERE entry_id=? AND status='pending' AND EXISTS(SELECT 1 FROM voice_result_checkpoints WHERE entry_id=? AND claim=? AND lease_until>?) AND NOT EXISTS(SELECT 1 FROM voice_result_chunks WHERE entry_id=? AND state!='confirmed') AND `+resultNotInOpening, session, generation, completed.Format(time.RFC3339Nano), id, id, claim, completed.Format(time.RFC3339Nano), id)
 			if err != nil {
 				return
 			}
@@ -253,7 +253,7 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 			continue
 		}
 		// Fenced persisted attempt precedes every external send. Expiry never authorizes replay.
-		res, err = s.db.ExecContext(ctx, `UPDATE voice_result_chunks SET state='attempted' WHERE entry_id=? AND ordinal=? AND state=? AND EXISTS(SELECT 1 FROM voice_result_checkpoints c JOIN voice_sessions v ON v.id=c.session_id AND v.workspace_id=c.workspace_id AND v.owner_id=c.subject_id AND v.generation=c.generation AND v.gateway_session_id=c.gateway_session_id AND v.gateway_media_generation=c.media_generation AND v.state='active' WHERE c.entry_id=? AND c.claim=? AND c.lease_until>?)`, id, ordinal, state, id, claim, s.now().UTC().Format(time.RFC3339Nano))
+		res, err = s.db.ExecContext(ctx, `UPDATE voice_result_chunks AS d SET state='attempted' WHERE entry_id=? AND ordinal=? AND state=? AND `+resultNotInOpening+` AND EXISTS(SELECT 1 FROM voice_result_checkpoints c JOIN voice_sessions v ON v.id=c.session_id AND v.workspace_id=c.workspace_id AND v.owner_id=c.subject_id AND v.generation=c.generation AND v.gateway_session_id=c.gateway_session_id AND v.gateway_media_generation=c.media_generation AND v.state='active' WHERE c.entry_id=? AND c.claim=? AND c.lease_until>?)`, id, ordinal, state, id, claim, s.now().UTC().Format(time.RFC3339Nano))
 		if err != nil {
 			return
 		}
@@ -291,67 +291,6 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 	}
 }
 
-// PendingResultContext is availability evidence, not a playback or delivery instruction.
-type PendingResultContext struct {
-	EntryID, TaskID, RunID, Text, ContentHash string
-	TaskGoal, TaskStatus                      string
-	DestinationSession                        string
-	DestinationGeneration                     int64
-	ConfirmedChunks, AmbiguousChunks          int
-}
-
-// PendingResultsForContext returns bounded owner-scoped original sources, without semantic selection.
-// Including these in silent opening context must be tracked separately using MarkResultAvailable.
-func (s *Service) PendingResultsForContext(ctx context.Context, workspace, owner string, limit int) ([]PendingResultContext, error) {
-	if limit <= 0 || limit > 25 {
-		limit = 25
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT d.entry_id,d.task_id,d.run_id,e.content,t.goal,t.status,coalesce(c.session_id,''),coalesce(c.generation,0),(SELECT count(*) FROM voice_result_chunks x WHERE x.entry_id=d.entry_id AND x.state='confirmed'),(SELECT count(*) FROM voice_result_chunks x WHERE x.entry_id=d.entry_id AND x.state IN ('attempted','unknown')) FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.task_id=d.task_id AND e.workspace_id=d.workspace_id LEFT JOIN voice_result_checkpoints c ON c.entry_id=d.entry_id WHERE d.workspace_id=? AND d.subject_id=? AND d.status='pending' AND e.kind='assistant_message' AND `+authoritativeResultPredicate+` AND NOT EXISTS(SELECT 1 FROM voice_result_chunks x WHERE x.entry_id=d.entry_id AND x.state!='pending') ORDER BY d.created_at,d.entry_id LIMIT ?`, workspace, owner, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []PendingResultContext
-	for rows.Next() {
-		var p PendingResultContext
-		if err = rows.Scan(&p.EntryID, &p.TaskID, &p.RunID, &p.Text, &p.TaskGoal, &p.TaskStatus, &p.DestinationSession, &p.DestinationGeneration, &p.ConfirmedChunks, &p.AmbiguousChunks); err != nil {
-			return nil, err
-		}
-		p.ContentHash = resultHash(p.Text)
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-// MarkResultAvailable records silent context inclusion only after the opening-context acknowledgement.
-func (s *Service) MarkResultAvailable(ctx context.Context, workspace, owner, entry, session string, generation int64) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var text string
-	err = tx.QueryRowContext(ctx, `SELECT e.content FROM voice_result_deliveries d JOIN voice_sessions v ON v.workspace_id=d.workspace_id AND v.owner_id=d.subject_id JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.workspace_id=d.workspace_id AND e.task_id=d.task_id AND e.kind='assistant_message' WHERE d.entry_id=? AND d.workspace_id=? AND d.subject_id=? AND d.status='pending' AND v.id=? AND v.generation=? AND v.state='active' AND `+authoritativeResultPredicate, entry, workspace, owner, session, generation).Scan(&text)
-	if err != nil {
-		return err
-	}
-	if !utf8.ValidString(text) || strings.TrimSpace(text) == "" {
-		return errors.New("invalid_result_content")
-	}
-	var hash string
-	err = tx.QueryRowContext(ctx, `SELECT content_hash FROM voice_result_checkpoints WHERE entry_id=?`, entry).Scan(&hash)
-	if err != nil && err != sql.ErrNoRows {
-		return err
-	}
-	if err == nil && hash != resultHash(text) {
-		return errors.New("result_source_changed")
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_result_availability(entry_id,session_id,generation,available_at) VALUES(?,?,?,?)`, entry, session, generation, s.now().UTC().Format(time.RFC3339Nano)); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 // SelectPendingResult authorizes model-driven selection of an existing source entry.
 // Deferred rows are released by clearing awaiting_context, never by opening-context ACK.
 // A same-destination selection is idempotent and retains all checkpoints/leases.
@@ -363,7 +302,7 @@ func (s *Service) SelectPendingResult(ctx context.Context, principal contracts.P
 	}
 	defer tx.Rollback()
 	var task, run, text, status string
-	err = tx.QueryRowContext(ctx, `SELECT d.task_id,d.run_id,e.content,d.status FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.workspace_id=d.workspace_id AND e.task_id=d.task_id AND e.kind='assistant_message' WHERE d.entry_id=? AND d.workspace_id=? AND d.subject_id=? AND `+authoritativeResultPredicate, entry, principal.WorkspaceID, principal.SubjectID).Scan(&task, &run, &text, &status)
+	err = tx.QueryRowContext(ctx, `SELECT d.task_id,d.run_id,e.content,d.status FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.workspace_id=d.workspace_id AND e.task_id=d.task_id AND e.kind='assistant_message' WHERE d.entry_id=? AND d.workspace_id=? AND d.subject_id=? AND `+authoritativeResultPredicate+` AND `+resultNotInOpening, entry, principal.WorkspaceID, principal.SubjectID).Scan(&task, &run, &text, &status)
 	if err != nil {
 		return err
 	}
