@@ -23,7 +23,7 @@ Original dialogue -> Register
 
 Authoritative results -> voice delivery and requested UI
 Bound screen input --> the identified task or pending question
-Original dialogue and completed-task records -> scheduled memory ingestion
+Original dialogue and confirmed context events -> scheduled memory ingestion
 ```
 
 The component contracts define route semantics, action semantics, identities,

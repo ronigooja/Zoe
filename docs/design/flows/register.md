@@ -6,7 +6,7 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 ## Inputs and outputs
 
-Input is the owner's compact context, contiguous recent raw dialogue, and current original utterance. The exact output schema is:
+Input is the owner's compact context, contiguous recent raw dialogue merged with [confirmed context events](results.md#conversation-context-events), and current original utterance. The exact output schema is:
 
 ```typescript
 type RegisterOutput = {

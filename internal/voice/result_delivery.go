@@ -218,7 +218,24 @@ func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session s
 	if code == "receipt_rejected" {
 		status = "failed"
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE voice_fast_replies SET status=?,voice_session_id=CASE WHEN ? THEN ? ELSE voice_session_id END,voice_generation=CASE WHEN ? THEN ? ELSE voice_generation END,last_error_code=?,updated_at=? WHERE id=? AND workspace_id=? AND session_id=? AND generation=? AND status='pending' AND attempts=? AND next_attempt_at=?`, status, ok, session, ok, generation, code, s.now().UTC().Format(time.RFC3339Nano), id, workspace, session, generation, attempts, token)
+	completed := s.now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	res, err = tx.ExecContext(ctx, `UPDATE voice_fast_replies SET status=?,voice_session_id=CASE WHEN ? THEN ? ELSE voice_session_id END,voice_generation=CASE WHEN ? THEN ? ELSE voice_generation END,last_error_code=?,updated_at=? WHERE id=? AND workspace_id=? AND session_id=? AND generation=? AND status='pending' AND attempts=? AND next_attempt_at=?`, status, ok, session, ok, generation, code, completed.Format(time.RFC3339Nano), id, workspace, session, generation, attempts, token)
+	if err != nil {
+		return
+	}
+	n, err = res.RowsAffected()
+	if err != nil || n != 1 {
+		return
+	}
+	if ok && recordContextEvent(ctx, tx, contextEvent{workspace: workspace, owner: owner, session: session, kind: "fast_reply", id: id, role: "background", text: text, at: completed}) != nil {
+		return
+	}
+	_ = tx.Commit()
 
 }
 

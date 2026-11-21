@@ -53,6 +53,14 @@ Instructions for the voice upstream list background tools only. Message formats 
 
 `user_text` is the user's own input, produced by the [screen](screen.md) conversation-text input, and is delivered through `deliverDurableText`. `ui_input_request` and `ui_input_received` apply only to `task_question` surfaces. The request text is the task's authoritative pending question, not UI_Controller `input_note`. When no call is active, each text remains pending and is delivered on the next call. A delivery receipt proves transport writes only, never upstream understanding.
 
+## Conversation context events
+
+Zoe records `voice_context_events` only after every source chunk is confirmed, atomically with the single fenced transition to delivered; a recording failure rolls back that transition and retries reuse the source identity.
+The owner/workspace-scoped identities and roles are `task_result`/entry ID (`background`), `ui_feedback`/request ID (`background`), `fast_reply`/reply ID for task reports and recall (`background`), `user_text`/command ID (`user`), `ui_input_request`/question ID (`background`), and `ui_input_received`/answer command ID (`user`).
+Each event retains the delivery session and full original source text without transport wrappers; `at` and `received_at` share the UTC delivery-completion timestamp.
+Register, compact and memory ingestion merge events with transcript turns by parsed UTC time and then canonical source identity (`event:%q:%q` for kind/ID, `turn:%q:%d` for session/sequence); ingestion membership uses those same identities.
+Compact publication fences the owner-wide count of both sources in its snapshot and retains that snapshot's event rowid watermark, so later inserted events remain raw even when their timestamps equal or precede the build time.
+
 ## Task result summaries
 
 `tasks.result` remains the authoritative full text for voice, UI_Controller and prior-task context. `tasks.summary_result` is nullable: NULL means not generated, while an empty string means generated and empty. Steward receives only this summary; lexical candidate ranking may still use full results inside SQL.

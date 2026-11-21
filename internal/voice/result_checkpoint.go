@@ -226,7 +226,24 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 		var state string
 		err = s.db.QueryRowContext(ctx, `SELECT delivery_id,content_hash,text,state FROM voice_result_chunks WHERE entry_id=? AND ordinal=?`, id, ordinal).Scan(&p.DeliveryID, &p.ContentHash, &p.Text, &state)
 		if err == sql.ErrNoRows {
-			_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries SET status='delivered',voice_session_id=?,generation=?,last_error_code='gateway_accepted',updated_at=? WHERE entry_id=? AND status='pending' AND EXISTS(SELECT 1 FROM voice_result_checkpoints WHERE entry_id=? AND claim=? AND lease_until>?) AND NOT EXISTS(SELECT 1 FROM voice_result_chunks WHERE entry_id=? AND state!='confirmed')`, session, generation, s.now().UTC().Format(time.RFC3339Nano), id, id, claim, s.now().UTC().Format(time.RFC3339Nano), id)
+			completed := s.now().UTC()
+			tx, err := s.db.BeginTx(ctx, nil)
+			if err != nil {
+				return
+			}
+			defer tx.Rollback()
+			res, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries SET status='delivered',voice_session_id=?,generation=?,last_error_code='gateway_accepted',updated_at=? WHERE entry_id=? AND status='pending' AND EXISTS(SELECT 1 FROM voice_result_checkpoints WHERE entry_id=? AND claim=? AND lease_until>?) AND NOT EXISTS(SELECT 1 FROM voice_result_chunks WHERE entry_id=? AND state!='confirmed')`, session, generation, completed.Format(time.RFC3339Nano), id, id, claim, completed.Format(time.RFC3339Nano), id)
+			if err != nil {
+				return
+			}
+			n, err := res.RowsAffected()
+			if err != nil || n != 1 {
+				return
+			}
+			if recordContextEvent(ctx, tx, contextEvent{workspace: workspace, owner: owner, session: session, kind: "task_result", id: id, role: "background", text: text, at: completed}) != nil {
+				return
+			}
+			_ = tx.Commit()
 			return
 		}
 		if err != nil {
