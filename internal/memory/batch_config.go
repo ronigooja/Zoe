@@ -76,7 +76,7 @@ func (r *Repository) batchStepWithJitter(ctx context.Context, client ingestClien
 		}
 		logging.Infof("memory_batch status=%s owners=%d chunks=%d elapsed_ms=%d", status, owners, chunks, time.Since(started).Milliseconds())
 	}()
-	rows, err := r.db.QueryContext(ctx, `SELECT workspace_id,owner_id FROM voice_sessions WHERE owner_id<>'' UNION SELECT workspace_id,owner_subject_id FROM tasks WHERE owner_subject_id<>''`)
+	rows, err := r.db.QueryContext(ctx, `SELECT workspace_id,owner_id FROM voice_sessions WHERE owner_id<>'' UNION SELECT workspace_id,owner_id FROM voice_context_events WHERE owner_id<>''`)
 	if err != nil {
 		return err
 	}

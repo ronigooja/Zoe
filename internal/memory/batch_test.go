@@ -113,6 +113,9 @@ func TestMemoryBatchTransientReconcilesSameIdentity(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','fact',?)`, now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`INSERT INTO voice_context_events VALUES('workspace','owner','session','ui_input_received','answer','user','typed answer',?,?)`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
 	var first map[string]string
 	calls := 0
 	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +123,9 @@ func TestMemoryBatchTransientReconcilesSameIdentity(t *testing.T) {
 		var input map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&input)
 		if calls == 1 {
+			if !strings.Contains(input["text"], "user: typed answer") {
+				t.Error("event missing from retry snapshot")
+			}
 			first = input
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(`{"error_kind":"backend_unavailable"}`))
@@ -155,6 +161,7 @@ func ingestFixture(t *testing.T) (*sql.DB, *Repository, time.Time) {
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(`CREATE TABLE voice_sessions(id TEXT PRIMARY KEY,workspace_id TEXT,owner_id TEXT);
 CREATE TABLE voice_transcript_turns(workspace_id TEXT,session_id TEXT,seq INTEGER,role TEXT,text TEXT,at TEXT);
+CREATE TABLE voice_context_events(workspace_id TEXT,owner_id TEXT,session_id TEXT,source_kind TEXT,source_id TEXT,role TEXT,text TEXT,at TEXT,received_at TEXT,PRIMARY KEY(workspace_id,owner_id,source_kind,source_id));
 CREATE TABLE tasks(id TEXT,workspace_id TEXT,owner_subject_id TEXT,status TEXT,finished_at TEXT,goal TEXT,result TEXT);
 CREATE TABLE memory_ingest_batches(id TEXT PRIMARY KEY,workspace_id TEXT,principal_id TEXT,from_ns INTEGER,until_ns INTEGER,status TEXT NOT NULL DEFAULT 'pending',error_kind TEXT NOT NULL DEFAULT '',UNIQUE(workspace_id,principal_id,from_ns));
 CREATE TABLE memory_ingest_chunks(batch_id TEXT,position INTEGER,id TEXT UNIQUE,text TEXT,done INTEGER DEFAULT 0,PRIMARY KEY(batch_id,position));
@@ -190,7 +197,29 @@ func ingestWorker(t *testing.T, handler func(http.ResponseWriter, *http.Request)
 	return client
 }
 
-func TestMemoryIngestTranscriptTasksWindowAndCadence(t *testing.T) {
+func TestMemoryEqualTimestampNumericTurnAndEventOrder(t *testing.T) {
+	db, _, now := ingestFixture(t)
+	at := now.Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',10,'assistant','ten',?),('workspace','session',9,'user','nine',?);
+INSERT INTO voice_context_events VALUES('workspace','owner','session','ui_feedback','a','background','feedback',?,?),('workspace','owner','session','task_result','z','background','result z',?,?),('workspace','owner','session','task_result','a','background','result a',?,?)`, at, at, at, at, at, at, at, at); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := batchSources(context.Background(), db, "workspace", "owner", time.Time{}, now, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`event:"task_result":"a"`, `event:"task_result":"z"`, `event:"ui_feedback":"a"`, `turn:"session":9`, `turn:"session":10`}
+	if len(entries) != len(want) {
+		t.Fatalf("sources=%d", len(entries))
+	}
+	for i, entry := range entries {
+		if entry.source != want[i] {
+			t.Fatalf("source %d=%s want=%s", i, entry.source, want[i])
+		}
+	}
+}
+
+func TestMemoryIngestTranscriptEventsWindowAndCadence(t *testing.T) {
 	db, repo, now := ingestFixture(t)
 	for _, turn := range []struct {
 		seq        int
@@ -212,7 +241,10 @@ func TestMemoryIngestTranscriptTasksWindowAndCadence(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	want := "[2026-11-13T11:00:00Z] user: original words\n[2026-11-13T12:00:00Z] completed task done:\nrequest: original task sentence\nresult: result text\n[2026-11-13T12:00:00Z] assistant: answer\n"
+	if _, err := db.Exec(`INSERT INTO voice_context_events VALUES('workspace','owner','session','task_result','done','background','result text',?,?)`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	want := "[2026-11-13T11:00:00Z] user: original words\n[2026-11-13T12:00:00Z] background: result text\n[2026-11-13T12:00:00Z] assistant: answer\n"
 	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var input map[string]string
@@ -229,6 +261,10 @@ func TestMemoryIngestTranscriptTasksWindowAndCadence(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("calls=%d", calls)
+	}
+	var members int
+	if err := db.QueryRow(`SELECT count(*) FROM memory_ingest_members WHERE source_id=?`, `event:"task_result":"done"`).Scan(&members); err != nil || members != 1 {
+		t.Fatalf("event members=%d err=%v", members, err)
 	}
 	var boundary, next int64
 	if err := db.QueryRow(`SELECT boundary_ns,next_attempt_ms FROM memory_ingest_state WHERE principal_id='owner'`).Scan(&boundary, &next); err != nil || boundary != now.UnixNano() || next != now.Add(24*time.Hour).UnixMilli() {
@@ -407,7 +443,7 @@ func TestMemoryIngestLateBackdatedSourceAfterSnapshot(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&input)
 		if calls == 1 {
 			// This independent insert proves HTTP happens outside snapshot tx.
-			if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',2,'assistant','late backdated',?)`, now.Add(-time.Hour).Format(time.RFC3339Nano)); err != nil {
+			if _, err := db.Exec(`INSERT INTO voice_context_events VALUES('workspace','owner','session','task_result','late','background','late backdated',?,?)`, now.Add(-time.Hour).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 				t.Error(err)
 			}
 		} else if !strings.Contains(input["text"], "late backdated") || strings.Contains(input["text"], "user: first") {

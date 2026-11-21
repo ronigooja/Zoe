@@ -238,6 +238,10 @@ type RegisterLayers struct {
 	Version                                                       int64
 }
 type registerTurn struct {
+	key        string
+	eventKind  string
+	eventID    string
+	eventOrder int64
 	at         time.Time
 	received   time.Time
 	eligible   bool
@@ -247,9 +251,11 @@ type registerTurn struct {
 }
 type registerState struct {
 	RegisterLayers
-	hash        string
-	turns       []registerTurn
-	sourceCount int
+	hash                  string
+	turns                 []registerTurn
+	sourceCount           int
+	eventWatermark        int64
+	currentEventWatermark int64
 }
 
 const registerEpoch = "1970-01-01T00:00:00Z"
@@ -277,7 +283,7 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 	}
 	defer tx.Rollback()
 	edge, built, used := time.Time{}.Format(time.RFC3339Nano), registerEpoch, ""
-	err = tx.QueryRowContext(ctx, `SELECT compact,compact_through,built_at,version,source_hash,source_memory_boundary FROM voice_context_registers WHERE workspace_id=? AND owner_subject_id=?`, o.WorkspaceID, o.OwnerSubjectID).Scan(&s.Compact, &edge, &built, &s.Version, &s.hash, &used)
+	err = tx.QueryRowContext(ctx, `SELECT compact,compact_through,built_at,version,source_hash,source_memory_boundary,event_watermark FROM voice_context_registers WHERE workspace_id=? AND owner_subject_id=?`, o.WorkspaceID, o.OwnerSubjectID).Scan(&s.Compact, &edge, &built, &s.Version, &s.hash, &used, &s.eventWatermark)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return s, err
 	}
@@ -324,7 +330,7 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 			return s, err
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT t.at,t.received_at,t.session_id,t.seq,t.role,t.text FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id AND v.workspace_id=t.workspace_id WHERE v.workspace_id=? AND v.owner_id=?`, o.WorkspaceID, o.OwnerSubjectID)
+	rows, err := tx.QueryContext(ctx, `SELECT t.at,t.received_at,t.session_id,t.seq,t.role,t.text,'','',0 FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id AND v.workspace_id=t.workspace_id WHERE v.workspace_id=? AND v.owner_id=? UNION ALL SELECT at,received_at,session_id,0,role,text,source_kind,source_id,rowid FROM voice_context_events WHERE workspace_id=? AND owner_id=?`, o.WorkspaceID, o.OwnerSubjectID, o.WorkspaceID, o.OwnerSubjectID)
 	if err != nil {
 		return s, err
 	}
@@ -332,7 +338,7 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 		s.sourceCount++
 		var t registerTurn
 		var at, received string
-		if err = rows.Scan(&at, &received, &t.session, &t.seq, &t.role, &t.text); err != nil {
+		if err = rows.Scan(&at, &received, &t.session, &t.seq, &t.role, &t.text, &t.eventKind, &t.eventID, &t.eventOrder); err != nil {
 			rows.Close()
 			return s, err
 		}
@@ -348,7 +354,12 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 		}
 		// Keep all raw coverage after the retained edge, and late un-ingested
 		// records even when their semantic timestamp precedes M.
-		unseen := membership && !consumed[fmt.Sprintf("turn:%q:%d", t.session, t.seq)]
+		t.key = fmt.Sprintf("turn:%q:%d", t.session, t.seq)
+		if t.eventOrder != 0 {
+			t.key = fmt.Sprintf("event:%q:%q", t.eventKind, t.eventID)
+			s.currentEventWatermark = max(s.currentEventWatermark, t.eventOrder)
+		}
+		unseen := membership && !consumed[t.key]
 		t.eligible = !t.at.Before(s.MemoryBoundary) || unseen
 		if (!t.at.Before(s.MemoryBoundary) || !t.at.Before(s.RawFrom) || unseen) && !t.at.After(now) {
 			s.turns = append(s.turns, t)
@@ -367,13 +378,27 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 		if !a.at.Equal(b.at) {
 			return a.at.Before(b.at)
 		}
+		// Equal-time events precede turns; turn sequence ordering is numeric.
+		if (a.eventKind != "") != (b.eventKind != "") {
+			return a.eventKind != ""
+		}
+		if a.eventKind != "" {
+			if a.eventKind != b.eventKind {
+				return a.eventKind < b.eventKind
+			}
+			return a.eventID < b.eventID
+		}
 		if a.session != b.session {
 			return a.session < b.session
 		}
 		return a.seq < b.seq
 	})
 	for _, t := range s.turns {
-		if !t.at.Before(s.RawFrom) || t.received.After(s.BuiltAt) || (s.Version == 0 && t.at.Before(s.MemoryBoundary)) {
+		late := t.received.After(s.BuiltAt)
+		if t.eventOrder != 0 {
+			late = t.eventOrder > s.eventWatermark
+		}
+		if !t.at.Before(s.RawFrom) || late || (s.Version == 0 && t.at.Before(s.MemoryBoundary)) {
 			s.Raw += registerLine(t)
 		}
 	}

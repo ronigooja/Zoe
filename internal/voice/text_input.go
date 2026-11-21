@@ -114,5 +114,24 @@ func (s *Service) deliverVoiceInput(ctx context.Context, d voiceInputDelivery) {
 		update("pending", code, false, 30*time.Second)
 		return
 	}
-	update("delivered", "", true, 0)
+	completed := s.now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	a := append([]any{completed.Format(time.RFC3339Nano)}, args...)
+	a = append(a, attempt)
+	r, err = tx.ExecContext(ctx, `UPDATE `+table+` SET status='delivered',last_error='',updated_at=? WHERE `+where+` AND status='pending' AND attempts=?`, a...)
+	if err != nil {
+		return
+	}
+	n, err = r.RowsAffected()
+	if err != nil || n != 1 {
+		return
+	}
+	if recordContextEvent(ctx, tx, contextEvent{workspace: d.workspace, owner: d.owner, session: session, kind: d.kind, id: d.id, role: contextEventRole(d.kind), text: d.text, at: completed}) != nil {
+		return
+	}
+	_ = tx.Commit()
 }

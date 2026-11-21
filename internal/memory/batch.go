@@ -27,11 +27,12 @@ type ingestClient interface {
 }
 
 type batchEntry struct {
-	at     time.Time
-	id     string
-	seq    int64
-	text   string
-	source string
+	eventKind string
+	at        time.Time
+	id        string
+	seq       int64
+	text      string
+	source    string
 }
 
 // BoundaryAt returns the last successful worker ingestion boundary, without
@@ -48,13 +49,13 @@ func (r *Repository) BoundaryAt(ctx context.Context, workspace, principal string
 	return time.Unix(0, ns).UTC(), nil
 }
 
-// batchInput reads only transcript turns and completed task requests/results.
+// batchInput reads transcript turns and confirmed conversation events.
 type batchQuerier interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
 func batchSources(ctx context.Context, q batchQuerier, workspace, principal string, from, until time.Time, unseen bool) ([]batchEntry, error) {
-	var turns, tasks []batchEntry
+	var turns, events []batchEntry
 	seen := map[string]bool{}
 	if unseen {
 		rows, err := q.QueryContext(ctx, `SELECT source_id FROM memory_ingest_members WHERE workspace_id=? AND principal_id=?`, workspace, principal)
@@ -101,24 +102,24 @@ func batchSources(ctx context.Context, q batchQuerier, workspace, principal stri
 	if err != nil {
 		return nil, err
 	}
-	rows, err = q.QueryContext(ctx, `SELECT id,finished_at,goal,coalesce(result,'') FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND status='complete' AND finished_at IS NOT NULL`, workspace, principal)
+	rows, err = q.QueryContext(ctx, `SELECT source_kind,source_id,at,role,text FROM voice_context_events WHERE workspace_id=? AND owner_id=?`, workspace, principal)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var e batchEntry
-		var at, request, result string
-		if err = rows.Scan(&e.id, &at, &request, &result); err != nil {
+		var at, role, text string
+		if err = rows.Scan(&e.eventKind, &e.id, &at, &role, &text); err != nil {
 			break
 		}
 		e.at, err = time.Parse(time.RFC3339Nano, at)
 		if err != nil {
 			break
 		}
-		e.source = fmt.Sprintf("task:%q", e.id)
+		e.source = fmt.Sprintf("event:%q:%q", e.eventKind, e.id)
 		if !seen[e.source] && (unseen || e.at.After(from)) && !e.at.After(until) {
-			e.text = fmt.Sprintf("[%s] completed task %s:\nrequest: %s\nresult: %s\n", e.at.UTC().Format(time.RFC3339Nano), e.id, request, result)
-			tasks = append(tasks, e)
+			e.text = fmt.Sprintf("[%s] %s: %s\n", e.at.UTC().Format(time.RFC3339Nano), role, text)
+			events = append(events, e)
 		}
 	}
 	if err == nil {
@@ -134,13 +135,20 @@ func batchSources(ctx context.Context, q batchQuerier, workspace, principal stri
 			if !a.at.Equal(b.at) {
 				return a.at.Before(b.at)
 			}
+			// Equal-time events precede turns; turn sequence ordering is numeric.
+			if (a.eventKind != "") != (b.eventKind != "") {
+				return a.eventKind != ""
+			}
+			if a.eventKind != b.eventKind {
+				return a.eventKind < b.eventKind
+			}
 			if a.id != b.id {
 				return a.id < b.id
 			}
 			return a.seq < b.seq
 		})
 	}
-	entries := append(turns, tasks...)
+	entries := append(turns, events...)
 	less(entries)
 	return entries, nil
 }
@@ -154,7 +162,7 @@ func (r *Repository) batchInput(ctx context.Context, workspace, principal string
 	return blocks, err
 }
 
-// ingestChunks preserves whole turns/tasks unless one block exceeds the limit.
+// ingestChunks preserves whole turns/events unless one block exceeds the limit.
 // JSON size is also bounded: escaping can make 200 KiB of text exceed 256 KiB.
 func ingestChunks(blocks []string, user string) []string {
 	var chunks []string

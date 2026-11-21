@@ -74,17 +74,21 @@ func (s *Service) deliverUIFeedback(ctx context.Context, d uiFeedback) {
 		s.deferUIFeedback(ctx, d, attempt, code)
 		return
 	}
+	completed := s.now().UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return
 	}
 	defer tx.Rollback()
-	r, err = tx.ExecContext(ctx, `UPDATE ui_feedback_deliveries SET status='delivered',last_error=NULL,updated_at=? WHERE request_id=? AND status='pending' AND attempts=?`, s.now().UTC().Format(time.RFC3339Nano), d.id, attempt)
+	r, err = tx.ExecContext(ctx, `UPDATE ui_feedback_deliveries SET status='delivered',last_error=NULL,updated_at=? WHERE request_id=? AND status='pending' AND attempts=?`, completed.Format(time.RFC3339Nano), d.id, attempt)
 	if err != nil {
 		return
 	}
 	n, _ = r.RowsAffected()
 	if n != 1 {
+		return
+	}
+	if recordContextEvent(ctx, tx, contextEvent{workspace: d.workspace, owner: d.owner, session: session, kind: "ui_feedback", id: d.id, role: "background", text: d.text, at: completed}) != nil {
 		return
 	}
 	// Transport delivery state never changes render/failure evidence on the request.
