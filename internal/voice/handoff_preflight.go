@@ -40,10 +40,14 @@ func (s *Service) prepareHandoff(ctx context.Context, p contracts.Principal, req
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	var id string
+	routingTimeout := func() error {
+		logging.Warnf("voice_routing_wait id=%s wait_ms=%d budget_hit=true reason=routing_timeout", id, time.Since(started).Milliseconds())
+		return apiError(http.StatusServiceUnavailable, "routing_timeout", "voice routing is not ready; retry this handoff", nil)
+	}
 	refreshes := 0
 	for {
 		if waitCtx.Err() != nil {
-			return apiError(503, "routing_timeout", "voice routing is not ready; retry this handoff", nil)
+			return routingTimeout()
 		}
 		var category, existing string
 		var hash []byte
@@ -64,19 +68,37 @@ func (s *Service) prepareHandoff(ctx context.Context, p contracts.Principal, req
 			s.classifyCommittedTurn(id)
 			select {
 			case <-waitCtx.Done():
-				return apiError(503, "routing_timeout", "voice routing is not ready; retry this handoff", nil)
+				return routingTimeout()
 			case <-ticker.C:
 				continue
 			}
 		}
 		if err == nil && (category != "" || existing != "") {
 			if existing == "" && (RouteResult{Route: category}).Has("task") {
+				// Classification publishes its snapshot before releasing the guard.
+				// Check the guard first so a completed write cannot look like failure.
+				_, inFlight := s.classifying.Load(id)
 				var accepted string
 				var handled int
-				if err := s.db.QueryRowContext(waitCtx, `SELECT steward_snapshot,handoff_handled FROM voice_turns WHERE id=?`, id).Scan(&accepted, &handled); err != nil {
+				err := s.db.QueryRowContext(waitCtx, `SELECT steward_snapshot,handoff_handled FROM voice_turns WHERE id=?`, id).Scan(&accepted, &handled)
+				if waitCtx.Err() != nil {
+					return routingTimeout()
+				}
+				if err != nil {
 					return err
 				}
+				if handled == 0 && accepted == "" && inFlight {
+					select {
+					case <-waitCtx.Done():
+						return routingTimeout()
+					case <-ticker.C:
+						continue
+					}
+				}
 				current, err := stewardSnapshot(waitCtx, s.db, p.WorkspaceID, p.SubjectID)
+				if waitCtx.Err() != nil {
+					return routingTimeout()
+				}
 				if err != nil {
 					return err
 				}
@@ -85,11 +107,23 @@ func (s *Service) prepareHandoff(ctx context.Context, p contracts.Principal, req
 						logging.Infof("selection_stale branch=refresh_exhausted turn=%s refreshes=%d accepted_empty=%t equal=%t", id, refreshes, accepted == "", accepted == current)
 						return apiError(409, "selection_stale", "task facts keep changing; retry handoff", nil)
 					}
-					refreshes++
-					logging.Infof("voice_selection_refresh turn=%s refreshes=%d accepted_empty=%t equal=%t", id, refreshes, accepted == "", accepted == current)
-					if _, err := s.db.ExecContext(waitCtx, `UPDATE voice_turns SET steward_snapshot='',steward_action='',steward_task_id='',steward_question_id='',steward_task_version=0,report_text='' WHERE id=? AND handoff_handled=0`, id); err != nil {
+					// A classifier may have published a new snapshot since our read.
+					cleared, err := s.db.ExecContext(waitCtx, `UPDATE voice_turns SET steward_snapshot='',steward_action='',steward_task_id='',steward_question_id='',steward_task_version=0,report_text='' WHERE id=? AND handoff_handled=0 AND steward_snapshot=?`, id, accepted)
+					if waitCtx.Err() != nil {
+						return routingTimeout()
+					}
+					if err != nil {
 						return err
 					}
+					changed, err := cleared.RowsAffected()
+					if err != nil {
+						return err
+					}
+					if changed == 0 {
+						continue
+					}
+					refreshes++
+					logging.Infof("voice_selection_refresh turn=%s refreshes=%d accepted_empty=%t equal=%t", id, refreshes, accepted == "", accepted == current)
 					s.classifyCommittedTurn(id)
 					continue
 				}
@@ -102,8 +136,7 @@ func (s *Service) prepareHandoff(ctx context.Context, p contracts.Principal, req
 		}
 		select {
 		case <-waitCtx.Done():
-			logging.Warnf("voice_routing_wait id=%s wait_ms=%d budget_hit=true reason=routing_timeout", id, time.Since(started).Milliseconds())
-			return apiError(http.StatusServiceUnavailable, "routing_timeout", "voice routing is not ready; retry this handoff", nil)
+			return routingTimeout()
 		case <-ticker.C:
 		}
 	}
