@@ -125,7 +125,8 @@ func (s *Service) applyDelegation(ctx context.Context, id string) error {
 	}
 	cmd.CommandID = delegationKey(p.SessionID, p.Generation, p.TurnID, p.Revision)
 	_, events, err := s.applyDelegationOutcomeTx(ctx, tx, cmd, p, id, s.uiEventServer)
-	if err != nil {
+	var oversized *oversizedDelegation
+	if err != nil && !errors.As(err, &oversized) {
 		return err
 	}
 	if len(events) != 0 {
@@ -136,5 +137,12 @@ func (s *Service) applyDelegation(ctx context.Context, id string) error {
 	if err = s.markHandledTx(ctx, tx, cmd, p); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	if oversized != nil {
+		// Size rejection happens before task writes. Log only after the turn is durably handled.
+		logging.Errorf("voice_delegation_task_text_too_large id=%s request_bytes=%d limit_bytes=%d", id, oversized.requestBytes, control.MaxTaskTextBytes)
+	}
+	return nil
 }

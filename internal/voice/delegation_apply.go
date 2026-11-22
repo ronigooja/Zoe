@@ -37,6 +37,10 @@ type delegationIdentity struct {
 	Generation, Revision           int64
 }
 
+type oversizedDelegation struct{ requestBytes int }
+
+func (e *oversizedDelegation) Error() string { return "delegation request exceeds task text limit" }
+
 // applyDelegationOutcomeTx applies only a persisted route for the bound turn.
 func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, p delegationIdentity, turnID string, server *control.Server) (contracts.CommandResult, []contracts.Event, error) {
 	var storedCategory, stewardAction, stewardTaskID, questionID string
@@ -100,7 +104,6 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 		event, _ := json.Marshal(map[string]any{"route": "fast", "category": category, "turn_id": p.TurnID, "revision": p.Revision})
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, []contracts.Event{{Type: "voice.turn.handoff", AggregateType: "voice_session", AggregateID: p.SessionID, AggregateVersion: p.Generation, Payload: event}}, nil
 	}
-	goal := content
 	if err := s.validateStewardSnapshotTx(ctx, tx, cmd.Principal, p); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
@@ -114,6 +117,12 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 		}
 		if version != selectedVersion {
 			return contracts.CommandResult{}, nil, staleSelection("version_changed", turnID)
+		}
+	}
+	switch steward.Action(stewardAction) {
+	case steward.ActionNew, steward.ActionContinue, steward.ActionAppend, steward.ActionAnswer:
+		if len(content) > control.MaxTaskTextBytes {
+			return contracts.CommandResult{}, nil, &oversizedDelegation{requestBytes: len(content)}
 		}
 	}
 	{
@@ -210,7 +219,7 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 		return contracts.CommandResult{}, nil, apiError(409, "invalid_selection", "continuation requires a selected prior task", nil)
 	}
 	ref, _ := json.Marshal(voiceTaskSourceReference{Kind: "voice_turn", SessionID: p.SessionID, Generation: p.Generation, TurnID: p.TurnID, Revision: p.Revision, ContentHash: p.ContentHash})
-	admission, err := server.AdmitTaskTx(ctx, tx, control.AdmissionContext{Principal: cmd.Principal, Source: "voice", SourceRef: ref, IdempotencyKey: cmd.CommandID, ProfileID: "zoe-steward", Title: voiceTaskTitle(content), Goal: goal, InitialMessage: goal, AcceptedAt: cmd.AcceptedAt, TrustedSource: true})
+	admission, err := server.AdmitTaskTx(ctx, tx, control.AdmissionContext{Principal: cmd.Principal, Source: "voice", SourceRef: ref, IdempotencyKey: cmd.CommandID, ProfileID: "zoe-steward", Title: voiceTaskTitle(content), Goal: content, InitialMessage: content, AcceptedAt: cmd.AcceptedAt, TrustedSource: true})
 	if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}

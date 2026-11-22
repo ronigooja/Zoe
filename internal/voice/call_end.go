@@ -75,7 +75,7 @@ func (r callEndedRequest) valid() bool {
 		return false
 	}
 	switch r.Reason {
-	case "user_hangup", "silence_timeout", "upstream_voice_end", "media_lost", "gateway_shutdown", "failure":
+	case "user_hangup", "upstream_voice_end", "media_lost", "gateway_shutdown", "failure":
 		return true
 	}
 	return false

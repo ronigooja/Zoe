@@ -94,6 +94,10 @@ identity reused with different text), and `413 transcript_too_large`. Other
   execution after a user-visible failure is a fault to investigate.
 - Classification failures follow [Register failure rules](register.md#failure-and-recovery).
   The worker handles stale decisions under [Steward revalidation](steward.md#failure-and-recovery).
+- If a retained request exceeds the 20,000-byte limit for task goals, additions
+  or answers, mark the turn handled and emit one error log
+  containing only identifiers and byte lengths. Do not truncate, retry, create
+  or modify a task, or send a reply.
 - New admission: rollback leaves no partial admission/link.
 - Append/answer: retry reconciles admission/delivery identity; stale questions cannot receive answers.
 - Continue: missing/stale source facts re-evaluate selection; no text-based substitute admission.

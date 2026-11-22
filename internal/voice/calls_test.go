@@ -333,6 +333,11 @@ func TestCallEndedEvidenceAndReconciliation(t *testing.T) {
 			closed := now.Add(-30 * time.Second).Format(time.RFC3339Nano)
 			e = cleanEvidence(bind.callBinding, observed)
 			req := callEndedRequest{callBinding: bind.callBinding, Reason: "user_hangup", ClosedAt: closed}
+			if mode == "verified" {
+				silence := req
+				silence.Reason = "silence_timeout"
+				h.post(p+"/ended", silence, 400, "invalid_request")
+			}
 			stale := req
 			stale.MediaGeneration++
 			h.post(p+"/ended", stale, 409, "voice_generation_stale")

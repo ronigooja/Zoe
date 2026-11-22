@@ -1,10 +1,12 @@
 package voice
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/steward"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -109,6 +112,55 @@ func TestDelegationApplyRevalidatesPersistedSnapshot(t *testing.T) {
 	r.assertResult(t, "stale-persisted", "task", "clarify")
 	if n := writeJobCount(t, r.store, `SELECT count(*) FROM voice_fast_replies WHERE text='Which task?'`); n != 1 || r.routes.Load() != 1 || r.choices.Load() != 2 {
 		t.Fatalf("refresh produced %d replies, register=%d steward=%d", n, r.routes.Load(), r.choices.Load())
+	}
+}
+
+func TestOversizedDelegationIsHandledWithOneErrorLog(t *testing.T) {
+	for _, action := range []string{"new", "append"} {
+		t.Run(action, func(t *testing.T) {
+			r := newClassificationRig(t, nil)
+			const id = "oversized-turn"
+			r.seedTurn(t, id)
+			request := "private request " + strings.Repeat("界", 6662) // 20,002 bytes
+			var target string
+			var version int
+			if action == "append" {
+				target, version = "existing-task", 1
+				r.seedTask(t, target, "user-1")
+			}
+			ctx := context.Background()
+			snapshot, err := stewardSnapshot(ctx, r.store.DB(), "default", "user-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.exec(t, `UPDATE voice_turns SET transcript_seq=1,exits='task',request=?,steward_action=?,steward_snapshot=?,steward_task_id=?,steward_task_version=? WHERE id=?`, request, action, snapshot, target, version, id)
+			r.svc.uiEventServer, err = control.NewServer(r.store, control.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var logs bytes.Buffer
+			oldOutput, oldFlags, oldLevel := log.Writer(), log.Flags(), logging.CurrentLevel()
+			log.SetOutput(&logs)
+			log.SetFlags(0)
+			logging.SetLevel(logging.Info)
+			t.Cleanup(func() { log.SetOutput(oldOutput); log.SetFlags(oldFlags); logging.SetLevel(oldLevel) })
+			for range 2 {
+				r.svc.processDelegations(ctx)
+			}
+			if got, want := logs.String(), "level=error voice_delegation_task_text_too_large id=oversized-turn request_bytes=20002 limit_bytes=20000\n"; got != want {
+				t.Fatalf("log = %q, want %q", got, want)
+			}
+			if n := writeJobCount(t, r.store, `SELECT count(*) FROM voice_turns WHERE id='oversized-turn' AND handoff_handled=1`); n != 1 {
+				t.Fatal("oversized turn was left pending")
+			}
+			var retained string
+			if err := r.store.DB().QueryRow(`SELECT request FROM voice_turns WHERE id=?`, id).Scan(&retained); err != nil || retained != request {
+				t.Fatalf("retained request changed: bytes=%d err=%v", len(retained), err)
+			}
+			if n := writeJobCount(t, r.store, `SELECT (SELECT count(*) FROM tasks WHERE id!='existing-task') + (SELECT count(*) FROM task_entries) + (SELECT count(*) FROM voice_fast_replies)`); n != 0 {
+				t.Fatalf("oversized delegation wrote %d tasks, entries or replies", n)
+			}
+		})
 	}
 }
 

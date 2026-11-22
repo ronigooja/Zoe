@@ -60,9 +60,8 @@ failure maps to `503 voice_unavailable`.
 For `call.established` and `call.ended`, use the same 400/401/403 codes,
 `404 not_found` for an unknown Zoe session and `409 voice_generation_stale`
 for a stale binding or generation; changed replays use `409 idempotency_conflict`.
-Unexpected server errors are 5xx. `reason` is exactly `user_hangup`,
-`silence_timeout`, `upstream_voice_end`, `media_lost`, `gateway_shutdown` or
-`failure`.
+Unexpected server errors are 5xx. `call.ended.reason` is exactly
+`user_hangup`, `upstream_voice_end`, `media_lost`, `gateway_shutdown` or `failure`.
 
 The opening manifest is the existing `kind: "full"`, owner-scoped `version`
 and ordered `items` array of `{role,text}` strings (empty array if none).
@@ -164,12 +163,13 @@ runner are forbidden. Zoe retains the owner, device, Zoe session ID/generation,
 replies, text input and UI feedback sent upstream still require an active call
 and are fenced by both session identities and generations.
 
-The gateway closes both legs on any end trigger and reports `call.ended` with
-the result of close. The gateway observes liveness
-from the media connection. Its configurable silence timer (default 60 seconds)
-tracks valid interaction separately from transport health; polling, retries,
-stale or duplicate events and render chatter do not count as activity. Zoe no
-longer calls gateway `POST /v1/voice/sessions`, `DELETE /v1/voice/sessions/{id}`
+The client owns the silence timer. Only valid interaction resets it; polling,
+retries, stale or duplicate events, render chatter and transport health do not
+count as activity. On silence expiry the client closes local media and sends a
+normal gateway hangup, reported as `user_hangup`. The gateway does not time
+silence. It observes media liveness, closes both legs on any end trigger and
+reports `call.ended` with the close result. Zoe no longer calls gateway
+`POST /v1/voice/sessions`, `DELETE /v1/voice/sessions/{id}`
 or `POST /v1/voice/account-leases/{lease_id}/release`. The DELETE is not a Zoe
 operator or reconciliation path. Zoe does not end calls on a context budget.
 
@@ -235,8 +235,9 @@ Ship Zoe, the gateway and Apple together in one release. Remove Zoe's
 `POST /v1/voice/sessions`, `POST /v1/voice/sessions/{session_id}/connected`,
 `/heartbeat` and `/hangup` siblings, `voice.turn.commit`, `voice.turn.handoff`,
 the Apple voice-turn relay path, heartbeat reaper, handoff preflight wait and
-background classification scan in that release. No compatibility window;
-the old client is unsupported.
+background classification scan in that release. Deploy with a fresh Zoe
+database; no migration from prior data or compatibility with older clients
+or gateways is required.
 
 ## Implementation locations
 
@@ -245,8 +246,9 @@ the old client is unsupported.
 ## Verification obligations
 
 Verify fail-closed and duplicate dials, binding before forwarding, and rejection
-of stale reports. Verify all gateway end triggers, valid-activity-only silence,
-matched evidence and lookup on report loss, and no reuse on unknown evidence.
+of stale reports. Verify all gateway end triggers, client silence hangup on
+valid-activity-only timing, matched evidence and lookup on report loss, and no
+reuse on unknown evidence.
 Verify unbound failed-create reconciliation rejects old generations and pool
 sources, and cannot clear a bound or replacement call. Verify real gateway
 reconnection and task continuity. Follow the
