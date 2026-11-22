@@ -68,6 +68,7 @@ type Service struct {
 	retryStatusPath        string
 	retryPublish           chan struct{}
 	resultReceiptAdapter   ResultReceiptAdapter
+	beforeResultClaim      func() // Test seam after source/destination reads, before the claim transaction.
 	resultCapability       *gatewayResultCapability
 	db                     *sql.DB
 	base                   *url.URL

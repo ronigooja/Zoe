@@ -112,6 +112,10 @@ func (s *Service) acknowledgeOpeningResults(ctx context.Context, tx *sql.Tx, p c
 		return nil
 	}
 	if !strictOpeningReceipt(opening, receipt) {
+		now := s.now().UTC().Format(time.RFC3339Nano)
+		if _, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET last_error_code='',next_attempt_at=?,updated_at=? WHERE d.workspace_id=? AND d.subject_id=? AND d.status='pending' AND d.last_error_code='awaiting_context' AND d.entry_id IN (SELECT o.entry_id FROM voice_result_opening o JOIN voice_sessions v ON v.id=o.session_id WHERE o.session_id=? AND o.state='reserved' AND v.workspace_id=d.workspace_id AND v.owner_id=d.subject_id AND v.state='active') AND NOT EXISTS(SELECT 1 FROM voice_result_chunks ch WHERE ch.entry_id=d.entry_id AND ch.state!='pending')`, now, now, p.WorkspaceID, p.SubjectID, session); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `DELETE FROM voice_result_opening WHERE session_id=? AND state='reserved'`, session)
 		return err
 	}

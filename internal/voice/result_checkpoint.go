@@ -176,6 +176,9 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 	if err != nil || (adapter != nil && media <= 0) {
 		return
 	}
+	if s.beforeResultClaim != nil {
+		s.beforeResultClaim()
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return
