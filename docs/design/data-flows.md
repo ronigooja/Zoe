@@ -12,7 +12,7 @@ identify implementation locations, not conformance.
 ## Main flow
 
 ```text
-Apple dial -> gateway -> Zoe call authorization and opening -> gateway AVAS + client relay
+Apple dial -> gateway -> Zoe call authorization and opening -> gateway bridges Apple media to AVAS
 AVAS client-targeted delegation -> gateway transcript ingest -> Zoe worker -> Register
   chat -----------> upstream conversation
   memory_write ---> memory worker

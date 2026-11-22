@@ -36,9 +36,7 @@ under the prompt lifecycle above.
 
 ### Voice configuration
 
-Zoe's authenticated `GET /v1/voice/config` response includes
-`gateway_dial_origin`, the gateway's HTTPS origin for AVAS dialing. See
-[dial authentication](media.md#avas-dial-authentication).
+See the [authenticated AVAS configuration response](media.md#apple-signaling-and-configuration).
 
 ## Persistence and idempotency
 

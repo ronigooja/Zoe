@@ -22,11 +22,11 @@ Production discovery starts the result dispatcher only with a configured HTTPS g
 
 ## Persistence and idempotency
 
-Durable task result/assistant entry and event have independently tracked consumer progress. In-call result checkpoints are keyed by result, destination/session generation and chunk identity. Zoe reserves the exact opening items during [call setup](media.md#inputs-and-outputs); reservations and consumed results exclude in-call voice delivery. Only a receipt matching applied, silent, version and content hash consumes the reservation.
+Durable task result/assistant entry and event have independently tracked consumer progress. In-call result checkpoints are keyed by result, destination/session generation and chunk identity. Opening reservations and consumed results exclude in-call voice delivery; see [call establishment](media.md#call-lifecycle) for reservation and receipt handling.
 
 ## Failure and recovery
 
-Transport acknowledgement or model wording is not task success; stale observations cannot overwrite current authority. Keep opening reservations while the create outcome is unknown. Release unconsumed reservations on a non-matching receipt or when the session reaches failed or ended. Within the same conversation reconcile chunk acknowledgements and resume only unacknowledged chunks; an HTTP append alone does not prove spoken delivery.
+Transport acknowledgement or model wording is not task success; stale observations cannot overwrite current authority. Within the same conversation reconcile chunk acknowledgements and resume only unacknowledged chunks; an HTTP append alone does not prove spoken delivery.
 
 Unsupported, malformed or unavailable health retains pending work with `receipt_capability_disabled`, without transport attempts. An applied receipt proves local transport writes plus durable receipt persistence, never upstream consumption or speech; capability discovery is not live end-to-end evidence.
 
@@ -55,7 +55,7 @@ Instructions for the voice upstream list background tools only. Message formats 
 
 ## Conversation context events
 
-Zoe records `voice_context_events` atomically with the fenced transition to delivered (all chunks confirmed) or consumed (strict opening receipt); a recording failure rolls back the transition and retries reuse the source identity.
+Zoe records `voice_context_events` atomically with the fenced transition to delivered (all chunks confirmed) or in the [opening receipt transaction](media.md#call-lifecycle); a recording failure rolls back the transition and retries reuse the source identity.
 The owner/workspace-scoped identities and roles are `task_result`/entry ID (`background`), `ui_feedback`/request ID (`background`), `fast_reply`/reply ID for task reports and recall (`background`), `user_text`/command ID (`user`), `ui_input_request`/question ID (`background`), and `ui_input_received`/answer command ID (`user`).
 Each event retains the delivery session and the text the upstream received without transport wrappers: the source text for in-call deliveries, and the exact `Task result` item (goal, status and summary or result) for results sent in the opening. `at` and `received_at` share the UTC delivery-completion timestamp.
 Register, compact and memory ingestion merge events with transcript turns by parsed UTC time, then events before turns, then event kind/ID strings or turn session string/numeric sequence; ingestion membership uses canonical identities (`event:%q:%q` for kind/ID, `turn:%q:%d` for session/sequence).
