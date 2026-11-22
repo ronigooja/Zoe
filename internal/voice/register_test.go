@@ -110,10 +110,10 @@ func TestRegisterContiguousLayersAndMemoryBoundary(t *testing.T) {
 		t.Fatal("no rebuild")
 	}
 	s := f.layers(f.now)
-	if !s.CompactThrough.Equal(edge) || !s.RawFrom.Equal(s.CompactThrough) || !s.CompactFrom.IsZero() || strings.Contains(s.Raw, "old") || !strings.Contains(s.Raw, "assistant: edge") {
+	if !s.CompactThrough.Equal(edge) || !s.RawFrom.Equal(s.CompactThrough) || !s.CompactFrom.IsZero() || s.Raw != "assistant: edge\nuser: recent\n" {
 		t.Fatalf("noncontiguous layers: %+v", s)
 	}
-	if !strings.Contains(f.inputs[0], "user: old") || strings.Contains(f.inputs[0], "assistant: edge") || f.instructions[0] != testPrompts(t).Compact() {
+	if f.inputs[0] != "Character limit: 1000\n\nuser: old\n" || f.instructions[0] != testPrompts(t).Compact() {
 		t.Fatal("incorrect compaction instruction/input")
 	}
 	m := f.now.Add(-2 * time.Hour)
@@ -133,6 +133,37 @@ func TestRegisterContiguousLayersAndMemoryBoundary(t *testing.T) {
 	text, err := f.r.AssembleContext(ctx, f.owner, f.now, 15)
 	if err != nil || len([]rune(text)) != 15 {
 		t.Fatalf("budget: %q %v", text, err)
+	}
+}
+
+func TestRegisterRouteAndOpeningRenderStoredContextWithoutTimePrefixes(t *testing.T) {
+	f := newRegisterFixture(t)
+	at := f.now.Format(time.RFC3339Nano)
+	compact := "[" + at + "] user mentioned a deadline of " + at + "\n" + at + " assistant confirmed it"
+	f.exec(`INSERT INTO voice_context_registers(workspace_id,owner_subject_id,compact) VALUES(?,?,?)`, f.owner.WorkspaceID, f.owner.OwnerSubjectID, compact)
+	f.turn("handoff-session", 0, "user", "the deadline", f.now)
+	f.output = `{"route":"chat","request":null}`
+	ctx := context.Background()
+	if _, err := f.r.Route(ctx, f.owner, "that", f.now); err != nil {
+		t.Fatal(err)
+	}
+	wantCompact := "user mentioned a deadline of " + at + "\nassistant confirmed it"
+	if want := "Compact:\n" + wantCompact + "\nRaw:\nuser: the deadline\n\nCurrent sentence:\nthat"; f.inputs[0] != want {
+		t.Fatalf("routing input = %q, want %q", f.inputs[0], want)
+	}
+	if got, err := f.r.AssembleContext(ctx, f.owner, f.now, 1000); err != nil || got != wantCompact+"\nuser: the deadline\n" {
+		t.Fatalf("opening context = %q, err = %v", got, err)
+	}
+	var stored string
+	if err := f.db.QueryRow(`SELECT compact FROM voice_context_registers WHERE workspace_id=? AND owner_subject_id=?`, f.owner.WorkspaceID, f.owner.OwnerSubjectID).Scan(&stored); err != nil || stored != compact {
+		t.Fatalf("stored compact = %q, err = %v", stored, err)
+	}
+}
+
+func TestCompactInstructionKeepsTopicOrder(t *testing.T) {
+	instruction := testPrompts(t).Compact()
+	if !strings.Contains(instruction, "\nWrite plain text in the transcript's language, one line per topic in time order.\n") {
+		t.Fatal("compact instruction must require one line per topic in time order")
 	}
 }
 

@@ -9,5 +9,5 @@ Drop greetings, filler, repetition and speech recognition debris.
 Add no facts or intent beyond the transcript.
 Only the user's words establish that a request is finished or failed; attribute assistant statements to the assistant and background content to its background source.
 
-Write plain text in the transcript's language, one line per topic in time order, each line starting with the time of its first utterance.
+Write plain text in the transcript's language, one line per topic in time order.
 Stay within the given character limit.

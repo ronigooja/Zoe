@@ -300,6 +300,7 @@ func (r *ContextRegister) snapshotForTurn(ctx context.Context, o RegisterOwner, 
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return s, err
 	}
+	s.Compact = stripCompactTimePrefixes(s.Compact)
 	s.CompactThrough, err = time.Parse(time.RFC3339Nano, edge)
 	if err != nil {
 		return s, err
@@ -422,7 +423,23 @@ func (r *ContextRegister) snapshotForTurn(ctx context.Context, o RegisterOwner, 
 	return s, nil
 }
 func registerLine(t registerTurn) string {
-	return fmt.Sprintf("[%s] %s: %s\n", t.at.UTC().Format(time.RFC3339Nano), t.role, t.text)
+	return fmt.Sprintf("%s: %s\n", t.role, t.text)
+}
+
+// Older Compact prompts instructed the model to start each topic with its time.
+// Remove that line metadata without rewriting stored Compact or filtering dates in dialogue.
+func stripCompactTimePrefixes(compact string) string {
+	lines := strings.Split(compact, "\n")
+	for i, line := range lines {
+		prefix, rest, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		if _, err := time.Parse(time.RFC3339Nano, strings.TrimSuffix(strings.TrimPrefix(prefix, "["), "]")); err == nil {
+			lines[i] = rest
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (r *ContextRegister) Layers(ctx context.Context, owner RegisterOwner, now time.Time) (RegisterLayers, error) {

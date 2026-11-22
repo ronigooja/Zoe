@@ -17,7 +17,7 @@ func TestRegisterOpeningReadsStoredContextWithoutModel(t *testing.T) {
 	svc := newService(f.db, Config{ContextRegister: f.r, Now: func() time.Time { return f.now }, OpeningContextBudget: 200, UpstreamRoute: "avas"})
 	defer svc.Stop()
 	text := svc.openingRegisterText(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "owner"})
-	if !strings.Contains(text, "the lunar mission") || utf8.RuneCountInString(text) > 200 || f.calls != 0 {
+	if text != "user: the lunar mission\n" || f.calls != 0 {
 		t.Fatalf("opening=%q calls=%d", text, f.calls)
 	}
 }
