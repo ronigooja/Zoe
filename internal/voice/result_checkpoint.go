@@ -292,18 +292,12 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 	}
 }
 
-// SelectPendingResult authorizes model-driven selection of an existing source entry.
-// Deferred rows are released by clearing awaiting_context, never by opening-context ACK.
+// selectPendingResultTx binds an existing authoritative source and clears its deferral.
 // A same-destination selection is idempotent and retains all checkpoints/leases.
 // Rebinding requires every chunk pending and no unexpired claim; sent/ambiguous history is immutable.
-func (s *Service) SelectPendingResult(ctx context.Context, principal contracts.Principal, entry, voiceSessionID string, generation int64) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+func (s *Service) selectPendingResultTx(ctx context.Context, tx *sql.Tx, principal contracts.Principal, entry, voiceSessionID string, generation int64) error {
 	var task, run, text, status string
-	err = tx.QueryRowContext(ctx, `SELECT d.task_id,d.run_id,e.content,d.status FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.workspace_id=d.workspace_id AND e.task_id=d.task_id AND e.kind='assistant_message' WHERE d.entry_id=? AND d.workspace_id=? AND d.subject_id=? AND `+authoritativeResultPredicate+` AND `+resultNotInOpening, entry, principal.WorkspaceID, principal.SubjectID).Scan(&task, &run, &text, &status)
+	err := tx.QueryRowContext(ctx, `SELECT d.task_id,d.run_id,e.content,d.status FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.workspace_id=d.workspace_id AND e.task_id=d.task_id AND e.kind='assistant_message' WHERE d.entry_id=? AND d.workspace_id=? AND d.subject_id=? AND `+authoritativeResultPredicate+` AND `+resultNotInOpening, entry, principal.WorkspaceID, principal.SubjectID).Scan(&task, &run, &text, &status)
 	if err != nil {
 		return err
 	}
@@ -351,5 +345,5 @@ func (s *Service) SelectPendingResult(ctx context.Context, principal contracts.P
 	if _, err = tx.ExecContext(ctx, `UPDATE voice_result_deliveries SET last_error_code='',next_attempt_at=?,updated_at=? WHERE entry_id=? AND status='pending' AND last_error_code='awaiting_context'`, now, now, entry); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }

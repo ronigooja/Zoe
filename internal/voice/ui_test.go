@@ -288,6 +288,9 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 				if count(`SELECT count(*) FROM voice_result_deliveries WHERE entry_id='older' AND status='pending' AND last_error_code=''`) != 1 {
 					t.Fatal("report changed a reserved result's pending state")
 				}
+				if count(`SELECT count(*) FROM voice_fast_replies f JOIN voice_turns t ON t.id=f.report_turn_id WHERE f.turn_id='display' AND t.turn_id=f.turn_id AND t.steward_action='report'`) != 1 {
+					t.Fatal("report reply lost its exact persisted turn association")
+				}
 			}
 			if storedAction != wantAction {
 				t.Fatalf("stored action=%q want=%q", storedAction, wantAction)

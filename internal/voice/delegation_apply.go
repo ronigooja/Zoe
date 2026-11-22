@@ -131,8 +131,8 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 				return contracts.CommandResult{}, nil, apiError(409, "invalid_selection", "report requires a selected task", nil)
 			}
 			if stewardAction == string(steward.ActionReport) {
-				// This turn speaks the Steward reply only. Preserve any original
-				// result pending contextual selection; a report summary is not its ACK.
+				// Defer the original result until this report reply commits delivered;
+				// the summary itself never acknowledges the original result.
 				if _, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET last_error_code='awaiting_context' WHERE workspace_id=? AND subject_id=? AND task_id=? AND status='pending' AND `+resultNotInOpening+` AND NOT EXISTS(SELECT 1 FROM voice_result_chunks c WHERE c.entry_id=d.entry_id AND c.state!='pending')`, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, stewardTaskID); err != nil {
 					return contracts.CommandResult{}, nil, err
 				}
@@ -147,7 +147,7 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 			}
 			err := s.heldReplyTx(ctx, tx, cmd, p, reply)
 			if err == nil {
-				_, err = tx.ExecContext(ctx, `UPDATE voice_fast_replies SET intent_kind='task_report' WHERE session_id=? AND generation=? AND turn_id=?`, p.SessionID, p.Generation, p.TurnID)
+				_, err = tx.ExecContext(ctx, `UPDATE voice_fast_replies SET intent_kind='task_report',report_turn_id=CASE WHEN ?='report' THEN ? ELSE NULL END WHERE session_id=? AND generation=? AND turn_id=?`, stewardAction, turnID, p.SessionID, p.Generation, p.TurnID)
 			}
 			return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}, nil, err
 		}

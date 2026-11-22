@@ -18,6 +18,19 @@ func checkpointRig(t *testing.T) *deliveryRig {
 	return r
 }
 
+// Exercise the shared transactional binding fences independently of report eligibility.
+func (s *Service) selectPendingResultForTest(ctx context.Context, principal contracts.Principal, entry, session string, generation int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := s.selectPendingResultTx(ctx, tx, principal, entry, session, generation); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func TestResultCheckpointExplicitSelectionDelivers(t *testing.T) {
 	r := checkpointRig(t)
 	r.setup(t, "original result")
@@ -25,7 +38,7 @@ func TestResultCheckpointExplicitSelectionDelivers(t *testing.T) {
 	r.seedCall(t, "next", "user-1", 2)
 	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
 	for i := 0; i < 2; i++ {
-		if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "next", 2); err != nil {
+		if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "next", 2); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -49,10 +62,10 @@ func TestResultCheckpointSelectionUnknownCannotRebind(t *testing.T) {
 	r.exec(t, `UPDATE voice_sessions SET state='ended' WHERE id='old'`)
 	r.seedCall(t, "next", "user-1", 2)
 	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
-	if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "next", 2); err == nil {
+	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "next", 2); err == nil {
 		t.Fatal("unknown destination rebound")
 	}
-	if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "next", 99); err == nil {
+	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "next", 99); err == nil {
 		t.Fatal("wrong generation accepted")
 	}
 	var session string
@@ -72,12 +85,12 @@ func TestResultCheckpointSelectionUnsentCanRebind(t *testing.T) {
 	r.svc.consumeResultEvents(context.Background())
 	r.seedCall(t, "old", "user-1", 1)
 	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
-	if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "old", 1); err != nil {
+	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "old", 1); err != nil {
 		t.Fatal(err)
 	}
 	r.exec(t, `UPDATE voice_sessions SET state='ended' WHERE id='old'`)
 	r.seedCall(t, "next", "user-1", 2)
-	if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "next", 2); err != nil {
+	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "next", 2); err != nil {
 		t.Fatal(err)
 	}
 	r.run(t)
@@ -113,7 +126,7 @@ func TestResultCheckpointForgedDeliveryRejectedByEvent(t *testing.T) {
 				t.Fatal("forged source sent")
 			}
 			p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
-			if err := r.svc.SelectPendingResult(context.Background(), p, id, "s1", 1); err == nil {
+			if err := r.svc.selectPendingResultForTest(context.Background(), p, id, "s1", 1); err == nil {
 				t.Fatal("forged source selected")
 			}
 			pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
@@ -355,7 +368,7 @@ func TestResultCheckpointMissingAuthoritativeEventCannotDeliver(t *testing.T) {
 		t.Fatalf("unauthoritative source status=%s attempts=%d posts=%d", status, attempts, r.posts.Load())
 	}
 	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
-	if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "s1", 1); err == nil {
+	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "s1", 1); err == nil {
 		t.Fatal("source without authoritative event selected")
 	}
 	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
@@ -407,13 +420,13 @@ func TestResultCheckpointSelectionLiveLeaseRebindRejected(t *testing.T) {
 	r.svc.consumeResultEvents(context.Background())
 	r.seedCall(t, "old", "user-1", 1)
 	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
-	if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "old", 1); err != nil {
+	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "old", 1); err != nil {
 		t.Fatal(err)
 	}
 	r.exec(t, `UPDATE voice_result_checkpoints SET lease_until=?`, r.now().Add(time.Minute).Format(time.RFC3339Nano))
 	r.exec(t, `UPDATE voice_sessions SET state='ended' WHERE id='old'`)
 	r.seedCall(t, "next", "user-1", 2)
-	if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "next", 2); err == nil {
+	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "next", 2); err == nil {
 		t.Fatal("live lease rebound")
 	}
 }
@@ -427,7 +440,7 @@ func TestResultCheckpointSelectionConfirmedRebindRejected(t *testing.T) {
 	r.exec(t, `UPDATE voice_sessions SET state='ended' WHERE id='old'`)
 	r.seedCall(t, "next", "user-1", 2)
 	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
-	if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "next", 2); err == nil {
+	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "next", 2); err == nil {
 		t.Fatal("confirmed destination rebound")
 	}
 	var session string
@@ -456,7 +469,7 @@ func TestResultCheckpointPartialProgressSelectionPreserved(t *testing.T) {
 	}
 	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
 	for i := 0; i < 2; i++ {
-		if err := r.svc.SelectPendingResult(context.Background(), p, "entry-1", "s1", 1); err != nil {
+		if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "s1", 1); err != nil {
 			t.Fatal(err)
 		}
 	}

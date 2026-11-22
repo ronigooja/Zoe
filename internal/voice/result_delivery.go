@@ -192,6 +192,9 @@ func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session s
 	if ok && recordContextEvent(ctx, tx, contextEvent{workspace: workspace, owner: destination.owner, session: destination.session, kind: "fast_reply", id: id, role: "background", text: text, at: completed}) != nil {
 		return
 	}
+	if ok && s.releaseReportResultsTx(ctx, tx, id, workspace, destination, completed) != nil {
+		return
+	}
 	_ = tx.Commit()
 }
 

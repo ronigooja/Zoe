@@ -292,7 +292,7 @@ CREATE INDEX voice_pending_delegations ON voice_turns(confirmed_at,id) WHERE han
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 210, Name: "gateway_call_lifecycle", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 210, Name: "gateway_call_lifecycle", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN lifecycle_runner_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE voice_sessions ADD COLUMN call_start_response BLOB NOT NULL DEFAULT '';
 ALTER TABLE voice_sessions ADD COLUMN call_established_hash TEXT NOT NULL DEFAULT '';
@@ -303,6 +303,12 @@ ALTER TABLE voice_sessions ADD COLUMN call_end_evidence_hash TEXT NOT NULL DEFAU
 ALTER TABLE voice_account_terminations ADD COLUMN gateway_evidence BLOB NOT NULL DEFAULT '';
 CREATE UNIQUE INDEX voice_lifecycle_gateway_binding ON voice_sessions(gateway_session_id, gateway_media_generation)
 WHERE lifecycle_runner_id<>'' AND gateway_session_id<>'';`)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 211, Name: "report_reply_turn", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_fast_replies ADD COLUMN report_turn_id TEXT REFERENCES voice_turns(id);`)
 		return err
 	}})
 }

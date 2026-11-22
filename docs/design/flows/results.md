@@ -14,7 +14,9 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 ## Required behavior
 
-Pending results retain their authoritative identity and are candidates for silent opening context, not compulsory playback. Opening takes Register compact/raw first, then a [bounded](configuration.md#zoe-limits) set of owner-scoped pending results ordered by creation time and entry ID, excluding reserved, consumed or previously attempted results. It shares one rune budget and does not truncate or reserve items that do not fit. Each result is a `user` item with four lines labeled `Task result:`, `Goal:`, `Status:` and `Result:`; delivery metadata stays private. A contextual `report` sends its fact-grounded reply through the durable reply path without queueing or acknowledging the original result. `redisplay` remains UI-only and does not authorize voice playback.
+Pending results retain their authoritative identity and are candidates for silent opening context, not compulsory delivery. Opening takes Register compact/raw first, then a [bounded](configuration.md#zoe-limits) set of owner-scoped pending results ordered by creation time and entry ID, excluding reserved, consumed or previously attempted results. It shares one rune budget and does not truncate or reserve items that do not fit. Each result is a `user` item with four lines labeled `Task result:`, `Goal:`, `Status:` and `Result:`; delivery metadata stays private.
+
+A contextual `report` sends its fact-grounded reply through the durable reply path and does not itself acknowledge or consume the original result. That task's original result, if still pending, unreserved and without attempted chunks, is withheld using `awaiting_context`, a deferral overlay on a pending result, not a status. Once all reply chunks have applied receipts and the reply's delivered transition commits, the original result is released for delivery in the same active call, subject to unchanged source and checkpoint destination/lease fences. If the call ends or the reply fails first, the result stays pending for the next opening; a report reply resumed in another call does not release it. If no result exists at report time, nothing is withheld and a later result follows normal dispatch. `redisplay`, including its durable fallback reply, never releases an original result.
 
 For production receipt delivery, Zoe probes authenticated `GET /v1/health` using the configured gateway URL, owner bearer and HTTP client before checkpoint transactions. Only the exact `result_deliveries` contract `{version:"v1",max_text_bytes:8000,applied_evidence:"local_transport_writes_and_durable_receipt"}` enables the receipt adapter for task results and generic durable texts. Capability evidence is cached for 30 seconds, with one probe in flight and a two-second probe budget. No new deployment setting is required.
 
@@ -26,7 +28,7 @@ Durable task result/assistant entry and event have independently tracked consume
 
 ## Failure and recovery
 
-Transport acknowledgement or model wording is not task success; stale observations cannot overwrite current authority. Within the same conversation reconcile chunk acknowledgements and resume only unacknowledged chunks; an HTTP append alone does not prove spoken delivery.
+Transport acknowledgement or model wording is not task success; stale observations cannot overwrite current authority. Within the same conversation reconcile chunk acknowledgements and resume only unacknowledged chunks; an HTTP append alone does not prove upstream consumption.
 
 Unsupported, malformed or unavailable health retains pending work with `receipt_capability_disabled`, without transport attempts. An applied receipt proves local transport writes plus durable receipt persistence, never upstream consumption or speech; capability discovery is not live end-to-end evidence.
 
