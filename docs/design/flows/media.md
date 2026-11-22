@@ -62,6 +62,8 @@ For `call.established` and `call.ended`, use the same 400/401/403 codes,
 for a stale binding or generation; changed replays use `409 idempotency_conflict`.
 Unexpected server errors are 5xx. `call.ended.reason` is exactly
 `user_hangup`, `upstream_voice_end`, `media_lost`, `gateway_shutdown` or `failure`.
+Reject `closed_at` more than five minutes ahead of Zoe's receive time with
+`400 invalid_request`.
 
 The opening manifest is the existing `kind: "full"`, owner-scoped `version`
 and ordered `items` array of `{role,text}` strings (empty array if none).
@@ -69,11 +71,12 @@ Use [opening item selection](results.md#required-behavior).
 `opening_context_hash` is lowercase hex SHA-256 of Go `encoding/json.Marshal`
 of that manifest, in `kind`, `version`, `items` order and `role`, `text` order
 per item, with default escaping. The gateway applies the manifest and
-instructions at create, and forwards the projection of the actual create
-response's `opening_context`: boolean `applied`, `silent` when present (only
-JSON boolean `true` qualifies), integer `version` and lowercase hex string
-`content_hash` when present. Do not fabricate a receipt from the expected hash.
-Omit the receipt if none was returned, including on an empty opening.
+instructions at create. The opening receipt attests that the gateway applied
+and persisted the manifest locally at create, not that upstream consumed or
+spoke it. Report the create path's `opening_context` receipt as produced:
+boolean `applied`, `silent` when present (only JSON boolean `true` qualifies),
+integer `version` and lowercase hex `content_hash` when present. Omit the
+receipt if the create path produced none, including on an empty opening.
 
 ### Zoe reconciliation reads from the gateway
 
@@ -203,11 +206,12 @@ or authority to reuse an account.
   even if the call subsequently ended; it does not reactivate the call.
   For `call.ended`, exact retry reports the current committed result and does
   not duplicate evidence or change `ended_at`. Retry with the same reason,
-  `closed_at` and identity. A report missing evidence may be supplemented with
-  matching evidence, but never downgrade verified closure.
+  `closed_at` and identity. Missing or unverified evidence can be supplemented
+  with matching evidence, but never downgrade verified closure.
   Persist verified evidence and session/lease/pool transition together. Use
-  `closed_at` for `ended_at`, or `observed_at` when lookup establishes closure
-  before the report is received; later reports do not rewrite that timestamp.
+  `closed_at` capped at the first report's receive time for `ended_at`, or
+  `observed_at` when lookup establishes closure before the report is received;
+  later reports do not rewrite that timestamp.
   Clear only the matching pool source, never a replacement call's fence.
 
 ## Failure and recovery
@@ -233,9 +237,10 @@ beyond lookup.
 
 Ship Zoe, the gateway and Apple together in one release. Remove Zoe's
 `POST /v1/voice/sessions`, `POST /v1/voice/sessions/{session_id}/connected`,
-`/heartbeat` and `/hangup` siblings, `voice.turn.commit`, `voice.turn.handoff`,
-the Apple voice-turn relay path, heartbeat reaper, handoff preflight wait and
-background classification scan in that release. Deploy with a fresh Zoe
+`/heartbeat` and `/hangup` siblings, the `voice.turn.commit` and
+`voice.turn.handoff` commands, the Apple voice-turn relay path, heartbeat
+reaper, handoff preflight wait and background classification scan. Keep the
+`voice.turn.handoff` event. Deploy with a fresh Zoe
 database; no migration from prior data or compatibility with older clients
 or gateways is required.
 

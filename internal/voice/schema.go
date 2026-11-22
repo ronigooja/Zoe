@@ -298,6 +298,7 @@ ALTER TABLE voice_sessions ADD COLUMN call_start_response BLOB NOT NULL DEFAULT 
 ALTER TABLE voice_sessions ADD COLUMN call_established_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE voice_sessions ADD COLUMN call_ended_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE voice_sessions ADD COLUMN call_closed_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE voice_sessions ADD COLUMN call_effective_closed_at TEXT NOT NULL DEFAULT '';
 ALTER TABLE voice_sessions ADD COLUMN call_end_evidence_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE voice_account_terminations ADD COLUMN gateway_evidence BLOB NOT NULL DEFAULT '';
 CREATE UNIQUE INDEX voice_lifecycle_gateway_binding ON voice_sessions(gateway_session_id, gateway_media_generation)

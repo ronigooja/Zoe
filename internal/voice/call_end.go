@@ -70,8 +70,10 @@ type callEndedRequest struct {
 	TerminationEvidence *terminationEvidence `json:"termination_evidence,omitempty"`
 }
 
-func (r callEndedRequest) valid() bool {
-	if _, ok := wireUTCTime(r.ClosedAt); !ok || !r.callBinding.valid() {
+const maxCallClosedAtSkew = 5 * time.Minute
+
+func (r callEndedRequest) valid(receivedAt time.Time) bool {
+	if at, ok := wireUTCTime(r.ClosedAt); !ok || at.After(receivedAt.Add(maxCallClosedAtSkew)) || !r.callBinding.valid() {
 		return false
 	}
 	switch r.Reason {
@@ -89,17 +91,18 @@ type callEndedResponse struct {
 }
 
 func (s *Service) handleCallEnded(w http.ResponseWriter, r *http.Request) {
+	receivedAt := s.now().UTC()
 	p, ok := callRunner(w, r)
 	if !ok {
 		return
 	}
 	var req callEndedRequest
-	if err := decodeRequest(w, r, 64<<10, &req); err != nil || !req.valid() {
+	if err := decodeRequest(w, r, 64<<10, &req); err != nil || !req.valid(receivedAt) {
 		control.WriteError(w, apiError(http.StatusBadRequest, "invalid_request", "invalid end report", nil))
 		return
 	}
 	ctx, id := r.Context(), r.PathValue("session_id")
-	result, err := s.endCall(ctx, p, id, req)
+	result, err := s.endCall(ctx, p, id, req, receivedAt)
 	if err != nil {
 		control.WriteError(w, safeSessionError(err))
 		return
@@ -111,8 +114,8 @@ func (s *Service) handleCallEnded(w http.ResponseWriter, r *http.Request) {
 				control.WriteError(w, safeSessionError(err))
 				return
 			}
-		} else if outcome == "unknown" {
-			logging.Errorf("voice termination evidence unknown for session %s", id)
+		} else if outcome == "unknown" && ctx.Err() == nil {
+			s.logUnresolvedCall(id, "voice session %s termination unresolved: state=quarantined outcome=unknown", id)
 		}
 	}
 	status := http.StatusOK
@@ -122,7 +125,7 @@ func (s *Service) handleCallEnded(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, result)
 }
 
-func (s *Service) endCall(ctx context.Context, p contracts.RunnerPrincipal, id string, req callEndedRequest) (callEndedResponse, error) {
+func (s *Service) endCall(ctx context.Context, p contracts.RunnerPrincipal, id string, req callEndedRequest, receivedAt time.Time) (callEndedResponse, error) {
 	var zero callEndedResponse
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -144,15 +147,18 @@ func (s *Service) endCall(ctx context.Context, p contracts.RunnerPrincipal, id s
 	if c.endReason != "" && (c.endReason != req.Reason || c.closedAt != closed) {
 		return zero, callReplayConflict()
 	}
-	if req.TerminationEvidence == nil && strings.HasPrefix(c.endEvidenceHash, "only:") {
-		return zero, callReplayConflict()
+	if c.endReason == "" {
+		// Keep the wire timestamp for replay checks and the capped value for
+		// closure, even if this report must wait for verified evidence.
+		c.effectiveClosedAt = closed
+		if closedAt.After(receivedAt) {
+			c.effectiveClosedAt = receivedAt.Format(time.RFC3339Nano)
+		}
 	}
-	verified := req.TerminationEvidence.matches(c, s.now())
-	if c.endReason != "" && c.endEvidenceHash == "" && req.TerminationEvidence != nil && !verified {
-		return zero, callReplayConflict()
-	}
+	now := s.now().UTC()
+	verified := req.TerminationEvidence.matches(c, now)
 	var evidenceHash string
-	if req.TerminationEvidence != nil {
+	if req.TerminationEvidence != nil && (verified || c.endEvidenceHash != "") {
 		serialized, err := json.Marshal(req.TerminationEvidence)
 		if err != nil {
 			return zero, err
@@ -163,12 +169,15 @@ func (s *Service) endCall(ctx context.Context, p contracts.RunnerPrincipal, id s
 			// exact replay. Otherwise accept retries of the original report.
 			evidenceHash = "only:" + evidenceHash
 		}
-		if c.endEvidenceHash != "" && c.endEvidenceHash != evidenceHash {
+	}
+	if c.endEvidenceHash != "" && (req.TerminationEvidence != nil || strings.HasPrefix(c.endEvidenceHash, "only:")) && evidenceHash != c.endEvidenceHash {
+		return zero, callReplayConflict()
+	}
+	if c.state == "ended" && req.TerminationEvidence != nil && c.endEvidenceHash == "" {
+		// A late supplement must match an already-verified closure as well.
+		if !verified {
 			return zero, callReplayConflict()
 		}
-	}
-	if c.state == "ended" && req.TerminationEvidence != nil && evidenceHash != c.endEvidenceHash {
-		// A late supplement must match an already-verified closure as well.
 		var stored []byte
 		if err := tx.QueryRowContext(ctx, `SELECT gateway_evidence FROM voice_account_terminations WHERE session_id=? AND generation=?`, id, c.Generation).Scan(&stored); err != nil {
 			return zero, err
@@ -177,17 +186,17 @@ func (s *Service) endCall(ctx context.Context, p contracts.RunnerPrincipal, id s
 		if err != nil {
 			return zero, err
 		}
-		if !req.TerminationEvidence.matches(c, s.now()) || !bytes.Equal(stored, record) {
+		if !bytes.Equal(stored, record) {
 			return zero, callReplayConflict()
 		}
 	}
 	if c.endReason == "" || (c.endEvidenceHash == "" && evidenceHash != "") {
-		if _, err := tx.ExecContext(ctx, `UPDATE voice_sessions SET call_ended_reason=?,call_closed_at=?,call_end_evidence_hash=? WHERE id=?`, req.Reason, closed, evidenceHash, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE voice_sessions SET call_ended_reason=?,call_closed_at=?,call_effective_closed_at=?,call_end_evidence_hash=? WHERE id=?`, req.Reason, closed, c.effectiveClosedAt, evidenceHash, id); err != nil {
 			return zero, err
 		}
 	}
 	if c.state != "ended" && (c.state != "quarantined" || verified) {
-		c.state, err = s.applyTermination(ctx, tx, id, c, req.TerminationEvidence, closed)
+		c.state, err = s.applyTermination(ctx, tx, id, c, req.TerminationEvidence, now)
 		if err != nil {
 			return zero, err
 		}
@@ -195,8 +204,7 @@ func (s *Service) endCall(ctx context.Context, p contracts.RunnerPrincipal, id s
 	return commitEndResult(ctx, tx, c.state)
 }
 
-func (s *Service) applyTermination(ctx context.Context, tx *sql.Tx, id string, c lifecycleCall, e *terminationEvidence, endedAt string) (string, error) {
-	now := s.now().UTC()
+func (s *Service) applyTermination(ctx context.Context, tx *sql.Tx, id string, c lifecycleCall, e *terminationEvidence, now time.Time) (string, error) {
 	at := now.Format(time.RFC3339Nano)
 	claim, err := tx.ExecContext(ctx, `UPDATE voice_sessions SET state='ending',updated_at=? WHERE id=? AND generation=? AND state IN ('active','ending','quarantined') AND EXISTS(SELECT 1 FROM voice_pool_state WHERE id=1 AND source_session_id=?)`, at, id, c.Generation, id)
 	if err != nil {
@@ -218,6 +226,7 @@ func (s *Service) applyTermination(ctx context.Context, tx *sql.Tx, id string, c
 	}
 	observedAt, _ := wireUTCTime(e.ObservedAt)
 	observed := observedAt.Format(time.RFC3339Nano)
+	endedAt := c.effectiveClosedAt
 	if endedAt == "" {
 		endedAt = observed
 	}
@@ -249,6 +258,9 @@ func commitEndResult(ctx context.Context, tx *sql.Tx, state string) (callEndedRe
 }
 
 func (s *Service) queryTerminationEvidence(ctx context.Context, b callBinding) (*terminationEvidence, string) {
+	if !s.gatewayReady() {
+		return nil, "unknown"
+	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	query := url.Values{
@@ -302,10 +314,11 @@ func (s *Service) endFromLookup(ctx context.Context, id string, b callBinding, e
 		return zero, callStale()
 	}
 	if c.state != "ended" {
-		if !e.matches(c, s.now()) {
+		now := s.now().UTC()
+		if !e.matches(c, now) {
 			return zero, errors.New("termination evidence conflicts with persisted call binding")
 		}
-		c.state, err = s.applyTermination(ctx, tx, id, c, e, c.closedAt)
+		c.state, err = s.applyTermination(ctx, tx, id, c, e, now)
 		if err != nil {
 			return zero, err
 		}
@@ -321,8 +334,37 @@ func (s *Service) reconcileCallsLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			s.expireUnresolvedCallLogs()
 			s.reconcileBoundCalls(ctx)
 			s.attestStaleCreates(ctx)
+		}
+	}
+}
+
+const unresolvedCallLogInterval = time.Minute
+
+func (s *Service) logUnresolvedCall(id, format string, args ...any) {
+	now := s.now()
+	s.unresolvedCallLogMu.Lock()
+	if now.Before(s.unresolvedCallLogNext[id]) {
+		s.unresolvedCallLogMu.Unlock()
+		return
+	}
+	if s.unresolvedCallLogNext == nil {
+		s.unresolvedCallLogNext = make(map[string]time.Time)
+	}
+	s.unresolvedCallLogNext[id] = now.Add(unresolvedCallLogInterval)
+	s.unresolvedCallLogMu.Unlock()
+	logging.Errorf(format, args...)
+}
+
+func (s *Service) expireUnresolvedCallLogs() {
+	now := s.now()
+	s.unresolvedCallLogMu.Lock()
+	defer s.unresolvedCallLogMu.Unlock()
+	for id, next := range s.unresolvedCallLogNext {
+		if !now.Before(next) {
+			delete(s.unresolvedCallLogNext, id)
 		}
 	}
 }
@@ -357,16 +399,16 @@ func (s *Service) reconcileBoundCalls(ctx context.Context) {
 			return
 		}
 		if !c.valid() {
-			logging.Errorf("voice termination binding unknown for session %s", c.id)
+			s.logUnresolvedCall(c.id, "voice termination binding unknown for session %s", c.id)
 			continue
 		}
 		e, outcome := s.queryTerminationEvidence(ctx, c.callBinding)
 		if outcome == "released" {
 			if _, err := s.endFromLookup(ctx, c.id, c.callBinding, e); err != nil && ctx.Err() == nil {
-				logging.Errorf("voice evidence reconciliation failed for session %s: %T", c.id, err)
+				s.logUnresolvedCall(c.id, "voice evidence reconciliation failed for session %s: %T", c.id, err)
 			}
 		} else if (outcome == "unknown" || c.state == "ending") && ctx.Err() == nil {
-			logging.Errorf("voice session %s termination unresolved: state=%s outcome=%s", c.id, c.state, outcome)
+			s.logUnresolvedCall(c.id, "voice session %s termination unresolved: state=%s outcome=%s", c.id, c.state, outcome)
 		}
 	}
 }

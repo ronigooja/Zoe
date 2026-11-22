@@ -94,6 +94,8 @@ type Service struct {
 	poolRecoveryMu         sync.Mutex
 	poolRecoveryNext       time.Time
 	poolRecoveryRunning    bool
+	unresolvedCallLogMu    sync.Mutex
+	unresolvedCallLogNext  map[string]time.Time
 	started                bool
 	stopped                bool
 	workers                sync.WaitGroup
@@ -297,10 +299,8 @@ func (s *Service) Start() {
 		s.workers.Add(1)
 		go func() { defer s.workers.Done(); s.delegationWorker(s.recallCtx) }()
 	}
-	if s.gatewayReady() {
-		s.workers.Add(1)
-		go func() { defer s.workers.Done(); s.reconcileCallsLoop(s.recallCtx) }()
-	}
+	s.workers.Add(1)
+	go func() { defer s.workers.Done(); s.reconcileCallsLoop(s.recallCtx) }()
 	if s.resultDeliveryEnabled || s.register != nil {
 		s.workers.Add(1)
 		go func() { defer s.workers.Done(); s.resultDispatcher() }()
@@ -404,17 +404,23 @@ func (s *Service) attestStaleCreates(ctx context.Context) {
 		return
 	}
 	for _, c := range candidates {
-		outcome := s.queryGatewayOutcome(ctx, c.requestID)
+		if ctx.Err() != nil {
+			return
+		}
+		outcome := gatewayCreationOutcome{}
+		if s.gatewayReady() {
+			outcome = s.queryGatewayOutcome(ctx, c.requestID)
+		}
 		if outcome.recoverable() {
 			if err := s.resolveGatewayCreateOutcome(ctx, c.id, c.generation, c.state, c.requestID, outcome); err != nil {
-				logging.Errorf("voice gateway attestation resolution failed for session %s: %T", c.id, err)
+				s.logUnresolvedCall(c.id, "voice gateway attestation resolution failed for session %s: %T", c.id, err)
 			}
 		} else if ctx.Err() == nil {
 			kind := outcome.Outcome
 			if kind == "" {
 				kind = "unknown"
 			}
-			logging.Errorf("voice session %s establishment unresolved: outcome=%s", c.id, kind)
+			s.logUnresolvedCall(c.id, "voice session %s establishment unresolved: outcome=%s", c.id, kind)
 		}
 	}
 }

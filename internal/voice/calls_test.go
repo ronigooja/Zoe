@@ -306,7 +306,7 @@ func cleanEvidence(b callBinding, at time.Time) *terminationEvidence {
 }
 
 func TestCallEndedEvidenceAndReconciliation(t *testing.T) {
-	for _, mode := range []string{"verified", "unverified", "supplement", "lost-report", "lookup-on-report"} {
+	for _, mode := range []string{"verified", "unverified", "supplement", "correct-invalid", "lost-report", "lookup-on-report"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := callConfig()
 			now := time.Date(2026, 11, 1, 1, 2, 3, 0, time.UTC)
@@ -350,7 +350,7 @@ func TestCallEndedEvidenceAndReconciliation(t *testing.T) {
 				lookup = "released"
 				h.svc.reconcileBoundCalls(context.Background())
 			}
-			if mode == "unverified" {
+			if mode == "unverified" || mode == "correct-invalid" {
 				bad := *e
 				bad.TunnelsClosed = false
 				req.TerminationEvidence = &bad
@@ -363,27 +363,44 @@ func TestCallEndedEvidenceAndReconciliation(t *testing.T) {
 				lookup = "released"
 			}
 			status := 200
-			if mode == "unverified" || mode == "supplement" {
+			if mode == "unverified" || mode == "supplement" || mode == "correct-invalid" {
 				status = 202
 			}
 			first := h.post(p+"/ended", req, status, "").Body.String()
 			if again := h.post(p+"/ended", req, status, "").Body.String(); first != again {
 				t.Fatal("exact replay changed result")
 			}
-			if mode == "supplement" {
-				without := req
+			without := req
+			without.TerminationEvidence = nil
+			if mode == "unverified" || mode == "correct-invalid" {
+				if retry := h.post(p+"/ended", without, 202, "").Body.String(); first != retry {
+					t.Fatal("retry without invalid evidence changed quarantine result")
+				}
+			}
+			if mode == "supplement" || mode == "correct-invalid" {
 				req.TerminationEvidence = e
-				h.post(p+"/ended", req, 200, "")
+				verified := h.post(p+"/ended", req, 200, "").Body.String()
+				if replay := h.post(p+"/ended", req, 200, "").Body.String(); verified != replay {
+					t.Fatal("replaying verified supplement changed result")
+				}
 				h.post(p+"/ended", without, 200, "")
 				status = 200
 			}
 			if mode == "verified" {
-				without := req
-				without.TerminationEvidence = nil
 				h.post(p+"/ended", without, 409, "idempotency_conflict")
+			}
+			if status == 200 {
+				other := *e
+				other.ObservedAt = observed.Add(-time.Second).Format(time.RFC3339Nano)
+				changed := req
+				changed.TerminationEvidence = &other
+				h.post(p+"/ended", changed, 409, "idempotency_conflict")
 			}
 			changed := req
 			changed.Reason = "failure"
+			h.post(p+"/ended", changed, 409, "idempotency_conflict")
+			changed = req
+			changed.ClosedAt = observed.Format(time.RFC3339Nano)
 			h.post(p+"/ended", changed, 409, "idempotency_conflict")
 			h.post(p+"/established", bind, 200, "")
 			var state, ended, record string
@@ -406,6 +423,52 @@ func TestCallEndedEvidenceAndReconciliation(t *testing.T) {
 				if !strings.Contains(w.Body.String(), `"pool_blocked":true`) {
 					t.Fatal("old reply cleared replacement fence")
 				}
+			}
+		})
+	}
+}
+
+func TestCallEndedFutureSkewAndReceiveTime(t *testing.T) {
+	for _, mode := range []string{"direct", "supplement", "lookup"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := callConfig()
+			receivedAt := time.Date(2026, 11, 1, 1, 2, 3, 0, time.UTC)
+			now := receivedAt
+			cfg.Now = func() time.Time { return now }
+			var evidence *terminationEvidence
+			cfg.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				if mode == "lookup" && now.After(receivedAt) {
+					wire, _ := json.Marshal(evidence)
+					return gatewayFixture(fmt.Sprintf(`{"outcome":"released","termination_evidence":%s}`, wire)), nil
+				}
+				return gatewayFixture(`{"outcome":"not_yet"}`), nil
+			})}
+			h := newCallHarness(t, nil, cfg)
+			h.svc.Stop() // Drive reconciliation explicitly with the test clock.
+			a, _ := h.open(201)
+			p := callRoute + "/" + a.SessionID
+			binding := testBinding(a)
+			h.post(p+"/established", callEstablishedRequest{callBinding: binding}, 200, "")
+			evidence = cleanEvidence(binding, now)
+			req := callEndedRequest{callBinding: binding, Reason: "user_hangup", ClosedAt: now.Add(5*time.Minute + time.Nanosecond).Format(time.RFC3339Nano), TerminationEvidence: evidence}
+			h.post(p+"/ended", req, 400, "invalid_request")
+			req.ClosedAt = now.Add(5 * time.Minute).Format(time.RFC3339Nano)
+			if mode != "direct" {
+				req.TerminationEvidence = nil
+				h.post(p+"/ended", req, 202, "")
+				now = receivedAt.Add(6 * time.Minute)
+				if mode == "lookup" {
+					h.svc.reconcileBoundCalls(context.Background())
+				} else {
+					req.TerminationEvidence = evidence
+				}
+			}
+			for i := 0; i < 2; i++ {
+				h.post(p+"/ended", req, 200, "")
+			}
+			var ended, reported string
+			if err := h.store.DB().QueryRow(`SELECT ended_at,call_closed_at FROM voice_sessions WHERE id=?`, a.SessionID).Scan(&ended, &reported); err != nil || ended != receivedAt.Format(time.RFC3339Nano) || reported != req.ClosedAt {
+				t.Fatalf("ended_at=%s call_closed_at=%s err=%v", ended, reported, err)
 			}
 		})
 	}
@@ -469,4 +532,48 @@ func TestReconciliationLogsStuckEndingWithoutMutation(t *testing.T) {
 	if err := h.store.DB().QueryRow(`SELECT state,(SELECT blocked FROM voice_pool_state) FROM voice_sessions WHERE id=?`, a.SessionID).Scan(&state, &blocked); err != nil || state != "ending" || !blocked {
 		t.Fatalf("lookup changed stuck ending: %s blocked=%v err=%v", state, blocked, err)
 	}
+}
+
+func TestReconciliationLogsWithoutConfiguredGateway(t *testing.T) {
+	h := newCallHarness(t, nil, callConfig())
+	a, _ := h.open(201)
+	h.post(callRoute+"/"+a.SessionID+"/established", callEstablishedRequest{callBinding: testBinding(a)}, 200, "")
+	now := time.Now().UTC()
+	if _, err := h.store.DB().Exec(`UPDATE voice_sessions SET state='ending' WHERE id=?`, a.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_request_id,lifecycle_runner_id)
+VALUES('allocating-call','default','other','device','request',X'01',1,'allocating',?,?,'private-gateway-request','media')`,
+		now.Add(-3*time.Minute).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{GatewayURL: "http://invalid.example", GatewayAPIKey: "private-key", Now: func() time.Time { return now }, HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("called gateway without valid configuration")
+		return nil, nil
+	})}}
+	svc := newService(h.store.DB(), cfg)
+	t.Cleanup(svc.Stop)
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previous)
+	pass := func() {
+		svc.reconcileBoundCalls(context.Background())
+		svc.attestStaleCreates(context.Background())
+	}
+	pass()
+	pass()
+	check := func(want int) {
+		t.Helper()
+		got := logs.String()
+		if strings.Count(got, "level=error voice session "+a.SessionID+" termination unresolved: state=ending outcome=unknown") != want ||
+			strings.Count(got, "level=error voice session allocating-call establishment unresolved: outcome=unknown") != want ||
+			strings.Contains(got, "private-") || strings.Contains(got, "invalid.example") {
+			t.Fatal("missing, repeated or unsafe reconciliation logs:", got)
+		}
+	}
+	check(1)
+	now = now.Add(time.Minute)
+	pass()
+	check(2)
 }

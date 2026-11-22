@@ -255,15 +255,15 @@ type callEstablishedRequest struct {
 
 type lifecycleCall struct {
 	callBinding
-	principal                                  contracts.Principal
-	runner, state, establishedHash, poolSource string
-	endReason, closedAt, endEvidenceHash       string
-	accountHash, opening                       []byte
+	principal                                               contracts.Principal
+	runner, state, establishedHash, poolSource              string
+	endReason, closedAt, effectiveClosedAt, endEvidenceHash string
+	accountHash, opening                                    []byte
 }
 
 func loadLifecycleCall(ctx context.Context, tx *sql.Tx, id string) (lifecycleCall, error) {
 	var c lifecycleCall
-	err := tx.QueryRowContext(ctx, `SELECT s.generation,s.gateway_session_id,s.gateway_media_generation,s.account_lease_id,s.account_lease_generation,s.workspace_id,s.owner_id,s.device_id,s.lifecycle_runner_id,s.state,s.call_established_hash,p.source_session_id,s.call_ended_reason,s.call_closed_at,s.call_end_evidence_hash,s.account_id_hash,s.opening_context_manifest FROM voice_sessions s CROSS JOIN voice_pool_state p WHERE s.id=? AND p.id=1`, id).Scan(&c.Generation, &c.GatewaySessionID, &c.MediaGeneration, &c.AccountLeaseID, &c.AccountLeaseGeneration, &c.principal.WorkspaceID, &c.principal.SubjectID, &c.principal.DeviceID, &c.runner, &c.state, &c.establishedHash, &c.poolSource, &c.endReason, &c.closedAt, &c.endEvidenceHash, &c.accountHash, &c.opening)
+	err := tx.QueryRowContext(ctx, `SELECT s.generation,s.gateway_session_id,s.gateway_media_generation,s.account_lease_id,s.account_lease_generation,s.workspace_id,s.owner_id,s.device_id,s.lifecycle_runner_id,s.state,s.call_established_hash,p.source_session_id,s.call_ended_reason,s.call_closed_at,s.call_effective_closed_at,s.call_end_evidence_hash,s.account_id_hash,s.opening_context_manifest FROM voice_sessions s CROSS JOIN voice_pool_state p WHERE s.id=? AND p.id=1`, id).Scan(&c.Generation, &c.GatewaySessionID, &c.MediaGeneration, &c.AccountLeaseID, &c.AccountLeaseGeneration, &c.principal.WorkspaceID, &c.principal.SubjectID, &c.principal.DeviceID, &c.runner, &c.state, &c.establishedHash, &c.poolSource, &c.endReason, &c.closedAt, &c.effectiveClosedAt, &c.endEvidenceHash, &c.accountHash, &c.opening)
 	if errors.Is(err, sql.ErrNoRows) {
 		logging.Errorf("voice lifecycle report references an unknown session")
 		return c, apiError(http.StatusNotFound, "not_found", "voice session not found", nil)
