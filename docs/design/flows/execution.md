@@ -58,13 +58,13 @@ For initial, resume and rotation prompts, remove `Do not delegate or perform ext
 - Flush marked turns immediately without the 500 ms batching wait; do not evict
   them on queue overflow. Retry for at most 10 seconds with exponential
   backoff and jitter, only on network errors and HTTP 5xx (including 503).
-  HTTP 400, 401, 403, 404, 409 and 413 are terminal. The
-  [atomic media binding](media.md#required-behavior) prevents a partially
-  written binding from being observed by ingest.
+  HTTP 400, 401, 403, 404, 409 and 413 are terminal. Forwarding is gated by
+  [call establishment](media.md#required-behavior).
 - On terminal failure or expiry, the gateway appends a hand-off-failed note
-  upstream through the existing AVAS context-append mechanism. This is a
-  gateway notice, not a Zoe result delivery. The turn then follows the normal
-  long retry as an ordinary transcript turn. No persistent outbox, automatic
+  upstream through the existing AVAS context-append mechanism; see the
+  [delivery exception](results.md#delivery-paths). The turn then follows the
+  ordinary transcript path, with its normal long retry for retryable failures;
+  404 and 409 are terminal on that path too. No persistent outbox, automatic
   compensation or deduplication beyond the stated identities. Duplicate
   execution after a user-visible failure is a fault to investigate.
 - Classification failures follow [Register failure rules](register.md#failure-and-recovery).
@@ -76,11 +76,7 @@ For initial, resume and rotation prompts, remove `Do not delegate or perform ext
 
 ## Rollout order
 
-1. Ship Zoe's atomic media binding, transactional delegation ingest and worker
-   first. Keep `voice.turn.commit` and `voice.turn.handoff` for the installed client.
-2. After Zoe accepts delegation turns, ship gateway marking and immediate
-   flush, and stop client injection.
-3. Ship the client without the relay path, then remove the old server commands.
+Follow the [call lifecycle rollout](media.md#failure-and-recovery).
 
 ## Implementation locations
 

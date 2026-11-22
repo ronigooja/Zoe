@@ -22,7 +22,7 @@ Production discovery starts the result dispatcher only with a configured HTTPS g
 
 ## Persistence and idempotency
 
-Durable task result/assistant entry and event have independently tracked consumer progress. In-call result checkpoints are keyed by result, destination/session generation and chunk identity. Opening reserves the exact sent items before the create call; reservations and consumed results exclude in-call voice delivery. Only a receipt matching applied, silent, version and content hash consumes the reservation.
+Durable task result/assistant entry and event have independently tracked consumer progress. In-call result checkpoints are keyed by result, destination/session generation and chunk identity. Zoe reserves the exact opening items during [call setup](media.md#inputs-and-outputs); reservations and consumed results exclude in-call voice delivery. Only a receipt matching applied, silent, version and content hash consumes the reservation.
 
 ## Failure and recovery
 
@@ -32,7 +32,7 @@ Unsupported, malformed or unavailable health retains pending work with `receipt_
 
 ## Delivery paths
 
-After opening, every write to the upstream conversation uses one of two checkpointed paths; there is no unkeyed append.
+After opening, upstream conversation writes use one of two checkpointed paths without unkeyed appends. The sole exception is the [gateway-only hand-off-failed notice](execution.md#failure-and-recovery), which is not a Zoe delivery.
 
 | Content | Path | Identity |
 |---|---|---|
