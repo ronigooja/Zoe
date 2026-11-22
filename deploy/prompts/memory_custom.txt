@@ -1,1 +1,2 @@
-Extract only stable facts directly supported by the current source. Never treat retrieved memories as evidence for a new fact. Do not infer preferences or identity.
+Use retrieved memories to recognize duplicates and updates.
+Extract stable facts explicitly stated in the current source.
