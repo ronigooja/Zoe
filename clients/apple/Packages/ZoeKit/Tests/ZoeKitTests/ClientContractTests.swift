@@ -117,15 +117,84 @@ final class ClientContractTests: XCTestCase {
         try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: VoiceFixtureCredential(), session: session())
     }
 
-    @MainActor private func voiceContractModel(api: APIClient) -> ZoeAppModel {
+    @MainActor private func voiceContractModel(api: APIClient, clock: SilenceClock = SystemSilenceClock()) -> ZoeAppModel {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         defaults.set(api.serverURL.absoluteString, forKey: "zoe.instance.serverAddress")
-        let model = ZoeAppModel(defaults: defaults)
+        let model = ZoeAppModel(defaults: defaults, silenceClock: clock)
         model.keyStoreOverrideForTesting = { _ in VoiceContractKeyStore() }
         model.connectionAPIOverrideForTesting = { _, _, _ in api }
         model.voiceOfferOverrideForTesting = { "offer" }
         model.voiceAnswerOverrideForTesting = { XCTAssertEqual($0, "answer") }
         return model
+    }
+
+    func testVoiceRequestsDisableCookiesAndCachingWithInjectedProtocol() async throws {
+        let api = try voiceContractAPI()
+        let origin = URL(string: "https://gateway.example:8443")!
+        ContractURLProtocol.responseHandler = { request in
+            XCTAssertFalse(request.httpShouldHandleCookies)
+            XCTAssertEqual(request.cachePolicy, .reloadIgnoringLocalCacheData)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+            let headers = ["Set-Cookie": "voice-fixture=ignored; Path=/"]
+            switch request.url?.path {
+            case "/v1/voice/config": return (200, headers, Data(Self.voiceConfigBody.utf8))
+            case "/v1/voice/pool/status": return (200, headers, Data(Self.voicePoolBody.utf8))
+            case "/client/v1/voice/calls": return (200, headers, Self.dialAnswer)
+            case "/client/v1/voice/calls/gateway-call/hangup": return (204, [:], Data())
+            default: XCTFail("Unexpected request"); return (404, [:], Data())
+            }
+        }
+        _ = try await api.voiceConfig()
+        _ = try await api.voicePoolStatus()
+        let call = try await api.dialVoiceCall(origin: origin, payload: VoiceDialRequest(requestID: "call", offerSDP: "offer"))
+        try await api.hangupVoiceCall(origin: origin, gatewaySessionID: call.gatewaySessionId)
+    }
+
+    @MainActor func testEarlyVoiceEndClosesMediaBeforeHandshakeCanPublishActiveCall() async throws {
+        let model = voiceContractModel(api: try voiceContractAPI())
+        var stops = 0
+        model.voiceLocalMediaStopObserverForTesting = { stops += 1 }
+        ContractURLProtocol.responseHandler = Self.negotiationResponse
+        model.voiceAnswerOverrideForTesting = { _ in
+            await model.receiveVoiceDataForTesting(Data(#"{"type":"voice.end"}"#.utf8), mediaEpoch: 0)
+            XCTAssertEqual(stops, 0, "stale media cannot end the call in progress")
+            await model.receiveVoiceDataForTesting(Data(#"{"type":"voice.end"}"#.utf8))
+            XCTAssertEqual(stops, 1, "end must close even before the handshake resumes")
+        }
+        defer { model.voiceAnswerOverrideForTesting = nil }
+        await model.startVoice()
+        XCTAssertEqual(model.voiceStatus, .idle)
+        XCTAssertFalse(model.canEndVoiceSession)
+        XCTAssertFalse(model.hasPendingVoiceHangupForTesting)
+    }
+
+    @MainActor func testEarlyActivityIsRetainedAndNotCountedAgainAfterConnect() async throws {
+        let clock = VoiceContractSilenceClock()
+        let model = voiceContractModel(api: try voiceContractAPI(), clock: clock)
+        ContractURLProtocol.responseHandler = Self.negotiationResponse
+        let activity = Data(#"{"type":"input_transcript.added","turn_id":"early","event_id":"first","item":{"text":"Hello"}}"#.utf8)
+        model.voiceAnswerOverrideForTesting = { _ in
+            clock.date = Date(timeIntervalSince1970: 5)
+            await model.receiveVoiceDataForTesting(activity)
+            XCTAssertEqual(model.silence.lastActivityAge, 0)
+            clock.date = Date(timeIntervalSince1970: 8)
+        }
+        defer { model.voiceAnswerOverrideForTesting = nil }
+        await model.startVoice()
+        XCTAssertEqual(model.voiceStatus, .active(sessionID: "zoe-call", mediaGeneration: 4))
+        XCTAssertEqual(model.silence.lastActivityAge, 3)
+        await model.receiveVoiceDataForTesting(activity)
+        XCTAssertEqual(model.silence.lastActivityAge, 3)
+    }
+
+    private static func negotiationResponse(_ request: URLRequest) -> (Int, [String: String], Data) {
+        switch request.url?.path {
+        case "/v1/voice/config": return (200, [:], Data(voiceConfigBody.utf8))
+        case "/v1/voice/pool/status": return (200, [:], Data(voicePoolBody.utf8))
+        case "/client/v1/voice/calls": return (200, [:], dialAnswer)
+        default: XCTFail("Unexpected negotiation request: \(request.url?.path ?? "")"); return (404, [:], Data())
+        }
     }
 
     func testVoiceConfigRejectsMissingOrInvalidOriginWithoutFallback() async throws {

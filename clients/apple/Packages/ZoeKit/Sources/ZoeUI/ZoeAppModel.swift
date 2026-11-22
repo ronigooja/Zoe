@@ -113,6 +113,7 @@ public final class ZoeAppModel: ObservableObject {
     func installVoiceSessionForTesting(_ response: VoiceDialResponse, api: APIClient, origin: URL = URL(string: "https://gateway.example")!) -> UInt64 {
         let session = GatewayCall(response: response, origin: origin)
         let epoch = voiceMediaFence.beginAttempt()
+        resetVoiceActivity()
         voiceSession = session
         voiceSessionMediaEpoch = epoch
         voiceSessionMediaClosed = false
@@ -177,6 +178,9 @@ public final class ZoeAppModel: ObservableObject {
     private var diagnosticConnectedAt: Date?
     private var silenceResetDiagnostics = SilenceResetDiagnostics()
     private var voiceActivityCoalescer = VoiceActivityCoalescer()
+    private var voiceActivityClassifier = VoiceActivityClassifier()
+    private var negotiatingVoiceEpoch: UInt64?
+    private var earlyVoiceEndEpoch: UInt64?
     private var voiceEventCensus = EventCensusDiagnostics()
     private var voiceInnerEventCensus = EventCensusDiagnostics(completeTypes: true)
     private var censusEndRecorded = false
@@ -409,20 +413,26 @@ public final class ZoeAppModel: ObservableObject {
         }
     }
 
-    private func noteVoiceConnected() {
-        // Connected calls exclude setup time from the silence window and end duration.
-        voiceStartedAt = Date()
-        diagnosticConnectedAt = silence.diagnosticNow
+    private func resetVoiceActivity() {
+        silence.reset()
         silenceResetDiagnostics = SilenceResetDiagnostics()
         voiceActivityCoalescer = VoiceActivityCoalescer()
+        voiceActivityClassifier = VoiceActivityClassifier()
         voiceEventCensus = EventCensusDiagnostics()
         voiceInnerEventCensus = EventCensusDiagnostics(completeTypes: true)
+    }
+
+    private func noteVoiceConnected() {
+        // Start the window here unless the live data channel already delivered activity.
+        voiceStartedAt = Date()
+        diagnosticConnectedAt = silence.diagnosticNow
         censusEndRecorded = false
         censusEarlyRecorded = false
         censusNextReportElapsed = 60
-        silence.reset()
-        silence.noteVoiceActivity()
-        recordSilenceReset(type: "connect")
+        if silence.lastActivityAge == nil {
+            silence.noteVoiceActivity()
+            recordSilenceReset(type: "connect")
+        }
     }
 
     public func receiveInstallationLink(_ url: URL) {
@@ -560,6 +570,7 @@ public final class ZoeAppModel: ObservableObject {
         let oldEpoch = voiceSessionMediaEpoch
         let oldDuration = voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         silence.reset()
+        negotiatingVoiceEpoch = nil
         _ = voiceMediaFence.stop(voiceMediaEpoch)
         let oldTransport = voiceTransport
         let oldAudio = voiceAudioSession
@@ -645,16 +656,15 @@ public final class ZoeAppModel: ObservableObject {
         }
         voiceStartInProgress = true
         voiceAttemptEndReason = nil
-        voiceEventCensus = EventCensusDiagnostics()
-        voiceInnerEventCensus = EventCensusDiagnostics(completeTypes: true)
+        resetVoiceActivity()
         censusEndRecorded = false
         censusEarlyRecorded = false
         censusNextReportElapsed = 60
         diagnosticConnectedAt = nil
-        silence.reset()
         voiceStartedAt = Date()
         defer { voiceStartInProgress = false }
         let mediaEpoch = voiceMediaFence.beginAttempt()
+        earlyVoiceEndEpoch = nil
         voiceStartMediaLoss = nil
         let generation = connectionGeneration.value
         voiceAPI = api
@@ -695,9 +705,11 @@ public final class ZoeAppModel: ObservableObject {
             allocatedSession = created
             try requireVoiceAttempt(generation: generation, mediaEpoch: mediaEpoch)
             diagnosticPhase = "webrtc_answer"
+            negotiatingVoiceEpoch = mediaEpoch
             try await connectVoiceMedia(answer: response.answerSdp, generation: generation, mediaEpoch: mediaEpoch)
             try requireVoiceAttempt(generation: generation, mediaEpoch: mediaEpoch)
 
+            negotiatingVoiceEpoch = nil
             voiceSession = created
             voiceSessionMediaEpoch = mediaEpoch
             voiceSessionMediaClosed = false
@@ -709,6 +721,13 @@ public final class ZoeAppModel: ObservableObject {
             await reportScreenSize()
             #endif
         } catch {
+            if earlyVoiceEndEpoch == mediaEpoch, generation == connectionGeneration.value,
+               voiceMediaEpoch == (mediaEpoch &+ 1), let allocatedSession {
+                deliverVoiceEnd(allocatedSession, api: api, mediaEpoch: mediaEpoch, reason: .voiceEndEvent)
+                completeLocalVoiceEnd(lossReason: nil)
+                refreshPoolAfterVoiceEnd(api: api)
+                return
+            }
             let redacted = RedactedDiagnostic(error)
             api.recordDiagnostic(phase: diagnosticPhase, requestPath: diagnosticPhase == "gateway_dial" ? Self.gatewayDialPath : "client", httpStatus: redacted.httpStatus, errorType: redacted.errorType, errorSummary: redacted.errorSummary)
             let attemptWasCurrent = mediaEpoch == voiceMediaEpoch
@@ -721,7 +740,9 @@ public final class ZoeAppModel: ObservableObject {
                 if canPublishEnd {
                     deliverVoiceEnd(allocatedSession, api: api, mediaEpoch: mediaEpoch, reason: voiceAttemptEndReason ?? .setupFailed)
                 }
-                hangupUnconfirmed = !(await requestVoiceHangup(allocatedSession, api: api, phase: "setup_hangup", epoch: mediaEpoch))
+                if earlyVoiceEndEpoch != mediaEpoch {
+                    hangupUnconfirmed = !(await requestVoiceHangup(allocatedSession, api: api, phase: "setup_hangup", epoch: mediaEpoch))
+                }
             } else if canPublishEnd {
                 let reason = voiceAttemptEndReason ?? .setupFailed
                 let summary = reason.summary(duration: voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0) + silenceSettingsSuffix
@@ -1016,6 +1037,7 @@ public final class ZoeAppModel: ObservableObject {
 
     private func closeVoiceLocalMedia(mediaEpoch: UInt64) {
         guard voiceMediaFence.stop(mediaEpoch) else { return }
+        negotiatingVoiceEpoch = nil
         silence.reset()
         #if DEBUG
         voiceLocalMediaStopObserverForTesting?()
@@ -1201,8 +1223,8 @@ public final class ZoeAppModel: ObservableObject {
     private func receiveVoiceData(_ data: Data, generation: UInt64, mediaEpoch: UInt64) {
         guard generation == connectionGeneration.value,
               mediaEpoch == voiceMediaEpoch,
-              voiceSessionMediaEpoch == mediaEpoch,
-              voiceSession != nil else { return }
+              negotiatingVoiceEpoch == mediaEpoch || (voiceSessionMediaEpoch == mediaEpoch && voiceSession != nil),
+              data.count <= 1_048_576 else { return }
         guard let outer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
         var event = outer
         if outer["type"] as? String == "data_message", let encoded = outer["data"] as? String,
@@ -1210,7 +1232,7 @@ public final class ZoeAppModel: ObservableObject {
             event = inner
         }
         let type = (event["type"] as? String) ?? ""
-        let activity = VoiceActivityClassifier.isActivity(event: event)
+        let activity = voiceActivityClassifier.accept(event)
         let outerType = (outer["type"] as? String) ?? "missing"
         voiceEventCensus.note(type: outerType, activity: activity)
         if outerType == "data_message", event["type"] as? String != outerType {
@@ -1225,6 +1247,12 @@ public final class ZoeAppModel: ObservableObject {
         }
         if type == "voice.end" || type == "voice_end" ||
             ((type == "function_call" || type == "tool_call") && ((event["name"] as? String) == "voice.end" || (event["name"] as? String) == "voice_end")) {
+            if negotiatingVoiceEpoch == mediaEpoch {
+                // The gateway is already ending this call. Fence the handshake before it can publish active media.
+                earlyVoiceEndEpoch = mediaEpoch
+                closeVoiceLocalMedia(mediaEpoch: mediaEpoch)
+                return
+            }
             Task { @MainActor [weak self] in
                 await self?.receiveRemoteVoiceEnd(generation: generation, mediaEpoch: mediaEpoch)
             }

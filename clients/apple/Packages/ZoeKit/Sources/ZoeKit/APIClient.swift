@@ -11,6 +11,7 @@ public protocol BearerTokenProviding: Sendable {
 public final class APIClient: @unchecked Sendable {
     public let serverURL: URL
     private let session: URLSession
+    private let voiceSession: URLSession
     private let credentials: BearerTokenProviding?
     private let installationID: String?
     private let encoder: JSONEncoder
@@ -21,14 +22,24 @@ public final class APIClient: @unchecked Sendable {
 
     public var hasCredentials: Bool { credentials != nil }
 
-    public init(serverURL: URL, credentials: BearerTokenProviding? = nil, session: URLSession = .shared, installationID: String? = nil) throws {
+    public init(serverURL: URL, credentials: BearerTokenProviding? = nil, session: URLSession? = nil, installationID: String? = nil) throws {
         guard let scheme = serverURL.scheme?.lowercased(), ["http", "https"].contains(scheme), serverURL.host != nil else {
             throw ZoeError.invalidServerURL
         }
         self.serverURL = try ServerAddress.normalize(serverURL.absoluteString)
         self.installationID = installationID
         self.credentials = credentials
-        self.session = session
+        self.session = session ?? .shared
+        let voiceConfiguration = URLSessionConfiguration.ephemeral
+        // Keep injected URLProtocol fixtures, not the caller's storage or trust policy.
+        if let session { voiceConfiguration.protocolClasses = session.configuration.protocolClasses }
+        voiceConfiguration.httpShouldSetCookies = false
+        voiceConfiguration.httpCookieAcceptPolicy = .never
+        voiceConfiguration.httpCookieStorage = nil
+        voiceConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        voiceConfiguration.urlCache = nil
+        voiceConfiguration.urlCredentialStorage = nil
+        self.voiceSession = URLSession(configuration: voiceConfiguration)
         self.diagnosticQueue = EncryptedDiagnosticQueue(serverURL: self.serverURL, installationID: installationID)
         self.diagnosticsEnabled = installationID != nil
         self.diagnosticDeliveryFailureKey = "zoe.diagnostics.delivery_failures." + self.serverURL.absoluteString
@@ -37,6 +48,8 @@ public final class APIClient: @unchecked Sendable {
         decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
     }
+
+    deinit { voiceSession.invalidateAndCancel() }
 
     public func recovery() async throws -> RecoverySnapshot {
         let value: JSONValue = try await request(path: ["v1", "recovery"], method: "GET", authenticated: true)
@@ -196,14 +209,14 @@ public final class APIClient: @unchecked Sendable {
         components.percentEncodedPath = path
         guard let url = components.url else { throw ZoeError.invalidServerURL }
         guard let credentials else { throw ZoeError.missingCredential }
-        var request = URLRequest(url: url)
+        var request = Self.voiceRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(try credentials.bearerToken())", forHTTPHeaderField: "Authorization")
         return request
     }
 
     private func sendGatewayRequest(_ request: URLRequest, expecting status: Int) async throws -> Data {
-        let (data, response) = try await session.data(for: request, delegate: RefuseSignalingRedirects())
+        let (data, response) = try await voiceSession.data(for: request, delegate: RefuseSignalingRedirects())
         guard let http = response as? HTTPURLResponse else { throw ZoeError.invalidResponse }
         guard http.statusCode == status else {
             if (200..<300).contains(http.statusCode) { throw ZoeError.invalidResponse }
@@ -260,8 +273,16 @@ public final class APIClient: @unchecked Sendable {
         try decoder.decode(type, from: data)
     }
 
+    private static func voiceRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
+        request.httpShouldHandleCookies = false
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        return request
+    }
+
     private func request<Response: Decodable, Body: Encodable>(path: [String], method: String, body: Body? = Optional<NoBody>.none, authenticated: Bool, refusesRedirects: Bool = false) async throws -> Response {
-        var request = URLRequest(url: try makeURL(path: path), cachePolicy: refusesRedirects ? .reloadIgnoringLocalCacheData : .useProtocolCachePolicy)
+        let url = try makeURL(path: path)
+        var request = refusesRedirects ? Self.voiceRequest(url: url) : URLRequest(url: url)
         request.httpMethod = method
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -282,7 +303,8 @@ public final class APIClient: @unchecked Sendable {
         let requestID = clientRequestID ?? request.value(forHTTPHeaderField: "X-Zoe-Client-Request-ID") ?? UUID().uuidString.lowercased()
         let phase = diagnosticPhase(path)
         do {
-            let (data, response) = try await session.data(for: request, delegate: refusesRedirects ? RefuseSignalingRedirects() : nil)
+            let transport = refusesRedirects ? voiceSession : session
+            let (data, response) = try await transport.data(for: request, delegate: refusesRedirects ? RefuseSignalingRedirects() : nil)
             guard let response = response as? HTTPURLResponse else {
                 recordDiagnostic(phase: phase, requestPath: path, clientRequestID: requestID, errorType: "invalid_response", errorSummary: "non_http_response")
                 throw ZoeError.invalidResponse
