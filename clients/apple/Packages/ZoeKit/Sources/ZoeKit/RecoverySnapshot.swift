@@ -9,18 +9,23 @@ public struct RecoverySnapshot: Decodable, Sendable {
 }
 
 public struct RecoveryControlSnapshot: Decodable, Sendable {
-    public let workspaceID: String
     public let subjectID: String
     public let eventCursor: String
     public let serverVersion: String
     public let authority: JSONValue
+    public var instanceLineageID: String? {
+        guard case let .object(fields) = authority,
+              case let .string(identity) = fields["instance_lineage_id"],
+              !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return identity
+    }
     public let projects: [JSONValue]
     public let tasks: [JSONValue]
     public let approvals: [JSONValue]
     public let runs: [JSONValue]
     public let executionCapacity: JSONValue
     enum CodingKeys: String, CodingKey {
-        case workspaceID = "workspace_id", subjectID = "subject_id"
+        case subjectID = "subject_id"
         case eventCursor = "event_cursor", serverVersion = "server_version"
         case authority, projects, tasks, approvals, runs
         case executionCapacity = "execution_capacity"

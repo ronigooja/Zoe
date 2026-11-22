@@ -56,7 +56,7 @@ public final class APIClient: @unchecked Sendable {
         let result = try JSONDecoder().decode(RecoverySnapshot.self, from: JSONEncoder().encode(value))
         guard let cursor = Int64(result.cursor), cursor >= 0,
               result.snapshot.eventCursor == result.cursor, result.ui.cursor == cursor,
-              result.snapshot.workspaceID == "default", result.snapshot.subjectID == "owner" else {
+               result.snapshot.instanceLineageID != nil, result.snapshot.subjectID == "owner" else {
             throw ZoeError.invalidResponse
         }
         return result
@@ -70,7 +70,8 @@ public final class APIClient: @unchecked Sendable {
 
     public func snapshot() async throws -> Snapshot {
         let snapshot: Snapshot = try await request(path: ["v1", "snapshot"], method: "GET", authenticated: true)
-        guard snapshot.workspaceId == "default", snapshot.subjectId == "owner" else { throw ZoeError.invalidResponse }
+        guard !snapshot.authority.instanceLineageId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              snapshot.subjectId == "owner" else { throw ZoeError.invalidResponse }
         return snapshot
     }
 

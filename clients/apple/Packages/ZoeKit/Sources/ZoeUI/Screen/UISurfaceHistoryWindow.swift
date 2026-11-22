@@ -113,7 +113,7 @@ public struct UISurfaceHistoryView: View {
             SwiftUI.Button(uiText("Clear All"), role: .destructive) { Task { await model.clearAll() } }
             SwiftUI.Button(uiText("Cancel"), role: .cancel) {}
         } message: {
-            Text(uiText("This removes every saved history entry for this server and workspace."))
+            Text(uiText("This removes every saved history entry for this instance."))
         }
     }
 

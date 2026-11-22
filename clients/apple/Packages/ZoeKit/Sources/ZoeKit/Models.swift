@@ -3,14 +3,23 @@ import Foundation
 public struct Snapshot: Codable, Equatable, Sendable {
     public var serverVersion: String
     public var eventCursor: String
-    public var workspaceId: String
+    public var authority: InstanceAuthority
     public var subjectId: String
 
-    public init(serverVersion: String, eventCursor: String, workspaceId: String = "default", subjectId: String = "owner") {
+    public init(serverVersion: String, eventCursor: String, authority: InstanceAuthority, subjectId: String = "owner") {
         self.serverVersion = serverVersion
         self.eventCursor = eventCursor
-        self.workspaceId = workspaceId
+        self.authority = authority
         self.subjectId = subjectId
+    }
+}
+
+/// Authenticated persistent identity, independent of the server address and instance key.
+public struct InstanceAuthority: Codable, Equatable, Sendable {
+    public let instanceLineageId: String
+
+    public init(instanceLineageId: String) {
+        self.instanceLineageId = instanceLineageId
     }
 }
 
@@ -127,7 +136,6 @@ public struct VoicePoolStatus: Codable, Equatable, Sendable {
 public struct CommandReceipt: Codable, Equatable, Sendable {
     public var commandId: String
     public var idempotencyKey: String
-    public var workspaceId: String
     public var kind: String
     public var status: String
     public var resourceType: String?
@@ -152,7 +160,7 @@ public enum ZoeError: Error, LocalizedError, Sendable {
     case http(status: Int, code: String, message: String, details: [String: JSONValue]?)
     case invalidResponse
     case persistence(String)
-    case pendingCommandWorkspaceMismatch
+    case pendingCommandInstanceMismatch
 
     public var errorDescription: String? {
         switch self {
@@ -161,7 +169,7 @@ public enum ZoeError: Error, LocalizedError, Sendable {
         case let .http(_, _, message, _): message
         case .invalidResponse: "The server returned a response the app could not read."
         case let .persistence(message): message
-        case .pendingCommandWorkspaceMismatch: "This saved action belongs to a different workspace and was not retried."
+        case .pendingCommandInstanceMismatch: "This saved action belongs to a different instance and was not retried."
         }
     }
 }
@@ -207,7 +215,6 @@ public struct EventEnvelope: Codable, Equatable, Sendable {
     public var cursor: String
     public var type: String
     public var occurredAt: String
-    public var workspaceId: String
     public var subjectId: String?
     public var aggregateType: String
     public var aggregateId: String
@@ -215,7 +222,7 @@ public struct EventEnvelope: Codable, Equatable, Sendable {
     public var payload: JSONValue
 }
 
-/// Workspace access is granted only after a successful authenticated snapshot.
+/// Instance access is granted only after a successful authenticated snapshot.
 public enum InstanceConnectionState: Equatable, Sendable {
     case checking, disconnected, unavailable, connected
     public var isConnected: Bool { self == .connected }

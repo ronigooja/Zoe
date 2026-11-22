@@ -24,7 +24,7 @@
 "Another voice call is active or still closing." = "Another voice call is active or still closing.";
 "This voice call could not be retried. Start a new call." = "This voice call could not be retried. Start a new call.";
 "The voice account pool is quarantined." = "The voice account pool is quarantined.";
-"This saved action belongs to a different workspace and was not retried." = "This saved action belongs to a different workspace and was not retried.";
+"This saved action belongs to a different instance and was not retried." = "This saved action belongs to a different instance and was not retried.";
 "Voice setup was stopped locally." = "Voice setup was stopped locally.";
 "unknown" = "unknown";
 

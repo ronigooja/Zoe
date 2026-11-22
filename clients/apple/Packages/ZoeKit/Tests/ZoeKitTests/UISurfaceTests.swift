@@ -222,7 +222,7 @@ final class UISurfaceTests: XCTestCase {
         model.setAuthenticationForTesting(.connected)
         var delivered = 0
         model.onUISurface = { _ in delivered += 1; return false }
-        var envelope = EventEnvelope(schemaVersion: 1, eventId: "e1", cursor: "10", type: "ui.surface", occurredAt: "", workspaceId: "w1", aggregateType: "ui_surface", aggregateId: "s1", aggregateVersion: 1, payload: try payload())
+        var envelope = EventEnvelope(schemaVersion: 1, eventId: "e1", cursor: "10", type: "ui.surface", occurredAt: "", aggregateType: "ui_surface", aggregateId: "s1", aggregateVersion: 1, payload: try payload())
         await model.handleEventForTesting(envelope)
         XCTAssertEqual(delivered, 1)
         await model.handleEventForTesting(envelope, expectedConnectionEpoch: UInt64.max)

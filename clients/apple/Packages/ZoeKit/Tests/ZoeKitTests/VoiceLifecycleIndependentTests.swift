@@ -31,7 +31,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         var hangups = 0
         model.voiceLocalMediaStopObserverForTesting = { stops += 1 }
         model.voiceHangupOverrideForTesting = { _ in hangups += 1 }
-        let stale = EventEnvelope(schemaVersion: 1, eventId: "end", cursor: "2", type: "voice.end", occurredAt: "now", workspaceId: "workspace-1", subjectId: nil, aggregateType: "voice_session", aggregateId: "old-call", aggregateVersion: 3, payload: .object([:]))
+        let stale = EventEnvelope(schemaVersion: 1, eventId: "end", cursor: "2", type: "voice.end", occurredAt: "now", subjectId: nil, aggregateType: "voice_session", aggregateId: "old-call", aggregateVersion: 3, payload: .object([:]))
         await model.handleEventForTesting(stale)
         let end = Data(#"{"type":"voice.end"}"#.utf8)
         await model.receiveVoiceDataForTesting(end, mediaEpoch: epoch - 1)

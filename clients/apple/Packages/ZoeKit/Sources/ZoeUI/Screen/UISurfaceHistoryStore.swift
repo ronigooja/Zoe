@@ -3,14 +3,12 @@ import CryptoKit
 import Foundation
 import ZoeKit
 
-/// Identifies one server and workspace. Each scope gets its own folder, so history never mixes across servers.
+/// Authenticated instance identity keeps history isolated across fresh instances and stable across key rotation.
 public struct UISurfaceHistoryScope: Codable, Sendable, Equatable {
-    public let serverURL: String
-    public let workspaceID: String
+    public let instanceLineageID: String
 
-    public init(serverURL: String, workspaceID: String) {
-        self.serverURL = serverURL
-        self.workspaceID = workspaceID
+    public init(instanceLineageID: String) {
+        self.instanceLineageID = instanceLineageID
     }
 }
 
@@ -189,7 +187,7 @@ public actor UISurfaceHistoryStore {
     }
 
     private func folder(for scope: UISurfaceHistoryScope) -> URL {
-        let digest = SHA256.hash(data: Data("\(scope.serverURL)\n\(scope.workspaceID)".utf8))
+        let digest = SHA256.hash(data: Data("instance\n\(scope.instanceLineageID)".utf8))
         return root.appendingPathComponent(digest.map { String(format: "%02x", $0) }.joined(), isDirectory: true)
     }
 

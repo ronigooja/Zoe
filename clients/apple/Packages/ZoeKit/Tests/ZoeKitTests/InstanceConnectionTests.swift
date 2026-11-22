@@ -69,7 +69,7 @@ final class InstanceConnectionTests: XCTestCase {
         return URLSession(configuration: configuration)
     }
     private var snapshotData: Data {
-        Data(#"{"server_version":"candidate","event_cursor":"0","workspace_id":"default","subject_id":"owner","projects":[],"tasks":[],"approvals":[],"runs":[]}"#.utf8)
+        Data(#"{"server_version":"candidate","event_cursor":"0","authority":{"instance_lineage_id":"default"},"subject_id":"owner","projects":[],"tasks":[],"approvals":[],"runs":[]}"#.utf8)
     }
     override func tearDown() {
         InstanceURLProtocol.handle = nil
@@ -200,12 +200,12 @@ final class InstanceConnectionTests: XCTestCase {
         }
         let api = try APIClient(serverURL: URL(string: "https://zoe.example/base/")!, credentials: credential, session: session(), installationID: installation)
         let snapshot = try await api.snapshot()
-        XCTAssertEqual(snapshot.workspaceId, "default")
+        XCTAssertEqual(snapshot.authority.instanceLineageId, "default")
         XCTAssertEqual(snapshot.subjectId, "owner")
     }
 
     func testMissingOrDifferentOwnerContractCannotValidateConnection() async throws {
-        for body in [snapshotData.replacingOccurrences(of: "default", with: "another"), snapshotData.replacingOccurrences(of: "owner", with: "another"), Data(#"{"server_version":"old","event_cursor":"0","projects":[],"tasks":[],"approvals":[],"devices":[],"runs":[]}"#.utf8)] {
+        for body in [snapshotData.replacingOccurrences(of: "default", with: ""), snapshotData.replacingOccurrences(of: "owner", with: "another"), Data(#"{"server_version":"old","event_cursor":"0","projects":[],"tasks":[],"approvals":[],"devices":[],"runs":[]}"#.utf8)] {
             InstanceURLProtocol.handle = { _ in (200, body) }
             let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: InstanceKey(key()), session: session())
             do { _ = try await api.snapshot(); XCTFail("Incompatible authority must fail validation") }
@@ -274,7 +274,7 @@ final class InstanceConnectionTests: XCTestCase {
             let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
             let queued = PendingCommand(idempotencyKey: UUID().uuidString, kind: "voice.text_input", expectedVersion: nil,
                                         payload: .object(["title": .string("Queued work")]), createdAt: "now",
-                                        workspaceID: "default", expectedResourceType: nil, expectedResourceID: nil)
+                                        instanceLineageID: "default", expectedResourceType: nil, expectedResourceID: nil)
             try await journal.append(queued)
             let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
             let store = MemoryInstanceKeyStore()

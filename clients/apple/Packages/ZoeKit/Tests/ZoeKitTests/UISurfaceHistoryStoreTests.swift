@@ -6,7 +6,7 @@ import ZoeKit
 
 final class UISurfaceHistoryStoreTests: XCTestCase {
     private var root: URL!
-    private let scope = UISurfaceHistoryScope(serverURL: "https://zoe.example", workspaceID: "default")
+    private let scope = UISurfaceHistoryScope(instanceLineageID: "instance-1")
     private let base = Date(timeIntervalSince1970: 1_800_000_000)
 
     override func setUp() {
@@ -89,7 +89,7 @@ final class UISurfaceHistoryStoreTests: XCTestCase {
 
     func testClearAllRemovesOnlyThisScope() async throws {
         let store = UISurfaceHistoryStore(root: root)
-        let other = UISurfaceHistoryScope(serverURL: "https://other.example", workspaceID: "default")
+        let other = UISurfaceHistoryScope(instanceLineageID: "instance-2")
         try await append(store, 0)
         try await append(store, 1, scope: other)
         try await store.clearAll(scope: scope)
@@ -99,10 +99,10 @@ final class UISurfaceHistoryStoreTests: XCTestCase {
         XCTAssertEqual(kept, ["entry-1"])
     }
 
-    func testHistoryIsSeparatedPerServerAndWorkspace() async throws {
+    func testHistoryIsSeparatedPerAuthenticatedInstance() async throws {
         let store = UISurfaceHistoryStore(root: root)
-        let otherServer = UISurfaceHistoryScope(serverURL: "https://second.example", workspaceID: "default")
-        let otherWorkspace = UISurfaceHistoryScope(serverURL: "https://zoe.example", workspaceID: "work")
+        let otherServer = UISurfaceHistoryScope(instanceLineageID: "instance-2")
+        let otherWorkspace = UISurfaceHistoryScope(instanceLineageID: "instance-3")
         try await append(store, 0)
         try await append(store, 1, scope: otherServer)
         try await append(store, 2, scope: otherWorkspace)
@@ -112,6 +112,15 @@ final class UISurfaceHistoryStoreTests: XCTestCase {
         XCTAssertEqual(first, ["entry-0"])
         XCTAssertEqual(second, ["entry-1"])
         XCTAssertEqual(third, ["entry-2"])
+    }
+
+    func testHistoryIdentitySurvivesCredentialAndAddressChanges() async throws {
+        let store = UISurfaceHistoryStore(root: root)
+        try await append(store, 0)
+        // Neither a key nor a server address participates in the persisted namespace.
+        let reauthenticated = UISurfaceHistoryScope(instanceLineageID: "instance-1")
+        let entries = try await allPages(store, scope: reauthenticated)
+        XCTAssertEqual(entries.map(\.id), ["entry-0"])
     }
 
     func testCorruptIndexIsRebuiltFromRecordFiles() async throws {

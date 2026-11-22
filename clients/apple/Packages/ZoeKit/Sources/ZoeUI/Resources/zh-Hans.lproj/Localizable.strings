@@ -19,7 +19,7 @@
 "The previous voice audio route became unavailable." = "先前的语音音频路由已不可用。";
 "The server returned a response the app could not read." = "服务器返回了应用无法读取的响应。";
 "The system interrupted the voice audio session." = "系统中断了语音音频会话。";
-"This saved action belongs to a different workspace and was not retried." = "此已保存操作属于其他工作区，未被重试。";
+"This saved action belongs to a different instance and was not retried." = "此已保存操作属于其他实例，未被重试。";
 "Voice setup was stopped locally." = "语音连接已在本地停止。";
 "unknown" = "未知";
 

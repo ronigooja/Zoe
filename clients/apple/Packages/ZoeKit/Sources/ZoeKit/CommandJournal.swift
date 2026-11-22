@@ -7,7 +7,7 @@ public struct PendingCommand: Codable, Equatable, Identifiable, Sendable {
     public var expectedVersion: Int64?
     public var payload: JSONValue
     public var createdAt: String
-    public var workspaceID: String?
+    public var instanceLineageID: String?
     public var expectedResourceType: String?
     public var expectedResourceID: String?
     public var id: String { idempotencyKey }
@@ -25,15 +25,13 @@ public actor CommandJournal {
         encoder.outputFormatting = [.sortedKeys]
     }
 
-    public init(serverURL: URL, credentialScope: String) throws {
+    public init(instanceLineageID: String) throws {
+        guard !instanceLineageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ZoeError.invalidResponse }
         let fileManager = FileManager.default
         let root = try fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
         let directory = root.appendingPathComponent("Zoe", isDirectory: true).appendingPathComponent("Commands", isDirectory: true)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false)
-        components?.query = nil
-        components?.fragment = nil
-        let scope = "\(components?.string ?? serverURL.absoluteString)\u{0}\(credentialScope)"
+        let scope = "instance\u{0}\(instanceLineageID)"
         let digest = SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
         self.fileURL = directory.appendingPathComponent("\(digest).json")
         encoder = JSONEncoder()
@@ -54,7 +52,7 @@ public actor CommandJournal {
         var current = try all()
         if let existing = current.first(where: { $0.idempotencyKey == command.idempotencyKey }) {
             guard existing.kind == command.kind, existing.expectedVersion == command.expectedVersion, existing.payload == command.payload,
-                  existing.workspaceID == command.workspaceID, existing.expectedResourceType == command.expectedResourceType,
+                   existing.instanceLineageID == command.instanceLineageID, existing.expectedResourceType == command.expectedResourceType,
                   existing.expectedResourceID == command.expectedResourceID else {
                 throw ZoeError.http(status: 409, code: "local_idempotency_conflict", message: "The saved idempotency key is already bound to a different command.", details: nil)
             }
@@ -102,15 +100,16 @@ public actor CommandCoordinator {
     private static let recoverableKinds: Set<String> = ["voice.text_input", "ui.rendered", "ui.action"]
 
     /// A command is journaled before POST. A retry first checks the durable receipt by key.
-    public func submit(kind: String, expectedVersion: Int64? = nil, payload: JSONValue, workspaceID: String? = nil, idempotencyKey: String? = nil,
+    public func submit(kind: String, expectedVersion: Int64? = nil, payload: JSONValue, instanceLineageID: String, idempotencyKey: String? = nil,
                        isValid: @MainActor @Sendable () -> Bool = { true }) async throws -> CommandOutcome {
+        guard !instanceLineageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ZoeError.invalidResponse }
         let command = PendingCommand(
             idempotencyKey: idempotencyKey ?? UUID().uuidString.lowercased(),
             kind: kind,
             expectedVersion: expectedVersion,
             payload: payload,
             createdAt: ISO8601DateFormatter().string(from: Date()),
-            workspaceID: workspaceID,
+            instanceLineageID: instanceLineageID,
             expectedResourceType: nil,
             expectedResourceID: nil
         )
@@ -121,21 +120,12 @@ public actor CommandCoordinator {
         return try await deliver(command, checkReceiptFirst: alreadyPending || (kind == "voice.text_input" && idempotencyKey != nil), isValid: isValid)
     }
 
-    public func recoverPending() async throws -> [CommandOutcome] {
-        try await recoverPending(currentWorkspaceID: nil, enforceWorkspace: false, onOutcome: { _ in })
-    }
-
     /// Reports each receipt as soon as its journal row is durably removed. Callers can
     /// reconcile accepted commands even if a later row in the same replay fails.
-    public func recoverPending(onOutcome: @MainActor @Sendable (CommandOutcome) async -> Void) async throws -> [CommandOutcome] {
-        try await recoverPending(currentWorkspaceID: nil, enforceWorkspace: false, onOutcome: onOutcome)
-    }
-
     public func recoverPending(
-        currentWorkspaceID: String?,
-        enforceWorkspace: Bool = true,
+        currentInstanceLineageID: String?,
         onOutcome: @MainActor @Sendable (CommandOutcome) async -> Void,
-        onWorkspaceMismatch: @MainActor @Sendable (PendingCommand) async -> Void = { _ in },
+        onInstanceMismatch: @MainActor @Sendable (PendingCommand) async -> Void = { _ in },
         onFailure: @MainActor @Sendable (PendingCommand, ZoeError?) async -> Void = { _, _ in },
         isValid: @MainActor @Sendable () -> Bool = { true }
     ) async throws -> [CommandOutcome] {
@@ -144,8 +134,9 @@ public actor CommandCoordinator {
         var outcomes: [CommandOutcome] = []
         for command in commands where Self.recoverableKinds.contains(command.kind) {
             try await requireValidity(isValid)
-            guard !enforceWorkspace || (command.workspaceID != nil && currentWorkspaceID != nil && command.workspaceID == currentWorkspaceID) else {
-                await onWorkspaceMismatch(command)
+            guard command.instanceLineageID != nil, currentInstanceLineageID != nil,
+                  command.instanceLineageID == currentInstanceLineageID else {
+                await onInstanceMismatch(command)
                 try await requireValidity(isValid)
                 continue
             }
@@ -165,15 +156,15 @@ public actor CommandCoordinator {
         return outcomes
     }
 
-    public func retryPending(idempotencyKey: String, currentWorkspaceID: String?) async throws -> CommandOutcome {
+    public func retryPending(idempotencyKey: String, currentInstanceLineageID: String?) async throws -> CommandOutcome {
         guard let command = try await journal.all().first(where: {
             $0.idempotencyKey == idempotencyKey && Self.recoverableKinds.contains($0.kind)
         }) else {
             throw ZoeError.persistence("The saved action is no longer pending.")
         }
-        guard let commandWorkspaceID = command.workspaceID,
-              let currentWorkspaceID,
-              commandWorkspaceID == currentWorkspaceID else { throw ZoeError.pendingCommandWorkspaceMismatch }
+        guard let commandInstanceID = command.instanceLineageID,
+              let currentInstanceLineageID,
+              commandInstanceID == currentInstanceLineageID else { throw ZoeError.pendingCommandInstanceMismatch }
         return try await deliver(command, checkReceiptFirst: true)
     }
 
@@ -221,7 +212,6 @@ public actor CommandCoordinator {
 
     private func validate(_ receipt: CommandReceipt, command: PendingCommand) throws {
         guard receipt.kind == command.kind, receipt.idempotencyKey == command.idempotencyKey else { throw ZoeError.invalidResponse }
-        if let workspaceID = command.workspaceID, receipt.workspaceId != workspaceID { throw ZoeError.invalidResponse }
         if let resourceType = command.expectedResourceType, receipt.resourceType != resourceType { throw ZoeError.invalidResponse }
         if let resourceID = command.expectedResourceID, receipt.resourceId != resourceID { throw ZoeError.invalidResponse }
         if receipt.status != "accepted" { throw ZoeError.invalidResponse }

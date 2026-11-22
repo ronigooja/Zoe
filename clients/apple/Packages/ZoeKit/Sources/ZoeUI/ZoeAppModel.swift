@@ -23,7 +23,6 @@ public final class ZoeAppModel: ObservableObject {
     public var onUISurfaceInputState: ((UISurfaceEvent) -> Void)?
     /// Called only after the native host reports a successful display of the event. A thrown error is recorded as a diagnostic.
     public var onUISurfaceDisplayed: ((UISurfaceEvent, UISurfaceHistoryScope) async throws -> Void)?
-    private let historyScopeKey = "zoe.history.scope"
     private var recoveryACKTask: Task<Void, Never>?
     #if os(macOS)
     public var screenVisibleSize: () -> NSSize? = { NSScreen.main?.visibleFrame.size }
@@ -105,7 +104,7 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     func setSnapshotForTesting(_ snapshot: Snapshot?) {
-        workspaceID = snapshot?.workspaceId
+        instanceLineageID = snapshot?.authority.instanceLineageId
         eventCursor = snapshot?.eventCursor
     }
 
@@ -290,7 +289,7 @@ public final class ZoeAppModel: ObservableObject {
             #if DEBUG
             if suppressConnectionFollowupsForTesting { return }
             #endif
-            if let coordinator { _ = try? await coordinator.recoverPending(currentWorkspaceID: workspaceID, onOutcome: { _ in }) }
+            if let coordinator { _ = try? await coordinator.recoverPending(currentInstanceLineageID: instanceLineageID, onOutcome: { _ in }) }
             guard generation == connectionGeneration.value else { return }
             startEventLoop()
             if continuousVoiceEnabled, voiceSession == nil {
@@ -298,7 +297,7 @@ public final class ZoeAppModel: ObservableObject {
             }
         } catch {
             if Self.isAccessDenied(error) || (error as? ZoeError).map({ if case .missingCredential = $0 { true } else { false } }) == true {
-                lockWorkspace()
+                lockInstance()
                 authentication = .disconnected
             } else if !authentication.isConnected { authentication = .unavailable }
             setOffline(error)
@@ -471,15 +470,15 @@ public final class ZoeAppModel: ObservableObject {
             _ = try await candidateAPI.snapshot()
             let store = try keyStore(url: candidate.serverURL)
             let previousKey = try store.load()
-            // Local credential replacement is atomic. A failed write leaves the old workspace intact.
+            // Local credential replacement is atomic. A failed write leaves the old connection intact.
             try store.replace(candidate.key)
             do {
                 guard try store.load() == candidate.key else {
                     throw ZoeError.persistence("The instance key could not be saved in local storage.")
                 }
                 await endVoiceSession(reason: .connectionCleared)
-                // Cleanup must use the old credential scope without deleting the newly saved key.
-                try await removeLocalConnection(preservingCredential: true, previousKey: previousKey)
+                // Keep instance-scoped pending commands across key rotation.
+                try await removeLocalConnection(preservingCredential: true)
             } catch {
                 do {
                     if let previousKey { try store.replace(previousKey) }
@@ -524,18 +523,14 @@ public final class ZoeAppModel: ObservableObject {
         savedKeyText = SavedKeyMask.text(for: key)
     }
 
-    private func removeLocalConnection(preservingCredential: Bool = false, previousKey: InstanceKey? = nil) async throws {
+    private func removeLocalConnection(preservingCredential: Bool = false) async throws {
         connectionCleanupWarning = nil
         let oldJournal = journal
-        lockWorkspace()
+        lockInstance()
         authentication = .disconnected
-        try await oldJournal?.discard()
+        if !preservingCredential { try await oldJournal?.discard() }
         if let url = try? ServerAddress.normalize(serverAddress) {
             let store = try keyStore(url: url)
-            let cleanupKey = preservingCredential ? previousKey : try store.load()
-            if let key = cleanupKey, oldJournal == nil {
-                try await CommandJournal(serverURL: url, credentialScope: key.bearerToken()).discard()
-            }
             if !preservingCredential { try store.reset() }
         }
         configuredServerURL = nil
@@ -544,7 +539,7 @@ public final class ZoeAppModel: ObservableObject {
         defaults.removeObject(forKey: "zoe.instance.serverAddress")
     }
 
-    private func lockWorkspace() {
+    private func lockInstance() {
         recoveryACKTask?.cancel()
         closeUISurfaces()
         connectionGeneration.advance()
@@ -553,7 +548,7 @@ public final class ZoeAppModel: ObservableObject {
         eventTask = nil
         if let syncLoop { Task { await syncLoop.cancel() } }
         syncLoop = nil
-        workspaceID = nil
+        instanceLineageID = nil
         eventCursor = nil
         authoritativeControlSnapshot = nil
         recoveredVoicePool = nil
@@ -592,7 +587,7 @@ public final class ZoeAppModel: ObservableObject {
         oldTransport?.closeImmediately()
         Task { [weak self] in
             guard let self, let oldSession, let oldAPI else { return }
-            _ = await self.requestVoiceHangup(oldSession, api: oldAPI, phase: "workspace_lock")
+            _ = await self.requestVoiceHangup(oldSession, api: oldAPI, phase: "instance_lock")
         }
     }
     public func refreshVoiceReadiness() async {
@@ -1187,11 +1182,11 @@ public final class ZoeAppModel: ObservableObject {
 
     private func configure() throws -> APIClient {
         let url = try ServerAddress.normalize(serverAddress)
-        if let api, api.serverURL == url, coordinator != nil { return api }
+        if let api, api.serverURL == url { return api }
         let store = try keyStore(url: url)
         guard let key = try store.load() else { throw ZoeError.missingCredential }
         if configuredServerURL != url {
-            lockWorkspace()
+            lockInstance()
             connectionGeneration.switchOrigin(to: url)
             connectionEpoch = connectionGeneration.value
             configuredServerURL = url
@@ -1202,11 +1197,7 @@ public final class ZoeAppModel: ObservableObject {
         let api = try connectionAPI(url: url, key: key)
         self.identity = store
         self.api = api
-        // Physical installation identity must never be derived from the shared instance key.
-        let scope = try key.bearerToken()
-        let journal = try CommandJournal(serverURL: url, credentialScope: scope)
-        self.journal = journal
-        coordinator = CommandCoordinator(api: api, journal: journal)
+        // Journals are opened only after an authenticated snapshot establishes instance identity.
         return api
     }
 
@@ -1268,17 +1259,32 @@ public final class ZoeAppModel: ObservableObject {
         await finishVoiceSession(session, api: api, mediaEpoch: mediaEpoch, lossReason: nil, reason: .voiceEndEvent, gatewayIsEnding: true)
     }
 
-    private var workspaceID: String?
+    private var instanceLineageID: String?
     private var eventCursor: String?
     public let silence: SilenceController
     private var voiceMonitorTask: Task<Void, Never>?
+
+    private func adoptInstanceIdentity(_ identity: String, api: APIClient) throws {
+        guard !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ZoeError.invalidResponse }
+        guard instanceLineageID != identity || coordinator == nil else { return }
+        let journal = try CommandJournal(instanceLineageID: identity)
+        if instanceLineageID != identity {
+            closeUISurfaces()
+            eventCursor = nil
+            authoritativeControlSnapshot = nil
+            recoveryACKTask?.cancel()
+        }
+        instanceLineageID = identity
+        self.journal = journal
+        coordinator = CommandCoordinator(api: api, journal: journal)
+    }
 
     private func validateConnection() async throws {
         guard let api else { throw ZoeError.missingCredential }
         let generation = connectionGeneration.value
         let snapshot = try await api.snapshot()
         guard isCurrentConnection(generation, sourceAPI: api) else { return }
-        workspaceID = snapshot.workspaceId
+        try adoptInstanceIdentity(snapshot.authority.instanceLineageId, api: api)
         // Neither metadata nor UI snapshots prove consumption of global events.
     }
 
@@ -1311,7 +1317,7 @@ public final class ZoeAppModel: ObservableObject {
                 api.recordDiagnostic(phase: "events_stream", requestPath: "/v1/events", httpStatus: redacted.httpStatus, errorType: redacted.errorType, errorSummary: "error;\(redacted.errorType);dur=\(DiagnosticSummaries.seconds(Date().timeIntervalSince(started)))", level: .info)
                 if Task.isCancelled || !isCurrentConnection(generation, sourceAPI: api) { return }
                 if Self.isAccessDenied(error) {
-                    lockWorkspace()
+                    lockInstance()
                     authentication = .disconnected
                     setOffline(error)
                     return
@@ -1358,10 +1364,10 @@ public final class ZoeAppModel: ObservableObject {
                 guard !Task.isCancelled, generation == connectionGeneration.value else { return }
             }
             if let coordinator {
-                let workspace = workspaceID
-                _ = try? await coordinator.recoverPending(currentWorkspaceID: workspace, onOutcome: { _ in }, isValid: { [weak self] in
+                let instance = instanceLineageID
+                _ = try? await coordinator.recoverPending(currentInstanceLineageID: instance, onOutcome: { _ in }, isValid: { [weak self] in
                     guard let self else { return false }
-                    return generation == self.connectionGeneration.value && self.workspaceID == workspace
+                    return generation == self.connectionGeneration.value && self.instanceLineageID == instance
                 })
             }
             guard !Task.isCancelled, generation == connectionGeneration.value else { return }
@@ -1375,6 +1381,8 @@ public final class ZoeAppModel: ObservableObject {
     private func recoverGlobalState(using api: APIClient, generation: UInt64) async throws {
         let recovery = try await api.recovery()
         guard !Task.isCancelled, generation == connectionGeneration.value else { throw CancellationError() }
+        guard let identity = recovery.snapshot.instanceLineageID else { throw ZoeError.invalidResponse }
+        try adoptInstanceIdentity(identity, api: api)
         #if DEBUG
         await recoveryApplicationGateForTesting?()
         #endif
@@ -1424,7 +1432,7 @@ public final class ZoeAppModel: ObservableObject {
         #endif
         // Commit boundary: no throwing or suspension between these assignments and
         // checkpoint adoption. Native displays are not physically transactional.
-        workspaceID = recovery.snapshot.workspaceID
+        instanceLineageID = identity
         authoritativeControlSnapshot = recovery.snapshot
         recoveredVoicePool = recovery.voice.pool
         uiSurfaceRequests = staged
@@ -1438,7 +1446,7 @@ public final class ZoeAppModel: ObservableObject {
         authentication = .connected
         onUISurfacesClosed?(removed)
         let events = recovery.ui.surfaces.map(\.event).filter { staged.outcomes[$0.binding] == true }
-        let workspace = recovery.snapshot.workspaceID
+        let instance = identity
         let coordinator = coordinator
         // ACK transport/receipt lookup is independent of authoritative recovery.
         // Coordinator persists uncertain submissions; later connections retry them.
@@ -1449,15 +1457,15 @@ public final class ZoeAppModel: ObservableObject {
                 for event in events {
                     guard generation == self.connectionGeneration.value, !Task.isCancelled else { return }
                     guard self.isCurrentUIPresentation?(event) != false else { continue }
-                    _ = try? await coordinator.submit(kind: "ui.rendered", payload: event.renderedPayload(success: true), workspaceID: workspace, idempotencyKey: event.renderedIdempotencyKey, isValid: { [weak self] in
+                    _ = try? await coordinator.submit(kind: "ui.rendered", payload: event.renderedPayload(success: true), instanceLineageID: instance, idempotencyKey: event.renderedIdempotencyKey, isValid: { [weak self] in
                         guard let self else { return false }
-                        return generation == self.connectionGeneration.value && self.workspaceID == workspace && self.isCurrentUIPresentation?(event) != false
+                        return generation == self.connectionGeneration.value && self.instanceLineageID == instance && self.isCurrentUIPresentation?(event) != false
                     })
                     guard generation == self.connectionGeneration.value, !Task.isCancelled else { return }
                 }
-                _ = try? await coordinator.recoverPending(currentWorkspaceID: workspace, onOutcome: { _ in }, isValid: { [weak self] in
+                _ = try? await coordinator.recoverPending(currentInstanceLineageID: instance, onOutcome: { _ in }, isValid: { [weak self] in
                     guard let self else { return false }
-                    return generation == self.connectionGeneration.value && self.workspaceID == workspace &&
+                    return generation == self.connectionGeneration.value && self.instanceLineageID == instance &&
                         events.allSatisfy { self.isCurrentUIPresentation?($0) != false }
                 })
                 guard generation == self.connectionGeneration.value, !Task.isCancelled else { return }
@@ -1537,7 +1545,7 @@ public final class ZoeAppModel: ObservableObject {
                let journal, let coordinator,
                let pending = try? await journal.all(),
                pending.contains(where: { $0.idempotencyKey == event.renderedIdempotencyKey }) {
-                _ = try? await coordinator.retryPending(idempotencyKey: event.renderedIdempotencyKey, currentWorkspaceID: workspaceID)
+                _ = try? await coordinator.retryPending(idempotencyKey: event.renderedIdempotencyKey, currentInstanceLineageID: instanceLineageID)
             }
             return
         }
@@ -1556,17 +1564,16 @@ public final class ZoeAppModel: ObservableObject {
         generation == connectionGeneration.value && (sourceAPI == nil || sourceAPI === api)
     }
 
-    /// History is local and never fed back to the server. The last scope persists so it stays viewable while disconnected.
+    /// History is local and never fed back to the server; only the authenticated instance is visible.
     private func recordUISurfaceHistory(_ event: UISurfaceEvent) {
-        guard let workspace = workspaceID, !serverAddress.isEmpty else {
+        guard let instance = instanceLineageID, !serverAddress.isEmpty else {
             var missing: [String] = []
-            if workspaceID == nil { missing.append("workspace") }
+            if instanceLineageID == nil { missing.append("instance") }
             if serverAddress.isEmpty { missing.append("server") }
             recordUITrace(phase: "history_scope_unavailable", summary: "missing=" + missing.joined(separator: ","), level: .warn, upload: true)
             return
         }
-        let scope = UISurfaceHistoryScope(serverURL: serverAddress, workspaceID: workspace)
-        if let data = try? JSONEncoder().encode(scope) { defaults.set(data, forKey: historyScopeKey) }
+        let scope = UISurfaceHistoryScope(instanceLineageID: instance)
         guard let write = onUISurfaceDisplayed else { return }
         Task { [weak self] in
             do {
@@ -1587,7 +1594,8 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     public var historyScope: UISurfaceHistoryScope? {
-        defaults.data(forKey: historyScopeKey).flatMap { try? JSONDecoder().decode(UISurfaceHistoryScope.self, from: $0) }
+        guard let instanceLineageID else { return nil }
+        return UISurfaceHistoryScope(instanceLineageID: instanceLineageID)
     }
 
     private func closeUISurfaces() {
@@ -1611,13 +1619,13 @@ public final class ZoeAppModel: ObservableObject {
         recordUITrace(phase: "ui_surface_render_error", summary: "count=\(errors.count) first_type=\(errorType)", level: .warn, upload: true)
     }
 
-    public var canSubmitConversationText: Bool { authentication.isConnected && coordinator != nil && workspaceID != nil }
+    public var canSubmitConversationText: Bool { authentication.isConnected && coordinator != nil && instanceLineageID != nil }
 
     public func submitConversationText(_ text: String, idempotencyKey: String) async throws {
-        guard canSubmitConversationText, let coordinator, let workspaceID else {
+        guard canSubmitConversationText, let coordinator, let instanceLineageID else {
             throw ZoeError.persistence("Connect to the server before sending.")
         }
-        _ = try await coordinator.submit(kind: "voice.text_input", payload: .object(["text": .string(text)]), workspaceID: workspaceID, idempotencyKey: idempotencyKey)
+        _ = try await coordinator.submit(kind: "voice.text_input", payload: .object(["text": .string(text)]), instanceLineageID: instanceLineageID, idempotencyKey: idempotencyKey)
     }
 
     public func sendUISurfaceAction(binding: UISurfaceBinding, action: ResolvedAction) {
@@ -1669,7 +1677,8 @@ public final class ZoeAppModel: ObservableObject {
                 _ = try await api.submit(kind: kind, payload: payload, idempotencyKey: key)
             } else {
                 guard let coordinator else { return false }
-                _ = try await coordinator.submit(kind: kind, payload: payload, workspaceID: workspaceID, idempotencyKey: key)
+                guard let instanceLineageID else { throw ZoeError.invalidResponse }
+                _ = try await coordinator.submit(kind: kind, payload: payload, instanceLineageID: instanceLineageID, idempotencyKey: key)
             }
             return true
         } catch {
@@ -1691,7 +1700,7 @@ public final class ZoeAppModel: ObservableObject {
 
     private func setOffline(_ error: Error) {
         if Self.isAccessDenied(error), authentication.isConnected {
-            lockWorkspace()
+            lockInstance()
             authentication = .disconnected
         }
         let message = userMessage(error)

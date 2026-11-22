@@ -352,7 +352,7 @@ final class ClientContractTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
         for kind in ["voice.turn.commit", "voice.turn.handoff"] {
-            try await journal.append(PendingCommand(idempotencyKey: kind, kind: kind, expectedVersion: nil, payload: .object([:]), createdAt: "now", workspaceID: "default", expectedResourceType: nil, expectedResourceID: nil))
+            try await journal.append(PendingCommand(idempotencyKey: kind, kind: kind, expectedVersion: nil, payload: .object([:]), createdAt: "now", instanceLineageID: "default", expectedResourceType: nil, expectedResourceID: nil))
         }
         let coordinator = CommandCoordinator(api: api, journal: journal)
         var requestIDs: [String] = []
@@ -376,10 +376,10 @@ final class ClientContractTests: XCTestCase {
             }
         }
         // Legacy journal rows must not be looked up or replayed after the upgrade.
-        let outcomes = try await coordinator.recoverPending()
+        let outcomes = try await coordinator.recoverPending(currentInstanceLineageID: "default", onOutcome: { _ in })
         XCTAssertTrue(outcomes.isEmpty)
         do {
-            _ = try await coordinator.retryPending(idempotencyKey: "voice.turn.handoff", currentWorkspaceID: "default")
+            _ = try await coordinator.retryPending(idempotencyKey: "voice.turn.handoff", currentInstanceLineageID: "default")
             XCTFail("Explicit retry must not replay a retired command")
         } catch ZoeError.persistence(_) {}
         for _ in 0..<2 {
@@ -397,7 +397,7 @@ final class ClientContractTests: XCTestCase {
     }
     private static func recoveryBody(cursor: String) -> Data {
         Data("""
-        {"cursor":"\(cursor)","snapshot":{"workspace_id":"default","subject_id":"owner","server_version":"1","event_cursor":"\(cursor)","authority":{"instance_lineage_id":"lineage","generation":1,"deletion_sequence":"0"},"projects":[],"tasks":[{"id":"authoritative-task","status":"complete"}],"approvals":[],"runs":[],"execution_capacity":{}},"ui":{"cursor":\(cursor),"surfaces":[]},"voice":{"current_session":null,"pool":{"blocked":false,"reason_code":""}}}
+        {"cursor":"\(cursor)","snapshot":{"subject_id":"owner","server_version":"1","event_cursor":"\(cursor)","authority":{"instance_lineage_id":"default","generation":1,"deletion_sequence":"0"},"projects":[],"tasks":[{"id":"authoritative-task","status":"complete"}],"approvals":[],"runs":[],"execution_capacity":{}},"ui":{"cursor":\(cursor),"surfaces":[]},"voice":{"current_session":null,"pool":{"blocked":false,"reason_code":""}}}
         """.utf8)
     }
 
@@ -441,7 +441,7 @@ final class ClientContractTests: XCTestCase {
     @MainActor func testReconnectTransportReplaysNonUIEventsDespiteNewerUISnapshotAndFetchFailure() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let model = ZoeAppModel()
-        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "1"))
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "1", authority: InstanceAuthority(instanceLineageId: "default")))
         model.setAuthenticationForTesting(.connected)
         _ = model.installVoiceSessionForTesting(try voiceDialFixture("replayed-call", generation: 1), api: api)
         var mediaStops = 0
@@ -501,7 +501,7 @@ final class ClientContractTests: XCTestCase {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let model = ZoeAppModel()
         model.setAuthenticationForTesting(.connected)
-        model.setSnapshotForTesting(Snapshot(serverVersion: "test", eventCursor: "10"))
+        model.setSnapshotForTesting(Snapshot(serverVersion: "test", eventCursor: "10", authority: InstanceAuthority(instanceLineageId: "default")))
         ContractURLProtocol.responseHandler = { request in
             if request.url?.path == "/v1/recovery" { return (503, [:], Data()) }
             if request.url?.path == "/v1/ui/snapshot" {
@@ -524,7 +524,7 @@ final class ClientContractTests: XCTestCase {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let model = ZoeAppModel()
         model.setAuthenticationForTesting(.connected)
-        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10"))
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10", authority: InstanceAuthority(instanceLineageId: "default")))
         _ = model.installVoiceSessionForTesting(try voiceDialFixture("old", generation: 1), api: api)
         var stops = 0
         var hangups = 0
@@ -588,7 +588,7 @@ final class ClientContractTests: XCTestCase {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let model = ZoeAppModel()
         model.setAuthenticationForTesting(.connected)
-        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "0"))
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "0", authority: InstanceAuthority(instanceLineageId: "default")))
         let gate = AsyncTestGate()
         model.recoveryApplicationGateForTesting = { await gate.pause() }
         ContractURLProtocol.responseHandler = { request in
@@ -631,7 +631,7 @@ final class ClientContractTests: XCTestCase {
     @MainActor func testRecoveryFailedRenderRetriesSameRevisionWithoutModelCommit() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let model = ZoeAppModel()
-        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10"))
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10", authority: InstanceAuthority(instanceLineageId: "default")))
         var renders = 0
         model.onUISurface = { _ in renders += 1; return renders > 1 }
         let surface = #"{"request_id":"pending","surface_id":"s1","surface_version":2,"container":"window","chat_input":false,"task_question":true,"task_id":"task","question_id":"question","render_status":"rendered","messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}]}"#
@@ -668,7 +668,7 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(model.eventCursorForTesting, "20")
         let live = surface.replacingOccurrences(of: "\"surface_version\":1", with: "\"surface_version\":2")
         let payload = try JSONDecoder().decode(JSONValue.self, from: Data(live.utf8))
-        await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "live", cursor: "21", type: "ui.surface", occurredAt: "", workspaceId: "default", aggregateType: "ui_surface", aggregateId: "s1", aggregateVersion: 2, payload: payload))
+        await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "live", cursor: "21", type: "ui.surface", occurredAt: "", aggregateType: "ui_surface", aggregateId: "s1", aggregateVersion: 2, payload: payload))
         XCTAssertEqual(renders, 1)
         try await model.recoverGlobalStateForTesting(api: api)
         XCTAssertEqual(renders, 1, "Reconnect must not hide or recreate the already-presented live surface")
@@ -713,7 +713,7 @@ final class ClientContractTests: XCTestCase {
         model.onUISurfacesClosed = { ids in ids.forEach { manager.close(id: $0) } }
         let live = #"{"request_id":"live","surface_id":"s1","surface_version":1,"container":"window","chat_input":false,"task_question":false,"messages":[{"version":"v0.9","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"s1","components":[{"id":"root","component":"Text","text":"Hello"}]}}]}"#
         let payload = try JSONDecoder().decode(JSONValue.self, from: Data(live.utf8))
-        await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "live", cursor: "10", type: "ui.surface", occurredAt: "", workspaceId: "default", aggregateType: "ui_surface", aggregateId: "s1", aggregateVersion: 1, payload: payload))
+        await model.handleEventForTesting(EventEnvelope(schemaVersion: 1, eventId: "live", cursor: "10", type: "ui.surface", occurredAt: "", aggregateType: "ui_surface", aggregateId: "s1", aggregateVersion: 1, payload: payload))
         XCTAssertNotNil(manager.viewModel(for: "s1"))
         let pending = #"{"request_id":"pending","surface_id":"s2","surface_version":1,"container":"window","chat_input":false,"task_question":true,"task_id":"task","question_id":"question","render_status":"rendered","messages":[{"version":"v0.9","createSurface":{"surfaceId":"s2","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}},{"version":"v0.9","updateComponents":{"surfaceId":"s2","components":[{"id":"root","component":"Text","text":"Question"}]}}]}"#
         let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!.replacingOccurrences(of: "\"surfaces\":[]", with: "\"surfaces\":[\(pending)]")
@@ -737,7 +737,7 @@ final class ClientContractTests: XCTestCase {
     @MainActor func testGenerationSwitchAfterRenderingCannotCommitStagedModel() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let model = ZoeAppModel()
-        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10"))
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10", authority: InstanceAuthority(instanceLineageId: "default")))
         let gate = AsyncTestGate()
         model.recoveryCommitGateForTesting = { await gate.pause() }
         ContractURLProtocol.responseHandler = { _ in (200, [:], Self.recoveryBody(cursor: "20")) }
@@ -760,11 +760,11 @@ final class ClientContractTests: XCTestCase {
         let coordinator = CommandCoordinator(api: api, journal: journal)
         ContractURLProtocol.responseHandler = { _ in (503, [:], Data()) }
         do {
-            _ = try await coordinator.submit(kind: "ui.rendered", payload: JSONValue.object([:]), workspaceID: "default", idempotencyKey: "pending-render")
+            _ = try await coordinator.submit(kind: "ui.rendered", payload: JSONValue.object([:]), instanceLineageID: "default", idempotencyKey: "pending-render")
         } catch { }
         let model = ZoeAppModel()
         model.installRecoveryCoordinatorForTesting(coordinator)
-        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10"))
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10", authority: InstanceAuthority(instanceLineageId: "default")))
         ContractURLProtocol.responseHandler = { request in
             if request.url?.path == "/v1/recovery" { return (200, [:], Self.recoveryBody(cursor: "20")) }
             return (503, [:], Data())
@@ -798,7 +798,7 @@ final class ClientContractTests: XCTestCase {
     @MainActor func testRecoveryRejectsRotatedCredentialWithoutCursorAdvance() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let model = ZoeAppModel()
-        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "0"))
+        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "0", authority: InstanceAuthority(instanceLineageId: "default")))
         ContractURLProtocol.responseHandler = { _ in
             (401, [:], Data(#"{"error":{"code":"unauthenticated","message":"rotated"}}"#.utf8))
         }
@@ -816,7 +816,7 @@ final class ClientContractTests: XCTestCase {
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("journal.json"))
         let coordinator = CommandCoordinator(api: api, journal: journal)
         ContractURLProtocol.responseHandler = { _ in (503, [:], Data()) }
-        do { _ = try await coordinator.submit(kind: "ui.rendered", payload: .object([:]), workspaceID: "default", idempotencyKey: "old") } catch { }
+        do { _ = try await coordinator.submit(kind: "ui.rendered", payload: .object([:]), instanceLineageID: "default", idempotencyKey: "old") } catch { }
         let gate = AsyncTestGate()
         var valid = true
         var posts = 0
@@ -828,7 +828,7 @@ final class ClientContractTests: XCTestCase {
             return (404, [:], Data(#"{"error":{"code":"not_found","message":"missing"}}"#.utf8))
         }
         let recovery = Task {
-            try await coordinator.recoverPending(currentWorkspaceID: "default", onOutcome: { _ in }, isValid: { valid })
+            try await coordinator.recoverPending(currentInstanceLineageID: "default", onOutcome: { _ in }, isValid: { valid })
         }
         await gate.waitUntilStarted()
         valid = false
@@ -860,12 +860,12 @@ final class ClientContractTests: XCTestCase {
                 return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: kind, workspaceID: "workspace-1", resourceID: "s1"))
             }
             do {
-                _ = try await coordinator.submit(kind: kind, payload: payload, workspaceID: "workspace-1", idempotencyKey: key)
+                _ = try await coordinator.submit(kind: kind, payload: payload, instanceLineageID: "instance-1", idempotencyKey: key)
                 XCTFail("Expected uncertain acceptance")
             } catch { }
             let pending = try await journal.all()
             XCTAssertEqual(pending.first?.payload, payload)
-            let outcomes = try await coordinator.recoverPending(currentWorkspaceID: "workspace-1", onOutcome: { _ in })
+            let outcomes = try await coordinator.recoverPending(currentInstanceLineageID: "instance-1", onOutcome: { _ in })
             XCTAssertEqual(outcomes.count, 1)
             XCTAssertTrue(try XCTUnwrap(outcomes.first).recovered)
             XCTAssertEqual(posts, 1)
@@ -887,7 +887,7 @@ final class ClientContractTests: XCTestCase {
         ContractURLProtocol.failureHandler = { request in request.httpMethod == "POST" ? URLError(.timedOut) : nil }
         ContractURLProtocol.responseHandler = { _ in (404, [:], Data(#"{"error":{"code":"not_found","message":"missing"}}"#.utf8)) }
         do {
-            _ = try await coordinator.submit(kind: "voice.text_input", payload: payload, workspaceID: "workspace-1", idempotencyKey: key)
+            _ = try await coordinator.submit(kind: "voice.text_input", payload: payload, instanceLineageID: "instance-1", idempotencyKey: key)
             XCTFail("Expected an uncertain submission")
         } catch { }
         let pending = try await journal.all()
@@ -898,7 +898,7 @@ final class ClientContractTests: XCTestCase {
             if request.httpMethod == "GET" { return (404, [:], Data(#"{"error":{"code":"not_found","message":"missing"}}"#.utf8)) }
             return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: "voice.text_input", workspaceID: "workspace-1", resourceID: ""))
         }
-        let outcomes = try await coordinator.recoverPending(currentWorkspaceID: "workspace-1", onOutcome: { _ in })
+        let outcomes = try await coordinator.recoverPending(currentInstanceLineageID: "instance-1", onOutcome: { _ in })
         XCTAssertEqual(outcomes.count, 1)
         XCTAssertFalse(try XCTUnwrap(outcomes.first).recovered)
         let remaining = try await journal.all()
@@ -951,8 +951,8 @@ final class ClientContractTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent("\(UUID().uuidString).json")
         let journal = try CommandJournal(fileURL: file)
-        let first = PendingCommand(idempotencyKey: "stable-key", kind: "voice.text_input", expectedVersion: 2, payload: .object(["text": .string("first")]), createdAt: "now", workspaceID: "ws", expectedResourceType: nil, expectedResourceID: nil)
-        let changed = PendingCommand(idempotencyKey: "stable-key", kind: "voice.text_input", expectedVersion: 2, payload: .object(["text": .string("second")]), createdAt: "later", workspaceID: "ws", expectedResourceType: nil, expectedResourceID: nil)
+        let first = PendingCommand(idempotencyKey: "stable-key", kind: "voice.text_input", expectedVersion: 2, payload: .object(["text": .string("first")]), createdAt: "now", instanceLineageID: "instance-1", expectedResourceType: nil, expectedResourceID: nil)
+        let changed = PendingCommand(idempotencyKey: "stable-key", kind: "voice.text_input", expectedVersion: 2, payload: .object(["text": .string("second")]), createdAt: "later", instanceLineageID: "instance-1", expectedResourceType: nil, expectedResourceID: nil)
         try await journal.append(first)
         do {
             try await journal.append(changed)
@@ -992,13 +992,13 @@ final class ClientContractTests: XCTestCase {
         }
 
         do {
-            _ = try await coordinator.submit(kind: "ui.action", payload: .object(["surface_id": .string("surface")]), workspaceID: "workspace-1", idempotencyKey: key)
+            _ = try await coordinator.submit(kind: "ui.action", payload: .object(["surface_id": .string("surface")]), instanceLineageID: "instance-1", idempotencyKey: key)
             XCTFail("The first response should be lost after the server accepts the command")
         } catch { }
         let pendingAfterTimeout = try await journal.all()
         XCTAssertEqual(pendingAfterTimeout.map(\.idempotencyKey), [key])
 
-        let recovered = try await coordinator.retryPending(idempotencyKey: key, currentWorkspaceID: "workspace-1")
+        let recovered = try await coordinator.retryPending(idempotencyKey: key, currentInstanceLineageID: "instance-1")
 
         XCTAssertTrue(recovered.recovered)
         XCTAssertEqual(recovered.receipt.idempotencyKey, key)
@@ -1015,7 +1015,7 @@ final class ClientContractTests: XCTestCase {
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
         let key = "definitive-404-\(UUID().uuidString.lowercased())"
         let payload: JSONValue = .object(["text": .string("Original payload")])
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.text_input", expectedVersion: nil, payload: payload, createdAt: "2026-10-22T12:00:00Z", workspaceID: "workspace-1", expectedResourceType: nil, expectedResourceID: nil))
+        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.text_input", expectedVersion: nil, payload: payload, createdAt: "2026-10-22T12:00:00Z", instanceLineageID: "instance-1", expectedResourceType: nil, expectedResourceID: nil))
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let coordinator = CommandCoordinator(api: api, journal: journal)
         var receiptCount = 0
@@ -1036,7 +1036,7 @@ final class ClientContractTests: XCTestCase {
             return (503, ["Content-Type": "application/json"], Data())
         }
 
-        let outcome = try await coordinator.retryPending(idempotencyKey: key, currentWorkspaceID: "workspace-1")
+        let outcome = try await coordinator.retryPending(idempotencyKey: key, currentInstanceLineageID: "instance-1")
 
         XCTAssertEqual(receiptCount, 1, "receipt lookup must precede the safe retry")
         XCTAssertEqual(postCount, 1)
@@ -1054,17 +1054,17 @@ final class ClientContractTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        let key = "workspace-guard-\(UUID().uuidString.lowercased())"
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.text_input", expectedVersion: nil, payload: .object([:]), createdAt: "now", workspaceID: "old-workspace", expectedResourceType: nil, expectedResourceID: nil))
+        let key = "instance-guard-\(UUID().uuidString.lowercased())"
+        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.text_input", expectedVersion: nil, payload: .object([:]), createdAt: "now", instanceLineageID: "old-instance", expectedResourceType: nil, expectedResourceID: nil))
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let coordinator = CommandCoordinator(api: api, journal: journal)
-        ContractURLProtocol.responseHandler = { _ in XCTFail("workspace mismatch must not make a network request"); return (500, [:], Data()) }
+        ContractURLProtocol.responseHandler = { _ in XCTFail("instance mismatch must not make a network request"); return (500, [:], Data()) }
 
         do {
-            _ = try await coordinator.retryPending(idempotencyKey: key, currentWorkspaceID: "new-workspace")
-            XCTFail("Expected a workspace guard")
+            _ = try await coordinator.retryPending(idempotencyKey: key, currentInstanceLineageID: "new-instance")
+            XCTFail("Expected an instance guard")
         } catch let error as ZoeError {
-            guard case .pendingCommandWorkspaceMismatch = error else { return XCTFail("Unexpected error: \(error)") }
+            guard case .pendingCommandInstanceMismatch = error else { return XCTFail("Unexpected error: \(error)") }
         }
         let remaining = try await journal.all()
         XCTAssertEqual(remaining.map(\.idempotencyKey), [key])
@@ -1076,7 +1076,7 @@ final class ClientContractTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
         let key = "receipt-timeout-\(UUID().uuidString.lowercased())"
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.text_input", expectedVersion: nil, payload: .object(["text": .string("Work")]), createdAt: "now", workspaceID: "workspace-1", expectedResourceType: nil, expectedResourceID: nil))
+        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.text_input", expectedVersion: nil, payload: .object(["text": .string("Work")]), createdAt: "now", instanceLineageID: "instance-1", expectedResourceType: nil, expectedResourceID: nil))
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let coordinator = CommandCoordinator(api: api, journal: journal)
         var postCount = 0
@@ -1088,7 +1088,7 @@ final class ClientContractTests: XCTestCase {
         ContractURLProtocol.responseHandler = { _ in XCTFail("a failed receipt lookup must not fall through to POST"); return (500, [:], Data()) }
 
         do {
-            _ = try await coordinator.retryPending(idempotencyKey: key, currentWorkspaceID: "workspace-1")
+            _ = try await coordinator.retryPending(idempotencyKey: key, currentInstanceLineageID: "instance-1")
             XCTFail("Expected receipt lookup to remain uncertain")
         } catch { }
 
