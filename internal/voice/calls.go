@@ -49,7 +49,7 @@ func (s *Service) handleCallStart(w http.ResponseWriter, r *http.Request) {
 		control.WriteError(w, err)
 		return
 	}
-	if !control.HasRunnerScope(runner, voiceRunnerScope, p.WorkspaceID) || (!control.HasScope(p, "voice:open") && !control.HasScope(p, "client:command")) {
+	if !control.HasRunnerScope(runner, voiceRunnerScope) || (!control.HasScope(p, "voice:open") && !control.HasScope(p, "client:command")) {
 		control.WriteError(w, callForbidden())
 		return
 	}
@@ -273,7 +273,7 @@ func loadLifecycleCall(ctx context.Context, tx *sql.Tx, id string) (lifecycleCal
 }
 
 func (c lifecycleCall) authorize(runner contracts.RunnerPrincipal) error {
-	if runner.RunnerID != c.runner || !control.HasRunnerScope(runner, voiceRunnerScope, c.principal.WorkspaceID) {
+	if runner.RunnerID != c.runner || !control.HasRunnerScope(runner, voiceRunnerScope) {
 		return callForbidden()
 	}
 	return nil

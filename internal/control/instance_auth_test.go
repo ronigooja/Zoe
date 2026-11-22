@@ -199,14 +199,14 @@ func TestInternalCredentialsRemainScopedAndRevokedAfterRegistrationRetry(t *test
 	ingest, _ := GenerateInstanceKey()
 	credentials := []struct{ token, id, scope string }{{runner, "runner", "runner:claim"}, {ingest, "ingest", "voice:turn:ingest"}}
 	for _, entry := range credentials {
-		if err := server.RegisterRunnerCredential(context.Background(), entry.token, entry.id, []string{"default"}, []string{entry.scope}); err != nil {
+		if err := server.RegisterRunnerCredential(context.Background(), entry.token, entry.id, []string{entry.scope}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := server.RegisterRunnerRoutes(func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /runner/v1/test", func(w http.ResponseWriter, r *http.Request) {
 			p, ok := RunnerPrincipalFromContext(r.Context())
-			if !ok || p.RunnerID != "runner" || !HasRunnerScope(p, "runner:claim", "default") {
+			if !ok || p.RunnerID != "runner" || !HasRunnerScope(p, "runner:claim") {
 				t.Error("generic runner route did not receive the execution runner principal")
 			}
 			w.WriteHeader(204)
@@ -234,7 +234,7 @@ func TestInternalCredentialsRemainScopedAndRevokedAfterRegistrationRetry(t *test
 		t.Fatal(err)
 	}
 	for _, entry := range credentials {
-		if err := server.RegisterRunnerCredential(context.Background(), entry.token, entry.id, []string{"default"}, []string{entry.scope}); err != nil {
+		if err := server.RegisterRunnerCredential(context.Background(), entry.token, entry.id, []string{entry.scope}); err != nil {
 			t.Fatal(err)
 		}
 		if got := instanceRequest(handler, "GET", "/runner/v1/test", entry.token, "").Code; got != 401 {
@@ -306,11 +306,11 @@ func TestOneKeySupportsConcurrentClientsAndIndependentPushInstallations(t *testi
 
 func TestOwnerAndInternalWorkerCredentialsCannotShareASecret(t *testing.T) {
 	store, server, key := instanceAuthFixture(t)
-	if err := server.RegisterRunnerCredential(context.Background(), key, "worker", []string{"default"}, []string{"runner:claim"}); err == nil {
+	if err := server.RegisterRunnerCredential(context.Background(), key, "worker", []string{"runner:claim"}); err == nil {
 		t.Fatal("owner secret registered as internal worker")
 	}
 	worker, _ := GenerateInstanceKey()
-	if err := server.RegisterRunnerCredential(context.Background(), worker, "worker", []string{"default"}, []string{"runner:claim"}); err != nil {
+	if err := server.RegisterRunnerCredential(context.Background(), worker, "worker", []string{"runner:claim"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := RotateInstanceKey(context.Background(), store, worker); err == nil {

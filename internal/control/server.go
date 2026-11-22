@@ -22,7 +22,6 @@ type Config struct {
 	TaskUIDisplayInstruction string
 	RunnerToken              string
 	RunnerID                 string
-	RunnerWorkspaceIDs       []string
 	RunnerScopes             []string
 	InstanceScopes           []string
 	DefaultProfileID         string
@@ -131,7 +130,7 @@ func (s *Server) AppendEventsTx(ctx context.Context, tx *sql.Tx, p contracts.Pri
 			e.OccurredAt = time.Now().UTC()
 		}
 		var cursor int64
-		if err := tx.QueryRowContext(ctx, `UPDATE event_counters SET current_cursor=current_cursor+1 WHERE workspace_id=? RETURNING current_cursor`, p.WorkspaceID).Scan(&cursor); err != nil {
+		if err := tx.QueryRowContext(ctx, `UPDATE event_counters SET current_cursor=current_cursor+1 WHERE singleton=1 RETURNING current_cursor`).Scan(&cursor); err != nil {
 			return err
 		}
 		e.Cursor = fmt.Sprint(cursor)
@@ -503,19 +502,9 @@ func containsString(values []string, wanted string) bool {
 	return false
 }
 
-func HasRunnerScope(p contracts.RunnerPrincipal, scope, workspaceID string) bool {
-	allowed := false
+func HasRunnerScope(p contracts.RunnerPrincipal, scope string) bool {
 	for _, value := range p.Scopes {
 		if value == scope || value == "*" {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		return false
-	}
-	for _, value := range p.WorkspaceIDs {
-		if value == workspaceID || value == "*" {
 			return true
 		}
 	}
@@ -544,7 +533,7 @@ func (s *Server) DeviceTransaction(ctx context.Context, fn func(*sql.Tx, contrac
 	return tx.Commit()
 }
 
-// RunnerTransaction binds a transaction to the runner identity, workspace allowlist, and scopes in ctx.
+// RunnerTransaction binds a transaction to the runner identity and scopes in ctx.
 func (s *Server) RunnerTransaction(ctx context.Context, fn func(*sql.Tx, contracts.RunnerPrincipal) error) error {
 	p, ok := RunnerPrincipalFromContext(ctx)
 	if !ok {

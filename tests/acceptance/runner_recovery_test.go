@@ -17,7 +17,7 @@ func TestCurrentClaimRecoveryDoesNotDeadlockOrChangeSnapshot(t *testing.T) {
 	bootstrapCode, deviceToken, runnerToken := reviewToken(t), reviewToken(t), reviewToken(t)
 	profile := control.RuntimeProfile{ID: "worker", RuntimeRouteID: "native", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"task.read"}, Scopes: []string{"task:read"}}
 	profiles := map[string]control.RuntimeProfile{"worker": profile}
-	store, handler := reviewServer(t, control.Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim", "runner:control:read"}, DefaultProfileID: "worker", Profiles: profiles}, nil)
+	store, handler := reviewServer(t, control.Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerScopes: []string{"runner:claim", "runner:control:read"}, DefaultProfileID: "worker", Profiles: profiles}, nil)
 	reviewInitializeInstance(t, handler, bootstrapCode, deviceToken)
 	created := reviewRequest(handler, http.MethodPost, "/v1/commands", deviceToken, "create", contracts.CommandRequest{Kind: "task.create", Payload: json.RawMessage(`{"title":"original title","goal":"original goal","source":"user"}`)})
 	if created.Code != http.StatusOK {
@@ -107,7 +107,7 @@ func TestRuntimeProfileRejectsUnknownOrMismatchedHarness(t *testing.T) {
 func TestQueuedHarnessSnapshotSurvivesConfigurationChange(t *testing.T) {
 	bootstrapCode, deviceToken, runnerToken := reviewToken(t), reviewToken(t), reviewToken(t)
 	profile := control.RuntimeProfile{ID: "worker", Harness: "opencode", RuntimeRouteID: "opencode", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1"}
-	store, handler := reviewServer(t, control.Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, nil)
+	store, handler := reviewServer(t, control.Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerScopes: []string{"runner:claim"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, nil)
 	reviewInitializeInstance(t, handler, bootstrapCode, deviceToken)
 	created := reviewRequest(handler, http.MethodPost, "/v1/commands", deviceToken, "create", contracts.CommandRequest{Kind: "task.create", Payload: json.RawMessage(`{"title":"original title","goal":"original goal","source":"user"}`)})
 	if created.Code != http.StatusOK {
@@ -116,7 +116,7 @@ func TestQueuedHarnessSnapshotSurvivesConfigurationChange(t *testing.T) {
 	if _, err := store.DB().Exec(`UPDATE tasks SET harness='third-party' WHERE source='user'`); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := control.NewServer(store, control.Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}})
+	restarted, err := control.NewServer(store, control.Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerScopes: []string{"runner:claim"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestTerminationProofMethodIsBoundToRunHarness(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			bootstrapCode, deviceToken, runnerToken := reviewToken(t), reviewToken(t), reviewToken(t)
 			profile := control.RuntimeProfile{ID: "worker", Harness: tc.harness, RuntimeRouteID: tc.harness, ModelRouteID: "model", Role: "worker", IsolationPolicy: tc.policy}
-			store, handler := reviewServer(t, control.Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim", "runner:observe"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, nil)
+			store, handler := reviewServer(t, control.Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerScopes: []string{"runner:claim", "runner:observe"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, nil)
 			reviewInitializeInstance(t, handler, bootstrapCode, deviceToken)
 			created := reviewRequest(handler, http.MethodPost, "/v1/commands", deviceToken, "create", contracts.CommandRequest{Kind: "task.create", Payload: json.RawMessage(`{"title":"stop test","goal":"goal","source":"user"}`)})
 			if created.Code != http.StatusOK {

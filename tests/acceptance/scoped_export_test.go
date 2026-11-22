@@ -313,7 +313,7 @@ func TestScopedExportConcurrentWritesReturnOneSnapshotOrSafeRetry(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = store.DB().Exec(`UPDATE event_counters SET current_cursor=current_cursor+1 WHERE workspace_id='default'`); err != nil {
+		if _, err = store.DB().Exec(`UPDATE event_counters SET current_cursor=current_cursor+1 WHERE singleton=1`); err != nil {
 			t.Fatal(err)
 		}
 		changed = true

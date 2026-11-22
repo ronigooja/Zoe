@@ -310,7 +310,7 @@ func TestDelegationRecallQueuesRetainedRequest(t *testing.T) {
 
 func bindDelegationTestSession(t *testing.T, store *storage.Store) {
 	t.Helper()
-	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, ingestTestToken, "voice-gateway", []string{"default"}, []string{"voice:turn:ingest"}); err != nil {
+	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, ingestTestToken, "voice-gateway", []string{"voice:turn:ingest"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB().Exec(`UPDATE voice_sessions SET gateway_session_id=id,gateway_media_generation=1,lifecycle_runner_id='voice-gateway' WHERE id='handoff-session'`); err != nil {

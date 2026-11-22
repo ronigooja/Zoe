@@ -147,27 +147,12 @@ func (s *Service) claimTrigger(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		now := time.Now().UTC()
-		workspaceCount := len(runner.WorkspaceIDs)
-		if workspaceCount == 0 {
-			return nil
-		}
-		if _, err := tx.ExecContext(r.Context(), `INSERT INTO capability_trigger_runner_cursors(runner_id,workspace_index) VALUES(?,0) ON CONFLICT(runner_id) DO NOTHING`, runner.RunnerID); err != nil {
-			return err
-		}
-		var start int
-		if err := tx.QueryRowContext(r.Context(), `SELECT workspace_index FROM capability_trigger_runner_cursors WHERE runner_id=?`, runner.RunnerID).Scan(&start); err != nil {
-			return err
-		}
-		start %= workspaceCount
-		workspaces := make([]string, workspaceCount)
-		for i := range workspaces {
-			workspaces[i] = runner.WorkspaceIDs[(start+i)%workspaceCount]
-		}
+		workspaces := []string{"default"}
 		if err := s.processTriggerAdmissions(r.Context(), tx, runner, workspaces, now); err != nil {
 			return err
 		}
-		for i, workspace := range workspaces {
-			if !control.HasRunnerScope(runner, "capability:deploy", workspace) {
+		for _, workspace := range workspaces {
+			if !control.HasRunnerScope(runner, "capability:deploy") {
 				continue
 			}
 			var err error
@@ -176,12 +161,10 @@ func (s *Service) claimTrigger(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			if claim != nil {
-				_, err = tx.ExecContext(r.Context(), `UPDATE capability_trigger_runner_cursors SET workspace_index=? WHERE runner_id=?`, (start+i+1)%workspaceCount, runner.RunnerID)
 				return err
 			}
 		}
-		_, updateErr := tx.ExecContext(r.Context(), `UPDATE capability_trigger_runner_cursors SET workspace_index=? WHERE runner_id=?`, (start+1)%workspaceCount, runner.RunnerID)
-		return updateErr
+		return nil
 	})
 	if err != nil {
 		control.WriteError(w, err)
@@ -217,12 +200,7 @@ func (s *Service) admitTriggerTasks(w http.ResponseWriter, r *http.Request) {
 	var status capabilityTriggerAdmissionStatus
 	err := s.server.RunnerTransaction(r.Context(), func(tx *sql.Tx, runner contracts.RunnerPrincipal) error {
 		now := time.Now().UTC()
-		workspaces := make([]string, 0, len(runner.WorkspaceIDs))
-		for _, workspace := range runner.WorkspaceIDs {
-			if control.HasRunnerScope(runner, "capability:deploy", workspace) {
-				workspaces = append(workspaces, workspace)
-			}
-		}
+		workspaces := []string{"default"}
 		if err := s.processTriggerAdmissions(r.Context(), tx, runner, workspaces, now); err != nil {
 			return err
 		}
@@ -251,7 +229,7 @@ func (s *Service) admitTriggerTasks(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) processTriggerAdmissions(ctx context.Context, tx *sql.Tx, runner contracts.RunnerPrincipal, workspaces []string, now time.Time) error {
 	for _, workspace := range workspaces {
-		if !control.HasRunnerScope(runner, "capability:deploy", workspace) {
+		if !control.HasRunnerScope(runner, "capability:deploy") {
 			continue
 		}
 		if err := s.processTriggerEvents(ctx, tx, workspace, now); err != nil {
@@ -335,7 +313,7 @@ func (s *Service) activeTriggerClaim(ctx context.Context, tx *sql.Tx, runner con
 		return nil, nil
 	}
 	item := items[0]
-	if !control.HasRunnerScope(runner, "capability:deploy", item.workspace) {
+	if !control.HasRunnerScope(runner, "capability:deploy") {
 		return nil, control.NewAPIError(403, "forbidden", "runner cannot access the current trigger claim", nil)
 	}
 	var claim contracts.CapabilityTriggerClaim
@@ -750,7 +728,7 @@ func (s *Service) claimQueuedProgramTrigger(ctx context.Context, tx *sql.Tx, run
 		return nil, err
 	}
 	for _, item := range items {
-		if !control.HasRunnerScope(runner, "capability:deploy", workspace) {
+		if !control.HasRunnerScope(runner, "capability:deploy") {
 			continue
 		}
 		var active int
@@ -833,7 +811,7 @@ func (s *Service) observeTrigger(w http.ResponseWriter, r *http.Request) {
 		} else if err != nil {
 			return err
 		}
-		if !control.HasRunnerScope(runner, "capability:deploy", workspace) {
+		if !control.HasRunnerScope(runner, "capability:deploy") {
 			return control.NewAPIError(403, "forbidden", "runner cannot report this workspace", nil)
 		}
 		if runner.RunnerID != claimedRunner {

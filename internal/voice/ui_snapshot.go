@@ -58,7 +58,7 @@ func (s *Service) readUISnapshot(ctx context.Context, p contracts.Principal) (ui
 	if err = pruneUISurfacesTx(ctx, tx, s.now()); err != nil {
 		return result, err
 	}
-	if err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT current_cursor FROM event_counters WHERE workspace_id=?),0)`, p.WorkspaceID).Scan(&result.Cursor); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT current_cursor FROM event_counters WHERE singleton=1),0)`).Scan(&result.Cursor); err != nil {
 		return result, err
 	}
 	// The first read establishes the SQLite snapshot shared by the document read.

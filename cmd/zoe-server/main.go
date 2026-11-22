@@ -119,7 +119,6 @@ func run() error {
 		TaskUIDisplayInstruction: promptSet.TaskUIDisplay(),
 		RunnerToken:              runnerToken,
 		RunnerID:                 env("ZOE_RUNNER_ID", "configured-runner"),
-		RunnerWorkspaceIDs:       splitEnv("ZOE_RUNNER_WORKSPACES", "default"),
 		RunnerScopes:             splitEnv("ZOE_RUNNER_SCOPES", "runner:claim,runner:observe,runner:control:read"),
 		InstanceScopes:           optionalSplitEnv("ZOE_INSTANCE_SCOPES"),
 		DefaultProfileID:         strings.TrimSpace(os.Getenv("ZOE_DEFAULT_PROFILE_ID")),
@@ -173,7 +172,7 @@ func run() error {
 		logging.Infof("instance key is pending; waiting for zoe key init")
 	}
 	if runnerToken != "" {
-		if err = control.RegisterRunnerCredentialIfMissing(ctx, store, runnerToken, env("ZOE_RUNNER_ID", "configured-runner"), splitEnv("ZOE_RUNNER_WORKSPACES", "default"), splitEnv("ZOE_RUNNER_SCOPES", "runner:claim,runner:observe,runner:control:read")); err != nil {
+		if err = control.RegisterRunnerCredentialIfMissing(ctx, store, runnerToken, env("ZOE_RUNNER_ID", "configured-runner"), splitEnv("ZOE_RUNNER_SCOPES", "runner:claim,runner:observe,runner:control:read")); err != nil {
 			return err
 		}
 	}

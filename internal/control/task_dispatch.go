@@ -99,7 +99,7 @@ func (s *Server) handleDispatchAuthorization(w http.ResponseWriter, r *http.Requ
 	defer tx.Rollback()
 	var workspaceID, assignedRunner string
 	err = tx.QueryRowContext(r.Context(), `SELECT workspace_id,runner_id FROM runs WHERE id=? AND status IN ('dispatching','active','uncertain')`, runID).Scan(&workspaceID, &assignedRunner)
-	if errors.Is(err, sql.ErrNoRows) || assignedRunner != runner.RunnerID || !HasRunnerScope(runner, "runner:claim", workspaceID) {
+	if errors.Is(err, sql.ErrNoRows) || assignedRunner != runner.RunnerID || !HasRunnerScope(runner, "runner:claim") {
 		WriteError(w, NewAPIError(http.StatusNotFound, "run_unavailable", "dispatch authorization is unavailable for this runner", nil))
 		return
 	}

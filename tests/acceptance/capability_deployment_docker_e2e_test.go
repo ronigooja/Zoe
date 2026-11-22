@@ -180,7 +180,7 @@ func startCapabilityHTTPFixture(t *testing.T, databasePath, bootstrapCode, runne
 		t.Fatal(err)
 	}
 	deviceScopes := []string{"client:read", "client:command", "capability:read", "capability:release:submit", "capability:deployment:request", "capability:deployment:authorize", "capability:deployment:revoke"}
-	server, err := control.NewServer(store, control.Config{RunnerToken: runnerToken, RunnerID: "local-capability-runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim", "runner:observe", "runner:control:read", "capability:deploy"}, InstanceScopes: deviceScopes})
+	server, err := control.NewServer(store, control.Config{RunnerToken: runnerToken, RunnerID: "local-capability-runner", RunnerScopes: []string{"runner:claim", "runner:observe", "runner:control:read", "capability:deploy"}, InstanceScopes: deviceScopes})
 	if err != nil {
 		_ = store.Close()
 		t.Fatal(err)
@@ -197,7 +197,7 @@ func startCapabilityHTTPFixture(t *testing.T, databasePath, bootstrapCode, runne
 		_ = store.Close()
 		t.Fatal(err)
 	}
-	if err = server.RegisterRunnerCredential(ctx, runnerToken, "local-capability-runner", []string{"default"}, []string{"runner:claim", "runner:observe", "runner:control:read", "capability:deploy"}); err != nil {
+	if err = server.RegisterRunnerCredential(ctx, runnerToken, "local-capability-runner", []string{"runner:claim", "runner:observe", "runner:control:read", "capability:deploy"}); err != nil {
 		t.Fatal(err)
 	}
 	handler := server.Handler()

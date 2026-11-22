@@ -133,7 +133,7 @@ func TestGlobalRecoveryAtomicSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.exec(t, `UPDATE event_counters SET current_cursor=current_cursor+1 WHERE workspace_id='default'`)
+	r.exec(t, `UPDATE event_counters SET current_cursor=current_cursor+1 WHERE singleton=1`)
 	r.exec(t, `UPDATE tasks SET version=version+1,result='new result' WHERE id='task'`)
 	r.exec(t, `UPDATE voice_pool_state SET blocked=1,reason_code='release_unknown' WHERE id=1`)
 	after, err := r.svc.readRecoveryTx(context.Background(), tx, p)

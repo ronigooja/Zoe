@@ -23,7 +23,7 @@ func TestRunEntryDeliveriesDurableOrderingAndGates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	principal := contracts.RunnerPrincipal{RunnerID: "runner", WorkspaceIDs: []string{"default"}, Scopes: []string{"runner:control:read"}}
+	principal := contracts.RunnerPrincipal{RunnerID: "runner", Scopes: []string{"runner:control:read"}}
 	request := func(method, path string, body []byte) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, bytes.NewReader(body))
 		r.SetPathValue("run_id", "entry-run")

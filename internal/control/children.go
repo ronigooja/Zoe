@@ -20,7 +20,7 @@ func (s *Server) handleChildProposal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, apiError(http.StatusUnauthorized, "unauthenticated", "runner authentication required", nil))
 		return
 	}
-	if !runnerHasAnyWorkspaceScope(runner, "runner:claim") || !runnerHasAnyWorkspaceScope(runner, "runner:propose") {
+	if !HasRunnerScope(runner, "runner:claim") || !HasRunnerScope(runner, "runner:propose") {
 		writeError(w, apiError(http.StatusForbidden, "forbidden", "runner lacks child proposal scope", nil))
 		return
 	}
@@ -68,7 +68,7 @@ func (s *Server) handleChildProposal(w http.ResponseWriter, r *http.Request) {
 	var depth, rootLimit int
 	var policyJSON []byte
 	err = tx.QueryRowContext(r.Context(), `SELECT r.workspace_id,r.task_id,r.attempt_id,r.fence,r.status,r.desired_control,t.status,t.workspace_id,t.owner_subject_id,t.created_by_device_id,t.project_id,coalesce(t.lineage_root_task_id,t.id),t.lineage_depth,t.root_child_limit,r.child_policy_json FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id=? AND r.runner_id=?`, r.PathValue("run_id"), runner.RunnerID).Scan(&workspace, &taskID, &attemptID, &fence, &status, &desired, &parentStatus, &parentWorkspace, &subjectID, &deviceID, &projectID, &rootID, &depth, &rootLimit, &policyJSON)
-	if errors.Is(err, sql.ErrNoRows) || err == nil && (attemptID != req.Attempt || fence != req.Fence || parentWorkspace != workspace || !HasRunnerScope(runner, "runner:claim", workspace) || !HasRunnerScope(runner, "runner:propose", workspace)) {
+	if errors.Is(err, sql.ErrNoRows) || err == nil && (attemptID != req.Attempt || fence != req.Fence || parentWorkspace != workspace || !HasRunnerScope(runner, "runner:claim") || !HasRunnerScope(runner, "runner:propose")) {
 		writeError(w, apiError(http.StatusNotFound, "not_found", "active run not found", nil))
 		return
 	}

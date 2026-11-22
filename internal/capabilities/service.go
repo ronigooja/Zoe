@@ -511,7 +511,7 @@ func (s *Service) claimDeployment(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		for _, x := range items {
-			if !control.HasRunnerScope(runner, "capability:deploy", x.workspace) {
+			if !control.HasRunnerScope(runner, "capability:deploy") {
 				continue
 			}
 			var snapshot contracts.DeploymentClaim
@@ -633,7 +633,7 @@ func (s *Service) loadUnresolvedDeploymentClaims(ctx context.Context, tx *sql.Tx
 			rows.Close()
 			return nil, err
 		}
-		if !control.HasRunnerScope(runner, "capability:deploy", item.workspace) {
+		if !control.HasRunnerScope(runner, "capability:deploy") {
 			continue
 		}
 		var claim contracts.DeploymentClaim
@@ -679,7 +679,7 @@ func (s *Service) observeDeployment(w http.ResponseWriter, r *http.Request) {
 		} else if err != nil {
 			return err
 		}
-		if !control.HasRunnerScope(runner, "capability:deploy", workspace) {
+		if !control.HasRunnerScope(runner, "capability:deploy") {
 			return control.NewAPIError(403, "forbidden", "runner cannot report this workspace", nil)
 		}
 		if runner.RunnerID != claimedRunner {

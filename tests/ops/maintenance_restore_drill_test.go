@@ -52,10 +52,10 @@ func TestMaintenanceRESTEncryptedRestoreDrill(t *testing.T) {
 		t.Fatal(err)
 	}
 	runnerToken := randomBearer(t)
-	if err = control.RegisterRunnerCredentialIfMissing(ctx, store, runnerToken, "ops-drill-runner", []string{"default"}, []string{"runner:control:read"}); err != nil {
+	if err = control.RegisterRunnerCredentialIfMissing(ctx, store, runnerToken, "ops-drill-runner", []string{"runner:control:read"}); err != nil {
 		t.Fatal(err)
 	}
-	server, err := control.NewServer(store, control.Config{InstanceScopes: []string{"instance:admin"}, RunnerToken: runnerToken, RunnerID: "ops-drill-runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:control:read"}})
+	server, err := control.NewServer(store, control.Config{InstanceScopes: []string{"instance:admin"}, RunnerToken: runnerToken, RunnerID: "ops-drill-runner", RunnerScopes: []string{"runner:control:read"}})
 	if err != nil {
 		t.Fatal(err)
 	}

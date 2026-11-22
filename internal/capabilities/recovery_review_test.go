@@ -34,7 +34,7 @@ func capabilityRecoveryFixture(t *testing.T) (*storage.Store, http.Handler, stri
 	if e = storage.RegisterCoreMigrations(store); e != nil {
 		t.Fatal(e)
 	}
-	server, e := control.NewServer(store, control.Config{RunnerToken: token, RunnerID: "review", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"capability:deploy"}})
+	server, e := control.NewServer(store, control.Config{RunnerToken: token, RunnerID: "review", RunnerScopes: []string{"capability:deploy"}})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -44,7 +44,7 @@ func capabilityRecoveryFixture(t *testing.T) (*storage.Store, http.Handler, stri
 	if e = store.Migrate(ctx); e != nil {
 		t.Fatal(e)
 	}
-	if err := server.RegisterRunnerCredential(ctx, token, "review", []string{"default"}, []string{"capability:deploy"}); err != nil {
+	if err := server.RegisterRunnerCredential(ctx, token, "review", []string{"capability:deploy"}); err != nil {
 		t.Fatal(err)
 	}
 	insertCapabilityTestDevice(t, store, "device", "owner")

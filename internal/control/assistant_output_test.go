@@ -24,7 +24,7 @@ func assistantObservationRequest(t *testing.T, s *Server, run, id, kind string, 
 	r := httptest.NewRequest(http.MethodPost, "/runner/v1/runs/"+run+"/observations", bytes.NewReader(b))
 	r.SetPathValue("run_id", run)
 	r.Header.Set("Idempotency-Key", id)
-	r = r.WithContext(context.WithValue(r.Context(), runnerPrincipalKey{}, contracts.RunnerPrincipal{RunnerID: "budget-runner", WorkspaceIDs: []string{"default"}, Scopes: []string{"runner:observe"}}))
+	r = r.WithContext(context.WithValue(r.Context(), runnerPrincipalKey{}, contracts.RunnerPrincipal{RunnerID: "budget-runner", Scopes: []string{"runner:observe"}}))
 	w := httptest.NewRecorder()
 	s.handleObservation(w, r)
 	return w
@@ -48,7 +48,7 @@ func assistantCounts(t *testing.T, s *Server, task, run string) (entries, events
 	p := envelope.Payload
 	role = p.Role
 	_ = s.store.DB().QueryRow(`SELECT version FROM tasks WHERE id=?`, task).Scan(&version)
-	_ = s.store.DB().QueryRow(`SELECT current_cursor FROM event_counters WHERE workspace_id='default'`).Scan(&cursor)
+	_ = s.store.DB().QueryRow(`SELECT current_cursor FROM event_counters WHERE singleton=1`).Scan(&cursor)
 	return
 }
 

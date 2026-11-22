@@ -541,7 +541,7 @@ func (s *Service) resolveGatewayCreateOutcome(ctx context.Context, sessionID str
 		}
 		payload, _ := json.Marshal(map[string]any{"reconciliation_id": id, "source_session_id": sessionID, "generation": generation, "method": "gateway_attestation", "reason": reason, "account_identity_available": false})
 		var cursor int64
-		if err := tx.QueryRowContext(ctx, `UPDATE event_counters SET current_cursor=current_cursor+1 WHERE workspace_id=? RETURNING current_cursor`, workspace).Scan(&cursor); err != nil {
+		if err := tx.QueryRowContext(ctx, `UPDATE event_counters SET current_cursor=current_cursor+1 WHERE singleton=1 RETURNING current_cursor`).Scan(&cursor); err != nil {
 			return err
 		}
 		eventID := uuid.NewString()

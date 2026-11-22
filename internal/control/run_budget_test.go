@@ -29,7 +29,7 @@ func budgetTestServer(t *testing.T, limits contracts.RunBudgetSnapshot) (*Server
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err = store.DB().Exec(`INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('budget-device','default','budget-owner','test','approved',?)`, now); err != nil {
+	if _, err = store.DB().Exec(`INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('budget-device','budget-owner','test','approved',?)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id) VALUES('budget-task','default','budget','budget','user','worker','active',1,?,?,?,?,?)`, now, now, now, "budget-device", "budget-command"); err != nil {
@@ -50,7 +50,7 @@ func budgetPrincipalRequest(handler func(http.ResponseWriter, *http.Request), bo
 	encoded, _ := json.Marshal(body)
 	r := httptest.NewRequest("POST", "/runner/v1/runs/"+runID+"/budget/reservations", bytes.NewReader(encoded))
 	r.SetPathValue("run_id", runID)
-	p := contracts.RunnerPrincipal{RunnerID: "budget-runner", WorkspaceIDs: []string{"default"}, Scopes: []string{"runner:claim"}}
+	p := contracts.RunnerPrincipal{RunnerID: "budget-runner", Scopes: []string{"runner:claim"}}
 	r = r.WithContext(context.WithValue(r.Context(), runnerPrincipalKey{}, p))
 	w := httptest.NewRecorder()
 	handler(w, r)
@@ -149,7 +149,7 @@ func TestUnknownBudgetSettlementKeepsReservationAndExhaustionRequestsStop(t *tes
 	r := httptest.NewRequest("POST", "/runner/v1/runs/budget-run/budget/reservations/provider-call-1/settlement", bytes.NewReader(settleReq))
 	r.SetPathValue("run_id", "budget-run")
 	r.SetPathValue("reservation_id", "provider-call-1")
-	r = r.WithContext(context.WithValue(r.Context(), runnerPrincipalKey{}, contracts.RunnerPrincipal{RunnerID: "budget-runner", WorkspaceIDs: []string{"default"}, Scopes: []string{"runner:claim"}}))
+	r = r.WithContext(context.WithValue(r.Context(), runnerPrincipalKey{}, contracts.RunnerPrincipal{RunnerID: "budget-runner", Scopes: []string{"runner:claim"}}))
 	w := httptest.NewRecorder()
 	server.handleRunBudgetSettle(w, r)
 	if w.Code != 200 {

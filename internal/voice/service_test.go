@@ -49,10 +49,10 @@ func newVoiceTestService(t *testing.T, cfg Config) (*storage.Store, *Service) {
 func TestResultConsumerEnqueuesFromEventAndAdvancesCursor(t *testing.T) {
 	store, svc := newVoiceTestService(t, Config{Now: func() time.Time { return time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC) }})
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().Exec(`INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('device-1','default','subject-1','test','approved',?)`, now); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('device-1','subject-1','test','approved',?)`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`INSERT INTO command_receipts(command_id,workspace_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES('cmd-1','default','subject-1','key',X'01','{}',?)`, now); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO command_receipts(command_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES('cmd-1','subject-1','key',X'01','{}',?)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,result,error,created_by_device_id,command_id,owner_subject_id) VALUES('task-1','default','title','goal','user','default','queued',1,?,?, '', '', 'device-1','cmd-1','subject-1')`, now, now); err != nil {
@@ -88,7 +88,7 @@ func TestVoiceTaskAdmissionBindsStableTurnAcrossRevisions(t *testing.T) {
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('turn-1','default','session-atomic',1,'stable-turn',1,'authoritative transcript',X'01',?,'turn-command'),('turn-2','default','session-atomic',1,'stable-turn',2,'edited transcript',X'02',?,'turn-command-2')`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('device-1','default','user-1','test','approved',?)`, now); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('device-1','user-1','test','approved',?)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id) VALUES('task-1','default','client title','client goal','voice','default','queued',1,?,?,'device-1','create-1','user-1')`, now, now); err != nil {
@@ -202,7 +202,7 @@ func handoffHTTPServerWithScopes(t *testing.T, voiceCfg Config, scopes []string)
 	if _, _, err = control.InitializeInstanceAuth(ctx, store, key); err != nil {
 		t.Fatal(err)
 	}
-	if err = server.RegisterRunnerCredential(ctx, "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA", "steward-test-runner", []string{"default"}, []string{"runner:claim"}); err != nil {
+	if err = server.RegisterRunnerCredential(ctx, "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA", "steward-test-runner", []string{"runner:claim"}); err != nil {
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(server.Handler())
@@ -287,7 +287,7 @@ func TestVoiceTaskLinkRequiresSameDeviceVoiceTaskAndExposesTaskEvents(t *testing
 	ctx := context.Background()
 	store, svc := newVoiceTestService(t, Config{})
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,workspace_id,subject_id,name,status,version,created_at) VALUES('device-1','default','user-1','test','approved',1,?)`, now); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,version,created_at) VALUES('device-1','user-1','test','approved',1,?)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('session-1','default','user-1','device-1','request-1',X'01',1,'ended',?,?)`, now, now); err != nil {

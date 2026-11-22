@@ -567,7 +567,7 @@ func (s *Server) handleMigrationReadiness(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleRunnerInstance(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
-	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:control:read") {
+	if !ok || !HasRunnerScope(p, "runner:control:read") {
 		writeError(w, apiError(http.StatusForbidden, "forbidden", "runner control read scope required", nil))
 		return
 	}

@@ -22,7 +22,7 @@ func TestConfiguredRunCapKeepsUnknownOutcomeFenced(t *testing.T) {
 	}
 	_, h := reviewServer(t, control.Config{DefaultProfileID: "worker", Limits: policy, Profiles: map[string]control.RuntimeProfile{"worker": profile}}, func(s *control.Server) {
 		for i, token := range runnerTokens {
-			if err := s.RegisterRunnerCredential(context.Background(), token, "runner-"+strconv.Itoa(i), []string{"default"}, []string{"runner:claim", "runner:observe", "runner:control:read"}); err != nil {
+			if err := s.RegisterRunnerCredential(context.Background(), token, "runner-"+strconv.Itoa(i), []string{"runner:claim", "runner:observe", "runner:control:read"}); err != nil {
 				t.Fatal(err)
 			}
 		}

@@ -132,9 +132,9 @@ func initializeInstanceAuth(ctx context.Context, store *storage.Store, configure
 }
 
 func ensureInstanceActor(ctx context.Context, db *sql.Tx, now string) error {
-	// Existing domain tables retain a synthetic owner row for foreign-key and
-	// audit compatibility; it is never used for authentication or approval.
-	_, err := db.ExecContext(ctx, `INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at,approved_at) VALUES('instance','default','owner','This instance','approved',?,?) ON CONFLICT(id) DO NOTHING`, now, now)
+	// Domain foreign keys and audit records identify the instance owner actor;
+	// this row is never used for authentication or approval.
+	_, err := db.ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,created_at,approved_at) VALUES('instance','owner','This instance','approved',?,?) ON CONFLICT(id) DO NOTHING`, now, now)
 	return err
 }
 
@@ -233,16 +233,12 @@ func (s *Server) runnerAuth(next http.Handler) http.Handler {
 			return
 		}
 		var p contracts.RunnerPrincipal
-		var workspaceJSON, scopesJSON []byte
+		var scopesJSON []byte
 		var revoked sql.NullString
-		err = s.store.DB().QueryRowContext(r.Context(), `SELECT runner_id,workspace_ids,scopes,revoked_at FROM runner_credentials WHERE token_hash=?`, hash).Scan(&p.RunnerID, &workspaceJSON, &scopesJSON, &revoked)
+		err = s.store.DB().QueryRowContext(r.Context(), `SELECT runner_id,scopes,revoked_at FROM runner_credentials WHERE token_hash=?`, hash).Scan(&p.RunnerID, &scopesJSON, &revoked)
 		if err == nil {
 			if revoked.Valid {
 				writeError(w, apiError(http.StatusUnauthorized, "unauthenticated", "runner credential is revoked", nil))
-				return
-			}
-			if e := jsonUnmarshal(workspaceJSON, &p.WorkspaceIDs); e != nil {
-				writeError(w, apiError(500, "internal", "runner credential record is invalid", nil))
 				return
 			}
 			if e := jsonUnmarshal(scopesJSON, &p.Scopes); e != nil {
@@ -279,13 +275,13 @@ func voiceRunnerRoute(r *http.Request) bool {
 }
 
 // RegisterRunnerCredential stores only a digest of a deployment-provisioned bearer.
-func (s *Server) RegisterRunnerCredential(ctx context.Context, token, runnerID string, workspaceIDs, scopes []string) error {
-	return RegisterRunnerCredentialIfMissing(ctx, s.store, token, runnerID, workspaceIDs, scopes)
+func (s *Server) RegisterRunnerCredential(ctx context.Context, token, runnerID string, scopes []string) error {
+	return RegisterRunnerCredentialIfMissing(ctx, s.store, token, runnerID, scopes)
 }
 
 // RegisterRunnerCredentialIfMissing provisions the deployment credential once
 // and preserves a later database revocation across server restarts.
-func RegisterRunnerCredentialIfMissing(ctx context.Context, store interface{ DB() *sql.DB }, token, runnerID string, workspaceIDs, scopes []string) error {
+func RegisterRunnerCredentialIfMissing(ctx context.Context, store interface{ DB() *sql.DB }, token, runnerID string, scopes []string) error {
 	if store == nil || store.DB() == nil {
 		return errors.New("open control store is required")
 	}
@@ -305,9 +301,8 @@ func RegisterRunnerCredentialIfMissing(ctx context.Context, store interface{ DB(
 	if ownerCount != 0 {
 		return errors.New("internal worker credential must be distinct from the owner key")
 	}
-	workspaces, _ := jsonMarshal(workspaceIDs)
 	scopeBytes, _ := jsonMarshal(scopes)
-	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO runner_credentials(token_hash,runner_id,workspace_ids,scopes) VALUES(?,?,?,?)`, hash, runnerID, workspaces, scopeBytes); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO runner_credentials(token_hash,runner_id,scopes) VALUES(?,?,?)`, hash, runnerID, scopeBytes); err != nil {
 		return err
 	}
 	return tx.Commit()

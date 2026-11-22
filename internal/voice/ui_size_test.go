@@ -73,7 +73,7 @@ func TestUIJobSize(t *testing.T) {
 	for i, entry := range []string{"one", "two"} {
 		r.seedEntry(t, "task", entry, "result")
 		r.seedEvent(t, int64(i*2+1), "task", "run", entry)
-		r.exec(t, `UPDATE event_counters SET current_cursor=? WHERE workspace_id='default'`, i*2+1)
+		r.exec(t, `UPDATE event_counters SET current_cursor=? WHERE singleton=1`, i*2+1)
 		r.svc.consumeUITaskEvents(context.Background())
 		r.svc.dispatchUIJobs(context.Background())
 		var width, height int

@@ -154,7 +154,7 @@ func (s *Server) handleScopedExport(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	var cursor int64
-	if err = tx.QueryRowContext(r.Context(), `SELECT current_cursor FROM event_counters WHERE workspace_id=?`, p.WorkspaceID).Scan(&cursor); err != nil {
+	if err = tx.QueryRowContext(r.Context(), `SELECT current_cursor FROM event_counters WHERE singleton=1`).Scan(&cursor); err != nil {
 		writeExportFailure(w)
 		return
 	}
@@ -252,7 +252,7 @@ func (s *Server) handleScopedExport(w http.ResponseWriter, r *http.Request) {
 	}
 	defer auditTx.Rollback()
 	var currentCursor int64
-	if err = auditTx.QueryRowContext(r.Context(), `SELECT current_cursor FROM event_counters WHERE workspace_id=?`, p.WorkspaceID).Scan(&currentCursor); err != nil || currentCursor != cursor {
+	if err = auditTx.QueryRowContext(r.Context(), `SELECT current_cursor FROM event_counters WHERE singleton=1`).Scan(&currentCursor); err != nil || currentCursor != cursor {
 		writeError(w, apiError(http.StatusConflict, "export_snapshot_stale", "authoritative data changed while preparing the export; retry the request", nil))
 		return
 	}
@@ -298,7 +298,7 @@ func (s *Server) handleScopedExport(w http.ResponseWriter, r *http.Request) {
 	}
 	var validatedCursor int64
 	var eventID, eventType, aggregateID string
-	if err = auditTx.QueryRowContext(r.Context(), `SELECT current_cursor FROM event_counters WHERE workspace_id=?`, p.WorkspaceID).Scan(&validatedCursor); err != nil || validatedCursor != cursor+1 {
+	if err = auditTx.QueryRowContext(r.Context(), `SELECT current_cursor FROM event_counters WHERE singleton=1`).Scan(&validatedCursor); err != nil || validatedCursor != cursor+1 {
 		writeError(w, apiError(http.StatusConflict, "export_snapshot_stale", "export audit cursor did not follow the data snapshot", nil))
 		return
 	}

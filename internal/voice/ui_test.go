@@ -237,10 +237,10 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 				}
 				uiFlowRun(t, store.DB(), target, "redisplay-run")
 				payload, _ := json.Marshal(map[string]any{"payload": map[string]string{"task_id": target, "run_id": "redisplay-run", "entry_id": "older"}})
-				if _, err := store.DB().Exec(`INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) SELECT 'redisplay-result',workspace_id,current_cursor+1,1,'task.assistant_message','2026-01-01T00:00:00Z','task',?,1,? FROM event_counters WHERE workspace_id='default'`, target, payload); err != nil {
+				if _, err := store.DB().Exec(`INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) SELECT 'redisplay-result','default',current_cursor+1,1,'task.assistant_message','2026-01-01T00:00:00Z','task',?,1,? FROM event_counters WHERE singleton=1`, target, payload); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := store.DB().Exec(`UPDATE event_counters SET current_cursor=current_cursor+1 WHERE workspace_id='default'`); err != nil {
+				if _, err := store.DB().Exec(`UPDATE event_counters SET current_cursor=current_cursor+1 WHERE singleton=1`); err != nil {
 					t.Fatal(err)
 				}
 				if mode == "show" || mode == "report" {

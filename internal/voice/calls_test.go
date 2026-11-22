@@ -78,11 +78,11 @@ func newCallHarness(t *testing.T, db *storage.Store, cfg Config) callHarness {
 	if _, _, err := control.InitializeInstanceAuth(ctx, db, h.instance); err != nil {
 		t.Fatal(err)
 	}
-	for _, auth := range []struct{ token, id, workspace, scope string }{
-		{h.runner, "media", "default", voiceRunnerScope}, {h.other, "other", "default", voiceRunnerScope},
-		{h.wrong, "wrong", "different", voiceRunnerScope}, {h.scope, "scope", "default", "runner:claim"},
+	for _, auth := range []struct{ token, id, scope string }{
+		{h.runner, "media", voiceRunnerScope}, {h.other, "other", voiceRunnerScope},
+		{h.wrong, "wrong", "runner:observe"}, {h.scope, "scope", "runner:claim"},
 	} {
-		if err := ctrl.RegisterRunnerCredential(ctx, auth.token, auth.id, []string{auth.workspace}, []string{auth.scope}); err != nil {
+		if err := ctrl.RegisterRunnerCredential(ctx, auth.token, auth.id, []string{auth.scope}); err != nil {
 			t.Fatal(err)
 		}
 	}

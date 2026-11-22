@@ -69,8 +69,8 @@ func TestComposedReceiptSchedulerIndependentOfAccountMediaAndRegister(t *testing
 				t.Fatal(err)
 			}
 			for _, query := range []string{
-				`INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('device-1','default','user-1','test','approved','2026-01-01')`,
-				`INSERT INTO command_receipts(command_id,workspace_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES('cmd-1','default','user-1','key-1',X'01','{}','2026-01-01')`,
+				`INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('device-1','user-1','test','approved','2026-01-01')`,
+				`INSERT INTO command_receipts(command_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES('cmd-1','user-1','key-1',X'01','{}','2026-01-01')`,
 				`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,result,error,created_by_device_id,command_id,owner_subject_id) VALUES('task-1','default','title','goal','voice','zoe-steward','awaiting_user',1,'2026-01-01','2026-01-01','','','device-1','cmd-1','user-1')`,
 				`INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES('entry-1','task-1','default','assistant_message','full result','device-1','2026-01-01')`,
 				`INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('event-1','default',1,1,'task.assistant_message','2026-01-01','task','task-1',1,'{"payload":{"task_id":"task-1","run_id":"run-1","entry_id":"entry-1"}}')`,

@@ -18,7 +18,7 @@ const rotationContextProfile = "rotation-context-worker"
 
 func rotationContextConfig(token string, scopes []string) control.Config {
 	return control.Config{
-		RunnerToken: token, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"},
+		RunnerToken: token, RunnerID: "runner",
 		RunnerScopes: scopes, DefaultProfileID: rotationContextProfile,
 		Profiles: map[string]control.RuntimeProfile{rotationContextProfile: {
 			ID: rotationContextProfile, Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model",
@@ -83,7 +83,7 @@ func TestRotationContextRejectsWrongRunnerFenceAttemptScopeAndTerminal(t *testin
 	t.Run("different runner", func(t *testing.T) {
 		f := newRotationContextFixture(t, false)
 		other := reviewToken(t)
-		if err := control.RegisterRunnerCredentialIfMissing(t.Context(), f.store, other, "other-runner", []string{"default"}, []string{"runner:control:read"}); err != nil {
+		if err := control.RegisterRunnerCredentialIfMissing(t.Context(), f.store, other, "other-runner", []string{"runner:control:read"}); err != nil {
 			t.Fatal(err)
 		}
 		assertRotationContextError(t, f.h, f.claim.RunID, f.claim.AttemptID, f.claim.Fence, other, http.StatusConflict, "fence_conflict")
@@ -91,7 +91,7 @@ func TestRotationContextRejectsWrongRunnerFenceAttemptScopeAndTerminal(t *testin
 	t.Run("scope", func(t *testing.T) {
 		f := newRotationContextFixture(t, false)
 		other := reviewToken(t)
-		if err := control.RegisterRunnerCredentialIfMissing(t.Context(), f.store, other, "runner-no-read", []string{"default"}, []string{"runner:observe"}); err != nil {
+		if err := control.RegisterRunnerCredentialIfMissing(t.Context(), f.store, other, "runner-no-read", []string{"runner:observe"}); err != nil {
 			t.Fatal(err)
 		}
 		assertRotationContextError(t, f.h, f.claim.RunID, f.claim.AttemptID, f.claim.Fence, other, http.StatusForbidden, "forbidden")

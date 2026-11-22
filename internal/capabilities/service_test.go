@@ -173,7 +173,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 	if err = control.RegisterInstanceMaintenanceMigration(store); err != nil {
 		t.Fatal(err)
 	}
-	server, err := control.NewServer(store, control.Config{RunnerToken: runnerToken, RunnerID: "runner-test", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"capability:deploy", "runner:observe", "runner:claim", "runner:control:read"}, Profiles: map[string]control.RuntimeProfile{
+	server, err := control.NewServer(store, control.Config{RunnerToken: runnerToken, RunnerID: "runner-test", RunnerScopes: []string{"capability:deploy", "runner:observe", "runner:claim", "runner:control:read"}, Profiles: map[string]control.RuntimeProfile{
 		"worker-profile": {ID: "worker-profile", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", Role: "worker", IsolationPolicy: runner.OpenCodeWorkspaceWritePolicy},
 		"super-profile":  {ID: "super-profile", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", Role: "super", IsolationPolicy: runner.OpenCodeWorkspaceWritePolicy},
 	}})
@@ -187,7 +187,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertCapabilityTestDevice(t, store, "device", "owner")
-	if err := server.RegisterRunnerCredential(ctx, runnerToken, "runner-test", []string{"default"}, []string{"capability:deploy", "runner:observe", "runner:claim", "runner:control:read"}); err != nil {
+	if err := server.RegisterRunnerCredential(ctx, runnerToken, "runner-test", []string{"capability:deploy", "runner:observe", "runner:claim", "runner:control:read"}); err != nil {
 		t.Fatal(err)
 	}
 	handler := server.Handler()
@@ -281,7 +281,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 	if err = store.DB().QueryRowContext(ctx, `SELECT observed_state FROM capability_deployments WHERE deployment_id=?`, claim.DeploymentID).Scan(&state); err != nil || state != "running" {
 		t.Fatalf("observed state not persisted: %q err=%v", state, err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `UPDATE event_counters SET current_cursor=2 WHERE workspace_id='default'`); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `UPDATE event_counters SET current_cursor=2 WHERE singleton=1`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.DB().ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('trigger-event-1','default',1,1,'task.created',?,'owner','task','task-1',1,'{"type":"task.created","payload":{"task":{"task_id":"task-1"}}}'),('trigger-event-2','default',2,1,'task.created',?,'owner','task','task-2',1,'{"type":"task.created","payload":{"task":{"task_id":"task-2"}}}')`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
@@ -384,7 +384,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 	if err = store.DB().QueryRowContext(ctx, `SELECT coalesce(max(cursor),0)+1 FROM events WHERE workspace_id='default'`).Scan(&resultEventCursor); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `UPDATE event_counters SET current_cursor=? WHERE workspace_id='default'`, resultEventCursor); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `UPDATE event_counters SET current_cursor=? WHERE singleton=1`, resultEventCursor); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.DB().ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('task-result-decided','default',?,1,'task.result_decided',?,'owner','task',?,2,'{"type":"task.result_decided","payload":{"status":"complete"}}')`, resultEventCursor, time.Now().UTC().Format(time.RFC3339Nano), acceptedTaskID); err != nil {
@@ -717,7 +717,7 @@ func TestCapabilityTriggerRunnerOpenCodeResultChain(t *testing.T) {
 	if err = control.RegisterInstanceMaintenanceMigration(store); err != nil {
 		t.Fatal(err)
 	}
-	server, err := control.NewServer(store, control.Config{RunnerToken: runnerToken, RunnerID: "runner-chain", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim", "runner:observe", "runner:control:read", "capability:deploy"}, Profiles: map[string]control.RuntimeProfile{
+	server, err := control.NewServer(store, control.Config{RunnerToken: runnerToken, RunnerID: "runner-chain", RunnerScopes: []string{"runner:claim", "runner:observe", "runner:control:read", "capability:deploy"}, Profiles: map[string]control.RuntimeProfile{
 		"worker-profile": {ID: "worker-profile", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", Role: "worker", IsolationPolicy: runner.OpenCodeWorkspaceWritePolicy},
 	}})
 	if err != nil {
@@ -730,7 +730,7 @@ func TestCapabilityTriggerRunnerOpenCodeResultChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertCapabilityTestDevice(t, store, "device", "owner")
-	if err := server.RegisterRunnerCredential(ctx, runnerToken, "runner-chain", []string{"default"}, []string{"capability:deploy", "runner:observe", "runner:claim", "runner:control:read"}); err != nil {
+	if err := server.RegisterRunnerCredential(ctx, runnerToken, "runner-chain", []string{"capability:deploy", "runner:observe", "runner:claim", "runner:control:read"}); err != nil {
 		t.Fatal(err)
 	}
 	handler := server.Handler()
@@ -784,7 +784,7 @@ func TestCapabilityTriggerRunnerOpenCodeResultChain(t *testing.T) {
 	if err = controlClient.ObserveDeployment(ctx, contracts.DeploymentObservation{DeploymentID: deploymentClaim.DeploymentID, AttemptID: deploymentClaim.AttemptID, Fence: deploymentClaim.Fence, ObservationID: "trigger-chain-deployment-running", Operation: "install", State: "running", ExternalEffectRef: []string{"fixture-container"}, Health: contracts.CapabilityHealth{State: "healthy", CheckedAt: time.Now().UTC(), EvidenceRef: "fixture-health"}, ObservedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("record running deployment observation: %v", err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `UPDATE event_counters SET current_cursor=2 WHERE workspace_id='default'`); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `UPDATE event_counters SET current_cursor=2 WHERE singleton=1`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.DB().ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('chain-source-1','default',1,1,'task.created',?,'owner','task','source-task-1',1,'{"type":"task.created","payload":{"task":{"task_id":"source-task-1"}}}'),('chain-source-2','default',2,1,'task.created',?,'owner','task','source-task-2',1,'{"type":"task.created","payload":{"task":{"task_id":"source-task-2"}}}')`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
@@ -877,7 +877,7 @@ func begin(t *testing.T, db *sql.DB) *sql.Tx {
 
 func insertCapabilityTestDevice(t *testing.T, store *storage.Store, deviceID, subjectID string) {
 	t.Helper()
-	if _, err := store.DB().ExecContext(context.Background(), `INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES(?, 'default', ?, 'capability test', 'approved', ?)`, deviceID, subjectID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := store.DB().ExecContext(context.Background(), `INSERT INTO actors(id,subject_id,name,status,created_at) VALUES(?, ?, 'capability test', 'approved', ?)`, deviceID, subjectID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 }

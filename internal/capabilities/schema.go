@@ -144,10 +144,6 @@ CREATE TABLE capability_trigger_cursors (
   workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
   cursor INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE capability_trigger_runner_cursors (
-  runner_id TEXT PRIMARY KEY,
-  workspace_index INTEGER NOT NULL DEFAULT 0
-);
 `)
 		return err
 	}}); err != nil {

@@ -30,7 +30,7 @@ func runnerContextServer(t *testing.T, cfg control.Config) (*storage.Store, http
 	if err := store.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.RegisterRunnerCredential(context.Background(), cfg.RunnerToken, cfg.RunnerID, cfg.RunnerWorkspaceIDs, cfg.RunnerScopes); err != nil {
+	if err := srv.RegisterRunnerCredential(context.Background(), cfg.RunnerToken, cfg.RunnerID, cfg.RunnerScopes); err != nil {
 		t.Fatal(err)
 	}
 	return store, bindReviewHandler(srv.Handler(), store)

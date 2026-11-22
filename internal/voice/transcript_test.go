@@ -27,7 +27,7 @@ const ingestTestToken = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCA"
 func transcriptHTTPServer(t *testing.T) (*httptest.Server, *storage.Store, string) {
 	t.Helper()
 	ts, store, _ := handoffHTTPServerWithConfig(t, Config{IngestEnabled: true})
-	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, ingestTestToken, "voice-gateway", []string{"default"}, []string{"voice:turn:ingest"}); err != nil {
+	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, ingestTestToken, "voice-gateway", []string{"voice:turn:ingest"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB().Exec(`UPDATE voice_sessions SET gateway_session_id=id,gateway_media_generation=1,lifecycle_runner_id='voice-gateway'`); err != nil {
@@ -176,7 +176,7 @@ func TestLateDelegationUsesOriginalBindingAndRejectsDifferentRunner(t *testing.T
 		t.Fatalf("status=%d code=%s", status, code)
 	}
 	const other = "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDA"
-	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, other, "different-gateway", []string{"default"}, []string{"voice:turn:ingest"}); err != nil {
+	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, other, "different-gateway", []string{"voice:turn:ingest"}); err != nil {
 		t.Fatal(err)
 	}
 	if status, _, code := postTranscriptGeneration(t, ts, other, "handoff-session", 2, markedTranscript(2, "foreign", "never execute")); status != 403 || code != "forbidden" {
@@ -339,7 +339,7 @@ func TestIngestEndpointRequiresVoiceIngestScope(t *testing.T) {
 	ts, store, key := transcriptHTTPServer(t)
 	other := "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD A"
 	other = strings.ReplaceAll(other, " ", "")
-	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, other, "execution", []string{"default"}, []string{"runner:claim"}); err != nil {
+	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, other, "execution", []string{"runner:claim"}); err != nil {
 		t.Fatal(err)
 	}
 	if status, _ := postTranscript(t, ts, other, "handoff-session", transcriptTurn(1, "user", "no")); status != 403 {
@@ -381,7 +381,7 @@ func TestIngestTokenCannotCallOtherEndpoints(t *testing.T) {
 
 func TestIngestTokenIsDisabledWhenNoTokenFileConfigured(t *testing.T) {
 	ts, store, _ := registerDisabledHTTPServer(t, Config{})
-	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, ingestTestToken, "voice-gateway", []string{"default"}, []string{"voice:turn:ingest"}); err != nil {
+	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, ingestTestToken, "voice-gateway", []string{"voice:turn:ingest"}); err != nil {
 		t.Fatal(err)
 	}
 	if status, _ := postTranscript(t, ts, ingestTestToken, "handoff-session", transcriptTurn(1, "user", "no")); status != 404 {

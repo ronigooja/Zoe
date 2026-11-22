@@ -64,7 +64,7 @@ func newRotationRecoveryFixture(t *testing.T, normal bool, firstOld string) *rot
 	t.Helper()
 	token := reviewToken(t)
 	profile := control.RuntimeProfile{ID: "worker", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1"}
-	store, handler := reviewServer(t, control.Config{RunnerToken: token, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim", "runner:observe"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, nil)
+	store, handler := reviewServer(t, control.Config{RunnerToken: token, RunnerID: "runner", RunnerScopes: []string{"runner:claim", "runner:observe"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, nil)
 	live := httptest.NewServer(handler)
 	t.Cleanup(live.Close)
 	client, err := runner.NewControlClient(live.URL, token, live.Client())
@@ -381,7 +381,7 @@ func TestSessionRotationRebindsRunAndRejectsOldTerminationSession(t *testing.T) 
 	bootstrap, device, token := reviewToken(t), reviewToken(t), reviewToken(t)
 	profile := control.RuntimeProfile{ID: "worker", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1"}
 	var server *control.Server
-	store, handler := reviewServer(t, control.Config{RunnerToken: token, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim", "runner:observe"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, func(s *control.Server) { server = s })
+	store, handler := reviewServer(t, control.Config{RunnerToken: token, RunnerID: "runner", RunnerScopes: []string{"runner:claim", "runner:observe"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, func(s *control.Server) { server = s })
 	_ = server
 	reviewInitializeInstance(t, handler, bootstrap, device)
 	created := reviewRequest(handler, http.MethodPost, "/v1/commands", device, "create", contracts.CommandRequest{Kind: "task.create", Payload: json.RawMessage(`{"title":"rotation","goal":"rotation goal","source":"user"}`)})
@@ -436,7 +436,7 @@ func TestSessionRotationRebindsRunAndRejectsOldTerminationSession(t *testing.T) 
 func TestSessionRotationReplayWrongOldAndFenceAreRejected(t *testing.T) {
 	bootstrap, device, token := reviewToken(t), reviewToken(t), reviewToken(t)
 	profile := control.RuntimeProfile{ID: "worker", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1"}
-	store, handler := reviewServer(t, control.Config{RunnerToken: token, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim", "runner:observe"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, nil)
+	store, handler := reviewServer(t, control.Config{RunnerToken: token, RunnerID: "runner", RunnerScopes: []string{"runner:claim", "runner:observe"}, DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, nil)
 	reviewInitializeInstance(t, handler, bootstrap, device)
 	if response := reviewRequest(handler, http.MethodPost, "/v1/commands", device, "create", contracts.CommandRequest{Kind: "task.create", Payload: json.RawMessage(`{"title":"rotation","goal":"rotation goal","source":"user"}`)}); response.Code != http.StatusOK {
 		t.Fatalf("create=%d", response.Code)

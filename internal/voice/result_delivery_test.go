@@ -98,8 +98,8 @@ func (r *deliveryRig) exec(t *testing.T, q string, args ...any) {
 func (r *deliveryRig) seedTask(t *testing.T, taskID, subject string) {
 	t.Helper()
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT OR IGNORE INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('device-1','default',?, 'test','approved',?)`, subject, at)
-	r.exec(t, `INSERT INTO command_receipts(command_id,workspace_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES(?, 'default',?,?,X'01','{}',?)`, "cmd-"+taskID, subject, "key-"+taskID, at)
+	r.exec(t, `INSERT OR IGNORE INTO actors(id,subject_id,name,status,created_at) VALUES('device-1',?, 'test','approved',?)`, subject, at)
+	r.exec(t, `INSERT INTO command_receipts(command_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES(?,?,?,X'01','{}',?)`, "cmd-"+taskID, subject, "key-"+taskID, at)
 	r.exec(t, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,result,error,created_by_device_id,command_id,owner_subject_id) VALUES(?, 'default','title','goal','voice','zoe-steward','awaiting_user',1,?,?, '', '', 'device-1',?,?)`, taskID, at, at, "cmd-"+taskID, subject)
 }
 

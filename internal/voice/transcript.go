@@ -98,7 +98,7 @@ func (s *Service) storeTranscript(ctx context.Context, principal contracts.Runne
 	if err != nil {
 		return 0, 0, err
 	}
-	if !control.HasRunnerScope(principal, "voice:turn:ingest", workspace) {
+	if !control.HasRunnerScope(principal, "voice:turn:ingest") {
 		return 0, 0, apiError(http.StatusForbidden, "forbidden", "voice:turn:ingest scope and session workspace authorization required", nil)
 	}
 	if generation != storedGeneration || bindings != 1 || state == "allocating" || state == "failed" {

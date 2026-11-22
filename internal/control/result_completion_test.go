@@ -33,7 +33,7 @@ func TestRuntimeResultCompletion(t *testing.T) {
 				req := httptest.NewRequest("POST", "/runner/v1/runs/budget-run/observations", bytes.NewReader(body))
 				req.SetPathValue("run_id", "budget-run")
 				req.Header.Set("Idempotency-Key", kind)
-				req = req.WithContext(context.WithValue(req.Context(), runnerPrincipalKey{}, contracts.RunnerPrincipal{RunnerID: "budget-runner", WorkspaceIDs: []string{"default"}, Scopes: []string{"runner:observe"}}))
+				req = req.WithContext(context.WithValue(req.Context(), runnerPrincipalKey{}, contracts.RunnerPrincipal{RunnerID: "budget-runner", Scopes: []string{"runner:observe"}}))
 				w := httptest.NewRecorder()
 				s.handleObservation(w, req)
 				return w

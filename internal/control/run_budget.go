@@ -15,7 +15,7 @@ import (
 
 func (s *Server) handleRunBudgetReserve(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
-	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:claim") {
+	if !ok || !HasRunnerScope(p, "runner:claim") {
 		writeError(w, apiError(http.StatusForbidden, "forbidden", "runner lacks budget accounting scope", nil))
 		return
 	}
@@ -40,7 +40,7 @@ func (s *Server) handleRunBudgetReserve(w http.ResponseWriter, r *http.Request) 
 	var fence uint64
 	var budgetJSON []byte
 	err = tx.QueryRowContext(r.Context(), `SELECT workspace_id,runner_id,attempt_id,fence,status,desired_control,budget_snapshot_json FROM runs WHERE id=?`, r.PathValue("run_id")).Scan(&workspace, &owner, &attempt, &fence, &status, &desired, &budgetJSON)
-	if errors.Is(err, sql.ErrNoRows) || err == nil && (owner != p.RunnerID || attempt != req.AttemptID || fence != req.Fence || !HasRunnerScope(p, "runner:claim", workspace)) {
+	if errors.Is(err, sql.ErrNoRows) || err == nil && (owner != p.RunnerID || attempt != req.AttemptID || fence != req.Fence || !HasRunnerScope(p, "runner:claim")) {
 		writeError(w, apiError(http.StatusNotFound, "not_found", "run budget is not available to this runner", nil))
 		return
 	}
@@ -162,7 +162,7 @@ func (s *Server) handleRunBudgetReserve(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleRunBudgetSettle(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
-	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:claim") {
+	if !ok || !HasRunnerScope(p, "runner:claim") {
 		writeError(w, apiError(http.StatusForbidden, "forbidden", "runner lacks budget accounting scope", nil))
 		return
 	}
@@ -194,7 +194,7 @@ func (s *Server) handleRunBudgetSettle(w http.ResponseWriter, r *http.Request) {
 	var oldSettlementID string
 	err = tx.QueryRowContext(r.Context(), `SELECT r.workspace_id,r.runner_id,r.attempt_id,r.fence,r.status,r.desired_control,r.budget_snapshot_json,b.request_hash,b.reserved_json,b.actual_json,b.status,b.settlement_id,b.settlement_hash FROM runs r JOIN run_budget_reservations b ON b.run_id=r.id WHERE r.id=? AND b.reservation_id=?`, runID, resID).Scan(&workspace, &owner, &attempt, &fence, &status, &desired, &budgetJSON, &requestHash, &reservedJSON, &actualJSON, &existingBudgetStatus, &oldSettlementID, &settleHash)
 	_ = requestHash
-	if errors.Is(err, sql.ErrNoRows) || err == nil && (owner != p.RunnerID || attempt != req.AttemptID || fence != req.Fence || !HasRunnerScope(p, "runner:claim", workspace)) {
+	if errors.Is(err, sql.ErrNoRows) || err == nil && (owner != p.RunnerID || attempt != req.AttemptID || fence != req.Fence || !HasRunnerScope(p, "runner:claim")) {
 		writeError(w, apiError(http.StatusNotFound, "not_found", "run budget reservation is not available to this runner", nil))
 		return
 	}

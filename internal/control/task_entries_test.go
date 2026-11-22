@@ -45,7 +45,7 @@ func taskEntriesTestServer(t *testing.T) (*Server, func()) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
-	if _, err = store.DB().Exec(`INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('entries-device','default','entries-owner','test','approved',?)`, now); err != nil {
+	if _, err = store.DB().Exec(`INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('entries-device','entries-owner','test','approved',?)`, now); err != nil {
 		t.Fatal(err)
 	}
 	for _, task := range []struct{ id, owner string }{{"entries-task", "entries-owner"}, {"private-task", "private-owner"}} {

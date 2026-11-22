@@ -25,7 +25,7 @@ func TestCapabilityRevocationFencesClaimsAndRequiresProvenCleanup(t *testing.T) 
 	bootstrap, deviceToken, runnerToken := reviewToken(t), reviewToken(t), reviewToken(t)
 	server, err := control.NewServer(store, control.Config{
 		InstanceScopes: []string{"client:read", "client:command", "capability:read", "capability:release:submit", "capability:deployment:request", "capability:deployment:authorize", "capability:deployment:revoke"},
-		RunnerToken:    runnerToken, RunnerID: "revocation-runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"capability:deploy"},
+		RunnerToken:    runnerToken, RunnerID: "revocation-runner", RunnerScopes: []string{"capability:deploy"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestCapabilityRevocationFencesClaimsAndRequiresProvenCleanup(t *testing.T) 
 	if err = store.Migrate(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err = control.RegisterRunnerCredentialIfMissing(t.Context(), store, runnerToken, "revocation-runner", []string{"default"}, []string{"capability:deploy"}); err != nil {
+	if err = control.RegisterRunnerCredentialIfMissing(t.Context(), store, runnerToken, "revocation-runner", []string{"capability:deploy"}); err != nil {
 		t.Fatal(err)
 	}
 	handler := bindReviewHandler(server.Handler(), store)

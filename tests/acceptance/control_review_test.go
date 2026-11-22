@@ -53,11 +53,7 @@ func reviewServer(t *testing.T, cfg control.Config, register func(*control.Serve
 		if len(scopes) == 0 {
 			scopes = []string{"runner:claim", "runner:observe", "runner:control:read", "runner:propose", "runner:budget"}
 		}
-		workspaces := cfg.RunnerWorkspaceIDs
-		if len(workspaces) == 0 {
-			workspaces = []string{"default"}
-		}
-		if err := srv.RegisterRunnerCredential(context.Background(), cfg.RunnerToken, cfg.RunnerID, workspaces, scopes); err != nil {
+		if err := srv.RegisterRunnerCredential(context.Background(), cfg.RunnerToken, cfg.RunnerID, scopes); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -202,8 +198,8 @@ func TestReviewCanonicalHashPreservesLargeIntegers(t *testing.T) {
 }
 func TestReviewConfiguredRunnerRevocation(t *testing.T) {
 	token := reviewToken(t)
-	s, h := reviewServer(t, control.Config{RunnerToken: token, RunnerID: "review", RunnerWorkspaceIDs: []string{"default"}}, func(srv *control.Server) {
-		if e := srv.RegisterRunnerCredential(context.Background(), token, "review", []string{"default"}, []string{"runner:claim"}); e != nil {
+	s, h := reviewServer(t, control.Config{RunnerToken: token, RunnerID: "review"}, func(srv *control.Server) {
+		if e := srv.RegisterRunnerCredential(context.Background(), token, "review", []string{"runner:claim"}); e != nil {
 			t.Fatal(e)
 		}
 		srv.RegisterRunnerRoutes(func(mux *http.ServeMux) {
@@ -303,7 +299,7 @@ func TestReviewLateCommitFailureRollsBackReceiptWorkAndOutbox(t *testing.T) {
 		}
 	}
 	var cursor int
-	if e := s.DB().QueryRow("SELECT current_cursor FROM event_counters WHERE workspace_id='default'").Scan(&cursor); e != nil {
+	if e := s.DB().QueryRow("SELECT current_cursor FROM event_counters WHERE singleton=1").Scan(&cursor); e != nil {
 		t.Fatal(e)
 	}
 	if cursor != 0 {

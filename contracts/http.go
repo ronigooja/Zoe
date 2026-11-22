@@ -19,9 +19,8 @@ type Principal struct {
 }
 
 type RunnerPrincipal struct {
-	RunnerID     string   `json:"-"`
-	WorkspaceIDs []string `json:"-"`
-	Scopes       []string `json:"-"`
+	RunnerID string   `json:"-"`
+	Scopes   []string `json:"-"`
 }
 
 type ErrorEnvelope struct {
@@ -43,7 +42,6 @@ type CommandRequest struct {
 type CommandReceipt struct {
 	CommandID       string    `json:"command_id"`
 	IdempotencyKey  string    `json:"idempotency_key"`
-	WorkspaceID     string    `json:"workspace_id"`
 	Kind            string    `json:"kind"`
 	Status          string    `json:"status"`
 	ResourceType    string    `json:"resource_type,omitempty"`

@@ -36,15 +36,11 @@ func loadVoiceIngestCredentialFromEnv() (workerCredential, error) {
 	if id == env("ZOE_RUNNER_ID", "configured-runner") || strings.ContainsAny(id, ", \t\r\n") {
 		return workerCredential{}, errors.New("voice ingest ID must be a distinct non-empty worker ID")
 	}
-	workspaces := splitEnv("ZOE_VOICE_INGEST_WORKSPACES", "default")
-	if !validExactWorkspaceIDs(workspaces) || len(workspaces) == 0 {
-		return workerCredential{}, errors.New("voice ingest workspace allowlist must contain unique exact IDs")
-	}
-	return workerCredential{Enabled: true, Token: token, RunnerID: id, WorkspaceIDs: workspaces, Scopes: []string{"voice:turn:ingest"}}, nil
+	return workerCredential{Enabled: true, Token: token, RunnerID: id, Scopes: []string{"voice:turn:ingest"}}, nil
 }
 
 func registerVoiceIngestCredential(ctx context.Context, store interface{ DB() *sql.DB }, credential workerCredential) error {
-	// Reuse the worker registration's digest storage, exact identity/allowlist
+	// Reuse the worker registration's digest storage, exact identity
 	// checks, and revocation preservation, but never accept caller-supplied scopes.
 	credential.Scopes = []string{"voice:turn:ingest"}
 	if err := registerWorkerCredential(ctx, store, credential); err != nil {

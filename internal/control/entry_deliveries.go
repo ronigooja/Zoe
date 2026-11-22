@@ -83,7 +83,7 @@ func markRunEntries(ctx context.Context, tx *sql.Tx, runID, kind string, entries
 
 func (s *Server) handleEntryDelivery(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
-	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:control:read") {
+	if !ok || !HasRunnerScope(p, "runner:control:read") {
 		writeError(w, apiError(403, "forbidden", "runner lacks control scope", nil))
 		return
 	}
@@ -107,7 +107,7 @@ func (s *Server) handleEntryDelivery(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 	var workspace string
 	err = tx.QueryRowContext(r.Context(), `SELECT workspace_id FROM runs WHERE id=? AND runner_id=? AND attempt_id=? AND fence=? AND status='active' AND desired_control='run'`, r.PathValue("run_id"), p.RunnerID, in.AttemptID, in.Fence).Scan(&workspace)
-	if err != nil || !HasRunnerScope(p, "runner:control:read", workspace) {
+	if err != nil || !HasRunnerScope(p, "runner:control:read") {
 		writeError(w, apiError(409, "fence_conflict", "delivery does not match active run", nil))
 		return
 	}

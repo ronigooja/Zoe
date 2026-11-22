@@ -31,13 +31,12 @@ func TestIngestProvisioningUsesFixedScope(t *testing.T) {
 	}
 	t.Setenv("ZOE_VOICE_INGEST_SCOPES", "*")
 	t.Setenv("ZOE_VOICE_INGEST_ID", "")
-	t.Setenv("ZOE_VOICE_INGEST_WORKSPACES", "")
 	credential, err = loadVoiceIngestCredentialFromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !credential.Enabled || credential.RunnerID != "voice-gateway" || !sameStringSet(credential.WorkspaceIDs, []string{"default"}) || !sameStringSet(credential.Scopes, []string{"voice:turn:ingest"}) {
-		t.Fatalf("credential metadata enabled=%v id=%s workspaces=%v scopes=%v", credential.Enabled, credential.RunnerID, credential.WorkspaceIDs, credential.Scopes)
+	if !credential.Enabled || credential.RunnerID != "voice-gateway" || !sameStringSet(credential.Scopes, []string{"voice:turn:ingest"}) {
+		t.Fatalf("credential metadata enabled=%v id=%s scopes=%v", credential.Enabled, credential.RunnerID, credential.Scopes)
 	}
 	ctx := context.Background()
 	store, err := storage.Open(ctx, storage.Config{Path: ":memory:"})
@@ -68,9 +67,5 @@ func TestIngestProvisioningUsesFixedScope(t *testing.T) {
 	}
 	if err := registerVoiceIngestCredential(ctx, store, credential); err == nil {
 		t.Fatal("revoked credential silently reprovisioned")
-	}
-	t.Setenv("ZOE_VOICE_INGEST_WORKSPACES", "*")
-	if _, err := loadVoiceIngestCredentialFromEnv(); err == nil {
-		t.Fatal("wildcard workspace accepted")
 	}
 }

@@ -11,7 +11,7 @@ import (
 )
 
 func reviewRuntimeConfig(code, runnerToken string) control.Config {
-	return control.Config{RunnerToken: runnerToken, RunnerID: "review", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim", "runner:control:read"}, DefaultProfileID: "review", Profiles: map[string]control.RuntimeProfile{"review": {ID: "review", RuntimeRouteID: "review", ModelRouteID: "review", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1"}}}
+	return control.Config{RunnerToken: runnerToken, RunnerID: "review", RunnerScopes: []string{"runner:claim", "runner:control:read"}, DefaultProfileID: "review", Profiles: map[string]control.RuntimeProfile{"review": {ID: "review", RuntimeRouteID: "review", ModelRouteID: "review", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1"}}}
 }
 
 func TestReviewExplicitEmptyInstanceScopesRemainEmpty(t *testing.T) {

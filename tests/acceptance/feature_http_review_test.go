@@ -53,7 +53,7 @@ func reviewFeatureServer(t *testing.T) (*storage.Store, http.Handler, string, st
 	if err = store.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.RegisterRunnerCredential(context.Background(), runnerToken, "review", []string{"default"}, cfg.RunnerScopes); err != nil {
+	if err := srv.RegisterRunnerCredential(context.Background(), runnerToken, "review", cfg.RunnerScopes); err != nil {
 		t.Fatal(err)
 	}
 	h := bindReviewHandler(srv.Handler(), store)

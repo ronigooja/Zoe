@@ -19,7 +19,7 @@ func TestChildProposalAdmissionIsIdempotentAndClaimedThroughOrdinaryRunnerPath(t
 	childProfile := control.RuntimeProfile{ID: "child", RuntimeRouteID: "native", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"task.read"}, ChildPolicy: policy}
 	store, h := reviewServer(t, control.Config{DefaultProfileID: "parent", Profiles: map[string]control.RuntimeProfile{"parent": parentProfile, "child": childProfile}}, func(s *control.Server) {
 		for i, token := range []string{runnerOne, runnerTwo, runnerThree, runnerFour} {
-			if err := s.RegisterRunnerCredential(context.Background(), token, "runner-"+string(rune('1'+i)), []string{"default"}, []string{"runner:claim", "runner:propose"}); err != nil {
+			if err := s.RegisterRunnerCredential(context.Background(), token, "runner-"+string(rune('1'+i)), []string{"runner:claim", "runner:propose"}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -144,7 +144,7 @@ func TestOutOfPolicyChildRequiresExpectedVersionApprovalAndCannotReviveParent(t 
 	worker := control.RuntimeProfile{ID: "worker", RuntimeRouteID: "native", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"task.read"}, ChildPolicy: policy}
 	admin := control.RuntimeProfile{ID: "admin-worker", RuntimeRouteID: "native", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"admin"}}
 	store, h := reviewServer(t, control.Config{DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": worker, "admin-worker": admin}}, func(s *control.Server) {
-		if err := s.RegisterRunnerCredential(context.Background(), runnerToken, "runner", []string{"default"}, []string{"runner:claim", "runner:propose"}); err != nil {
+		if err := s.RegisterRunnerCredential(context.Background(), runnerToken, "runner", []string{"runner:claim", "runner:propose"}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -200,7 +200,7 @@ func TestConcurrentChildProposalsCannotOverspendRootBudget(t *testing.T) {
 	policy := control.ChildPolicy{AllowedProfileIDs: []string{"worker"}, CapabilityIDs: []string{"task.read"}, MaxChildRuns: 1, MaxDepth: 2}
 	profile := control.RuntimeProfile{ID: "worker", RuntimeRouteID: "native", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1", CapabilityIDs: []string{"task.read"}, ChildPolicy: policy}
 	store, h := reviewServer(t, control.Config{DefaultProfileID: "worker", Profiles: map[string]control.RuntimeProfile{"worker": profile}}, func(s *control.Server) {
-		if err := s.RegisterRunnerCredential(context.Background(), runnerToken, "runner", []string{"default"}, []string{"runner:claim", "runner:propose"}); err != nil {
+		if err := s.RegisterRunnerCredential(context.Background(), runnerToken, "runner", []string{"runner:claim", "runner:propose"}); err != nil {
 			t.Fatal(err)
 		}
 	})

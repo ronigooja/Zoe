@@ -24,7 +24,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		writeError(w, apiError(401, "unauthenticated", "runner authentication required", nil))
 		return
 	}
-	if !runnerHasAnyWorkspaceScope(p, "runner:claim") {
+	if !HasRunnerScope(p, "runner:claim") {
 		writeError(w, apiError(403, "forbidden", "runner lacks claim scope", nil))
 		return
 	}
@@ -97,7 +97,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
-		if !HasRunnerScope(p, "runner:claim", c.workspace) {
+		if !HasRunnerScope(p, "runner:claim") {
 			continue
 		}
 		profile, exists := s.cfg.Profiles[c.profile]
@@ -245,7 +245,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
-	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:control:read") {
+	if !ok || !HasRunnerScope(p, "runner:control:read") {
 		writeError(w, apiError(http.StatusForbidden, "forbidden", "runner lacks rotation context scope", nil))
 		return
 	}
@@ -269,7 +269,7 @@ func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if runnerID != p.RunnerID || workspace == "" || !HasRunnerScope(p, "runner:control:read", workspace) || claim.AttemptID != attempt || storedFence != fence {
+	if runnerID != p.RunnerID || !HasRunnerScope(p, "runner:control:read") || claim.AttemptID != attempt || storedFence != fence {
 		writeError(w, apiError(http.StatusConflict, "fence_conflict", "rotation context does not match the active run fence", nil))
 		return
 	}
@@ -371,18 +371,6 @@ func decodeRotationSnapshot(body []byte) (contracts.RotationContext, error) {
 	return zero, nil
 }
 
-func runnerHasAnyWorkspaceScope(p contracts.RunnerPrincipal, scope string) bool {
-	if len(p.WorkspaceIDs) == 0 {
-		return false
-	}
-	for _, workspace := range p.WorkspaceIDs {
-		if HasRunnerScope(p, scope, workspace) {
-			return true
-		}
-	}
-	return false
-}
-
 func intersectStrings(granted, requested []string) []string {
 	out := make([]string, 0, len(requested))
 	for _, value := range requested {
@@ -467,7 +455,7 @@ func addTaskDisplayInstruction(ctx context.Context, tx *sql.Tx, claim *contracts
 
 func (s *Server) handleCurrentClaims(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
-	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:control:read") {
+	if !ok || !HasRunnerScope(p, "runner:control:read") {
 		writeError(w, apiError(403, "forbidden", "runner lacks current-claim read scope", nil))
 		return
 	}
@@ -569,7 +557,7 @@ func (s *Server) handleCurrentClaims(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRunControl(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
-	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:control:read") {
+	if !ok || !HasRunnerScope(p, "runner:control:read") {
 		writeError(w, apiError(403, "forbidden", "runner lacks control read scope", nil))
 		return
 	}
@@ -596,8 +584,8 @@ func (s *Server) handleRunControl(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if !HasRunnerScope(p, "runner:control:read", workspace) {
-		writeError(w, apiError(403, "forbidden", "workspace scope required", nil))
+	if !HasRunnerScope(p, "runner:control:read") {
+		writeError(w, apiError(403, "forbidden", "runner control scope required", nil))
 		return
 	}
 	if ready {
@@ -615,7 +603,7 @@ func (s *Server) handleRunControl(w http.ResponseWriter, r *http.Request) {
 // returns no record until a device command has created a pending action.
 func (s *Server) handleRuntimeAuthorization(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
-	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:control:read") {
+	if !ok || !HasRunnerScope(p, "runner:control:read") {
 		writeError(w, apiError(403, "forbidden", "runner lacks authorization read scope", nil))
 		return
 	}
@@ -681,7 +669,7 @@ func (s *Server) handleRuntimeAuthorization(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
-	if !ok || !runnerHasAnyWorkspaceScope(p, "runner:observe") {
+	if !ok || !HasRunnerScope(p, "runner:observe") {
 		writeError(w, apiError(403, "forbidden", "runner lacks observation scope", nil))
 		return
 	}
@@ -727,7 +715,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if runnerID != p.RunnerID || !HasRunnerScope(p, "runner:observe", workspace) {
+	if runnerID != p.RunnerID || !HasRunnerScope(p, "runner:observe") {
 		writeError(w, apiError(403, "forbidden", "runner does not own this run", nil))
 		return
 	}
@@ -1322,7 +1310,7 @@ func appendEventTx(ctx context.Context, tx *sql.Tx, e contracts.Event) error {
 	}
 	e.SchemaVersion = 1
 	var cursor int64
-	if err := tx.QueryRowContext(ctx, `UPDATE event_counters SET current_cursor=current_cursor+1 WHERE workspace_id=? RETURNING current_cursor`, e.WorkspaceID).Scan(&cursor); err != nil {
+	if err := tx.QueryRowContext(ctx, `UPDATE event_counters SET current_cursor=current_cursor+1 WHERE singleton=1 RETURNING current_cursor`).Scan(&cursor); err != nil {
 		return err
 	}
 	e.Cursor = strconv.FormatInt(cursor, 10)

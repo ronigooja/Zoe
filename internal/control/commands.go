@@ -152,7 +152,7 @@ func (s *Server) ExecuteCommand(ctx context.Context, p contracts.Principal, key 
 	}
 
 	var oldHash, receiptJSON []byte
-	err = tx.QueryRowContext(ctx, `SELECT request_hash,receipt_json FROM command_receipts WHERE workspace_id=? AND subject_id=? AND idempotency_key=?`, p.WorkspaceID, p.SubjectID, key).Scan(&oldHash, &receiptJSON)
+	err = tx.QueryRowContext(ctx, `SELECT request_hash,receipt_json FROM command_receipts WHERE subject_id=? AND idempotency_key=?`, p.SubjectID, key).Scan(&oldHash, &receiptJSON)
 	if err == nil {
 		if !equalBytes(oldHash, requestHash) {
 			return contracts.CommandReceipt{}, apiError(409, "idempotency_conflict", "Idempotency-Key was already used with different command content", nil)
@@ -186,7 +186,7 @@ func (s *Server) ExecuteCommand(ctx context.Context, p contracts.Principal, key 
 			event.OccurredAt = accepted
 		}
 		var e error
-		e = tx.QueryRowContext(ctx, `UPDATE event_counters SET current_cursor=current_cursor+1 WHERE workspace_id=? RETURNING current_cursor`, p.WorkspaceID).Scan(&cursor)
+		e = tx.QueryRowContext(ctx, `UPDATE event_counters SET current_cursor=current_cursor+1 WHERE singleton=1 RETURNING current_cursor`).Scan(&cursor)
 		if e != nil {
 			return contracts.CommandReceipt{}, e
 		}
@@ -210,20 +210,20 @@ func (s *Server) ExecuteCommand(ctx context.Context, p contracts.Principal, key 
 		}
 	}
 	if cursor == 0 {
-		if err = tx.QueryRowContext(ctx, `SELECT current_cursor FROM event_counters WHERE workspace_id=?`, p.WorkspaceID).Scan(&cursor); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT current_cursor FROM event_counters WHERE singleton=1`).Scan(&cursor); err != nil {
 			return contracts.CommandReceipt{}, err
 		}
 	}
-	receipt := contracts.CommandReceipt{CommandID: commandID, IdempotencyKey: key, WorkspaceID: p.WorkspaceID, Kind: req.Kind, Status: "accepted", ResourceType: result.ResourceType, ResourceID: result.ResourceID, ResourceVersion: result.ResourceVersion, AcceptedAt: accepted, EventCursor: fmt.Sprint(cursor)}
+	receipt := contracts.CommandReceipt{CommandID: commandID, IdempotencyKey: key, Kind: req.Kind, Status: "accepted", ResourceType: result.ResourceType, ResourceID: result.ResourceID, ResourceVersion: result.ResourceVersion, AcceptedAt: accepted, EventCursor: fmt.Sprint(cursor)}
 	receiptJSON, err = json.Marshal(receipt)
 	if err != nil {
 		return receipt, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO command_receipts(command_id,workspace_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES(?,?,?,?,?,?,?)`, commandID, p.WorkspaceID, p.SubjectID, key, requestHash, receiptJSON, accepted.Format(time.RFC3339Nano))
+	_, err = tx.ExecContext(ctx, `INSERT INTO command_receipts(command_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES(?,?,?,?,?,?)`, commandID, p.SubjectID, key, requestHash, receiptJSON, accepted.Format(time.RFC3339Nano))
 	if err != nil {
 		return receipt, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO command_work(command_id,workspace_id,kind,status,created_at) VALUES(?,?,?,'accepted',?)`, commandID, p.WorkspaceID, req.Kind, accepted.Format(time.RFC3339Nano))
+	_, err = tx.ExecContext(ctx, `INSERT INTO command_work(command_id,kind,status,created_at) VALUES(?,?,'accepted',?)`, commandID, req.Kind, accepted.Format(time.RFC3339Nano))
 	if err != nil {
 		return receipt, err
 	}
@@ -247,7 +247,7 @@ func equalBytes(a, b []byte) bool {
 func (s *Server) handleGetCommand(w http.ResponseWriter, r *http.Request) {
 	p, _ := PrincipalFromContext(r.Context())
 	var raw []byte
-	err := s.store.DB().QueryRowContext(r.Context(), `SELECT receipt_json FROM command_receipts WHERE command_id=? AND workspace_id=? AND subject_id=?`, r.PathValue("command_id"), p.WorkspaceID, p.SubjectID).Scan(&raw)
+	err := s.store.DB().QueryRowContext(r.Context(), `SELECT receipt_json FROM command_receipts WHERE command_id=? AND subject_id=?`, r.PathValue("command_id"), p.SubjectID).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, apiError(404, "not_found", "command receipt not found", nil))
 		return
@@ -271,7 +271,7 @@ func (s *Server) handleGetCommandByKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var raw []byte
-	err := s.store.DB().QueryRowContext(r.Context(), `SELECT receipt_json FROM command_receipts WHERE workspace_id=? AND subject_id=? AND idempotency_key=?`, p.WorkspaceID, p.SubjectID, key).Scan(&raw)
+	err := s.store.DB().QueryRowContext(r.Context(), `SELECT receipt_json FROM command_receipts WHERE subject_id=? AND idempotency_key=?`, p.SubjectID, key).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, apiError(404, "not_found", "command receipt not found", nil))
 		return

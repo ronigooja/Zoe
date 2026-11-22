@@ -31,7 +31,7 @@ func TestProductionControlClientReadsAcceptedAnswerWithoutConsumingOnRead(t *tes
 	}
 	now := time.Now().UTC()
 	stamp := now.Format(time.RFC3339Nano)
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('device','default','owner','test','approved',?)`, stamp); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('device','owner','test','approved',?)`, stamp); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id) VALUES('answer-task','default','question','goal','user','profile','awaiting_user',2,?,?,?,?,?)`, stamp, stamp, "device", "command", "owner"); err != nil {
@@ -52,11 +52,11 @@ func TestProductionControlClientReadsAcceptedAnswerWithoutConsumingOnRead(t *tes
 			t.Fatal(err)
 		}
 	}
-	server, err := NewServer(store, Config{RunnerToken: token, RunnerID: "configured-runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:control:read", "runner:observe"}})
+	server, err := NewServer(store, Config{RunnerToken: token, RunnerID: "configured-runner", RunnerScopes: []string{"runner:control:read", "runner:observe"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.RegisterRunnerCredential(ctx, token, "configured-runner", []string{"default"}, []string{"runner:control:read", "runner:observe"}); err != nil {
+	if err := server.RegisterRunnerCredential(ctx, token, "configured-runner", []string{"runner:control:read", "runner:observe"}); err != nil {
 		t.Fatal(err)
 	}
 	httpServer := httptest.NewServer(server.Handler())

@@ -32,7 +32,6 @@ CREATE TABLE workspaces (
 INSERT INTO workspaces(id,name,created_at) VALUES('default','Default',strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 CREATE TABLE actors (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   subject_id TEXT NOT NULL,
   name TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('pending','approved','revoked')),
@@ -42,7 +41,7 @@ CREATE TABLE actors (
   last_seen_at TEXT,
   revoked_at TEXT
 );
-CREATE INDEX devices_subject ON actors(workspace_id,subject_id,status);
+CREATE INDEX devices_subject ON actors(subject_id,status);
 CREATE TABLE projects (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -116,17 +115,15 @@ CREATE TABLE approvals (
 CREATE INDEX approvals_workspace_status ON approvals(workspace_id,status,created_at);
 CREATE TABLE command_receipts (
   command_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   subject_id TEXT NOT NULL,
   idempotency_key TEXT NOT NULL,
   request_hash BLOB NOT NULL,
   receipt_json BLOB NOT NULL,
   accepted_at TEXT NOT NULL,
-  UNIQUE(workspace_id,subject_id,idempotency_key)
+  UNIQUE(subject_id,idempotency_key)
 );
 CREATE TABLE command_work (
   command_id TEXT PRIMARY KEY REFERENCES command_receipts(command_id),
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   kind TEXT NOT NULL,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -145,13 +142,13 @@ CREATE TABLE events (
   aggregate_version INTEGER NOT NULL,
   payload BLOB NOT NULL,
   delivered_at TEXT,
-  UNIQUE(workspace_id,cursor)
+  UNIQUE(cursor)
 );
 CREATE TABLE event_counters (
-  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
   current_cursor INTEGER NOT NULL DEFAULT 0
 );
-INSERT INTO event_counters(workspace_id,current_cursor) VALUES('default',0);
+INSERT INTO event_counters(singleton,current_cursor) VALUES(1,0);
 CREATE TABLE runs (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -216,7 +213,6 @@ CREATE TABLE external_effects (
 CREATE TABLE runner_credentials (
   token_hash BLOB PRIMARY KEY,
   runner_id TEXT NOT NULL,
-  workspace_ids BLOB NOT NULL,
   scopes BLOB NOT NULL,
   revoked_at TEXT
 );

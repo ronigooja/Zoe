@@ -26,7 +26,7 @@ func TestUncertainTaskDispatchRemainsNonDispatchableWithoutMutation(t *testing.T
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('device','default','owner','test','approved',?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('device','owner','test','approved',?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	server, err := NewServer(store, Config{})
@@ -89,7 +89,7 @@ func TestProductionControlClientRechecksLiveTaskAuthorizationOverHTTP(t *testing
 		t.Fatal(err)
 	}
 	at := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('device','default','owner','test','approved',?)`, at); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('device','owner','test','approved',?)`, at); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task','default','test','test','user','profile','active',1,?,?, 'device','command')`, at, at); err != nil {
@@ -98,7 +98,7 @@ func TestProductionControlClientRechecksLiveTaskAuthorizationOverHTTP(t *testing
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('run','default','task','attempt','active','run',1,'runner','device','command','test','profile','runtime','model','worker','opencode',?)`, at); err != nil {
 		t.Fatal(err)
 	}
-	server, err := NewServer(store, Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim"}})
+	server, err := NewServer(store, Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerScopes: []string{"runner:claim"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestProductionControlClientRechecksLiveTaskAuthorizationOverHTTP(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.RegisterRunnerCredential(ctx, runnerToken, "runner", []string{"default"}, []string{"runner:claim", "runner:observe", "runner:control:read"}); err != nil {
+	if err := server.RegisterRunnerCredential(ctx, runnerToken, "runner", []string{"runner:claim", "runner:observe", "runner:control:read"}); err != nil {
 		t.Fatal(err)
 	}
 	httpServer := httptest.NewServer(server.Handler())
@@ -164,7 +164,7 @@ func TestProductionHTTPRecoveryKeepsUncertainRunFenced(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,workspace_id,subject_id,name,status,created_at) VALUES('device','default','owner','test','approved',?)`, at); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('device','owner','test','approved',?)`, at); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task','default','test','test','user','profile','active',1,?,?, 'device','command')`, at, at); err != nil {
@@ -173,11 +173,11 @@ func TestProductionHTTPRecoveryKeepsUncertainRunFenced(t *testing.T) {
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('run','default','task','attempt','uncertain','run',1,'runner','device','command','test','profile','runtime','model','worker','opencode',?)`, at); err != nil {
 		t.Fatal(err)
 	}
-	server, err := NewServer(store, Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerWorkspaceIDs: []string{"default"}, RunnerScopes: []string{"runner:claim", "runner:observe", "runner:control:read"}})
+	server, err := NewServer(store, Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerScopes: []string{"runner:claim", "runner:observe", "runner:control:read"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.RegisterRunnerCredential(ctx, runnerToken, "runner", []string{"default"}, []string{"runner:claim", "runner:observe", "runner:control:read"}); err != nil {
+	if err := server.RegisterRunnerCredential(ctx, runnerToken, "runner", []string{"runner:claim", "runner:observe", "runner:control:read"}); err != nil {
 		t.Fatal(err)
 	}
 	httpServer := httptest.NewServer(server.Handler())

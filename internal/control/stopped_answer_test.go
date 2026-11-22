@@ -74,7 +74,7 @@ func TestStoppedAnswerNewClaimPromptReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	token := "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA"
-	if err := server.RegisterRunnerCredential(ctx, token, "runner", []string{"default"}, []string{"runner:claim", "runner:observe", "runner:control:read"}); err != nil {
+	if err := server.RegisterRunnerCredential(ctx, token, "runner", []string{"runner:claim", "runner:observe", "runner:control:read"}); err != nil {
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(server.Handler())

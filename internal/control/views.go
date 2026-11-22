@@ -48,7 +48,7 @@ func (s *Server) LoadSnapshotTx(ctx context.Context, tx *sql.Tx, p contracts.Pri
 func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, maxRuns int) (contracts.Snapshot, error) {
 	out := contracts.Snapshot{WorkspaceID: workspace, SubjectID: subject, ServerVersion: "1", Projects: []contracts.Project{}, Tasks: []contracts.Task{}, Approvals: []contracts.Approval{}, Runs: []contracts.Run{}}
 	var cursor int64
-	if err := tx.QueryRowContext(ctx, `SELECT current_cursor FROM event_counters WHERE workspace_id=?`, workspace).Scan(&cursor); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT current_cursor FROM event_counters WHERE singleton=1`).Scan(&cursor); err != nil {
 		return out, err
 	}
 	out.EventCursor = strconv.FormatInt(cursor, 10)
@@ -279,7 +279,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		cursor = n
 	}
 	var high int64
-	if err := s.store.DB().QueryRowContext(r.Context(), `SELECT current_cursor FROM event_counters WHERE workspace_id=?`, p.WorkspaceID).Scan(&high); err != nil {
+	if err := s.store.DB().QueryRowContext(r.Context(), `SELECT current_cursor FROM event_counters WHERE singleton=1`).Scan(&high); err != nil {
 		writeError(w, err)
 		return
 	}
