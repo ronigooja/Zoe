@@ -2,6 +2,7 @@ package acceptance
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -84,7 +85,11 @@ func TestReviewVoiceAtomicTaskSourceOverHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	create := func(revision int, key string) int {
-		featureCommand(t, h, token, fmt.Sprintf("commit-%d", revision), "voice.turn.commit", map[string]any{"session_id": "review-atomic", "generation": 1, "turn_id": "stable", "revision": revision, "content": fmt.Sprintf("confirmed transcript %d", revision), "user_confirmed": true})
+		content := fmt.Sprintf("confirmed transcript %d", revision)
+		hash := sha256.Sum256([]byte(content))
+		if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES(?,'default','review-atomic',1,'stable',?,?,?,?,?)`, fmt.Sprintf("review-turn-%d", revision), revision, content, hash[:], now, fmt.Sprintf("review-commit-%d", revision)); err != nil {
+			t.Fatal(err)
+		}
 		// This source-admission fixture supplies the already accepted register
 		// boundary explicitly; committing a turn must not start model work.
 		if _, err := store.DB().Exec(`UPDATE voice_turns SET exits='task',request=? WHERE session_id='review-atomic' AND turn_id='stable' AND revision=?`, fmt.Sprintf("Complete resolved request %d", revision), revision); err != nil {
