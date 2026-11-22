@@ -8,8 +8,6 @@ enum VoiceEndReason: String, CaseIterable {
     case mediaLossConnection = "media_loss_connection"
     case mediaLossAudio = "media_loss_audio"
     case mediaLossDataChannel = "media_loss_data_channel"
-    case leaseRenewalFailed = "lease_renewal_failed"
-    case heartbeatFailure = "heartbeat_failure"
     case appTerminate = "app_terminate"
     case connectionCleared = "connection_cleared"
     case setupFailed = "setup_failed"
@@ -17,8 +15,7 @@ enum VoiceEndReason: String, CaseIterable {
 
     var isError: Bool {
         switch self {
-        case .mediaLossConnection, .mediaLossAudio, .mediaLossDataChannel,
-             .leaseRenewalFailed, .heartbeatFailure, .setupFailed: true
+        case .mediaLossConnection, .mediaLossAudio, .mediaLossDataChannel, .setupFailed: true
         default: false
         }
     }
@@ -35,7 +32,6 @@ extension VoiceMediaLoss {
         case .connection: .mediaLossConnection
         case .audio: .mediaLossAudio
         case .dataChannel: .mediaLossDataChannel
-        case .leaseRenewalFailed: .leaseRenewalFailed
         }
     }
 }

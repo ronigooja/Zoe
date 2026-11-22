@@ -31,14 +31,9 @@ final class SilenceSettingsTests: XCTestCase {
     }
 
     func testClassifierTypesAndOneSecondCoalescing() {
-        for type in ["output_transcript.added", "user_audio_turn.final", "assistant.output"] {
-            XCTAssertTrue(VoiceActivityClassifier.isActivity(type: type), type)
-        }
         for type in ["session.output_audio.delta", "turn.delta", "session.input_audio.append", "input_audio.append", "unknown", "data_message", ""] {
-            XCTAssertFalse(VoiceActivityClassifier.isActivity(type: type), type)
-            XCTAssertFalse(ZoeAppModel.isVoiceActivity(["type": type]))
+            XCTAssertFalse(VoiceActivityClassifier.isActivity(event: ["type": type, "text": "ignored"]), type)
         }
-        XCTAssertFalse(ZoeAppModel.isVoiceActivity(["type": "user_audio_turn.final"]))
         let clock = SettingsSilenceClock()
         var coalescer = VoiceActivityCoalescer()
         XCTAssertTrue(coalescer.shouldReset(now: clock.now()))
@@ -58,12 +53,12 @@ final class SilenceSettingsTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         let model = ZoeAppModel(defaults: defaults, silenceClock: clock)
         let api = try APIClient(serverURL: URL(string: "https://silence.example")!)
-        let session = VoiceSessionResponse(voiceSessionId: "silence-test", generation: 1, state: "active", answerSdp: "")
+        let session = try voiceDialFixture("silence-test", generation: 1)
         let epoch = model.installVoiceSessionForTesting(session, api: api)
         var traces: [(String, String)] = []
         model.voiceDiagnosticObserverForTesting = { traces.append(($0, $1)) }
-        func wrapped(_ type: String) throws -> Data {
-            let inner = try JSONSerialization.data(withJSONObject: ["type": type])
+        func wrapped(_ type: String, text: String = "") throws -> Data {
+            let inner = try JSONSerialization.data(withJSONObject: ["type": type, "text": text])
             return try JSONSerialization.data(withJSONObject: ["type": "data_message", "data": String(decoding: inner, as: UTF8.self)])
         }
         clock.advance(59)
@@ -75,17 +70,36 @@ final class SilenceSettingsTests: XCTestCase {
         XCTAssertEqual(model.silence.lastActivityAge, 59.5)
         XCTAssertFalse(traces.contains { $0.0 == "silence_reset" })
         clock.advance(0.5)
-        await model.receiveVoiceDataForTesting(try wrapped("output_transcript.added"), mediaEpoch: epoch)
+        await model.receiveVoiceDataForTesting(try wrapped("output_transcript.added", text: "speech"), mediaEpoch: epoch)
         XCTAssertEqual(model.silence.lastActivityAge, 0)
         XCTAssertTrue(traces.contains { $0.0 == "silence_reset" && $0.1.contains("last=output_transcript.added") })
         for _ in 0..<59 {
             clock.advance(1)
             await model.receiveVoiceDataForTesting(try wrapped("session.input_audio.append"), mediaEpoch: epoch)
+            await model.receiveVoiceDataForTesting(try wrapped("output_transcript.added", text: "speech"), mediaEpoch: epoch)
+            await model.receiveVoiceDataForTesting(try wrapped("assistant.output"), mediaEpoch: epoch)
         }
         XCTAssertEqual(model.silence.lastActivityAge, 59)
         XCTAssertEqual(model.silence.tick(), .none)
         clock.advance(1)
         XCTAssertEqual(model.silence.tick(), .timedOut)
+    }
+
+    func testActivityRequiresNewContentOrEventWithinItsTurn() {
+        var classifier = VoiceActivityClassifier()
+        func event(_ type: String, _ turn: String, _ id: String, _ text: String) -> [String: Any] {
+            ["type": type, "turn_id": turn, "event_id": id, "item": ["text": text]]
+        }
+        XCTAssertFalse(classifier.accept(event("assistant.output", "turn-1", "blank", "  ")))
+        XCTAssertFalse(classifier.accept(["type": "output_transcript.added"]))
+        XCTAssertTrue(classifier.accept(event("output_transcript.added", "turn-1", "one", "Hello")))
+        XCTAssertFalse(classifier.accept(event("output_transcript.added", "turn-1", "one", "Changed replay")))
+        XCTAssertFalse(classifier.accept(event("assistant.output", "turn-1", "alias", " Hello ")))
+        XCTAssertFalse(classifier.accept(event("assistant.output", "turn-1", "alias", "Changed alias")))
+        XCTAssertTrue(classifier.accept(event("assistant.output", "turn-1", "two", "More speech")))
+        XCTAssertTrue(classifier.accept(event("input_transcript.added", "turn-1", "user", "Hello")))
+        XCTAssertTrue(classifier.accept(event("assistant.output", "turn-2", "three", "Hello")))
+        XCTAssertFalse(classifier.accept(event("output_transcript.added", "turn-1", "late", "Hello")))
     }
 
     func testDisabledNeverTimesOutAndActivityRestartsConfiguredWindow() {
@@ -146,7 +160,7 @@ final class SilenceSettingsTests: XCTestCase {
         clock.advance(100)
         XCTAssertEqual(model.silence.tick(), .none)
         let api = try APIClient(serverURL: URL(string: "https://silence.example")!)
-        let session = VoiceSessionResponse(voiceSessionId: "silence-test", generation: 1, state: "active", answerSdp: "")
+        let session = try voiceDialFixture("silence-test", generation: 1)
         let epoch = model.installVoiceSessionForTesting(session, api: api)
         var traces: [(String, String)] = []
         model.voiceDiagnosticObserverForTesting = { traces.append(($0, $1)) }
@@ -175,18 +189,20 @@ final class SilenceSettingsTests: XCTestCase {
     func testActivityEventShapes() throws {
         for role in ["user", "assistant"] {
             let event: [String: Any] = ["type": "chat_message_delta", "payload": ["delta": ["v": ["message": ["author": ["role": role], "content": ["parts": [["text": "hello"]]]]]]]]
-            XCTAssertTrue(ZoeAppModel.isVoiceActivity(event))
+            XCTAssertTrue(VoiceActivityClassifier.isActivity(event: event))
         }
         for json in [
-            #"{"type":"user_audio_turn.final","turn_id":"turn-1","revision":1,"transcript":"hello"}"#,
             #"{"type":"assistant.output","turn_id":"turn-1","revision":1,"transcript":"hello"}"#,
+            #"{"type":"input_transcript.added","item":{"text":"hello"}}"#,
             #"{"type":"input_audio_transcription.completed","transcript":"hello"}"#
         ] {
             let event = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
-            XCTAssertTrue(ZoeAppModel.isVoiceActivity(event))
+            XCTAssertTrue(VoiceActivityClassifier.isActivity(event: event))
         }
-        XCTAssertFalse(ZoeAppModel.isVoiceActivity(["type": "voice.end"]))
-        XCTAssertFalse(ZoeAppModel.isVoiceActivity(["type": "input_audio_transcription.completed", "transcript": " "]))
-        XCTAssertFalse(ZoeAppModel.isVoiceActivity(["type": "chat_message_delta", "transcript": "ignored"]))
+        XCTAssertFalse(VoiceActivityClassifier.isActivity(event: ["type": "voice.end"]))
+        XCTAssertFalse(VoiceActivityClassifier.isActivity(event: ["type": "input_transcript.added", "item": ["text": " "]]))
+        XCTAssertFalse(VoiceActivityClassifier.isActivity(event: ["type": "input_audio_transcription.completed", "transcript": " "]))
+        XCTAssertFalse(VoiceActivityClassifier.isActivity(event: ["type": "chat_message_delta", "transcript": "ignored"]))
+        XCTAssertFalse(VoiceActivityClassifier.isActivity(event: ["type": "user_audio_turn.final", "transcript": "obsolete"]))
     }
 }

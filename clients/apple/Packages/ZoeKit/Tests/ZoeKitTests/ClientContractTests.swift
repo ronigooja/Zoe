@@ -41,6 +41,22 @@ private struct StaticCredential: BearerTokenProviding {
     func bearerToken() throws -> String { UUID().uuidString }
 }
 
+private struct VoiceFixtureCredential: BearerTokenProviding {
+    func bearerToken() throws -> String { "synthetic-instance-key" }
+}
+
+private final class VoiceContractSilenceClock: SilenceClock {
+    var date = Date(timeIntervalSince1970: 0)
+    func now() -> Date { date }
+}
+
+private struct VoiceContractKeyStore: InstanceKeyStoring {
+    func load() throws -> InstanceKey? { try InstanceKey(String(repeating: "A", count: 43)) }
+    func replace(_ key: InstanceKey) throws {}
+    func reset() throws {}
+    func bearerToken() throws -> String { try XCTUnwrap(load()).bearerToken() }
+}
+
 private actor AsyncTestGate {
     private var continuation: CheckedContinuation<Void, Never>?
     private var startWaiter: CheckedContinuation<Void, Never>?
@@ -67,6 +83,318 @@ private actor AsyncTestGate {
 }
 
 final class ClientContractTests: XCTestCase {
+    @MainActor func testSilenceTimeoutClosesLocalMediaBeforeGatewayHangup() async throws {
+        let clock = VoiceContractSilenceClock()
+        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!, silenceClock: clock)
+        let api = try voiceContractAPI()
+        let call = try voiceDialFixture("zoe-id", generation: 4, handle: "gateway-handle")
+        model.installVoiceSessionForTesting(call, api: api, origin: URL(string: "https://gateway.example:8443")!)
+        var events: [String] = []
+        model.voiceLocalMediaStopObserverForTesting = { events.append("local_close") }
+        ContractURLProtocol.responseHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "https://gateway.example:8443/client/v1/voice/calls/gateway-handle/hangup")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-instance-key")
+            XCTAssertTrue((Self.requestBody(request) ?? Data()).isEmpty)
+            events.append("gateway_hangup")
+            return (204, [:], Data())
+        }
+        clock.date = Date(timeIntervalSince1970: 59)
+        await model.tickVoiceSilenceForTesting()
+        XCTAssertTrue(events.isEmpty)
+        clock.date = Date(timeIntervalSince1970: 60)
+        await model.tickVoiceSilenceForTesting()
+        await model.tickVoiceSilenceForTesting()
+        XCTAssertEqual(events, ["local_close", "gateway_hangup"])
+        XCTAssertEqual(model.voiceStatus, .idle)
+    }
+
+    private static let voiceConfigBody = #"{"version":"v1","gateway_dial_origin":"https://gateway.example:8443","defaults":{"voice":"cove","voice_mode":"wingman","language_code":"auto"},"voices":[{"id":"cove","name":"Cove"}],"voice_modes":[],"languages":[],"webrtc":{"data_channel":{"label":"zoe","negotiated":true,"id":0},"ice_servers":[],"receive_audio":true,"receive_video":false}}"#
+    private static let voicePoolBody = #"{"blocked":true,"reason_code":"voice_pool_quarantined","updated_at":"now","account_lease_identity":false,"account_scoped_termination":false,"trusted_termination_evidence":false}"#
+    private static let dialAnswer = Data(#"{"voice_session_id":"zoe-call","gateway_session_id":"gateway-call","generation":4,"answer_sdp":"answer"}"#.utf8)
+
+    private func voiceContractAPI() throws -> APIClient {
+        try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: VoiceFixtureCredential(), session: session())
+    }
+
+    @MainActor private func voiceContractModel(api: APIClient, clock: SilenceClock = SystemSilenceClock()) -> ZoeAppModel {
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set(api.serverURL.absoluteString, forKey: "zoe.instance.serverAddress")
+        let model = ZoeAppModel(defaults: defaults, silenceClock: clock)
+        model.keyStoreOverrideForTesting = { _ in VoiceContractKeyStore() }
+        model.connectionAPIOverrideForTesting = { _, _, _ in api }
+        model.voiceOfferOverrideForTesting = { "offer" }
+        model.voiceAnswerOverrideForTesting = { XCTAssertEqual($0, "answer") }
+        return model
+    }
+
+    func testVoiceRequestsDisableCookiesAndCachingWithInjectedProtocol() async throws {
+        let api = try voiceContractAPI()
+        let origin = URL(string: "https://gateway.example:8443")!
+        ContractURLProtocol.responseHandler = { request in
+            XCTAssertFalse(request.httpShouldHandleCookies)
+            XCTAssertEqual(request.cachePolicy, .reloadIgnoringLocalCacheData)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+            let headers = ["Set-Cookie": "voice-fixture=ignored; Path=/"]
+            switch request.url?.path {
+            case "/v1/voice/config": return (200, headers, Data(Self.voiceConfigBody.utf8))
+            case "/v1/voice/pool/status": return (200, headers, Data(Self.voicePoolBody.utf8))
+            case "/client/v1/voice/calls": return (200, headers, Self.dialAnswer)
+            case "/client/v1/voice/calls/gateway-call/hangup": return (204, [:], Data())
+            default: XCTFail("Unexpected request"); return (404, [:], Data())
+            }
+        }
+        _ = try await api.voiceConfig()
+        _ = try await api.voicePoolStatus()
+        let call = try await api.dialVoiceCall(origin: origin, payload: VoiceDialRequest(requestID: "call", offerSDP: "offer"))
+        try await api.hangupVoiceCall(origin: origin, gatewaySessionID: call.gatewaySessionId)
+    }
+
+    @MainActor func testEarlyVoiceEndClosesMediaBeforeHandshakeCanPublishActiveCall() async throws {
+        let model = voiceContractModel(api: try voiceContractAPI())
+        var stops = 0
+        model.voiceLocalMediaStopObserverForTesting = { stops += 1 }
+        ContractURLProtocol.responseHandler = Self.negotiationResponse
+        model.voiceAnswerOverrideForTesting = { _ in
+            await model.receiveVoiceDataForTesting(Data(#"{"type":"voice.end"}"#.utf8), mediaEpoch: 0)
+            XCTAssertEqual(stops, 0, "stale media cannot end the call in progress")
+            await model.receiveVoiceDataForTesting(Data(#"{"type":"voice.end"}"#.utf8))
+            XCTAssertEqual(stops, 1, "end must close even before the handshake resumes")
+        }
+        defer { model.voiceAnswerOverrideForTesting = nil }
+        await model.startVoice()
+        XCTAssertEqual(model.voiceStatus, .idle)
+        XCTAssertFalse(model.canEndVoiceSession)
+        XCTAssertFalse(model.hasPendingVoiceHangupForTesting)
+    }
+
+    @MainActor func testEarlyActivityIsRetainedAndNotCountedAgainAfterConnect() async throws {
+        let clock = VoiceContractSilenceClock()
+        let model = voiceContractModel(api: try voiceContractAPI(), clock: clock)
+        ContractURLProtocol.responseHandler = Self.negotiationResponse
+        let activity = Data(#"{"type":"input_transcript.added","turn_id":"early","event_id":"first","item":{"text":"Hello"}}"#.utf8)
+        model.voiceAnswerOverrideForTesting = { _ in
+            clock.date = Date(timeIntervalSince1970: 5)
+            await model.receiveVoiceDataForTesting(activity)
+            XCTAssertEqual(model.silence.lastActivityAge, 0)
+            clock.date = Date(timeIntervalSince1970: 8)
+        }
+        defer { model.voiceAnswerOverrideForTesting = nil }
+        await model.startVoice()
+        XCTAssertEqual(model.voiceStatus, .active(sessionID: "zoe-call", mediaGeneration: 4))
+        XCTAssertEqual(model.silence.lastActivityAge, 3)
+        await model.receiveVoiceDataForTesting(activity)
+        XCTAssertEqual(model.silence.lastActivityAge, 3)
+    }
+
+    private static func negotiationResponse(_ request: URLRequest) -> (Int, [String: String], Data) {
+        switch request.url?.path {
+        case "/v1/voice/config": return (200, [:], Data(voiceConfigBody.utf8))
+        case "/v1/voice/pool/status": return (200, [:], Data(voicePoolBody.utf8))
+        case "/client/v1/voice/calls": return (200, [:], dialAnswer)
+        default: XCTFail("Unexpected negotiation request: \(request.url?.path ?? "")"); return (404, [:], Data())
+        }
+    }
+
+    func testVoiceConfigRejectsMissingOrInvalidOriginWithoutFallback() async throws {
+        let api = try voiceContractAPI()
+        for body in [Self.voiceConfigBody.replacingOccurrences(of: #""gateway_dial_origin":"https://gateway.example:8443","#, with: ""),
+                     Self.voiceConfigBody.replacingOccurrences(of: "https://gateway.example:8443", with: "http://gateway.example"),
+                     Self.voiceConfigBody.replacingOccurrences(of: #""https://gateway.example:8443""#, with: "123")] {
+            ContractURLProtocol.responseHandler = { request in
+                XCTAssertEqual(request.url?.absoluteString, "https://zoe.example/v1/voice/config")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-instance-key")
+                return (200, [:], Data(body.utf8))
+            }
+            do {
+                _ = try await api.voiceConfig()
+                XCTFail("A missing or invalid origin must fail closed")
+            } catch let error as ZoeError {
+                guard case let .http(status, code, _, _) = error else { return XCTFail("Unexpected config error: \(error)") }
+                XCTAssertEqual(status, 503)
+                XCTAssertEqual(code, "voice_unavailable")
+            }
+        }
+    }
+
+    func testDialMapsWireFieldsAndRetriesExactRequestAfterTransportLoss() async throws {
+        let api = try voiceContractAPI()
+        let origin = URL(string: "https://gateway.example:8443")!
+        var requests: [Data] = []
+        ContractURLProtocol.failureHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "https://gateway.example:8443/client/v1/voice/calls")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-instance-key")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            requests.append(Self.requestBody(request) ?? Data())
+            return requests.count == 1 ? URLError(.timedOut) : nil
+        }
+        defer { ContractURLProtocol.failureHandler = nil }
+        ContractURLProtocol.responseHandler = { _ in (200, [:], Self.dialAnswer) }
+        let response = try await api.dialVoiceCall(origin: origin, payload: VoiceDialRequest(requestID: "stable", offerSDP: "offer", voice: "cove", voiceMode: "wingman", languageCode: "auto"))
+        XCTAssertEqual(response.voiceSessionId, "zoe-call")
+        XCTAssertEqual(response.gatewaySessionId, "gateway-call")
+        XCTAssertEqual(response.generation, 4)
+        XCTAssertEqual(response.answerSdp, "answer")
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.first, requests.last)
+        let first = try XCTUnwrap(requests.first)
+        let payload = try JSONSerialization.jsonObject(with: first) as? [String: String]
+        XCTAssertEqual(payload, ["request_id": "stable", "offer_sdp": "offer", "voice": "cove", "voice_mode": "wingman", "language_code": "auto"])
+    }
+
+    func testHangupEncodesOpaqueHandleAsOnePathSegmentAndRequires204() async throws {
+        let api = try voiceContractAPI()
+        let origin = URL(string: "https://gateway.example")!
+        for status in [200, 204, 401, 404, 503] {
+            let code: String = switch status {
+            case 401: "unauthenticated"
+            case 404: "not_found"
+            default: "voice_unavailable"
+            }
+            ContractURLProtocol.responseHandler = { request in
+                XCTAssertEqual(request.url?.absoluteString, "https://gateway.example/client/v1/voice/calls/id%2Fwith%3Freserved%23chars/hangup")
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-instance-key")
+                XCTAssertNil(request.value(forHTTPHeaderField: "Content-Type"))
+                XCTAssertTrue((Self.requestBody(request) ?? Data()).isEmpty)
+                let data = status == 204 ? Data() : Data("{\"error\":{\"code\":\"\(code)\",\"message\":\"private\"}}".utf8)
+                return (status, [:], data)
+            }
+            do {
+                try await api.hangupVoiceCall(origin: origin, gatewaySessionID: "id/with?reserved#chars")
+                XCTAssertEqual(status, 204)
+            } catch let error as ZoeError {
+                switch error {
+                case .invalidResponse: XCTAssertEqual(status, 200)
+                case let .http(actualStatus, actualCode, _, _):
+                    XCTAssertEqual(actualStatus, status)
+                    XCTAssertEqual(actualCode, code)
+                default: XCTFail("Unexpected hangup error: \(error)")
+                }
+            }
+        }
+    }
+
+    @MainActor func testDialMapsDocumentedErrorsWithoutReplayingHTTPFailures() async throws {
+        let api = try voiceContractAPI()
+        let origin = URL(string: "https://gateway.example")!
+        for (status, code, visible) in [
+            (400, "invalid_request", "The voice settings or call request were not accepted."),
+            (401, "unauthenticated", "The instance key was not accepted for voice calls."),
+            (409, "voice_lease_busy", "Another voice call is active or still closing."),
+            (409, "idempotency_conflict", "This voice call could not be retried. Start a new call."),
+            (503, "voice_pool_quarantined", "The voice account pool is quarantined."),
+            (503, "voice_unavailable", "Voice is unavailable right now.")
+        ] {
+            var count = 0
+            ContractURLProtocol.responseHandler = { request in
+                count += 1
+                let payload = (try? JSONSerialization.jsonObject(with: Self.requestBody(request) ?? Data())) as? [String: String]
+                XCTAssertEqual(payload, ["request_id": "call", "offer_sdp": "offer"])
+                return (status, [:], Data("{\"error\":{\"code\":\"\(code)\",\"message\":\"private diagnostic\"}}".utf8))
+            }
+            do {
+                _ = try await api.dialVoiceCall(origin: origin, payload: VoiceDialRequest(requestID: "call", offerSDP: "offer"))
+                XCTFail("Expected dial failure")
+            } catch let error as ZoeError {
+                guard case let .http(actualStatus, actualCode, message, _) = error else { return XCTFail("Unexpected error: \(error)") }
+                XCTAssertEqual(actualStatus, status)
+                XCTAssertEqual(actualCode, code)
+                XCTAssertFalse(message.contains("private diagnostic"))
+                XCTAssertEqual(ZoeAppModel.voiceDialFailureMessage(error), visible)
+            }
+            XCTAssertEqual(count, 1)
+        }
+    }
+
+    @MainActor func testLateGatewayDialOnlyHangsUpItsOwnHandle() async throws {
+        let api = try voiceContractAPI()
+        let model = voiceContractModel(api: api)
+        let gate = AsyncTestGate()
+        ContractURLProtocol.responseGate = { request in
+            if request.url?.path == "/client/v1/voice/calls" { await gate.pause() }
+        }
+        defer { ContractURLProtocol.responseGate = nil }
+        var hangups = 0
+        ContractURLProtocol.responseHandler = { request in
+            switch request.url?.path {
+            case "/v1/voice/config": return (200, [:], Data(Self.voiceConfigBody.utf8))
+            case "/v1/voice/pool/status": return (200, [:], Data(Self.voicePoolBody.utf8))
+            case "/client/v1/voice/calls": return (200, [:], Self.dialAnswer)
+            case "/client/v1/voice/calls/gateway-call/hangup":
+                XCTAssertEqual(request.url?.host, "gateway.example")
+                XCTAssertEqual(request.url?.port, 8443)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-instance-key")
+                hangups += 1
+                return (204, [:], Data())
+            default: XCTFail("Unexpected request: \(request.url?.path ?? "")"); return (404, [:], Data())
+            }
+        }
+        model.voiceAnswerOverrideForTesting = { _ in XCTFail("Stale answer must not be applied") }
+        let dial = Task { await model.startVoice() }
+        await gate.waitUntilStarted()
+        await model.endVoiceSession()
+        let replacement = try voiceDialFixture("new-call", generation: 5)
+        model.installVoiceSessionForTesting(replacement, api: api)
+        await gate.resume()
+        await dial.value
+        XCTAssertEqual(hangups, 1)
+        XCTAssertEqual(model.voiceStatus, .active(sessionID: "new-call", mediaGeneration: 5))
+        XCTAssertFalse(model.hasPendingVoiceHangupForTesting)
+    }
+
+    @MainActor func testGatewayLifecycleNeverPostsLegacyRoutesOrRelaysVoiceTurns() async throws {
+        let api = try voiceContractAPI()
+        let model = voiceContractModel(api: api)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
+        for kind in ["voice.turn.commit", "voice.turn.handoff"] {
+            try await journal.append(PendingCommand(idempotencyKey: kind, kind: kind, expectedVersion: nil, payload: .object([:]), createdAt: "now", workspaceID: "default", expectedResourceType: nil, expectedResourceID: nil))
+        }
+        let coordinator = CommandCoordinator(api: api, journal: journal)
+        var requestIDs: [String] = []
+        ContractURLProtocol.responseHandler = { request in
+            switch request.url?.path {
+            case "/v1/voice/config":
+                XCTAssertEqual(request.url?.host, "zoe.example")
+                return (200, [:], Data(Self.voiceConfigBody.utf8))
+            case "/v1/voice/pool/status":
+                XCTAssertEqual(request.url?.host, "zoe.example")
+                return (200, [:], Data(Self.voicePoolBody.utf8))
+            case "/client/v1/voice/calls":
+                XCTAssertEqual(request.url?.host, "gateway.example")
+                let payload = (try? JSONSerialization.jsonObject(with: Self.requestBody(request) ?? Data())) as? [String: String]
+                requestIDs.append(payload?["request_id"] ?? "")
+                return (200, [:], Self.dialAnswer)
+            case "/client/v1/voice/calls/gateway-call/hangup":
+                XCTAssertEqual(request.url?.host, "gateway.example")
+                return (204, [:], Data())
+            default: XCTFail("Unexpected request: \(request.url?.path ?? "")"); return (404, [:], Data())
+            }
+        }
+        // Legacy journal rows must not be looked up or replayed after the upgrade.
+        let outcomes = try await coordinator.recoverPending()
+        XCTAssertTrue(outcomes.isEmpty)
+        do {
+            _ = try await coordinator.retryPending(idempotencyKey: "voice.turn.handoff", currentWorkspaceID: "default")
+            XCTFail("Explicit retry must not replay a retired command")
+        } catch ZoeError.persistence(_) {}
+        for _ in 0..<2 {
+            await model.startVoice()
+            XCTAssertEqual(model.voiceStatus, .active(sessionID: "zoe-call", mediaGeneration: 4))
+            model.configureVoiceCoordinatorForTesting(api: api, journal: journal)
+            await model.receiveVoiceDataForTesting(Data(#"{"type":"user_audio_turn.final","turn_id":"obsolete","revision":1,"transcript":"ignored"}"#.utf8))
+            await model.endVoiceSession()
+            XCTAssertEqual(model.voiceStatus, .idle)
+            XCTAssertTrue(model.voicePoolStatus?.blocked == true, "204 alone says nothing about pool reuse")
+        }
+        XCTAssertEqual(requestIDs.count, 2)
+        XCTAssertEqual(Set(requestIDs).count, 2, "each new call gets a fresh request ID")
+        XCTAssertFalse(requestIDs.contains(""))
+    }
     private static func recoveryBody(cursor: String) -> Data {
         Data("""
         {"cursor":"\(cursor)","snapshot":{"workspace_id":"default","subject_id":"owner","server_version":"1","event_cursor":"\(cursor)","authority":{"instance_lineage_id":"lineage","generation":1,"deletion_sequence":"0"},"projects":[],"tasks":[{"id":"authoritative-task","status":"complete"}],"approvals":[],"runs":[],"execution_capacity":{}},"ui":{"cursor":\(cursor),"surfaces":[]},"voice":{"current_session":null,"pool":{"blocked":false,"reason_code":""}}}
@@ -115,16 +443,15 @@ final class ClientContractTests: XCTestCase {
         let model = ZoeAppModel()
         model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "1"))
         model.setAuthenticationForTesting(.connected)
-        _ = model.installVoiceSessionForTesting(VoiceSessionResponse(voiceSessionId: "replayed-call", generation: 1, state: "active", answerSdp: ""), api: api)
+        _ = model.installVoiceSessionForTesting(try voiceDialFixture("replayed-call", generation: 1), api: api)
         var mediaStops = 0
         var hangups = 0
         model.voiceLocalMediaStopObserverForTesting = { mediaStops += 1 }
         model.voiceHangupOverrideForTesting = { _ in
             hangups += 1
-            return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
         }
         func envelope(_ cursor: Int64, _ type: String, payload: String = "{}", version: Int64 = 1) -> String {
-            "{\"schema_version\":1,\"event_id\":\"e\(cursor)\",\"cursor\":\"\(cursor)\",\"type\":\"\(type)\",\"occurred_at\":\"\",\"workspace_id\":\"default\",\"aggregate_type\":\"ui_surface\",\"aggregate_id\":\"s1\",\"aggregate_version\":\(version),\"payload\":\(payload)}"
+            "{\"schema_version\":1,\"event_id\":\"e\(cursor)\",\"cursor\":\"\(cursor)\",\"type\":\"\(type)\",\"occurred_at\":\"\",\"workspace_id\":\"default\",\"aggregate_type\":\"\(type == "voice.end" ? "voice_session" : "ui_surface")\",\"aggregate_id\":\"\(type == "voice.end" ? "replayed-call" : "s1")\",\"aggregate_version\":\(version),\"payload\":\(payload)}"
         }
         func frame(_ cursor: Int64, _ type: String, payload: String = "{}", version: Int64 = 1) -> String {
             "id: \(cursor)\nevent: \(type)\ndata: \(envelope(cursor, type, payload: payload, version: version))\n\n"
@@ -164,7 +491,7 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(streamCursors, ["1", "10"])
         XCTAssertEqual(consumed, ["task.updated", "voice.end", "ui.surface", "task.updated"])
         XCTAssertEqual(mediaStops, 1, "Replayed voice.end must close actual local media")
-        XCTAssertEqual(hangups, 1, "Replayed voice.end must run the voice shutdown handler")
+        XCTAssertEqual(hangups, 0, "Replayed voice.end must not request another gateway close")
         guard case .idle = model.voiceStatus else { return XCTFail("Confirmed voice shutdown must finish idle") }
         XCTAssertEqual(renderCount, 1, "Snapshot revision must suppress its obsolete SSE replay")
         XCTAssertEqual(model.eventCursorForTesting, "13", "Event racing snapshot12 remains consumed")
@@ -198,14 +525,12 @@ final class ClientContractTests: XCTestCase {
         let model = ZoeAppModel()
         model.setAuthenticationForTesting(.connected)
         model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10"))
-        _ = model.installVoiceSessionForTesting(VoiceSessionResponse(voiceSessionId: "old", generation: 1, state: "active", answerSdp: ""), api: api)
+        _ = model.installVoiceSessionForTesting(try voiceDialFixture("old", generation: 1), api: api)
         var stops = 0
         var hangups = 0
         model.voiceLocalMediaStopObserverForTesting = { stops += 1 }
-        model.voiceHangupOverrideForTesting = { id in
-            XCTAssertEqual(id, "old")
+        model.voiceHangupOverrideForTesting = { _ in
             hangups += 1
-            return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
         }
         var paths: [String] = []
         var streams = 0
@@ -235,7 +560,7 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(model.eventCursorForTesting, "21")
         XCTAssertEqual(model.authoritativeControlSnapshot?.tasks.count, 1)
         XCTAssertEqual(stops, 1, "Post-checkpoint voice.end must close actual local media")
-        XCTAssertEqual(hangups, 1, "Post-checkpoint voice.end must invoke server hangup")
+        XCTAssertEqual(hangups, 0, "Post-checkpoint voice.end must not request another gateway close")
         guard case .idle = model.voiceStatus else { return XCTFail("Confirmed post-checkpoint voice shutdown must finish idle") }
         XCTAssertTrue(paths.contains("/v1/recovery"))
     }
@@ -283,11 +608,10 @@ final class ClientContractTests: XCTestCase {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let model = ZoeAppModel()
         model.setAuthenticationForTesting(.connected)
-        _ = model.installVoiceSessionForTesting(VoiceSessionResponse(voiceSessionId: "local", generation: 3, state: "active", answerSdp: ""), api: api)
+        _ = model.installVoiceSessionForTesting(try voiceDialFixture("local", generation: 3), api: api)
         var hangups = 0
         model.voiceHangupOverrideForTesting = { _ in
             hangups += 1
-            return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
         }
         ContractURLProtocol.responseHandler = { request in
             if request.url?.path == "/v1/recovery" {
@@ -458,7 +782,7 @@ final class ClientContractTests: XCTestCase {
             let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
             let model = ZoeAppModel()
             model.setAuthenticationForTesting(.connected)
-            _ = model.installVoiceSessionForTesting(VoiceSessionResponse(voiceSessionId: "local", generation: 3, state: "active", answerSdp: ""), api: api)
+            _ = model.installVoiceSessionForTesting(try voiceDialFixture("local", generation: 3), api: api)
             var stops = 0
             model.voiceLocalMediaStopObserverForTesting = { stops += 1 }
             let body = String(data: Self.recoveryBody(cursor: "20"), encoding: .utf8)!
@@ -614,7 +938,7 @@ final class ClientContractTests: XCTestCase {
     }
 
     func testCommandReceiptDecodesOmittedResourceMetadata() throws {
-        let data = Data(#"{"command_id":"cmd-1","idempotency_key":"key-1","workspace_id":"ws-1","kind":"voice.turn.handoff","status":"accepted","accepted_at":"2026-10-20T12:00:00Z","event_cursor":"21"}"#.utf8)
+        let data = Data(#"{"command_id":"cmd-1","idempotency_key":"key-1","workspace_id":"ws-1","kind":"voice.text_input","status":"accepted","accepted_at":"2026-10-20T12:00:00Z","event_cursor":"21"}"#.utf8)
         let receipt = try ZoeJSON.decoder.decode(CommandReceipt.self, from: data)
         XCTAssertEqual(receipt.idempotencyKey, "key-1")
         XCTAssertNil(receipt.resourceType)
@@ -627,8 +951,8 @@ final class ClientContractTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent("\(UUID().uuidString).json")
         let journal = try CommandJournal(fileURL: file)
-        let first = PendingCommand(idempotencyKey: "stable-key", kind: "voice.turn.handoff", expectedVersion: 2, payload: .object(["content": .string("first")]), createdAt: "now", workspaceID: "ws", expectedResourceType: nil, expectedResourceID: nil)
-        let changed = PendingCommand(idempotencyKey: "stable-key", kind: "voice.turn.handoff", expectedVersion: 2, payload: .object(["content": .string("second")]), createdAt: "later", workspaceID: "ws", expectedResourceType: nil, expectedResourceID: nil)
+        let first = PendingCommand(idempotencyKey: "stable-key", kind: "voice.text_input", expectedVersion: 2, payload: .object(["text": .string("first")]), createdAt: "now", workspaceID: "ws", expectedResourceType: nil, expectedResourceID: nil)
+        let changed = PendingCommand(idempotencyKey: "stable-key", kind: "voice.text_input", expectedVersion: 2, payload: .object(["text": .string("second")]), createdAt: "later", workspaceID: "ws", expectedResourceType: nil, expectedResourceID: nil)
         try await journal.append(first)
         do {
             try await journal.append(changed)
@@ -656,7 +980,7 @@ final class ClientContractTests: XCTestCase {
             guard request.url?.path == "/v1/commands", request.httpMethod == "POST" else { return nil }
             postCount += 1
             let submittedKey = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
-            acceptedReceipt = Self.commandReceipt(key: submittedKey, kind: "voice.turn.commit", workspaceID: "workspace-1", resourceID: "task-created")
+            acceptedReceipt = Self.commandReceipt(key: submittedKey, kind: "ui.action", workspaceID: "workspace-1", resourceID: "surface", resourceType: "ui_surface")
             return URLError(.timedOut)
         }
         ContractURLProtocol.responseHandler = { request in
@@ -668,7 +992,7 @@ final class ClientContractTests: XCTestCase {
         }
 
         do {
-            _ = try await coordinator.submit(kind: "voice.turn.commit", payload: .object(["title": .string("Work")]), workspaceID: "workspace-1", idempotencyKey: key)
+            _ = try await coordinator.submit(kind: "ui.action", payload: .object(["surface_id": .string("surface")]), workspaceID: "workspace-1", idempotencyKey: key)
             XCTFail("The first response should be lost after the server accepts the command")
         } catch { }
         let pendingAfterTimeout = try await journal.all()
@@ -690,8 +1014,8 @@ final class ClientContractTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
         let key = "definitive-404-\(UUID().uuidString.lowercased())"
-        let payload: JSONValue = .object(["title": .string("Original title"), "goal": .string("Original payload")])
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.turn.commit", expectedVersion: nil, payload: payload, createdAt: "2026-10-22T12:00:00Z", workspaceID: "workspace-1", expectedResourceType: nil, expectedResourceID: nil))
+        let payload: JSONValue = .object(["text": .string("Original payload")])
+        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.text_input", expectedVersion: nil, payload: payload, createdAt: "2026-10-22T12:00:00Z", workspaceID: "workspace-1", expectedResourceType: nil, expectedResourceID: nil))
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let coordinator = CommandCoordinator(api: api, journal: journal)
         var receiptCount = 0
@@ -707,7 +1031,7 @@ final class ClientContractTests: XCTestCase {
                 postCount += 1
                 postKey = request.value(forHTTPHeaderField: "Idempotency-Key")
                 postBody = Self.requestBody(request)
-                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: "voice.turn.commit", workspaceID: "workspace-1", resourceID: "task-created"))
+                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: "voice.text_input", workspaceID: "workspace-1", resourceID: "task-created"))
             }
             return (503, ["Content-Type": "application/json"], Data())
         }
@@ -718,8 +1042,8 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(postCount, 1)
         XCTAssertEqual(postKey, key)
         let postedEnvelope = try XCTUnwrap(postBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
-        XCTAssertEqual(postedEnvelope["kind"] as? String, "voice.turn.commit")
-        XCTAssertEqual(postedEnvelope["payload"] as? [String: String], ["title": "Original title", "goal": "Original payload"])
+        XCTAssertEqual(postedEnvelope["kind"] as? String, "voice.text_input")
+        XCTAssertEqual(postedEnvelope["payload"] as? [String: String], ["text": "Original payload"])
         XCTAssertEqual(outcome.receipt.idempotencyKey, key)
         let remaining = try await journal.all()
         XCTAssertTrue(remaining.isEmpty)
@@ -731,7 +1055,7 @@ final class ClientContractTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
         let key = "workspace-guard-\(UUID().uuidString.lowercased())"
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.turn.commit", expectedVersion: nil, payload: .object([:]), createdAt: "now", workspaceID: "old-workspace", expectedResourceType: nil, expectedResourceID: nil))
+        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.text_input", expectedVersion: nil, payload: .object([:]), createdAt: "now", workspaceID: "old-workspace", expectedResourceType: nil, expectedResourceID: nil))
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let coordinator = CommandCoordinator(api: api, journal: journal)
         ContractURLProtocol.responseHandler = { _ in XCTFail("workspace mismatch must not make a network request"); return (500, [:], Data()) }
@@ -752,7 +1076,7 @@ final class ClientContractTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
         let key = "receipt-timeout-\(UUID().uuidString.lowercased())"
-        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.turn.commit", expectedVersion: nil, payload: .object(["title": .string("Work")]), createdAt: "now", workspaceID: "workspace-1", expectedResourceType: nil, expectedResourceID: nil))
+        try await journal.append(PendingCommand(idempotencyKey: key, kind: "voice.text_input", expectedVersion: nil, payload: .object(["text": .string("Work")]), createdAt: "now", workspaceID: "workspace-1", expectedResourceType: nil, expectedResourceID: nil))
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
         let coordinator = CommandCoordinator(api: api, journal: journal)
         var postCount = 0
@@ -798,7 +1122,7 @@ final class ClientContractTests: XCTestCase {
         await model.handleVoiceMediaLossForTesting(.audio(.interrupted), mediaEpoch: startingEpoch)
         await model.handleVoiceMediaLossForTesting(.audio(.interrupted), mediaEpoch: startingEpoch)
 
-        XCTAssertFalse(model.canContinueVoiceAttemptForTesting(startingEpoch), "a late SDP/connected response cannot reactivate the interrupted attempt")
+        XCTAssertFalse(model.canContinueVoiceAttemptForTesting(startingEpoch), "a late SDP answer cannot reactivate the interrupted attempt")
         XCTAssertEqual(localStopCount, 1, "the startup interruption claims local teardown once")
         XCTAssertFalse(model.canEndVoiceSession, "the event does not invent an active server session")
         guard case .interrupted = model.voiceStatus else { return XCTFail("expected an interrupted voice setup") }
@@ -809,79 +1133,69 @@ final class ClientContractTests: XCTestCase {
     }
 
     @MainActor
-    func testVoiceMediaLossStopsHeartbeatAndPreservesTaskWhileHangupQuarantinesPool() async throws {
+    func testMediaLossClosesLocalMediaBeforeGatewayHangupAndRetriesUnconfirmedClose() async throws {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         var hangupCount = 0
         var localStopCount = 0
         ContractURLProtocol.responseHandler = { request in
-            if request.url?.path == "/v1/voice/sessions/session-1/hangup" {
+            if request.url?.path == "/client/v1/voice/calls/gateway-session-1/hangup" {
+                XCTAssertEqual(request.url?.host, "gateway.example")
+                XCTAssertEqual(request.httpMethod, "POST")
                 hangupCount += 1
-                XCTAssertEqual(localStopCount, 1, "the hangup receipt is sent only after local media teardown")
-                let body = (try? JSONSerialization.jsonObject(with: Self.requestBody(request) ?? Data())) as? [String: Any]
-                XCTAssertEqual(body?["media_closed"] as? Bool, true)
-                XCTAssertEqual(body?["generation"] as? Int, 4)
-                XCTAssertEqual(body?["account_lease_id"] as? String, "opaque-lease-1")
-                XCTAssertEqual(body?["account_lease_generation"] as? Int, 11)
+                XCTAssertEqual(localStopCount, 1, "close local media before calling gateway hangup")
+                XCTAssertTrue((Self.requestBody(request) ?? Data()).isEmpty)
                 if hangupCount == 1 {
-                    return (202, ["Content-Type": "application/json"], Data(#"{"ok":true,"state":"ended","upstream_termination":"unverified","pool_blocked":true}"#.utf8))
+                    return (503, [:], Data(#"{"error":{"code":"voice_unavailable","message":"temporary"}}"#.utf8))
                 }
-                return (200, ["Content-Type": "application/json"], Data(#"{"ok":true,"state":"ended","upstream_termination":"verified","pool_blocked":false}"#.utf8))
+                return (204, [:], Data())
             }
-            if request.url?.path == "/v1/voice/pool/status" {
-                return (200, ["Content-Type": "application/json"], Data(#"{"blocked":true,"reason_code":"upstream_termination_unverified","updated_at":"2026-10-22T12:00:00Z","account_lease_identity":false,"account_scoped_termination":false,"trusted_termination_evidence":false}"#.utf8))
-            }
+            XCTFail("Unexpected media lifecycle request: \(request.url?.path ?? "")")
             return (404, [:], Data())
         }
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let session = VoiceSessionResponse(voiceSessionId: "session-1", generation: 4, state: "active", answerSdp: "", accountLeaseId: "opaque-lease-1", accountLeaseGeneration: 11)
+        let session = try voiceDialFixture("session-1", generation: 4)
         let epoch = model.installVoiceSessionForTesting(session, api: api)
-        let heartbeatStarted = expectation(description: "heartbeat task starts")
-        let heartbeatCancelled = expectation(description: "heartbeat task is canceled on media loss")
-        model.installVoiceHeartbeatForTesting(Task {
-            heartbeatStarted.fulfill()
-            await withTaskCancellationHandler {
-                try? await Task.sleep(for: .seconds(30))
-            } onCancel: {
-                heartbeatCancelled.fulfill()
-            }
-        })
         model.voiceLocalMediaStopObserverForTesting = { localStopCount += 1 }
-        await fulfillment(of: [heartbeatStarted], timeout: 1)
 
         await model.handleVoiceMediaLossForTesting(.connection(.disconnected), mediaEpoch: epoch)
         await model.handleVoiceMediaLossForTesting(.connection(.failed), mediaEpoch: epoch)
-        await fulfillment(of: [heartbeatCancelled], timeout: 1)
-
-        XCTAssertFalse(model.voiceHeartbeatActiveForTesting)
         XCTAssertEqual(localStopCount, 1, "local media teardown is claimed once")
         XCTAssertEqual(hangupCount, 1, "duplicate terminal signals issue at most one hangup")
         guard case let .interrupted(reason) = model.voiceStatus else { return XCTFail("expected an interrupted voice status") }
-        XCTAssertEqual(reason, uiFormat("%@ Local media is closed. Upstream termination is unverified; the account pool remains quarantined. Retry server hangup to repeat the idempotent lease release.", uiText("The WebRTC connection was lost.")))
-        XCTAssertTrue(model.voicePoolStatus?.blocked == true)
-        XCTAssertTrue(model.canEndVoiceSession, "the identity remains available for an idempotent server release retry")
+        XCTAssertTrue(reason.contains("gateway hangup is unconfirmed"))
+        XCTAssertTrue(model.canEndVoiceSession, "the handle remains available for idempotent retry")
+        XCTAssertTrue(model.hasPendingVoiceHangupForTesting)
 
         await model.endVoiceSession()
 
         XCTAssertEqual(hangupCount, 2)
         XCTAssertFalse(model.canEndVoiceSession)
+        XCTAssertFalse(model.hasPendingVoiceHangupForTesting)
     }
 
     @MainActor
-    func testDelayedOldHeartbeatFailureCannotTearDownNewVoiceSession() async throws {
+    func testDelayedHangupAcknowledgementCannotTearDownNewVoiceSession() async throws {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let old = VoiceSessionResponse(voiceSessionId: "session-old", generation: 2, state: "active", answerSdp: "")
+        let old = try voiceDialFixture("session-old", generation: 2)
         let oldEpoch = model.installVoiceSessionForTesting(old, api: api)
-        let current = VoiceSessionResponse(voiceSessionId: "session-current", generation: 3, state: "active", answerSdp: "")
-        let currentEpoch = model.installVoiceSessionForTesting(current, api: api)
         var localStopCount = 0
         model.voiceLocalMediaStopObserverForTesting = { localStopCount += 1 }
+        let gate = AsyncTestGate()
+        model.voiceHangupOverrideForTesting = { handle in
+            XCTAssertEqual(handle, old.gatewaySessionId)
+            await gate.pause()
+        }
+        let hangup = Task { await model.endVoiceSession() }
+        await gate.waitUntilStarted()
+        let current = try voiceDialFixture("session-current", generation: 3)
+        let currentEpoch = model.installVoiceSessionForTesting(current, api: api)
+        await gate.resume()
+        await hangup.value
 
-        await model.handleVoiceHeartbeatFailureForTesting(sessionID: old.voiceSessionId, api: api, mediaEpoch: oldEpoch, generation: 0, message: "late timeout")
-
-        XCTAssertEqual(currentEpoch, oldEpoch + 1)
+        XCTAssertGreaterThan(currentEpoch, oldEpoch)
         XCTAssertTrue(model.canEndVoiceSession)
-        XCTAssertEqual(localStopCount, 0)
+        XCTAssertEqual(localStopCount, 1)
         guard case let .active(sessionID, generation) = model.voiceStatus else { return XCTFail("the newer voice session must remain active") }
         XCTAssertEqual(sessionID, current.voiceSessionId)
         XCTAssertEqual(generation, current.generation)
@@ -891,14 +1205,13 @@ final class ClientContractTests: XCTestCase {
     func testConcurrentRetryCannotSendSecondVoiceHangup() async throws {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let session = VoiceSessionResponse(voiceSessionId: "session-retry", generation: 5, state: "active", answerSdp: "")
+        let session = try voiceDialFixture("session-retry", generation: 5)
         _ = model.installVoiceSessionForTesting(session, api: api)
         let gate = AsyncTestGate()
         var hangupCount = 0
         model.voiceHangupOverrideForTesting = { _ in
             hangupCount += 1
             await gate.pause()
-            return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
         }
 
         let first = Task { await model.endVoiceSession() }

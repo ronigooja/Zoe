@@ -21,6 +21,24 @@ public struct VoiceConfig: Codable, Equatable, Sendable {
     public var voiceModes: [VoiceChoice]
     public var languages: [VoiceLanguage]
     public var webRTC: VoiceWebRTCConfig
+    public var gatewayDialOrigin: String?
+
+    public var gatewayOrigin: URL? {
+        gatewayDialOrigin.flatMap(Self.validateGatewayOrigin)
+    }
+
+    public static func validateGatewayOrigin(_ origin: String) -> URL? {
+        guard !origin.contains("\\"), !origin.contains("%"),
+              origin.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil,
+              var parts = URLComponents(string: origin), parts.scheme?.lowercased() == "https",
+              let host = parts.host, !host.isEmpty, parts.user == nil, parts.password == nil,
+              parts.percentEncodedPath.isEmpty, parts.query == nil, parts.fragment == nil,
+              !origin.hasSuffix(":"), parts.port.map({ (1...65535).contains($0) }) ?? true else { return nil }
+        parts.scheme = "https"
+        parts.host = host.lowercased()
+        if parts.port == 443 { parts.port = nil }
+        return parts.url
+    }
 
     /// Applies when starting a new call; unavailable preferences never reach the gateway.
     public func resolvedVoice(preferred: String?) -> String {
@@ -35,6 +53,7 @@ public struct VoiceConfig: Codable, Equatable, Sendable {
         case voiceModes
         case languages
         case webRTC = "webrtc"
+        case gatewayDialOrigin
     }
 }
 
@@ -73,13 +92,27 @@ public struct VoiceICEServer: Codable, Equatable, Sendable {
     public var urls: [String]
 }
 
-public struct VoiceSessionResponse: Codable, Equatable, Sendable {
-    public var voiceSessionId: String
-    public var generation: Int64
-    public var state: String
-    public var answerSdp: String
-    public var accountLeaseId: String? = nil
-    public var accountLeaseGeneration: Int64? = nil
+public struct VoiceDialRequest: Encodable, Sendable {
+    public let requestId: String
+    public let offerSdp: String
+    public let voice: String?
+    public let voiceMode: String?
+    public let languageCode: String?
+
+    public init(requestID: String, offerSDP: String, voice: String? = nil, voiceMode: String? = nil, languageCode: String? = nil) {
+        requestId = requestID
+        offerSdp = offerSDP
+        self.voice = voice
+        self.voiceMode = voiceMode
+        self.languageCode = languageCode
+    }
+}
+
+public struct VoiceDialResponse: Decodable, Equatable, Sendable {
+    public let voiceSessionId: String
+    public let generation: Int64
+    public let gatewaySessionId: String
+    public let answerSdp: String
 }
 
 public struct VoicePoolStatus: Codable, Equatable, Sendable {
@@ -89,13 +122,6 @@ public struct VoicePoolStatus: Codable, Equatable, Sendable {
     public var accountLeaseIdentity: Bool
     public var accountScopedTermination: Bool
     public var trustedTerminationEvidence: Bool
-}
-
-public struct VoiceOperationResponse: Codable, Equatable, Sendable {
-    public var ok: Bool
-    public var state: String?
-    public var upstreamTermination: String?
-    public var poolBlocked: Bool?
 }
 
 public struct CommandReceipt: Codable, Equatable, Sendable {

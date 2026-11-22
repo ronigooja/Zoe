@@ -45,7 +45,7 @@ final class DiagnosticSummariesTests: XCTestCase {
         let model = ZoeAppModel(defaults: defaults, silenceClock: clock)
         model.setSilenceHangupEnabled(false)
         let api = try APIClient(serverURL: URL(string: "https://census.example")!)
-        let session = VoiceSessionResponse(voiceSessionId: "census-test", generation: 1, state: "active", answerSdp: "")
+        let session = try voiceDialFixture("census-test", generation: 1)
         var epoch = model.installVoiceSessionForTesting(session, api: api)
         var traces: [(String, String)] = []
         model.voiceDiagnosticObserverForTesting = { traces.append(($0, $1)) }

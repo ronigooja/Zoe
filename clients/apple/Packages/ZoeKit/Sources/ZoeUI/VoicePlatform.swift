@@ -140,7 +140,7 @@ public final class LibWebRTCTransport: NSObject, WebRTCTransport, @unchecked Sen
         closeImmediately()
     }
 
-    private func closeImmediately() {
+    func closeImmediately() {
         lock.lock()
         guard !isClosed else { lock.unlock(); return }
         isClosed = true
@@ -256,7 +256,6 @@ enum VoiceMediaLoss {
     case connection(RTCPeerConnectionState)
     case audio(VoiceAudioLifecycleEvent)
     case dataChannel(RTCDataChannelState)
-    case leaseRenewalFailed(String)
 
     var message: String? {
         switch self {
@@ -271,7 +270,6 @@ enum VoiceMediaLoss {
         case .audio(.routeUnavailable): "The previous voice audio route became unavailable."
         case .dataChannel(.closing), .dataChannel(.closed): "The voice data channel was lost."
         case .dataChannel: nil
-        case let .leaseRenewalFailed(message): "The voice lease heartbeat failed: \(message)"
         }
     }
 }
@@ -292,22 +290,5 @@ struct VoiceMediaEpochFence {
         guard accepts(epoch) else { return false }
         current &+= 1
         return true
-    }
-}
-
-@MainActor
-final class VoiceHeartbeatLease {
-    private var task: Task<Void, Never>?
-
-    var isActive: Bool { task != nil && task?.isCancelled == false }
-
-    func install(_ task: Task<Void, Never>) {
-        self.task?.cancel()
-        self.task = task
-    }
-
-    func cancel() {
-        task?.cancel()
-        task = nil
     }
 }

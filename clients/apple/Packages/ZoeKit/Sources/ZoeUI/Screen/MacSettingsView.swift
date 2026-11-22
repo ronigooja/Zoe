@@ -33,19 +33,23 @@ public struct MacSettingsView: View {
                         Text("Connect to load available voices.").foregroundStyle(.secondary)
                     }
                 }
-                Section("Silence") {
-                    Toggle("Hang up after silence", isOn: Binding(
+                Section {
+                    Toggle(isOn: Binding(
                         get: { model.silenceHangupEnabled },
                         set: { model.setSilenceHangupEnabled($0) }
-                    ))
+                    )) {
+                        Text("Hang up after silence", bundle: .module)
+                    }
                     if model.silenceHangupEnabled {
-                        TextField("Silence timeout (seconds)", text: $silenceSeconds)
+                        TextField(uiText("Silence timeout (seconds)"), text: $silenceSeconds)
                             .onSubmit { applySilenceSeconds() }
                             .onChange(of: secondsFocused) { _, focused in
                                 if !focused { applySilenceSeconds() }
                             }
                             .focused($secondsFocused)
                     }
+                } header: {
+                    Text("Silence", bundle: .module)
                 }
                 Section {
                     Picker("When a new UI arrives", selection: Binding(

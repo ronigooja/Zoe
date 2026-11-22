@@ -78,7 +78,15 @@ struct ZoeMacApp {
         model.onUISurfaceDisplayed = { event, scope in
             try await store.append(scope: scope, id: event.renderedIdempotencyKey, container: event.container, messages: event.messages)
         }
-        model.$continuousVoiceEnabled.sink { enabled in voice.state = enabled ? .on : .off }.store(in: &subscriptions)
+        model.$continuousVoiceEnabled.combineLatest(model.$voiceStatus).sink { enabled, status in
+            voice.state = enabled ? .on : .off
+            switch status {
+            case let .unavailable(reason), let .interrupted(reason), let .reconnecting(reason):
+                voice.toolTip = reason
+            default:
+                voice.toolTip = nil
+            }
+        }.store(in: &subscriptions)
         Task { await model.start() }
     }
 

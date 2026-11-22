@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -12,6 +11,7 @@ public protocol BearerTokenProviding: Sendable {
 public final class APIClient: @unchecked Sendable {
     public let serverURL: URL
     private let session: URLSession
+    private let voiceSession: URLSession
     private let credentials: BearerTokenProviding?
     private let installationID: String?
     private let encoder: JSONEncoder
@@ -22,14 +22,24 @@ public final class APIClient: @unchecked Sendable {
 
     public var hasCredentials: Bool { credentials != nil }
 
-    public init(serverURL: URL, credentials: BearerTokenProviding? = nil, session: URLSession = .shared, installationID: String? = nil) throws {
+    public init(serverURL: URL, credentials: BearerTokenProviding? = nil, session: URLSession? = nil, installationID: String? = nil) throws {
         guard let scheme = serverURL.scheme?.lowercased(), ["http", "https"].contains(scheme), serverURL.host != nil else {
             throw ZoeError.invalidServerURL
         }
         self.serverURL = try ServerAddress.normalize(serverURL.absoluteString)
         self.installationID = installationID
         self.credentials = credentials
-        self.session = session
+        self.session = session ?? .shared
+        let voiceConfiguration = URLSessionConfiguration.ephemeral
+        // Keep injected URLProtocol fixtures, not the caller's storage or trust policy.
+        if let session { voiceConfiguration.protocolClasses = session.configuration.protocolClasses }
+        voiceConfiguration.httpShouldSetCookies = false
+        voiceConfiguration.httpCookieAcceptPolicy = .never
+        voiceConfiguration.httpCookieStorage = nil
+        voiceConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        voiceConfiguration.urlCache = nil
+        voiceConfiguration.urlCredentialStorage = nil
+        self.voiceSession = URLSession(configuration: voiceConfiguration)
         self.diagnosticQueue = EncryptedDiagnosticQueue(serverURL: self.serverURL, installationID: installationID)
         self.diagnosticsEnabled = installationID != nil
         self.diagnosticDeliveryFailureKey = "zoe.diagnostics.delivery_failures." + self.serverURL.absoluteString
@@ -38,6 +48,8 @@ public final class APIClient: @unchecked Sendable {
         decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
     }
+
+    deinit { voiceSession.invalidateAndCancel() }
 
     public func recovery() async throws -> RecoverySnapshot {
         let value: JSONValue = try await request(path: ["v1", "recovery"], method: "GET", authenticated: true)
@@ -63,7 +75,15 @@ public final class APIClient: @unchecked Sendable {
     }
 
     public func voiceConfig() async throws -> VoiceConfig {
-        try await request(path: ["v1", "voice", "config"], method: "GET", authenticated: true)
+        try requireSecureVoiceControl()
+        let config: VoiceConfig
+        do {
+            config = try await request(path: ["v1", "voice", "config"], method: "GET", authenticated: true, refusesRedirects: true)
+        } catch ZoeError.invalidResponse {
+            throw Self.voiceUnavailable
+        }
+        guard config.gatewayOrigin != nil else { throw Self.voiceUnavailable }
+        return config
     }
 
     public func recordDiagnostic(phase: String, requestPath: String, clientRequestID: String = UUID().uuidString.lowercased(), httpStatus: Int = 0, responseBytes: Int64 = 0, errorType: String = "", errorSummary: String = "", level: DiagnosticLevel? = nil, voiceSessionID: String? = nil, voiceGeneration: Int64? = nil, voiceMediaEpoch: UInt64? = nil, voicePeerState: String? = nil, voiceDataChannelState: String? = nil) {
@@ -132,32 +152,83 @@ public final class APIClient: @unchecked Sendable {
     }
 
     public func voicePoolStatus() async throws -> VoicePoolStatus {
-        try await request(path: ["v1", "voice", "pool", "status"], method: "GET", authenticated: true)
+        try requireSecureVoiceControl()
+        return try await request(path: ["v1", "voice", "pool", "status"], method: "GET", authenticated: true, refusesRedirects: true)
     }
 
-    public func createVoiceSession(requestID: String, offerSDP: String, voice: String, voiceMode: String, languageCode: String) async throws -> VoiceSessionResponse {
-        let body: [String: JSONValue] = [
-            "request_id": .string(requestID),
-            "offer_sdp": .string(offerSDP),
-            "voice": .string(voice),
-            "voice_mode": .string(voiceMode),
-            "language_code": .string(languageCode)
-        ]
-        return try await request(path: ["v1", "voice", "sessions"], method: "POST", body: body, authenticated: true)
+    private func requireSecureVoiceControl() throws {
+        guard serverURL.scheme == "https" else { throw Self.voiceUnavailable }
     }
 
-    public func confirmVoiceConnected(sessionID: String, generation: Int64) async throws -> VoiceOperationResponse {
-        let body = VoiceGenerationRequest(generation: generation)
-        return try await request(path: ["v1", "voice", "sessions", sessionID, "connected"], method: "POST", body: body, authenticated: true)
+    private static let voiceUnavailable = ZoeError.http(status: 503, code: "voice_unavailable", message: "Voice is unavailable right now.", details: nil)
+
+    public func dialVoiceCall(origin: URL, payload: VoiceDialRequest) async throws -> VoiceDialResponse {
+        let whitespace = CharacterSet.whitespacesAndNewlines
+        guard !payload.requestId.trimmingCharacters(in: whitespace).isEmpty,
+              !payload.offerSdp.trimmingCharacters(in: whitespace).isEmpty,
+              payload.offerSdp.utf8.count <= 1_048_576 else {
+            throw ZoeError.http(status: 400, code: "invalid_request", message: "The voice call request was not accepted.", details: nil)
+        }
+        var request = try gatewayRequest(origin: origin, path: Self.voiceCallsPath)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(payload)
+        let data: Data
+        do {
+            data = try await sendGatewayRequest(request, expecting: 200)
+        } catch let error as URLError where Self.isTransientVoiceTransportFailure(error) {
+            // A lost response is ambiguous. Retry the exact request once using the same offer and ID.
+            try Task.checkCancellation()
+            data = try await sendGatewayRequest(request, expecting: 200)
+        }
+        guard let call = try? decoder.decode(VoiceDialResponse.self, from: data), call.generation > 0,
+              !call.voiceSessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !call.gatewaySessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !call.answerSdp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ZoeError.invalidResponse }
+        return call
     }
 
-    public func heartbeatVoiceSession(sessionID: String) async throws -> VoiceOperationResponse {
-        try await request(path: ["v1", "voice", "sessions", sessionID, "heartbeat"], method: "POST", body: EmptyObject(), authenticated: true)
+    public func hangupVoiceCall(origin: URL, gatewaySessionID: String) async throws {
+        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        guard !gatewaySessionID.isEmpty,
+              let segment = gatewaySessionID.addingPercentEncoding(withAllowedCharacters: unreserved) else { throw ZoeError.invalidResponse }
+        let handle = segment == "." ? "%2E" : (segment == ".." ? "%2E%2E" : segment)
+        let request = try gatewayRequest(origin: origin, path: "\(Self.voiceCallsPath)/\(handle)/hangup")
+        let data = try await sendGatewayRequest(request, expecting: 204)
+        guard data.isEmpty else { throw ZoeError.invalidResponse }
     }
 
-    public func hangupVoiceSession(_ session: VoiceSessionResponse) async throws -> VoiceOperationResponse {
-        let body = VoiceHangupRequest(mediaClosed: true, generation: session.generation, accountLeaseId: session.accountLeaseId ?? "", accountLeaseGeneration: session.accountLeaseGeneration ?? 0)
-        return try await request(path: ["v1", "voice", "sessions", session.voiceSessionId, "hangup"], method: "POST", body: body, authenticated: true)
+    private static let voiceCallsPath = "/client/v1/voice/calls"
+
+    public static func isTransientVoiceTransportFailure(_ error: URLError) -> Bool {
+        [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed].contains(error.code)
+    }
+
+    private func gatewayRequest(origin: URL, path: String) throws -> URLRequest {
+        guard let origin = VoiceConfig.validateGatewayOrigin(origin.absoluteString),
+              var components = URLComponents(url: origin, resolvingAgainstBaseURL: false) else { throw ZoeError.invalidServerURL }
+        components.percentEncodedPath = path
+        guard let url = components.url else { throw ZoeError.invalidServerURL }
+        guard let credentials else { throw ZoeError.missingCredential }
+        var request = Self.voiceRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(try credentials.bearerToken())", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    private func sendGatewayRequest(_ request: URLRequest, expecting status: Int) async throws -> Data {
+        let (data, response) = try await voiceSession.data(for: request, delegate: RefuseSignalingRedirects())
+        guard let http = response as? HTTPURLResponse else { throw ZoeError.invalidResponse }
+        guard http.statusCode == status else {
+            if (200..<300).contains(http.statusCode) { throw ZoeError.invalidResponse }
+            // Preserve the wire code for branching, not server-provided text or details.
+            let failure = decodeFailure(status: http.statusCode, data: data)
+            if case let .http(status, code, _, _) = failure {
+                let known = ["invalid_request", "unauthenticated", "voice_lease_busy", "idempotency_conflict", "voice_pool_quarantined", "voice_unavailable", "not_found"]
+                throw ZoeError.http(status: status, code: known.contains(code) ? code : "http_error", message: "The voice gateway returned HTTP \(status).", details: nil)
+            }
+            throw failure
+        }
+        return data
     }
 
     public func receipt(idempotencyKey: String) async throws -> CommandReceipt {
@@ -202,8 +273,16 @@ public final class APIClient: @unchecked Sendable {
         try decoder.decode(type, from: data)
     }
 
-    private func request<Response: Decodable, Body: Encodable>(path: [String], method: String, body: Body? = Optional<NoBody>.none, authenticated: Bool) async throws -> Response {
-        var request = URLRequest(url: try makeURL(path: path))
+    private static func voiceRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
+        request.httpShouldHandleCookies = false
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        return request
+    }
+
+    private func request<Response: Decodable, Body: Encodable>(path: [String], method: String, body: Body? = Optional<NoBody>.none, authenticated: Bool, refusesRedirects: Bool = false) async throws -> Response {
+        let url = try makeURL(path: path)
+        var request = refusesRedirects ? Self.voiceRequest(url: url) : URLRequest(url: url)
         request.httpMethod = method
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -212,19 +291,20 @@ public final class APIClient: @unchecked Sendable {
         if authenticated { try authorize(&request) }
         let clientRequestID = UUID().uuidString.lowercased()
         request.setValue(clientRequestID, forHTTPHeaderField: "X-Zoe-Client-Request-ID")
-        return try await perform(request, clientRequestID: clientRequestID)
+        return try await perform(request, clientRequestID: clientRequestID, refusesRedirects: refusesRedirects)
     }
 
-    private func request<Response: Decodable>(path: [String], method: String, authenticated: Bool) async throws -> Response {
-        try await request(path: path, method: method, body: Optional<NoBody>.none, authenticated: authenticated)
+    private func request<Response: Decodable>(path: [String], method: String, authenticated: Bool, refusesRedirects: Bool = false) async throws -> Response {
+        try await request(path: path, method: method, body: Optional<NoBody>.none, authenticated: authenticated, refusesRedirects: refusesRedirects)
     }
 
-    private func perform<Response: Decodable>(_ request: URLRequest, clientRequestID: String? = nil, successDiagnosticPhase: String? = nil) async throws -> Response {
+    private func perform<Response: Decodable>(_ request: URLRequest, clientRequestID: String? = nil, successDiagnosticPhase: String? = nil, refusesRedirects: Bool = false) async throws -> Response {
         let path = request.url?.path ?? ""
         let requestID = clientRequestID ?? request.value(forHTTPHeaderField: "X-Zoe-Client-Request-ID") ?? UUID().uuidString.lowercased()
         let phase = diagnosticPhase(path)
         do {
-            let (data, response) = try await session.data(for: request)
+            let transport = refusesRedirects ? voiceSession : session
+            let (data, response) = try await transport.data(for: request, delegate: refusesRedirects ? RefuseSignalingRedirects() : nil)
             guard let response = response as? HTTPURLResponse else {
                 recordDiagnostic(phase: phase, requestPath: path, clientRequestID: requestID, errorType: "invalid_response", errorSummary: "non_http_response")
                 throw ZoeError.invalidResponse
@@ -258,8 +338,6 @@ public final class APIClient: @unchecked Sendable {
     private func diagnosticPhase(_ path: String) -> String {
         if path.hasSuffix("/voice/config") { return "config_request" }
         if path.hasSuffix("/voice/pool/status") { return "pool_status" }
-        if path.hasSuffix("/voice/sessions") { return "session_create" }
-        if path.contains("/connected") { return "connected" }
         return "request"
     }
 
@@ -311,15 +389,9 @@ private struct CommandEnvelope<Payload: Encodable & Sendable>: Encodable {
 
 private struct NoBody: Encodable {}
 
-private struct EmptyObject: Encodable {}
-
-private struct VoiceGenerationRequest: Encodable {
-    var generation: Int64
-}
-
-private struct VoiceHangupRequest: Encodable {
-    var mediaClosed: Bool
-    var generation: Int64
-    var accountLeaseId: String
-    var accountLeaseGeneration: Int64
+/// Handles redirects only; TLS certificate and hostname checks stay with URLSession.
+private final class RefuseSignalingRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
 }

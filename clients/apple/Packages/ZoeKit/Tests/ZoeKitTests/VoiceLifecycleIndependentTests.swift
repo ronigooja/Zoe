@@ -11,63 +11,35 @@ private final class IndependentVoiceURLProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        let body = Data(#"{"ok":true,"state":"ended","upstream_termination":"verified","pool_blocked":false}"#.utf8)
         // Retain diagnostic events for the queue assertions; hangup still succeeds.
-        let status = request.url!.path == "/v1/diagnostics/client" ? 503 : 200
+        let status = request.url!.path == "/v1/diagnostics/client" ? 503 : 204
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
-}
-
-private final class VoiceFinalURLProtocol: URLProtocol {
-    static var responseHandler: ((URLRequest) -> (Int, Data))?
-    static var requests: [URLRequest] = []
-
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() {
-        Self.requests.append(request)
-        let (status, body) = Self.responseHandler?(request) ?? (500, Data())
-        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: body)
-        client?.urlProtocolDidFinishLoading(self)
-    }
-    override func stopLoading() {}
-
-    static func body(_ request: URLRequest) -> Data? {
-        if let body = request.httpBody { return body }
-        guard let stream = request.httpBodyStream else { return nil }
-        stream.open()
-        defer { stream.close() }
-        var result = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while stream.hasBytesAvailable {
-            let count = stream.read(&buffer, maxLength: buffer.count)
-            if count <= 0 { break }
-            result.append(buffer, count: count)
-        }
-        return result
-    }
 }
 
 final class VoiceLifecycleIndependentTests: XCTestCase {
     @MainActor
-    func testVoiceEndEventReleasesCurrentSessionAndIgnoresOldConnection() async throws {
-        let (model, _, _) = try finalModel()
+    func testVoiceEndClosesOnlyMatchingLocalMedia() async throws {
+        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: IndependentVoiceCredential())
+        let call = try voiceDialFixture("current-call", generation: 4)
+        let epoch = model.installVoiceSessionForTesting(call, api: api)
+        var stops = 0
         var hangups = 0
-        model.voiceHangupOverrideForTesting = { _ in
-            hangups += 1
-            return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
-        }
-        let event = EventEnvelope(schemaVersion: 1, eventId: "end", cursor: "2", type: "voice.end", occurredAt: "now", workspaceId: "workspace-1", subjectId: nil, aggregateType: "voice", aggregateId: "final-session", aggregateVersion: 4, payload: .object([:]))
-        await model.handleEventForTesting(event, expectedConnectionEpoch: model.connectionEpoch + 1)
+        model.voiceLocalMediaStopObserverForTesting = { stops += 1 }
+        model.voiceHangupOverrideForTesting = { _ in hangups += 1 }
+        let stale = EventEnvelope(schemaVersion: 1, eventId: "end", cursor: "2", type: "voice.end", occurredAt: "now", workspaceId: "workspace-1", subjectId: nil, aggregateType: "voice_session", aggregateId: "old-call", aggregateVersion: 3, payload: .object([:]))
+        await model.handleEventForTesting(stale)
+        let end = Data(#"{"type":"voice.end"}"#.utf8)
+        await model.receiveVoiceDataForTesting(end, mediaEpoch: epoch - 1)
+        XCTAssertEqual(stops, 0)
+        await model.receiveVoiceDataForTesting(end, mediaEpoch: epoch)
+        for _ in 0..<20 where model.canEndVoiceSession { await Task.yield() }
+        XCTAssertEqual(stops, 1)
         XCTAssertEqual(hangups, 0)
-        await model.handleEventForTesting(event)
-        XCTAssertEqual(hangups, 1)
         XCTAssertFalse(model.canEndVoiceSession)
     }
 
@@ -80,124 +52,6 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
             session: URLSession(configuration: configuration),
             installationID: installationID
         )
-    }
-
-    @MainActor
-    private func finalModel() throws -> (ZoeAppModel, APIClient, UInt64) {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [VoiceFinalURLProtocol.self]
-        let api = try APIClient(serverURL: URL(string: "https://voice-final.example")!, credentials: IndependentVoiceCredential(), session: URLSession(configuration: configuration))
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let session = VoiceSessionResponse(voiceSessionId: "final-session", generation: 4, state: "active", answerSdp: "")
-        let epoch = model.installVoiceSessionForTesting(session, api: api)
-        model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "1", workspaceId: "workspace-1"))
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-        model.configureVoiceCoordinatorForTesting(api: api, journal: journal)
-        return (model, api, epoch)
-    }
-
-    private static func receipt(for request: URLRequest, kind: String, resourceType: String, resourceID: String) -> Data {
-        let key = request.value(forHTTPHeaderField: "Idempotency-Key") ?? "missing"
-        return Data("{\"command_id\":\"command-1\",\"idempotency_key\":\"\(key)\",\"workspace_id\":\"workspace-1\",\"kind\":\"\(kind)\",\"status\":\"accepted\",\"resource_type\":\"\(resourceType)\",\"resource_id\":\"\(resourceID)\",\"resource_version\":1,\"accepted_at\":\"2026-11-04T12:00:00Z\",\"event_cursor\":\"8\"}".utf8)
-    }
-
-    @MainActor
-    private func waitForVoiceFinalRequests(_ count: Int) async {
-        for _ in 0..<100 where VoiceFinalURLProtocol.requests.count < count {
-            try? await Task.sleep(nanoseconds: 1_000_000)
-        }
-    }
-
-    @MainActor
-    private func waitForVoiceDraftCleared(_ model: ZoeAppModel) async {
-        for _ in 0..<2000 where !model.voiceDraft.isEmpty {
-            try? await Task.sleep(nanoseconds: 1_000_000)
-        }
-    }
-
-    @MainActor
-    func testAuthoritativeUserAudioTurnFinalCommitsAndHandsOffExactlyOnce() async throws {
-        VoiceFinalURLProtocol.requests = []
-        VoiceFinalURLProtocol.responseHandler = { request in
-            let body = try! JSONSerialization.jsonObject(with: VoiceFinalURLProtocol.body(request)!) as! [String: Any]
-            let kind = body["kind"] as! String
-            return (200, Self.receipt(for: request, kind: kind, resourceType: kind == "voice.turn.commit" ? "voice_turn" : "task", resourceID: kind == "voice.turn.commit" ? "turn-1" : "task-1"))
-        }
-        let (model, _, epoch) = try finalModel()
-        let event = Data(#"{"type":"user_audio_turn.final","turn_id":"turn-1","revision":1,"transcript":"  research Zoe  "}"#.utf8)
-        await model.receiveVoiceDataForTesting(event, mediaEpoch: epoch)
-        await waitForVoiceFinalRequests(2)
-        await waitForVoiceDraftCleared(model)
-        await model.receiveVoiceDataForTesting(event, mediaEpoch: epoch)
-        await Task.yield()
-        XCTAssertEqual(VoiceFinalURLProtocol.requests.filter { $0.httpMethod == "POST" }.count, 2)
-        XCTAssertTrue(VoiceFinalURLProtocol.requests.compactMap { VoiceFinalURLProtocol.body($0) }.allSatisfy { body in
-            let envelope = try! JSONSerialization.jsonObject(with: body) as! [String: Any]
-            return envelope["kind"] as? String != "task.create"
-        })
-        XCTAssertEqual(model.voiceDraft, "")
-    }
-
-    @MainActor
-    func testNonFinalAndAssistantEventsAreIgnored() async throws {
-        VoiceFinalURLProtocol.requests = []
-        let (model, _, epoch) = try finalModel()
-        for event in [
-            #"{"type":"chat_message_delta","transcript":"ignore"}"#,
-            #"{"type":"input_audio_transcription.completed","transcript":"ignore"}"#,
-            #"{"type":"assistant.output","turn_id":"turn-1","revision":1,"transcript":"ignore"}"#,
-            #"{"type":"user_audio_turn.final","turn_id":"turn-1","revision":0,"transcript":"ignore"}"#
-        ] {
-            await model.receiveVoiceDataForTesting(Data(event.utf8), mediaEpoch: epoch)
-        }
-        await Task.yield()
-        XCTAssertTrue(VoiceFinalURLProtocol.requests.isEmpty)
-        XCTAssertEqual(model.voiceDraft, "ignore")
-    }
-
-    @MainActor
-    func testDuplicateFinalEventDoesNotDispatchDuplicateCommands() async throws {
-        VoiceFinalURLProtocol.requests = []
-        VoiceFinalURLProtocol.responseHandler = { request in
-            let body = try! JSONSerialization.jsonObject(with: VoiceFinalURLProtocol.body(request)!) as! [String: Any]
-            let kind = body["kind"] as! String
-            return (200, Self.receipt(for: request, kind: kind, resourceType: kind == "voice.turn.commit" ? "voice_turn" : "task", resourceID: "resource-1"))
-        }
-        let (model, _, epoch) = try finalModel()
-        let event = Data(#"{"type":"user_audio_turn.final","turn_id":"turn-dup","revision":1,"transcript":"same"}"#.utf8)
-        await model.receiveVoiceDataForTesting(event, mediaEpoch: epoch)
-        await model.receiveVoiceDataForTesting(event, mediaEpoch: epoch)
-        await waitForVoiceFinalRequests(2)
-        XCTAssertEqual(VoiceFinalURLProtocol.requests.filter { $0.httpMethod == "POST" }.count, 2)
-    }
-
-    @MainActor
-    func testStaleVoiceMediaEpochIgnoresFinalEvent() async throws {
-        VoiceFinalURLProtocol.requests = []
-        let (model, _, staleEpoch) = try finalModel()
-        _ = model.beginVoiceAttemptForTesting()
-        let event = Data(#"{"type":"user_audio_turn.final","turn_id":"stale","revision":1,"transcript":"ignore"}"#.utf8)
-        await model.receiveVoiceDataForTesting(event, mediaEpoch: staleEpoch)
-        await Task.yield()
-        XCTAssertTrue(VoiceFinalURLProtocol.requests.isEmpty)
-    }
-
-    @MainActor
-    func testFailedFinalHandoffPreservesDraft() async throws {
-        VoiceFinalURLProtocol.requests = []
-        VoiceFinalURLProtocol.responseHandler = { request in
-            let body = try! JSONSerialization.jsonObject(with: VoiceFinalURLProtocol.body(request)!) as! [String: Any]
-            let kind = body["kind"] as! String
-            if kind == "voice.turn.commit" { return (200, Self.receipt(for: request, kind: kind, resourceType: "voice_turn", resourceID: "turn-1")) }
-            return (503, Data(#"{"error":{"code":"unavailable","message":"temporary"}}"#.utf8))
-        }
-        let (model, _, epoch) = try finalModel()
-        await model.receiveVoiceDataForTesting(Data(#"{"type":"user_audio_turn.final","turn_id":"turn-fail","revision":1,"transcript":"preserve me"}"#.utf8), mediaEpoch: epoch)
-        await waitForVoiceFinalRequests(2)
-        XCTAssertEqual(model.voiceDraft, "preserve me")
-        XCTAssertEqual(model.voiceDraftRevision, 1)
     }
 
     private func recordedDiagnostics(for installationID: String) async throws -> [DiagnosticEvent] {
@@ -247,46 +101,11 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
     }
 
     @MainActor
-    func testHeartbeatFailureRequiresCurrentEpochAPIAndUncancelledTask() async throws {
-        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: IndependentVoiceCredential())
-        let otherAPI = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: IndependentVoiceCredential())
-        let session = VoiceSessionResponse(voiceSessionId: "same-session", generation: 4, state: "active", answerSdp: "")
-        let oldEpoch = model.installVoiceSessionForTesting(session, api: api)
-        let epoch = model.installVoiceSessionForTesting(session, api: api)
-        var localStops = 0
-        var hangups = 0
-        model.voiceLocalMediaStopObserverForTesting = { localStops += 1 }
-        model.voiceHangupOverrideForTesting = { _ in
-            hangups += 1
-            return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
-        }
-        await model.handleVoiceHeartbeatFailureForTesting(sessionID: session.voiceSessionId, api: api, mediaEpoch: oldEpoch, generation: model.connectionEpoch, message: "old epoch")
-        await model.handleVoiceHeartbeatFailureForTesting(sessionID: session.voiceSessionId, api: otherAPI, mediaEpoch: epoch, generation: model.connectionEpoch, message: "old API")
-        let cancelled = Task { @MainActor in
-            withUnsafeCurrentTask { $0?.cancel() }
-            await model.handleVoiceHeartbeatFailureForTesting(sessionID: session.voiceSessionId, api: api, mediaEpoch: epoch, generation: model.connectionEpoch, message: "cancelled")
-        }
-        await cancelled.value
-        XCTAssertEqual(localStops, 0)
-        XCTAssertEqual(hangups, 0)
-        XCTAssertTrue(model.canContinueVoiceAttemptForTesting(epoch))
-        guard case .active = model.voiceStatus else { return XCTFail("stale/cancelled failure must leave media active") }
-
-        await model.handleVoiceHeartbeatFailureForTesting(sessionID: session.voiceSessionId, api: api, mediaEpoch: epoch, generation: model.connectionEpoch, message: "current failure")
-        XCTAssertEqual(localStops, 1, "positive control must execute the same guarded handler")
-        XCTAssertEqual(hangups, 1)
-        XCTAssertFalse(model.canContinueVoiceAttemptForTesting(epoch))
-        XCTAssertFalse(model.canEndVoiceSession)
-        guard case .interrupted = model.voiceStatus else { return XCTFail("current failure must stop local media") }
-    }
-
-    @MainActor
     func testFailedHangupIsPersistedForTheNextLaunch() async throws {
         let suite = UserDefaults(suiteName: UUID().uuidString)!
         let first = ZoeAppModel(defaults: suite)
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: IndependentVoiceCredential())
-        let session = VoiceSessionResponse(voiceSessionId: "pending-session", generation: 4, state: "active", answerSdp: "", accountLeaseId: "lease", accountLeaseGeneration: 7)
+        let session = try voiceDialFixture("pending-session", generation: 4)
         _ = first.installVoiceSessionForTesting(session, api: api)
         first.voiceHangupOverrideForTesting = { _ in throw ZoeError.http(status: 503, code: "unavailable", message: "temporary", details: nil) }
 
@@ -295,6 +114,13 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         XCTAssertTrue(first.hasPendingVoiceHangupForTesting)
         let second = ZoeAppModel(defaults: suite)
         XCTAssertTrue(second.hasPendingVoiceHangupForTesting, "the unresolved release survives relaunch")
+        var handles: [String] = []
+        second.voiceHangupOverrideForTesting = { handles.append($0) }
+        await second.retryPendingVoiceHangupForTesting(api: api, origin: URL(string: "https://other.example")!)
+        XCTAssertTrue(handles.isEmpty, "do not replay an old handle to a different origin")
+        await second.retryPendingVoiceHangupForTesting(api: api)
+        XCTAssertEqual(handles, [session.gatewaySessionId])
+        XCTAssertFalse(second.hasPendingVoiceHangupForTesting)
     }
 
     @MainActor
@@ -311,7 +137,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let installationID = "voice-closed-" + UUID().uuidString
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let api = try voiceAPI(installationID: installationID)
-        let session = VoiceSessionResponse(voiceSessionId: "closed-session", generation: 1, state: "active", answerSdp: "")
+        let session = try voiceDialFixture("closed-session", generation: 1)
         let epoch = model.installVoiceSessionForTesting(session, api: api)
         let transport = try wiredTransport(for: model, mediaEpoch: epoch)
         transport.driveDataChannelStateForTesting(.closed)
@@ -347,7 +173,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let installationID = "voice-stale-" + UUID().uuidString
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let api = try voiceAPI(installationID: installationID)
-        let session = VoiceSessionResponse(voiceSessionId: "stale-session", generation: 1, state: "active", answerSdp: "")
+        let session = try voiceDialFixture("stale-session", generation: 1)
         let staleEpoch = model.installVoiceSessionForTesting(session, api: api)
         _ = model.beginVoiceAttemptForTesting()
         let transport = try wiredTransport(for: model, mediaEpoch: staleEpoch)
@@ -363,7 +189,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let installationID = "voice-connection-" + UUID().uuidString
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let api = try voiceAPI(installationID: installationID)
-        let session = VoiceSessionResponse(voiceSessionId: "failed-session", generation: 1, state: "active", answerSdp: "")
+        let session = try voiceDialFixture("failed-session", generation: 1)
         let epoch = model.installVoiceSessionForTesting(session, api: api)
         let transport = try wiredTransport(for: model, mediaEpoch: epoch)
         transport.driveConnectionStateForTesting(.failed)
@@ -381,16 +207,14 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
     func testContinuousVoiceDataChannelLossSetsReconnectingStatus() async throws {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let api = try voiceAPI(installationID: "voice-reconnect-" + UUID().uuidString)
-        let session = VoiceSessionResponse(voiceSessionId: "reconnect-session", generation: 1, state: "active", answerSdp: "")
+        let session = try voiceDialFixture("reconnect-session", generation: 1)
         model.setContinuousVoiceEnabled(true)
         let epoch = model.installVoiceSessionForTesting(session, api: api)
         var observedReconnecting = false
         model.voiceStatusObserverForTesting = { status in
             if case .reconnecting = status { observedReconnecting = true }
         }
-        model.voiceHangupOverrideForTesting = { _ in
-            return VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
-        }
+        model.voiceHangupOverrideForTesting = { _ in }
         let transport = try wiredTransport(for: model, mediaEpoch: epoch)
         transport.driveDataChannelStateForTesting(.closing)
         await Task.yield()

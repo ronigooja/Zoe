@@ -6,7 +6,7 @@ final class VoiceDiagnosticsTests: XCTestCase {
     func testReasonCodesAndBoundedSummaries() {
         XCTAssertEqual(Set(VoiceEndReason.allCases.map(\.rawValue)), Set([
             "silence_timeout", "voice_end_event", "user_toggle_off", "media_loss_connection",
-            "media_loss_audio", "media_loss_data_channel", "lease_renewal_failed", "heartbeat_failure",
+            "media_loss_audio", "media_loss_data_channel",
             "app_terminate", "connection_cleared", "setup_failed", "other"
         ]))
         for reason in VoiceEndReason.allCases {
@@ -28,6 +28,5 @@ final class VoiceDiagnosticsTests: XCTestCase {
         XCTAssertEqual(VoiceMediaLoss.connection(.failed).diagnosticReason, .mediaLossConnection)
         XCTAssertEqual(VoiceMediaLoss.audio(.interrupted).diagnosticReason, .mediaLossAudio)
         XCTAssertEqual(VoiceMediaLoss.dataChannel(.closed).diagnosticReason, .mediaLossDataChannel)
-        XCTAssertEqual(VoiceMediaLoss.leaseRenewalFailed("private transcript token").diagnosticReason, .leaseRenewalFailed)
     }
 }
