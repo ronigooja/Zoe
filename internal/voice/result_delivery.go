@@ -102,7 +102,14 @@ func (s *Service) consumeResultEvents(ctx context.Context) {
 
 func (s *Service) dispatchResults(ctx context.Context) {
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT entry_id,workspace_id,task_id,run_id,subject_id,attempts FROM voice_result_deliveries d WHERE status='pending' AND last_error_code!='awaiting_context' AND next_attempt_at<=? AND `+resultNotInOpening+` ORDER BY next_attempt_at LIMIT ?`, now, s.limits.Int("voice_result_sweep_rows"))
+	rows, err := s.db.QueryContext(ctx, `SELECT entry_id,workspace_id,task_id,run_id,subject_id,attempts FROM voice_result_deliveries d
+WHERE status='pending' AND last_error_code!='awaiting_context' AND next_attempt_at<=? AND `+resultNotInOpening+`
+AND (last_error_code!='awaiting_call' OR EXISTS (
+	SELECT 1 FROM voice_sessions v WHERE v.workspace_id=d.workspace_id AND v.owner_id=d.subject_id
+	AND v.state='active' AND v.gateway_session_id!='' AND v.gateway_media_generation>0
+	AND NOT EXISTS (SELECT 1 FROM voice_result_checkpoints c WHERE c.entry_id=d.entry_id
+	AND (c.session_id!=v.id OR c.generation!=v.generation OR c.gateway_session_id!=v.gateway_session_id OR c.media_generation!=v.gateway_media_generation))
+)) ORDER BY next_attempt_at LIMIT ?`, now, s.limits.Int("voice_result_sweep_rows"))
 	if err != nil {
 		return
 	}
@@ -249,7 +256,7 @@ func (s *Service) retryFastReply(id string, attempt int, code string) {
 func (s *Service) deliverResult(ctx context.Context, id, workspace, task, run, subject string, attempts int) {
 	adapter := s.receiptAdapter(ctx)
 	if adapter == nil {
-		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET last_error_code=CASE WHEN last_error_code='awaiting_context' THEN last_error_code ELSE 'receipt_capability_disabled' END,next_attempt_at=?,updated_at=? WHERE entry_id=? AND status='pending' AND `+resultNotInOpening, s.now().Add(resultDeliveryLease).UTC().Format(time.RFC3339Nano), s.now().UTC().Format(time.RFC3339Nano), id)
+		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET last_error_code='receipt_capability_disabled',next_attempt_at=?,updated_at=? WHERE entry_id=? AND status='pending' AND last_error_code!='awaiting_context' AND `+resultNotInOpening, s.now().Add(resultDeliveryLease).UTC().Format(time.RFC3339Nano), s.now().UTC().Format(time.RFC3339Nano), id)
 		return
 	}
 	s.deliverCheckpointedResult(ctx, id, workspace, task, run, subject, attempts, adapter)

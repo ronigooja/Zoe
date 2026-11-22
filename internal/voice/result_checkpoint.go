@@ -168,12 +168,12 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 		s.finishResult(id, "failed", "empty_result")
 		return
 	}
-	err = s.db.QueryRowContext(ctx, `SELECT id,gateway_session_id,generation,gateway_media_generation FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND state='active' AND gateway_session_id!='' AND (NOT EXISTS(SELECT 1 FROM voice_result_checkpoints WHERE entry_id=?) OR id=(SELECT session_id FROM voice_result_checkpoints WHERE entry_id=?)) ORDER BY created_at,id LIMIT 1`, workspace, owner, id, id).Scan(&session, &gateway, &generation, &media)
+	err = s.db.QueryRowContext(ctx, `SELECT id,gateway_session_id,generation,gateway_media_generation FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND state='active' AND gateway_session_id!='' AND gateway_media_generation>0 AND (NOT EXISTS(SELECT 1 FROM voice_result_checkpoints WHERE entry_id=?) OR id=(SELECT session_id FROM voice_result_checkpoints WHERE entry_id=?)) ORDER BY created_at,id LIMIT 1`, workspace, owner, id, id).Scan(&session, &gateway, &generation, &media)
 	if err == sql.ErrNoRows {
-		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET next_attempt_at=?,last_error_code='awaiting_context',updated_at=? WHERE entry_id=? AND status='pending' AND attempts=? AND `+resultNotInOpening, now.Add(resultDeliveryLease).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts)
+		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET next_attempt_at=?,last_error_code='awaiting_call',updated_at=? WHERE entry_id=? AND status='pending' AND attempts=? AND last_error_code!='awaiting_context' AND `+resultNotInOpening, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts)
 		return
 	}
-	if err != nil || (adapter != nil && media <= 0) {
+	if err != nil {
 		return
 	}
 	if s.beforeResultClaim != nil {

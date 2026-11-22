@@ -2,9 +2,47 @@ package voice
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/ronigooja/Zoe/internal/limits"
 )
+
+func TestOversizedOpeningResultDispatchesAfterCallEstablishes(t *testing.T) {
+	r := checkpointRig(t)
+	original := strings.Repeat("界", r.svc.limits.Int("opening_context_runes")+1)
+	r.setup(t, original)
+	r.exec(t, `UPDATE tasks SET owner_subject_id='owner'`)
+	r.run(t)
+	if status, code, attempts := r.row(t, "entry-1"); status != "pending" || code != "awaiting_call" || attempts != 0 {
+		t.Fatalf("before opening: %s %s %d", status, code, attempts)
+	}
+	cfg := callConfig()
+	cfg.Now = r.now
+	h := newCallHarness(t, r.store, cfg)
+	a, _ := h.open(201)
+	if len(a.OpeningContext.Items) != 0 {
+		t.Fatal("oversized original entered the opening")
+	}
+	r.run(t)
+	if r.posts.Load() != 0 {
+		t.Fatal("result dispatched before establishment")
+	}
+	h.post(callRoute+"/"+a.SessionID+"/established", callEstablishedRequest{testBinding(a), nil}, 200, "")
+	r.run(t)
+	if status, code, attempts := r.row(t, "entry-1"); status != "delivered" || code != "gateway_accepted" || attempts != 1 {
+		t.Fatalf("after establishment: %s %s %d", status, code, attempts)
+	}
+	if len(r.texts) < 2 || strings.Join(r.texts, "") != original {
+		t.Fatal("chunks did not reconstruct the original")
+	}
+	for _, chunk := range r.texts {
+		if len(chunk) > limits.GatewayTextChunkBytes {
+			t.Fatalf("chunk is %d bytes", len(chunk))
+		}
+	}
+}
 
 func TestOpeningDeferredResultReceiptRecovery(t *testing.T) {
 	for _, mode := range []string{"nonmatching", "matching", "missing"} {
@@ -13,7 +51,7 @@ func TestOpeningDeferredResultReceiptRecovery(t *testing.T) {
 			r.setup(t, "original result")
 			r.exec(t, `UPDATE tasks SET owner_subject_id='owner'`)
 			r.run(t)
-			if status, code, attempts := r.row(t, "entry-1"); status != "pending" || code != "awaiting_context" || attempts != 0 {
+			if status, code, attempts := r.row(t, "entry-1"); status != "pending" || code != "awaiting_call" || attempts != 0 {
 				t.Fatalf("before opening: %s %s %d", status, code, attempts)
 			}
 			cfg := callConfig()
@@ -41,7 +79,7 @@ func TestOpeningDeferredResultReceiptRecovery(t *testing.T) {
 			}
 			_, code, _ := r.row(t, "entry-1")
 			want := map[string]string{"nonmatching": "", "matching": "consumed", "missing": "reserved"}[mode]
-			if state != want || (mode == "nonmatching" && (code != "" || due != r.now().Format(time.RFC3339Nano))) || (mode != "nonmatching" && code != "awaiting_context") {
+			if state != want || (mode == "nonmatching" && (code != "" || due != r.now().Format(time.RFC3339Nano))) || (mode != "nonmatching" && code != "awaiting_call") {
 				t.Fatalf("state=%q code=%q due=%q", state, code, due)
 			}
 			for i := 0; i < 2; i++ {
@@ -122,7 +160,7 @@ func TestOpeningReleaseDeferralFences(t *testing.T) {
 			if (err != nil) != (mode == "delete-failure") {
 				t.Fatalf("release error=%v", err)
 			}
-			if _, code, _ := r.row(t, "entry-1"); code != "awaiting_context" {
+			if _, code, _ := r.row(t, "entry-1"); code != "awaiting_call" {
 				t.Fatalf("deferral crossed %s fence: %q", mode, code)
 			}
 		})

@@ -170,21 +170,16 @@ func (r *deliveryRig) rowForCheckpoint() (string, string, int) {
 	return status, code, attempts
 }
 
-func TestResultCheckpointNoCallPendingContextOnly(t *testing.T) {
+func TestResultCheckpointNoCallPreservesOpeningCandidate(t *testing.T) {
 	r := checkpointRig(t)
 	r.setup(t, " original\nresult ")
 	for i := 0; i < 8; i++ {
 		r.run(t)
 		r.advance(time.Minute)
 	}
-	status, _, attempts := r.row(t, "entry-1")
-	if status != "pending" || attempts != 0 || r.posts.Load() != 0 {
-		t.Fatalf("status=%s attempts=%d posts=%d", status, attempts, r.posts.Load())
-	}
-	r.seedCall(t, "next", "user-1", 2)
-	r.run(t)
-	if r.posts.Load() != 0 {
-		t.Fatal("next call must not autoplay pending history")
+	status, code, attempts := r.row(t, "entry-1")
+	if status != "pending" || code != "awaiting_call" || attempts != 0 || r.posts.Load() != 0 {
+		t.Fatalf("status=%s code=%s attempts=%d posts=%d", status, code, attempts, r.posts.Load())
 	}
 	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
 	if err != nil || len(pending) != 1 || pending[0].EntryID != "entry-1" || !strings.HasSuffix(pending[0].Text, "Result:  original\nresult ") {

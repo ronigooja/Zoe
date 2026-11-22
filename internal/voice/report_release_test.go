@@ -17,8 +17,9 @@ func deferredReportRig(t *testing.T, action string) *deliveryRig {
 	t.Helper()
 	r := checkpointRig(t)
 	r.setup(t, "original result")
-	r.run(t) // No active call: defer without creating a checkpoint.
+	r.svc.consumeResultEvents(context.Background())
 	r.seedCall(t, "s1", "user-1", 1)
+	r.exec(t, `UPDATE voice_result_deliveries SET last_error_code='awaiting_context' WHERE entry_id='entry-1'`)
 	seedReportReply(t, r, action)
 	return r
 }
