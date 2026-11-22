@@ -6,7 +6,7 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 ## Inputs and outputs
 
-The server retrieves owner/workspace-scoped task facts, preserving full goals, pending questions and retained additions, but sending only the stored result summary. Titles, quoted original utterances and per-call aliases are not selectors. The exact schemas are:
+The server retrieves owner/workspace-scoped task facts, preserving full goals, pending questions and retained additions. Titles, quoted original utterances and per-call aliases are not selectors. The exact schemas are:
 
 ```typescript
 type StewardInput = {
@@ -30,7 +30,7 @@ type StewardOutput = {
 };
 ```
 
-Every key is present; irrelevant fields are null. IDs are real stable server-owned identities from the supplied facts. `status` reflects authoritative task state; `summary_result` is copied directly from the task column, with no fallback to the full result, preserving null and empty values. Additions remain in conversational order. See [result summaries](results.md#task-result-summaries) for generation and storage.
+Every key is present; irrelevant fields are null. IDs are real stable server-owned identities from the supplied facts. `status` reflects authoritative task state. `summary_result` carries the stored summary when non-NULL (including an empty summary), otherwise the full task result, or null when neither exists. The server re-reads task facts before every model attempt, including retries and stale-selection refreshes. Additions remain in conversational order. See [result summaries](results.md#task-result-summaries) for generation and storage.
 
 ## Required behavior
 
@@ -54,6 +54,8 @@ Pending-question IDs survive retries and are scoped to the selected task. Keep s
 ## Failure and recovery
 
 If the snapshot is missing or facts changed, the worker refreshes and re-evaluates the selection before applying it; a stale or rejected decision never silently becomes new work. Invalid model output or an unavailable model follows [classification failure rules](register.md#failure-and-recovery). Existing processing-error behavior may report failure; it is not fallback authorization.
+
+The server sends candidate facts without truncation. If the provider rejects oversized input, classification fails without admitting work.
 
 ## Implementation locations
 

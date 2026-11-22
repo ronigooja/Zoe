@@ -2,6 +2,7 @@
 
 Requires existing mem0ai==2.2.1 dependencies. No model, Qdrant, or network calls.
 """
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -140,19 +141,25 @@ class PinnedWriteRecoveryTests(unittest.TestCase):
                 self.assertEqual(self.vector_db.execute("SELECT count(*) FROM vectors").fetchone()[0], 1)
 
     def test_public_infer_manifest_and_malformed_extraction(self):
+        source = "[2026-11-13T11:00Z] user: I moved here yesterday.\n"
         self.memory.llm.generate_response.return_value = '{"memory":[{"text":"one"},{"text":"two"}]}'
         self.raise_after = True
         with self.assertRaises(RuntimeError):
-            self.backend.ingest("owner", "batch", "chunk", "source", time.monotonic() + 5)
+            self.backend.ingest("owner", "batch", "chunk", source, time.monotonic() + 5)
         messages = self.memory.llm.generate_response.call_args.kwargs["messages"]
         self.assertIn(PROMPTS.memory_ingest, messages[1]["content"])
+        self.assertIn(source.rstrip("\n"), messages[1]["content"])
+        digest = self.memory.db.connection.execute(
+            "SELECT content_hash FROM zoe_person_ingest_receipts WHERE chunk_id='chunk'"
+        ).fetchone()[0]
+        self.assertEqual(digest, hashlib.sha256(source.encode("utf-8")).hexdigest())
         records = json.loads(self.memory.db.connection.execute("SELECT manifest FROM zoe_person_ingest_manifests").fetchone()[0])
         self.assertEqual(len(records), 2)
         self.assertEqual(len(self.calls), 1)
         self.restart()
         self.raise_after = False
         self.memory.llm.generate_response.side_effect = AssertionError("must not reinfer")
-        self.assertEqual(self.backend.ingest("owner", "batch", "chunk", "source", time.monotonic() + 5), {"added": 2, "updated": 0})
+        self.assertEqual(self.backend.ingest("owner", "batch", "chunk", source, time.monotonic() + 5), {"added": 2, "updated": 0})
         self.assertEqual(self.vector_db.execute("SELECT count(*) FROM vectors").fetchone()[0], 2)
         self.memory.llm.generate_response.side_effect = None
         self.memory.llm.generate_response.return_value = "malformed"

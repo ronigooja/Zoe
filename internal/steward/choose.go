@@ -57,7 +57,7 @@ type Input struct {
 	Request          string      `json:"request"`
 }
 
-// Candidate preserves task facts and stable identities, with summarized results.
+// Candidate preserves task facts and stable identities, with the best available result text.
 type Candidate struct {
 	TaskID           string     `json:"task_id"`
 	Goal             string     `json:"goal"`
@@ -87,6 +87,11 @@ var ErrNoQuestion = errors.New("no exact steward pending question identity match
 // Choose validates structure and identity membership, not semantic action eligibility.
 // Callers must transactionally revalidate ownership, eligibility and pending state.
 func (c *Client) Choose(ctx context.Context, input Input) (choice Choice, resultErr error) {
+	return c.ChooseLatest(ctx, func(context.Context) (Input, error) { return input, nil })
+}
+
+// ChooseLatest loads authoritative facts before each attempt, including retries.
+func (c *Client) ChooseLatest(ctx context.Context, load func(context.Context) (Input, error)) (choice Choice, resultErr error) {
 	if c == nil || c.transport == nil {
 		return Choice{}, errors.New("steward is disabled")
 	}
@@ -97,16 +102,8 @@ func (c *Client) Choose(ctx context.Context, input Input) (choice Choice, result
 	}()
 	ctx, cancel := context.WithTimeout(ctx, effective)
 	defer cancel()
-	input, refs, err := prepareInput(input)
-	if err != nil {
-		return Choice{}, err
-	}
-	data, err := json.Marshal(input)
-	if err != nil {
-		return Choice{}, errors.New("could not encode steward choice input")
-	}
+	var refs map[string]map[string]struct{}
 	call := logging.ModelCallFromContext(ctx, "steward")
-	call.Input(c.instructions, string(data))
 	defer func() {
 		call.Result(choice, errorKind(resultErr))
 		if resultErr != nil {
@@ -114,6 +111,19 @@ func (c *Client) Choose(ctx context.Context, input Input) (choice Choice, result
 		}
 	}()
 	output, err := RetryComplete(ctx, func(ctx context.Context) (string, error) {
+		input, err := load(ctx)
+		if err != nil {
+			return "", err
+		}
+		input, refs, err = prepareInput(input)
+		if err != nil {
+			return "", err
+		}
+		data, err := json.Marshal(input)
+		if err != nil {
+			return "", errors.New("could not encode steward choice input")
+		}
+		call.Input(c.instructions, string(data))
 		attemptCtx, cancel := context.WithTimeout(ctx, c.timeout)
 		defer cancel()
 		return c.transport.Complete(attemptCtx, c.instructions, string(data))

@@ -17,6 +17,8 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 Successful write is silent. Empty retrieval appends nothing. No new content makes no worker call. [Call opening](results.md#required-behavior) reads persisted Register context without waiting for a new model or ingestion call.
 
+Zoe supplies wall-clock timestamps to models only in scheduled memory ingestion. Each source record starts with `[YYYY-MM-DDTHH:MMZ] role: text`; the UTC minute is the observation time for relative dates in that record. Selection and ordering retain the original timestamp precision.
+
 ## Persistence and idempotency
 
 - Write: durable write job/operation identity and outcome.

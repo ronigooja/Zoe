@@ -177,7 +177,7 @@ func TestChooseIdentityAndQuestionMembership(t *testing.T) {
 func TestChooseFullInputNoTruncationOrAliases(t *testing.T) {
 	input := Input{Request: strings.Repeat("request🙂\n", 2000), DisplayRequested: true}
 	for i := 0; i < 12; i++ {
-		input.Tasks = append(input.Tasks, Candidate{TaskID: "real-" + strconv.Itoa(i), Goal: strings.Repeat("goal🙂", 500), Status: "arbitrary-authoritative-state", SummaryResult: text("summary"), Additions: []string{"first", "second", "third", "fourth", "fifth", "sixth"}})
+		input.Tasks = append(input.Tasks, Candidate{TaskID: "real-" + strconv.Itoa(i), Goal: strings.Repeat("goal🙂", 500), Status: "arbitrary-authoritative-state", SummaryResult: text(strings.Repeat("full result🙂\n", 2000)), Additions: []string{"first", "second", "third", "fourth", "fifth", "sixth"}})
 	}
 	before := encoded(input)
 	want, _, err := prepareInput(input)
@@ -194,7 +194,7 @@ func TestChooseFullInputNoTruncationOrAliases(t *testing.T) {
 			t.Error("wire input differs from complete canonical facts")
 		}
 		if strings.Contains(outer.Input, `"result":`) || !strings.Contains(outer.Input, `"summary_result":`) {
-			t.Error("Steward wire input must contain summaries, never full results")
+			t.Error("Steward wire input must name the result field summary_result")
 		}
 	})
 	defer s.Close()

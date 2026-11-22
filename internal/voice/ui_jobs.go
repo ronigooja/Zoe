@@ -215,12 +215,12 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 	var screen uictl.Size
 	err = s.db.QueryRowContext(ctx, `SELECT width,height FROM ui_screens WHERE workspace_id=? AND owner_subject_id=?`, j.w, j.o).Scan(&screen.Width, &screen.Height)
 	if err == sql.ErrNoRows {
-		return uictl.BuildInput(s.now(), requests, facts, nil)
+		return uictl.BuildInput(requests, facts, nil)
 	}
 	if err != nil {
 		return nil, err
 	}
-	return uictl.BuildInput(s.now(), requests, facts, &screen)
+	return uictl.BuildInput(requests, facts, &screen)
 }
 func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 	now := s.now().UTC()

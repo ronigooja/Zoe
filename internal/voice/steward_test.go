@@ -18,7 +18,10 @@ type fakeSteward struct {
 	calls atomic.Int32
 }
 
-func (f *fakeSteward) Choose(context.Context, steward.Input) (steward.Choice, error) {
+func (f *fakeSteward) ChooseLatest(ctx context.Context, load func(context.Context) (steward.Input, error)) (steward.Choice, error) {
+	if _, err := load(ctx); err != nil {
+		return steward.Choice{}, err
+	}
 	f.calls.Add(1)
 	return steward.Choice{Action: steward.ActionNew}, f.err
 }

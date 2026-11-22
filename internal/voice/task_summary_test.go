@@ -116,25 +116,32 @@ func TestTaskSummaryBackoffAndAuthentication(t *testing.T) {
 	}
 }
 
-func TestCandidateSummaryNoFallback(t *testing.T) {
-	for _, summary := range []*string{nil, new(string), func() *string { s := "short budget summary"; return &s }()} {
-		db, svc, now := rosterFixture(t)
-		candidateSeed(t, db, now, rosterSeed{id: "summary", status: "complete", result: "SECRET FULL budget RESULT"}, "budget")
-		rosterExec(t, db, `UPDATE tasks SET summary_result=? WHERE id='summary'`, summary)
-		candidates, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 8)
-		if err != nil || len(candidates) != 1 {
-			t.Fatalf("candidates=%+v err=%v", candidates, err)
-		}
-		c := candidates[0]
-		data, err := json.Marshal(steward.Candidate{TaskID: c.TaskID, Goal: c.Goal, Status: c.Status, SummaryResult: c.SummaryResult})
-		if err != nil || strings.Contains(string(data), `"result"`) || strings.Contains(string(data), "SECRET FULL") || !strings.Contains(string(data), `"summary_result":`) {
-			t.Fatalf("input=%s err=%v", data, err)
-		}
-		if (summary == nil) != (c.SummaryResult == nil) || summary != nil && *summary != *c.SummaryResult {
-			t.Fatalf("summary=%v candidate=%v", summary, c.SummaryResult)
-		}
-		if c.Result != "SECRET FULL budget RESULT" {
-			t.Fatal("authoritative result lost")
-		}
+func TestCandidateSummaryFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, result, want string
+		summary                    any
+	}{
+		{"NULL summary", "complete", "full original budget result\n", `"full original budget result\n"`, nil},
+		{"stored summary", "complete", "full original budget result", `"budget summary"`, "budget summary"},
+		{"empty summary", "complete", "full original budget result", `""`, ""},
+		{"no result", "active", "", `null`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, svc, now := rosterFixture(t)
+			candidateSeed(t, db, now, rosterSeed{id: "summary", status: tc.status, result: tc.result}, "budget")
+			rosterExec(t, db, `UPDATE tasks SET summary_result=? WHERE id='summary'`, tc.summary)
+			candidates, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 8)
+			if err != nil || len(candidates) != 1 {
+				t.Fatalf("candidates=%+v err=%v", candidates, err)
+			}
+			c := candidates[0]
+			data, err := json.Marshal(steward.Candidate{TaskID: c.TaskID, Goal: c.Goal, Status: c.Status, SummaryResult: c.SummaryResult})
+			if err != nil || strings.Contains(string(data), `"result":`) || !strings.Contains(string(data), `"summary_result":`+tc.want+`,`) {
+				t.Fatalf("input=%s err=%v", data, err)
+			}
+			if c.Result != tc.result {
+				t.Fatal("authoritative result lost")
+			}
+		})
 	}
 }

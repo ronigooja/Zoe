@@ -71,27 +71,30 @@ func (s *Service) classifyDelegation(parent context.Context, id string) {
 	if err == nil && route.Has("task") {
 		if route.Request == nil {
 			err = errors.New("task route has no request")
+		} else if s.steward == nil {
+			err = errors.New("steward is disabled")
 		} else {
-			snapshot, err = stewardSnapshot(ctx, s.db, workspace, owner)
-		}
-		var candidates []taskCandidate
-		if err == nil {
-			candidates, err = s.taskCandidatesForSession(ctx, s.db, workspace, owner, session, *route.Request, s.now(), 0)
-		}
-		if err == nil {
-			facts := make([]steward.Candidate, 0, len(candidates))
-			for _, c := range candidates {
-				facts = append(facts, steward.Candidate{TaskID: c.TaskID, Goal: c.Goal, Status: c.Status, PendingQuestions: c.PendingQuestions, SummaryResult: c.SummaryResult, Additions: c.Additions})
-			}
-			if s.steward == nil {
-				err = errors.New("steward is disabled")
-			} else {
-				err = s.interactiveModel(ctx, "steward", func() error {
-					var callErr error
-					choice, callErr = s.steward.Choose(logging.WithUserHash(ctx, logging.UserHash(owner)), steward.Input{Request: *route.Request, DisplayRequested: route.Has("ui"), Tasks: facts})
-					return callErr
+			var candidates []taskCandidate
+			err = s.interactiveModel(ctx, "steward", func() error {
+				var callErr error
+				choice, callErr = s.steward.ChooseLatest(logging.WithUserHash(ctx, logging.UserHash(owner)), func(ctx context.Context) (steward.Input, error) {
+					var readErr error
+					snapshot, readErr = stewardSnapshot(ctx, s.db, workspace, owner)
+					if readErr != nil {
+						return steward.Input{}, readErr
+					}
+					candidates, readErr = s.taskCandidatesForSession(ctx, s.db, workspace, owner, session, *route.Request, s.now(), 0)
+					if readErr != nil {
+						return steward.Input{}, readErr
+					}
+					facts := make([]steward.Candidate, 0, len(candidates))
+					for _, c := range candidates {
+						facts = append(facts, steward.Candidate{TaskID: c.TaskID, Goal: c.Goal, Status: c.Status, PendingQuestions: c.PendingQuestions, SummaryResult: c.SummaryResult, Additions: c.Additions})
+					}
+					return steward.Input{Request: *route.Request, DisplayRequested: route.Has("ui"), Tasks: facts}, nil
 				})
-			}
+				return callErr
+			})
 			if err == nil && choice.TaskID != nil {
 				matched := false
 				for _, candidate := range candidates {

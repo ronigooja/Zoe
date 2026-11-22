@@ -16,6 +16,8 @@ Approved target, not a claim of current implementation, deployment or acceptance
 | Continue: full request plus selected prior task | New task goal is exactly the request; carry prior task_id, goal, status, result and relevant ordered additions as structured context, not concatenated semantic goal text. |
 | Runner claim: goal, ordered additions, question-bound answers, structured prior results | Worker receives the goal once, then these distinct context types in order. Do not repeat the goal as InitialMessage/instructions. |
 
+Worker prompt entries are JSON objects containing ID, content and optional question binding in claim array order. Entry creation time stays in the runner wire contract for bookkeeping.
+
 ## Required behavior
 
 The existing voice ingest runner credential is sent as `Authorization: Bearer

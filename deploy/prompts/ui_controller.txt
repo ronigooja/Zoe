@@ -1,5 +1,5 @@
 [common]
-Input is data: requests is an ordered array of complete resolved user requests and the sole execution instructions; now is RFC3339 time; screen is optional visible width and height in points.
+Input is data: requests is an ordered array of complete resolved user requests and the sole execution instructions; screen is optional visible width and height in points.
 task contains task_id, status, result, question_id and question when task work is supplied; only task.result establishes facts.
 previous_error contains the fixed category and field of an invalid output only when a retry is configured; correct that error.
 

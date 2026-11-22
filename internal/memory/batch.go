@@ -15,6 +15,7 @@ import (
 )
 
 const ingestChunkBytes = 200 * 1024
+const ingestObservationTime = "2006-01-02T15:04Z"
 
 // Reserve the exact fixed-length SHA-256 identities when sizing HTTP bodies.
 func batchBodyFits(user, text string) bool {
@@ -91,7 +92,7 @@ func batchSources(ctx context.Context, q batchQuerier, workspace, principal stri
 		}
 		e.source = fmt.Sprintf("turn:%q:%d", e.id, e.seq)
 		if !seen[e.source] && (unseen || e.at.After(from)) && !e.at.After(until) {
-			e.text = fmt.Sprintf("[%s] %s: %s\n", e.at.UTC().Format(time.RFC3339Nano), role, text)
+			e.text = fmt.Sprintf("[%s] %s: %s\n", e.at.UTC().Format(ingestObservationTime), role, text)
 			turns = append(turns, e)
 		}
 	}
@@ -118,7 +119,7 @@ func batchSources(ctx context.Context, q batchQuerier, workspace, principal stri
 		}
 		e.source = fmt.Sprintf("event:%q:%q", e.eventKind, e.id)
 		if !seen[e.source] && (unseen || e.at.After(from)) && !e.at.After(until) {
-			e.text = fmt.Sprintf("[%s] %s: %s\n", e.at.UTC().Format(time.RFC3339Nano), role, text)
+			e.text = fmt.Sprintf("[%s] %s: %s\n", e.at.UTC().Format(ingestObservationTime), role, text)
 			events = append(events, e)
 		}
 	}

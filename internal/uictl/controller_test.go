@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ronigooja/Zoe/internal/prompts"
 )
@@ -288,18 +287,18 @@ func TestApply(t *testing.T) {
 }
 
 func TestBuildInput(t *testing.T) {
-	b, err := BuildInput(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), nil, nil, nil)
+	b, err := BuildInput(nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(b) != `{"task":null,"requests":[],"now":"2026-01-02T03:04:05Z"}` {
+	if string(b) != `{"task":null,"requests":[]}` {
 		t.Fatal(string(b))
 	}
-	if _, err = BuildInput(time.Now(), []string{strings.Repeat("x", 16*MaxState+1)}, nil, nil); err == nil {
+	if _, err = BuildInput([]string{strings.Repeat("x", 16*MaxState+1)}, nil, nil); err == nil {
 		t.Fatal("accepted oversized input")
 	}
 	for _, request := range []string{"", "  ", "none"} {
-		if _, err = BuildInput(time.Now(), []string{request}, nil, nil); err == nil {
+		if _, err = BuildInput([]string{request}, nil, nil); err == nil {
 			t.Fatalf("accepted incomplete request %q", request)
 		}
 	}
@@ -307,7 +306,7 @@ func TestBuildInput(t *testing.T) {
 
 func TestBuildInputFieldOrderAndRetryPrefix(t *testing.T) {
 	for _, screen := range []*Size{nil, {Width: 800, Height: 600}} {
-		b, err := BuildInput(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), []string{"request <one>"}, &Task{TaskID: "task"}, screen)
+		b, err := BuildInput([]string{"request <one>"}, &Task{TaskID: "task"}, screen)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -329,7 +328,7 @@ func TestBuildInputFieldOrderAndRetryPrefix(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		want := "task,requests,now"
+		want := "task,requests"
 		if screen != nil {
 			want = "screen," + want
 		}

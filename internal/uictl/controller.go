@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -26,7 +25,6 @@ type Input struct {
 	Screen        *Size          `json:"screen,omitempty"`
 	Task          *Task          `json:"task"`
 	Requests      []string       `json:"requests"`
-	Now           string         `json:"now"`
 	PreviousError *PreviousError `json:"previous_error,omitempty"`
 }
 
@@ -43,7 +41,7 @@ type Task struct {
 	Question   string  `json:"question"`
 }
 
-func BuildInput(now time.Time, requests []string, task *Task, screen *Size) ([]byte, error) {
+func BuildInput(requests []string, task *Task, screen *Size) ([]byte, error) {
 	if requests == nil {
 		requests = []string{}
 	}
@@ -52,7 +50,7 @@ func BuildInput(now time.Time, requests []string, task *Task, screen *Size) ([]b
 			return nil, errors.New("request_required")
 		}
 	}
-	b, err := json.Marshal(Input{Now: now.UTC().Format(time.RFC3339), Requests: requests, Task: task, Screen: screen})
+	b, err := json.Marshal(Input{Requests: requests, Task: task, Screen: screen})
 	if len(b) > 16*MaxState {
 		return nil, errors.New("input_limit")
 	}

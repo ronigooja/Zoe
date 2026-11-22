@@ -29,7 +29,7 @@ type scoredTaskCandidate struct {
 
 const candidateColumns = `t.id,t.goal,t.status,t.created_at,coalesce(t.finished_at,''),
 CASE WHEN t.status IN ('waiting','awaiting_user') AND t.interaction_state IN ('awaiting_message','explicit_confirmation') THEN coalesce(t.interaction_question,'') ELSE '' END,
-coalesce(t.result,''),t.summary_result,t.version`
+coalesce(t.result,''),coalesce(t.summary_result,nullif(t.result,'')),t.version`
 
 // taskCandidates retrieves bounded lexical candidates across calls. Ranking chooses
 // membership; the final facts are oldest first. It performs no writes or inference.

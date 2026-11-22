@@ -17,7 +17,11 @@ import (
 
 type classificationStewardFunc func(context.Context, steward.Input) (steward.Choice, error)
 
-func (f classificationStewardFunc) Choose(ctx context.Context, input steward.Input) (steward.Choice, error) {
+func (f classificationStewardFunc) ChooseLatest(ctx context.Context, load func(context.Context) (steward.Input, error)) (steward.Choice, error) {
+	input, err := load(ctx)
+	if err != nil {
+		return steward.Choice{}, err
+	}
 	return f(ctx, input)
 }
 

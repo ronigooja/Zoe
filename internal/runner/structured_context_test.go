@@ -1,10 +1,14 @@
 package runner
 
 import (
-	"github.com/ronigooja/Zoe/contracts"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ronigooja/Zoe/contracts"
 )
+
+var entryTimestamp = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
 func TestStructuredWorkerInitialResumePayloads(t *testing.T) {
 	for _, resume := range []bool{false, true} {
@@ -15,6 +19,9 @@ func TestStructuredWorkerInitialResumePayloads(t *testing.T) {
 			result := "prior authoritative result"
 			c.PriorContexts = []contracts.TaskPriorContext{{TaskID: "prior-id", Goal: "prior goal", Status: "completed", Result: &result, Additions: []string{"old first", "old second"}}}
 			c.Entries = []contracts.RunEntry{{ID: "addition-one", Content: "new first"}, {ID: "answer-two", Content: "bound answer", Question: &contracts.RunQuestionBinding{QuestionID: "server-question", RunID: "old-run", RequestID: "runtime-question", ActionDigest: "digest", Text: "which option?"}}, {ID: "addition-three", Content: "new last"}}
+			// Deliberately unsorted timestamps: the prompt must preserve array order.
+			c.Entries[0].CreatedAt = entryTimestamp
+			c.Entries[1].CreatedAt = entryTimestamp.Add(-time.Minute)
 			if resume {
 				c.ResumeQuestion = "legacy question"
 				c.ResumeAnswer = "legacy answer"
@@ -32,6 +39,7 @@ func TestStructuredWorkerInitialResumePayloads(t *testing.T) {
 			if prompt != f.promptText {
 				t.Fatal("Create/Prompt payload mismatch")
 			}
+			assertNoEntryTimestamp(t, prompt)
 			if strings.Count(prompt, c.Goal) != 1 || strings.Contains(prompt, "Do not delegate or perform external irreversible changes.") {
 				t.Fatalf("invalid goal/policy: %s", prompt)
 			}
@@ -44,6 +52,13 @@ func TestStructuredWorkerInitialResumePayloads(t *testing.T) {
 				t.Fatal("input order changed")
 			}
 		})
+	}
+}
+
+func assertNoEntryTimestamp(t *testing.T, prompt string) {
+	t.Helper()
+	if strings.Contains(prompt, `"created_at"`) || strings.Contains(prompt, entryTimestamp.Format(time.RFC3339)) {
+		t.Fatal("entry timestamp leaked into prompt")
 	}
 }
 
@@ -69,7 +84,7 @@ func TestBuildPromptInstructionsBeforeGoal(t *testing.T) {
 
 func TestStructuredWorkerRotationPayload(t *testing.T) {
 	messages := rotationPromptFixture(t)
-	c := &rotationContextControlFake{context: contracts.RotationContext{Entries: []contracts.RunEntry{{ID: "entry", Content: strings.Repeat("retained input", 2200)}}, PriorContexts: []contracts.TaskPriorContext{{TaskID: "prior", Goal: "old goal", Status: "completed", Additions: []string{"first", "second"}}}}}
+	c := &rotationContextControlFake{context: contracts.RotationContext{Entries: []contracts.RunEntry{{ID: "entry", Content: strings.Repeat("retained input", 2200), CreatedAt: entryTimestamp}}, PriorContexts: []contracts.TaskPriorContext{{TaskID: "prior", Goal: "old goal", Status: "completed", Additions: []string{"first", "second"}}}}}
 	f := completingRuntimeFake()
 	f.messages, f.rotationMessages = messages, rotationReplacement(messages)
 	e := testEngine(t, f, &c.controlFake, openTestJournal(t))
@@ -79,6 +94,7 @@ func TestStructuredWorkerRotationPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := assertRotationSpec(t, f)
+	assertNoEntryTimestamp(t, prompt)
 	if prompt != f.promptText || !strings.Contains(prompt, c.context.Entries[0].Content) || !strings.Contains(prompt, `"task_id":"prior"`) {
 		t.Fatal("rotation lost accepted context")
 	}

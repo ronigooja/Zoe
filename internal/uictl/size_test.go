@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestParseSize(t *testing.T) {
@@ -50,7 +49,7 @@ func TestParseSize(t *testing.T) {
 
 func TestBuildInputScreen(t *testing.T) {
 	for _, screen := range []*Size{nil, {Width: 1440, Height: 900}} {
-		b, err := BuildInput(time.Now(), nil, nil, screen)
+		b, err := BuildInput(nil, nil, screen)
 		if err != nil {
 			t.Fatal(err)
 		}

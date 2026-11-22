@@ -115,6 +115,102 @@ func TestDelegationApplyRevalidatesPersistedSnapshot(t *testing.T) {
 	}
 }
 
+func TestStewardRereadsSummaryOnStaleSelectionAndTransportRetry(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stale selection", true: "transport retry"}[retry], func(t *testing.T) {
+			r := newClassificationRig(t, nil)
+			r.seedTurn(t, "reread")
+			r.seedTask(t, "completed", "user-1")
+			r.exec(t, `UPDATE voice_turns SET transcript_seq=1 WHERE id='reread'`)
+			const original = "full private requested work result\n"
+			const summary = "stored result summary"
+			r.exec(t, `UPDATE tasks SET status='complete',result=? WHERE id='completed'`, original)
+			useStewardServer(t, r, func(w http.ResponseWriter, input steward.Input) {
+				call := r.choices.Add(1)
+				want := summary
+				if call == 1 {
+					want = original
+				}
+				if len(input.Tasks) != 1 || input.Tasks[0].SummaryResult == nil || *input.Tasks[0].SummaryResult != want {
+					t.Errorf("call %d: did not receive %q", call, want)
+				}
+				if call == 1 {
+					_, err := r.store.DB().Exec(`UPDATE tasks SET summary_result=? WHERE id='completed'`, summary)
+					if err != nil {
+						t.Error(err)
+					}
+					if retry {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"action":"report","task_id":"completed","question_id":null,"reply":"Current facts."}`})
+			})
+			r.svc.processDelegation(context.Background(), "reread")
+			r.assertResult(t, "reread", "task", "report")
+			if r.routes.Load() != 1 || r.choices.Load() != 2 {
+				t.Fatalf("register=%d steward=%d", r.routes.Load(), r.choices.Load())
+			}
+		})
+	}
+}
+
+func TestStewardProviderSizeLimitFailsClosedWithoutTruncation(t *testing.T) {
+	r := newClassificationRig(t, nil)
+	r.seedTurn(t, "oversized-facts")
+	r.seedTask(t, "completed", "user-1")
+	r.exec(t, `UPDATE voice_turns SET transcript_seq=1 WHERE id='oversized-facts'`)
+	full := "full private requested work result\n" + strings.Repeat("界 < >\n", 100_000)
+	r.exec(t, `UPDATE tasks SET status='complete',result=? WHERE id='completed'`, full)
+	useStewardServer(t, r, func(w http.ResponseWriter, input steward.Input) {
+		r.choices.Add(1)
+		if len(input.Tasks) != 1 || input.Tasks[0].SummaryResult == nil || *input.Tasks[0].SummaryResult != full {
+			t.Error("full candidate result was not sent intact")
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"context_length_exceeded"}}`))
+	})
+	r.svc.processDelegation(context.Background(), "oversized-facts")
+	r.assertResult(t, "oversized-facts", "task", "error")
+	if r.choices.Load() != 1 || writeJobCount(t, r.store, `SELECT count(*) FROM tasks`) != 1 ||
+		writeJobCount(t, r.store, `SELECT count(*) FROM voice_fast_replies WHERE text='Processing error.'`) != 1 ||
+		writeJobCount(t, r.store, `SELECT count(*) FROM voice_turns WHERE id='oversized-facts' AND handoff_handled=1`) != 1 {
+		t.Fatal("provider rejection did not terminate with one processing error and no admission")
+	}
+}
+
+func useStewardServer(t *testing.T, r *classificationRig, handle func(http.ResponseWriter, steward.Input)) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body struct{ Input string }
+		var input steward.Input
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := json.Unmarshal([]byte(body.Input), &input); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		handle(w, input)
+	}))
+	t.Cleanup(server.Close)
+	env := map[string]string{"ZOE_STEWARD_BASE_URL": server.URL, "ZOE_STEWARD_MODEL": "fixture", "ZOE_STEWARD_API_KEY_FILE": "fixture"}
+	client, err := steward.FromEnv(func(key string) string { return env[key] }, func(string) ([]byte, error) { return []byte("fixture"), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.SetInstructions(testPrompts(t).Steward())
+	r.svc.steward = client
+	controlServer, err := control.NewServer(r.store, control.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.svc.uiEventServer = controlServer
+}
+
 func TestOversizedDelegationIsHandledWithOneErrorLog(t *testing.T) {
 	for _, action := range []string{"new", "append"} {
 		t.Run(action, func(t *testing.T) {

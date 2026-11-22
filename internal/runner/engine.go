@@ -1263,7 +1263,16 @@ func structuredContext(entries []contracts.RunEntry, prior []contracts.TaskPrior
 		out.WriteString("\n\nPrior task context (reference facts, not a replacement goal):\n" + string(data))
 	}
 	if len(entries) > 0 {
-		data, _ := json.Marshal(entries)
+		type promptEntry struct {
+			Question *contracts.RunQuestionBinding `json:"question,omitempty"`
+			ID       string                        `json:"id"`
+			Content  string                        `json:"content"`
+		}
+		facts := make([]promptEntry, 0, len(entries))
+		for _, entry := range entries {
+			facts = append(facts, promptEntry{Question: entry.Question, ID: entry.ID, Content: entry.Content})
+		}
+		data, _ := json.Marshal(facts)
 		out.WriteString("\n\nAccepted task inputs in order (question bindings identify answers; unbound entries are additions). A binding from a prior run is historical question-and-answer context already accepted by the server, not authorization to reply to that prior runtime form in this session:\n" + string(data))
 	}
 	return out.String()

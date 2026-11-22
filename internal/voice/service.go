@@ -58,7 +58,7 @@ type Config struct {
 }
 
 type TaskSteward interface {
-	Choose(context.Context, steward.Input) (steward.Choice, error)
+	ChooseLatest(context.Context, func(context.Context) (steward.Input, error)) (steward.Choice, error)
 }
 
 type Service struct {

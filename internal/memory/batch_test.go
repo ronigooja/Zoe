@@ -2,8 +2,10 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -226,7 +228,7 @@ func TestMemoryIngestTranscriptEventsWindowAndCadence(t *testing.T) {
 		role, text string
 		at         time.Time
 	}{
-		{2, "assistant", "answer", now}, {1, "user", "original words", now.Add(-time.Hour)}, {3, "user", "future", now.Add(time.Second)},
+		{2, "assistant", "answer", now}, {1, "user", "original words", now.Add(-time.Hour + 59*time.Second + time.Nanosecond).In(time.FixedZone("UTC+2", 7200))}, {3, "user", "future", now.Add(time.Second)},
 	} {
 		if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',?,?,?,?)`, turn.seq, turn.role, turn.text, turn.at.Format(time.RFC3339Nano)); err != nil {
 			t.Fatal(err)
@@ -241,10 +243,11 @@ func TestMemoryIngestTranscriptEventsWindowAndCadence(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	if _, err := db.Exec(`INSERT INTO voice_context_events VALUES('workspace','owner','session','task_result','done','background','result text',?,?)`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+	eventAt := now.Add(-time.Nanosecond).Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO voice_context_events VALUES('workspace','owner','session','task_result','done','background','result text',?,?)`, eventAt, eventAt); err != nil {
 		t.Fatal(err)
 	}
-	want := "[2026-11-13T11:00:00Z] user: original words\n[2026-11-13T12:00:00Z] background: result text\n[2026-11-13T12:00:00Z] assistant: answer\n"
+	want := "[2026-11-13T11:00Z] user: original words\n[2026-11-13T11:59Z] background: result text\n[2026-11-13T12:00Z] assistant: answer\n"
 	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var input map[string]string
@@ -253,6 +256,9 @@ func TestMemoryIngestTranscriptEventsWindowAndCadence(t *testing.T) {
 		}
 		if input["text"] != want || input["user"] != memoryapi.User("workspace", "owner") || r.URL.Path != "/v1/memory/ingest" {
 			t.Errorf("unexpected input: %#v", input)
+		}
+		if id := fmt.Sprintf("%x", sha256.Sum256([]byte(input["batch_id"]+":0:"+want))); input["chunk_id"] != id {
+			t.Errorf("chunk ID does not cover exact minute-formatted bytes: got %s want %s", input["chunk_id"], id)
 		}
 		w.Write([]byte(`{"added":2,"updated":1}`))
 	})
@@ -282,7 +288,7 @@ func TestMemoryIngestTranscriptEventsWindowAndCadence(t *testing.T) {
 	if calls != 1 {
 		t.Fatal("called worker without content")
 	}
-	want = "[2026-11-13T12:00:01Z] user: future\n"
+	want = "[2026-11-13T12:00Z] user: future\n"
 	if err := repo.batchStep(context.Background(), client, 24*time.Hour, now.Add(24*time.Hour-time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +486,7 @@ func TestMemoryIngestBoundaryReadAndWindow(t *testing.T) {
 		t.Fatalf("boundary=%v err=%v", boundary, err)
 	}
 	blocks, err := repo.batchInput(ctx, "workspace", "owner", from, now)
-	if err != nil || len(blocks) != 1 || blocks[0] != "[2026-11-13T12:00:00Z] assistant: include now\n" {
+	if err != nil || len(blocks) != 1 || blocks[0] != "[2026-11-13T12:00Z] assistant: include now\n" {
 		t.Fatalf("blocks=%v err=%v", blocks, err)
 	}
 }

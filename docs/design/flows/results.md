@@ -64,7 +64,7 @@ Compact publication fences the owner-wide count of both sources in its snapshot 
 
 ## Task result summaries
 
-`tasks.result` remains authoritative for UI_Controller and prior-task context; in-call voice delivery uses the authoritative assistant entry. `tasks.summary_result` is nullable: NULL means not generated, while an empty string means generated and empty. Steward receives only the summary; lexical candidate ranking may still use full results inside SQL. Opening uses the summary when non-NULL and the authoritative assistant entry text otherwise.
+`tasks.result` remains authoritative for UI_Controller and prior-task context; in-call voice delivery uses the authoritative assistant entry. `tasks.summary_result` is nullable: NULL means not generated, while an empty string means generated and empty. See [Steward inputs](steward.md#inputs-and-outputs) for result selection on each call. Opening uses the summary when non-NULL and the authoritative assistant entry text otherwise.
 
 An asynchronous durable sweep selects complete tasks whose summary is NULL, including after restart. One model call receives the goal, status, ordered user additions and full result and returns only a minimal factual summary in the content's language, at most 200 characters. Completion never waits for generation; no database transaction spans the call. Writes only fill a still-NULL summary and fence changes to the source task. See [configuration](configuration.md#required-behavior) for model reuse and retries.
 
