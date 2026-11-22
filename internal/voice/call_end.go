@@ -370,7 +370,7 @@ func (s *Service) expireUnresolvedCallLogs() {
 }
 
 func (s *Service) reconcileBoundCalls(ctx context.Context) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,state,generation,gateway_session_id,gateway_media_generation,account_lease_id,account_lease_generation FROM voice_sessions WHERE lifecycle_runner_id<>'' AND state IN ('active','ending','quarantined')`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,state,generation,gateway_session_id,gateway_media_generation,account_lease_id,account_lease_generation FROM voice_sessions WHERE lifecycle_runner_id<>'' AND state IN ('active','ending','quarantined') AND EXISTS(SELECT 1 FROM voice_pool_state WHERE id=1 AND source_session_id=voice_sessions.id)`)
 	if err != nil {
 		if ctx.Err() == nil {
 			logging.Errorf("voice evidence reconciliation query failed: %T", err)

@@ -117,6 +117,9 @@ HTTPS dial origin from Zoe's voice configuration above, not from the
 installation link. The client validates the gateway's TLS
 certificate and hostname using platform trust. Deployment must make the
 gateway's HTTPS dial endpoint reachable from the client's network.
+The gateway client listener must sit behind a trusted TLS-terminating proxy:
+the instance key travels as a bearer, and that listener neither enforces TLS
+nor provides an admission rate limiter on the dial route.
 
 The client sends the same instance key as a bearer over HTTPS to Zoe and to the
 gateway. The `/client/v1/` routes do not use gateway `/v1/` API-key or browser
@@ -196,6 +199,11 @@ or authority to reuse an account.
   `allocating` row, opening reservations and complete replay response. Enforce
   one active or unresolved attempt per owner. Exact replay returns that saved
   response regardless of subsequent state, with no new allocation or reservation.
+  A row stranded in `allocating` by a lost `call.start` response is checked
+  after two minutes: unresolved outcomes produce an explicit error log;
+  only a matching gateway outcome can automatically release the hold.
+  Gateway reporting and evidence lookup resolve known bindings; the operator
+  path below requires the source to be `quarantined` or `ended`, not `allocating`.
 - The gateway uses `gateway_request_id` to fence a single create attempt and
   record its durable outcome before upstream allocation. A duplicate dial
   may share in-flight completion or replay the original answer for a still-live
@@ -232,6 +240,21 @@ failed create, fenced by session, generation, request and pool source. An old
 failed attempt cannot clear a bound or replacement session. Log an explicit
 error for a stuck `ending` or unknown session; no automatic compensation
 beyond lookup.
+
+When the pool remains quarantined and neither the gateway report nor Zoe's
+evidence lookup resolves it, use the operator command `voice.pool.reconcile`.
+It requires `voice:pool:reconcile` or `client:admin`, `session_id`,
+`generation >= 1`, `confirmed_out_of_band_termination: true`, and a trimmed
+12–500 character `reason`. Refuse with `409 voice_sessions_active` while any
+session is `allocating`, `active` or `ending`; otherwise require a blocked pool
+(`409 voice_pool_not_blocked`), its exact source session, and that session at
+the supplied generation in `quarantined` or `ended`
+(`409 voice_reconciliation_stale`). Atomically record an `operator_attestation`
+in `voice_pool_reconciliations`, clear the pool source/hold and emit
+`voice.pool.reconciled`. This does not close gateway media or rewrite session
+state or termination evidence. A quarantined source remains unverified;
+late end reports and evidence lookups are stale after its pool source is
+cleared and cannot alter a replacement call's hold.
 
 ## Release
 

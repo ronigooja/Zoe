@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/control"
@@ -416,6 +417,67 @@ type spacePublicConfig struct {
 	VoiceModes json.RawMessage `json:"voice_modes"`
 	Languages  json.RawMessage `json:"languages"`
 	WebRTC     json.RawMessage `json:"webrtc"`
+}
+
+type reconcilePoolPayload struct {
+	SessionID                     string `json:"session_id"`
+	Generation                    int64  `json:"generation"`
+	Reason                        string `json:"reason"`
+	ConfirmedOutOfBandTermination bool   `json:"confirmed_out_of_band_termination"`
+}
+
+func (s *Service) commandReconcilePool(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
+	if !control.HasScope(cmd.Principal, "voice:pool:reconcile") && !control.HasScope(cmd.Principal, "client:admin") {
+		return contracts.CommandResult{}, nil, apiError(http.StatusForbidden, "forbidden", "voice pool reconciliation requires an operator scope", nil)
+	}
+	var payload reconcilePoolPayload
+	if err := decodePayload(req.Payload, &payload); err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	payload.Reason = strings.TrimSpace(payload.Reason)
+	if payload.SessionID == "" || payload.Generation < 1 || !payload.ConfirmedOutOfBandTermination || len(payload.Reason) < 12 || len(payload.Reason) > 500 {
+		return contracts.CommandResult{}, nil, apiError(http.StatusBadRequest, "invalid_request", "source session, generation, explicit out-of-band termination confirmation, and a 12-500 character reason are required", nil)
+	}
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM voice_sessions WHERE state IN ('allocating','active','ending')`).Scan(&active); err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	if active != 0 {
+		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_sessions_active", "all known media sessions must be locally closed before pool reconciliation", map[string]any{"active_sessions": active})
+	}
+	var blocked int
+	var source string
+	if err := tx.QueryRowContext(ctx, `SELECT blocked,source_session_id FROM voice_pool_state WHERE id=1`).Scan(&blocked, &source); err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	if blocked == 0 {
+		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_pool_not_blocked", "voice account pool is not awaiting reconciliation", nil)
+	}
+	if source != payload.SessionID {
+		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_reconciliation_stale", "reconciliation source does not match the quarantined media session", nil)
+	}
+	var generation int64
+	var state string
+	err := tx.QueryRowContext(ctx, `SELECT generation,state FROM voice_sessions WHERE id=?`, payload.SessionID).Scan(&generation, &state)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (generation != payload.Generation || state != "quarantined" && state != "ended")) {
+		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_reconciliation_stale", "session generation is not eligible for out-of-band reconciliation", nil)
+	}
+	if err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
+	id := uuid.NewString()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO voice_pool_reconciliations(id,actor_id,source_session_id,generation,reason,method,created_at) VALUES(?,?,?,?,?,'operator_attestation',?)`, id, cmd.Principal.SubjectID, payload.SessionID, payload.Generation, payload.Reason, at); err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	// Retain quarantine and all call/evidence fields. Clearing the source fences
+	// late reports and lookups out of applyTermination; attestation is not evidence.
+	if _, err := tx.ExecContext(ctx, `UPDATE voice_pool_state SET blocked=0,reason_code='',source_session_id='',updated_at=?,updated_by=? WHERE id=1 AND source_session_id=?`, at, cmd.Principal.SubjectID, payload.SessionID); err != nil {
+		return contracts.CommandResult{}, nil, err
+	}
+	eventPayload, _ := json.Marshal(map[string]any{"reconciliation_id": id, "source_session_id": payload.SessionID, "generation": payload.Generation, "method": "operator_attestation", "out_of_band_termination_attested": true, "reason": payload.Reason, "account_identity_available": false})
+	event := contracts.Event{Type: "voice.pool.reconciled", AggregateType: "voice_pool", AggregateID: "default", AggregateVersion: 1, Payload: eventPayload}
+	return contracts.CommandResult{ResourceType: "voice_pool_reconciliation", ResourceID: id, ResourceVersion: 1}, []contracts.Event{event}, nil
 }
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, maxBytes int64, dst any) error {
