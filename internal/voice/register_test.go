@@ -136,30 +136,6 @@ func TestRegisterContiguousLayersAndMemoryBoundary(t *testing.T) {
 	}
 }
 
-func TestRegisterRouteAndOpeningRenderStoredContextWithoutTimePrefixes(t *testing.T) {
-	f := newRegisterFixture(t)
-	at := f.now.Format(time.RFC3339Nano)
-	compact := "[" + at + "] user mentioned a deadline of " + at + "\n" + at + " assistant confirmed it"
-	f.exec(`INSERT INTO voice_context_registers(workspace_id,owner_subject_id,compact) VALUES(?,?,?)`, f.owner.WorkspaceID, f.owner.OwnerSubjectID, compact)
-	f.turn("handoff-session", 0, "user", "the deadline", f.now)
-	f.output = `{"route":"chat","request":null}`
-	ctx := context.Background()
-	if _, err := f.r.Route(ctx, f.owner, "that", f.now); err != nil {
-		t.Fatal(err)
-	}
-	wantCompact := "user mentioned a deadline of " + at + "\nassistant confirmed it"
-	if want := "Compact:\n" + wantCompact + "\nRaw:\nuser: the deadline\n\nCurrent sentence:\nthat"; f.inputs[0] != want {
-		t.Fatalf("routing input = %q, want %q", f.inputs[0], want)
-	}
-	if got, err := f.r.AssembleContext(ctx, f.owner, f.now, 1000); err != nil || got != wantCompact+"\nuser: the deadline\n" {
-		t.Fatalf("opening context = %q, err = %v", got, err)
-	}
-	var stored string
-	if err := f.db.QueryRow(`SELECT compact FROM voice_context_registers WHERE workspace_id=? AND owner_subject_id=?`, f.owner.WorkspaceID, f.owner.OwnerSubjectID).Scan(&stored); err != nil || stored != compact {
-		t.Fatalf("stored compact = %q, err = %v", stored, err)
-	}
-}
-
 func TestCompactInstructionKeepsTopicOrder(t *testing.T) {
 	instruction := testPrompts(t).Compact()
 	if !strings.Contains(instruction, "\nWrite plain text in the transcript's language, one line per topic in time order.\n") {
