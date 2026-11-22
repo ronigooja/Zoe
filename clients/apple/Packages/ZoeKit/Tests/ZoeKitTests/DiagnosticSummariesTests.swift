@@ -2,7 +2,7 @@ import XCTest
 @testable import ZoeKit
 @testable import ZoeUI
 
-private final class CensusClock: SilenceClock {
+private final class CensusClock {
     var date = Date(timeIntervalSince1970: 0)
     func now() -> Date { date }
     func advance(_ seconds: Double) { date = date.addingTimeInterval(seconds) }
@@ -42,10 +42,9 @@ final class DiagnosticSummariesTests: XCTestCase {
         let name = "DiagnosticSummariesTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let model = ZoeAppModel(defaults: defaults, silenceClock: clock)
-        model.setSilenceHangupEnabled(false)
+        let model = ZoeAppModel(defaults: defaults, diagnosticNow: clock.now)
         let api = try APIClient(serverURL: URL(string: "https://census.example")!)
-        let session = VoiceSessionResponse(voiceSessionId: "census-test", generation: 1, state: "active", answerSdp: "")
+        let session = try voiceDialFixture("census-test", generation: 1)
         var epoch = model.installVoiceSessionForTesting(session, api: api)
         var traces: [(String, String)] = []
         model.voiceDiagnosticObserverForTesting = { traces.append(($0, $1)) }
@@ -89,25 +88,6 @@ final class DiagnosticSummariesTests: XCTestCase {
         clock.advance(60)
         model.reportVoiceCensusForTesting()
         XCTAssertEqual(traces.filter { $0.0 == "voice_event_types" }.map(\.1), ["part=1/1;types=turn.delta:1:ignored"])
-    }
-
-    func testSettingsAndTimeoutFormats() {
-        XCTAssertEqual(DiagnosticSummaries.settingsSuffix(enabled: true, seconds: 60), ";sil=on,60")
-        XCTAssertEqual(DiagnosticSummaries.settingsSuffix(enabled: false, seconds: 60), ";sil=off")
-        XCTAssertEqual(DiagnosticSummaries.settings(enabled: true, seconds: 60.5), "on,60.5")
-        XCTAssertEqual(DiagnosticSummaries.settings(enabled: true, seconds: 60) + "->" + DiagnosticSummaries.settings(enabled: false, seconds: 60), "on,60->off,60")
-        XCTAssertEqual(DiagnosticSummaries.timeout(age: 60.25, timeout: 60, enabled: true, interaction: false, elapsed: 103), "since_last_activity=60.2;timeout=60;enabled=1;interaction=0;t=103")
-        XCTAssertLessThanOrEqual(DiagnosticSummaries.timeout(age: .infinity, timeout: .greatestFiniteMagnitude, enabled: false, interaction: true, elapsed: .infinity).count, 200)
-    }
-
-    func testSilenceResetThrottleAndAggregation() {
-        var trace = SilenceResetDiagnostics()
-        let start = Date(timeIntervalSince1970: 0)
-        XCTAssertEqual(trace.note(type: "connect", now: start, elapsed: 0), "n=1;last=connect;t=0")
-        XCTAssertNil(trace.note(type: "assistant.output", now: start.addingTimeInterval(9), elapsed: 9))
-        XCTAssertEqual(trace.note(type: "input_audio_transcription.completed", now: start.addingTimeInterval(10), elapsed: 10), "n=2;last=input_audio_transcription.completed;t=10")
-        XCTAssertNil(trace.note(type: "ignored", now: start.addingTimeInterval(19.9), elapsed: 19.9))
-        XCTAssertEqual(DiagnosticSummaries.eventType(String(repeating: "a", count: 100)).count, 48)
     }
 
     func testCensusOrderingTruncationOmittedAndOverflow() {

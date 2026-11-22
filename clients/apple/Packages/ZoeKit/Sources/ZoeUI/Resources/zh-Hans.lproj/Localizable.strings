@@ -1,8 +1,5 @@
-"%@ Local media is closed and the server confirmed release of the voice lease. This did not cancel a task." = "%@ 本地媒体已关闭，服务器已确认释放语音租约。此操作没有取消任务。";
 "%@ Local media is closed. The setup attempt was stopped; this does not prove upstream termination or cancel a task." = "%@ 本地媒体已关闭，连接尝试已停止。这不表示上游已终止，也不会取消任务。";
-"%@ Local media is closed. Upstream termination is unverified; the account pool remains quarantined. Retry server hangup to repeat the idempotent lease release." = "%@ 本地媒体已关闭。上游终止尚未验证，账户池仍被隔离。请重试服务器挂断，以重复执行同一租约释放操作。";
 "%@ Stopping voice setup and releasing local media." = "%@ 正在停止语音连接并释放本地媒体。";
-"%@ Voice controls are stopped while local media closes and server release is checked." = "%@ 本地媒体正在关闭并检查服务器释放状态，语音控制已停止。";
 "1" = "1";
 "Active" = "进行中";
 "Canceled" = "已取消";
@@ -10,16 +7,12 @@
 "Zoe" = "Zoe";
 "Enter a valid Zoe server URL." = "请输入有效的 Zoe 服务器地址。";
 "Failed" = "失败";
-"Local media is closed, but server hangup is unconfirmed; the session remains fenced. %@%@" = "本地媒体已关闭，但服务器挂断尚未确认；会话仍受隔离。%@%@";
-"Local media is closed. Upstream termination is unverified; the account pool remains quarantined. Retry server hangup to repeat the idempotent lease release." = "本地媒体已关闭。上游终止尚未验证，账户池仍被隔离。请重试服务器挂断，以重复执行同一租约释放操作。";
-"Local voice media is closed. Server hangup is unconfirmed or the account pool remains quarantined; no new session can start until the pool is cleared. %@" = "本地语音媒体已关闭。服务器挂断尚未确认或账户池仍被隔离；清除隔离前无法启动新会话。%@";
 "The WebRTC connection closed." = "WebRTC 连接已关闭。";
 "The WebRTC connection failed." = "WebRTC 连接失败。";
 "The WebRTC connection was lost." = "WebRTC 连接已断开。";
 "The previous voice audio route became unavailable." = "先前的语音音频路由已不可用。";
 "The server returned a response the app could not read." = "服务器返回了应用无法读取的响应。";
 "The system interrupted the voice audio session." = "系统中断了语音音频会话。";
-"The voice lease heartbeat failed: %@" = "语音租约心跳失败：%@";
 "This saved action belongs to a different workspace and was not retried." = "此已保存操作属于其他工作区，未被重试。";
 "Voice setup was stopped locally." = "语音连接已在本地停止。";
 "unknown" = "未知";

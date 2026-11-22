@@ -19,7 +19,7 @@ final class VoiceReadinessTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let config = try decoder.decode(VoiceConfig.self, from: Data("""
-        {"version":"\(version)","defaults":{"voice":"default","voice_mode":"","language_code":"auto"},
+        {"version":"\(version)","gateway_dial_origin":"https://gateway.example","defaults":{"voice":"default","voice_mode":"","language_code":"auto"},
          "voices":[],"voice_modes":[],"languages":[],
          "webrtc":{"data_channel":{"label":"zoe","negotiated":true,"id":0},
          "ice_servers":[],"receive_audio":true,"receive_video":false}}
@@ -52,7 +52,7 @@ final class VoiceReadinessTests: XCTestCase {
         await model.refreshVoiceReadiness() // Configure the connection before installing media.
         XCTAssertEqual(model.voiceConfig, next.0)
         let api = try APIClient(serverURL: URL(string: model.serverAddress)!)
-        let session = VoiceSessionResponse(voiceSessionId: "active", generation: 1, state: "active", answerSdp: "")
+        let session = try voiceDialFixture("active", generation: 1)
         let epoch = model.installVoiceSessionForTesting(session, api: api)
         await model.refreshVoiceReadiness()
         XCTAssertEqual(model.voiceStatus, .active(sessionID: "active", mediaGeneration: 1))
@@ -143,10 +143,8 @@ final class VoiceReadinessTests: XCTestCase {
         await model.refreshVoiceReadiness()
         let api = try APIClient(serverURL: URL(string: model.serverAddress)!)
         _ = model.installVoiceSessionForTesting(
-            VoiceSessionResponse(voiceSessionId: "ending", generation: 1, state: "active", answerSdp: ""), api: api)
-        model.voiceHangupOverrideForTesting = { _ in
-            VoiceOperationResponse(ok: true, state: "ended", upstreamTermination: "verified", poolBlocked: false)
-        }
+            try voiceDialFixture("ending", generation: 1), api: api)
+        model.voiceHangupOverrideForTesting = { _ in }
         let started = expectation(description: "readiness suspended before hangup")
         var continuation: CheckedContinuation<(VoiceConfig, VoicePoolStatus), Error>?
         model.voiceReadinessOverrideForTesting = {

@@ -12,7 +12,7 @@ final class VoicePreferenceTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         var config = try decoder.decode(VoiceConfig.self, from: Data("""
-        {"version":"v1","defaults":{"voice":"default","voice_mode":"","language_code":"auto"},
+        {"version":"v1","gateway_dial_origin":"https://gateway.example","defaults":{"voice":"default","voice_mode":"","language_code":"auto"},
          "voices":[{"id":"chosen","name":"Chosen"}],"voice_modes":[],"languages":[],
          "webrtc":{"data_channel":{"label":"zoe","negotiated":true,"id":0},
          "ice_servers":[],"receive_audio":true,"receive_video":false}}

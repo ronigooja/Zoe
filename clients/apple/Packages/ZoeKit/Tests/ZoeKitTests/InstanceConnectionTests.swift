@@ -272,7 +272,7 @@ final class InstanceConnectionTests: XCTestCase {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
             let journal = try CommandJournal(fileURL: directory.appendingPathComponent("commands.json"))
-            let queued = PendingCommand(idempotencyKey: UUID().uuidString, kind: "voice.turn.commit", expectedVersion: nil,
+            let queued = PendingCommand(idempotencyKey: UUID().uuidString, kind: "voice.text_input", expectedVersion: nil,
                                         payload: .object(["title": .string("Queued work")]), createdAt: "now",
                                         workspaceID: "default", expectedResourceType: nil, expectedResourceID: nil)
             try await journal.append(queued)

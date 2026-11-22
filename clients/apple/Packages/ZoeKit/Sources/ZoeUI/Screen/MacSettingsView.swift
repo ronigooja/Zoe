@@ -6,9 +6,7 @@ public struct MacSettingsView: View {
     @ObservedObject var model: ZoeAppModel
     @State private var address = ""
     @State private var key = ""
-    @State private var silenceSeconds = ""
     @State private var confirmingClearKey = false
-    @FocusState private var secondsFocused: Bool
 
     public init(model: ZoeAppModel) { self.model = model }
 
@@ -31,20 +29,6 @@ public struct MacSettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         Text("Connect to load available voices.").foregroundStyle(.secondary)
-                    }
-                }
-                Section("Silence") {
-                    Toggle("Hang up after silence", isOn: Binding(
-                        get: { model.silenceHangupEnabled },
-                        set: { model.setSilenceHangupEnabled($0) }
-                    ))
-                    if model.silenceHangupEnabled {
-                        TextField("Silence timeout (seconds)", text: $silenceSeconds)
-                            .onSubmit { applySilenceSeconds() }
-                            .onChange(of: secondsFocused) { _, focused in
-                                if !focused { applySilenceSeconds() }
-                            }
-                            .focused($secondsFocused)
                     }
                 }
                 Section {
@@ -128,21 +112,8 @@ public struct MacSettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
-        .onAppear { address = model.serverAddress; refreshSilenceSeconds(); model.refreshSavedKeyText() }
-        .onChange(of: model.silenceTimeoutSeconds) { _, _ in refreshSilenceSeconds() }
+        .onAppear { address = model.serverAddress; model.refreshSavedKeyText() }
         .task(id: model.connectionEpoch) { await model.refreshVoiceReadiness() }
-    }
-
-    private func applySilenceSeconds() {
-        if let seconds = Double(silenceSeconds.trimmingCharacters(in: .whitespacesAndNewlines)), seconds.isFinite {
-            model.setSilenceTimeoutSeconds(seconds)
-        }
-        refreshSilenceSeconds()
-    }
-
-    private func refreshSilenceSeconds() {
-        let seconds = model.silenceTimeoutSeconds
-        silenceSeconds = seconds.rounded() == seconds ? String(Int(seconds)) : String(seconds)
     }
 
     private var connectionStatus: String {

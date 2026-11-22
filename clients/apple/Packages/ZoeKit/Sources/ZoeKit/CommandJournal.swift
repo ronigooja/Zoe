@@ -99,6 +99,8 @@ public actor CommandCoordinator {
         self.journal = journal
     }
 
+    private static let recoverableKinds: Set<String> = ["voice.text_input", "ui.rendered", "ui.action"]
+
     /// A command is journaled before POST. A retry first checks the durable receipt by key.
     public func submit(kind: String, expectedVersion: Int64? = nil, payload: JSONValue, workspaceID: String? = nil, idempotencyKey: String? = nil,
                        isValid: @MainActor @Sendable () -> Bool = { true }) async throws -> CommandOutcome {
@@ -140,7 +142,7 @@ public actor CommandCoordinator {
         let commands = try await journal.all()
         try await requireValidity(isValid)
         var outcomes: [CommandOutcome] = []
-        for command in commands where command.kind == "voice.turn.commit" || command.kind == "voice.turn.handoff" || command.kind == "voice.text_input" || command.kind == "ui.rendered" || command.kind == "ui.action" {
+        for command in commands where Self.recoverableKinds.contains(command.kind) {
             try await requireValidity(isValid)
             guard !enforceWorkspace || (command.workspaceID != nil && currentWorkspaceID != nil && command.workspaceID == currentWorkspaceID) else {
                 await onWorkspaceMismatch(command)
@@ -164,7 +166,9 @@ public actor CommandCoordinator {
     }
 
     public func retryPending(idempotencyKey: String, currentWorkspaceID: String?) async throws -> CommandOutcome {
-        guard let command = try await journal.all().first(where: { $0.idempotencyKey == idempotencyKey }) else {
+        guard let command = try await journal.all().first(where: {
+            $0.idempotencyKey == idempotencyKey && Self.recoverableKinds.contains($0.kind)
+        }) else {
             throw ZoeError.persistence("The saved action is no longer pending.")
         }
         guard let commandWorkspaceID = command.workspaceID,
