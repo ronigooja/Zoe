@@ -49,15 +49,15 @@ Steward chooses semantically using these definitions and supplied context, not e
 
 ## Persistence and idempotency
 
-Pending-question IDs survive retries and are scoped to the selected task. Keep source identity, decision, selected stable IDs and resulting task/entry/question linkage. Before applying a decision, the server validates ownership, selected IDs, eligibility and current pending state transactionally.
+Pending-question IDs survive retries and are scoped to the selected task. Keep source identity, decision, selected stable IDs and resulting task/entry/question linkage. Inside the applying transaction, the [delegation worker](execution.md#required-behavior) checks the Steward snapshot and validates ownership, selected IDs, eligibility and current pending state.
 
 ## Failure and recovery
 
-If facts changed, refresh and re-evaluate the selection; never silently convert it into new work. Invalid model output or an unavailable model fails without admitting work. Existing processing-error behavior may report failure; it is not fallback authorization.
+If the snapshot is missing or facts changed, the worker refreshes and re-evaluates the selection before applying it; a stale or rejected decision never silently becomes new work. Invalid model output or an unavailable model follows [classification failure rules](register.md#failure-and-recovery). Existing processing-error behavior may report failure; it is not fallback authorization.
 
 ## Implementation locations
 
-[Candidate retrieval](../../../internal/voice/taskcandidates.go), [Steward](../../../internal/steward/choose.go), [task commands](../../../internal/control/core_handlers.go).
+[Candidate retrieval](../../../internal/voice/taskcandidates.go), [Steward](../../../internal/steward/choose.go), [snapshot check](../../../internal/voice/handoff_snapshot.go), [task commands](../../../internal/control/core_handlers.go).
 
 ## Verification obligations
 

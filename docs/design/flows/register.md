@@ -2,7 +2,7 @@
 
 ## Purpose and boundary
 
-Approved target, not a claim of current implementation, deployment or acceptance. The register makes one routing call. Request derivation does not expand the user's authority. No additional impact-confirmation or delegation prohibition is introduced.
+Approved target, not a claim of current implementation, deployment or acceptance. The [delegation worker](execution.md#required-behavior) invokes Register for one routing call. Request derivation does not expand the user's authority. No additional impact-confirmation or delegation prohibition is introduced.
 
 ## Inputs and outputs
 
@@ -41,7 +41,7 @@ Invalid/partial output creates no fallback task or memory operation. Classificat
 
 ## Implementation locations
 
-[Register](../../../internal/voice/register.go), [handoff preflight](../../../internal/voice/handoff_preflight.go).
+[Register](../../../internal/voice/register.go).
 
 ## Verification obligations
 

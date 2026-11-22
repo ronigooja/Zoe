@@ -12,7 +12,8 @@ identify implementation locations, not conformance.
 ## Main flow
 
 ```text
-Original dialogue -> Register
+Apple dial -> gateway -> Zoe call authorization and opening -> gateway AVAS + client relay
+AVAS client-targeted delegation -> gateway transcript ingest -> Zoe worker -> Register
   chat -----------> upstream conversation
   memory_write ---> memory worker
   recall ---------> scoped search -> unchanged text delivery
@@ -35,11 +36,11 @@ persistence, and recovery.
 |---|---|
 | Routing and complete contextual requests | [Register](flows/register.md) |
 | Task selection, action fields, and stale decisions | [Steward](flows/steward.md) |
-| Handoff, Worker input, append, answer, and continuation | [Execution](flows/execution.md) |
+| Delegation ingest, Worker input, append, answer, and continuation | [Execution](flows/execution.md) |
 | Authoritative results, voice chunks, receipts, and next-call context | [Results](flows/results.md) |
 | UI_Controller, render ACKs, bound input, and event recovery | [Screen](flows/screen.md) |
 | Memory writes, recall, ingestion, and compact/raw coverage | [Memory](flows/memory.md) |
-| Media attempts, leases, recovery, and valid-activity silence | [Media](flows/media.md) |
+| Gateway-owned dial and hangup, Zoe session binding, leases, and termination evidence | [Media](flows/media.md) |
 | Independent model consumers, atomic configuration, and retained deployment state | [Configuration](flows/configuration.md) |
 
 Use [development](../development.md) for documentation checks and the acceptance
