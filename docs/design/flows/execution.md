@@ -21,15 +21,14 @@ Worker prompt entries are JSON objects containing ID, content and optional quest
 ## Required behavior
 
 The existing voice ingest runner credential is sent as `Authorization: Bearer
-<runner token>` over HTTPS. Its `voice:turn:ingest` scope and workspace
-allowlist authorize only `POST /runner/v1/voice/turns` and the three
+<runner token>` over HTTPS. Its `voice:turn:ingest` scope authorizes only
+`POST /runner/v1/voice/turns` and the three
 [lifecycle POST routes](media.md#gateway-lifecycle-reports-to-zoe), not a
-path prefix or any execution route. No new scope. For `call.start`, check
-the workspace from the validated instance key; for other calls and turns,
-check the workspace from the matched Zoe session. Zoe derives owner, device,
-session and generation from its records, never from caller-supplied actor
-fields. Client commands `voice.text_input`, `ui.screen`, `ui.rendered` and
-`ui.action` are unchanged.
+path prefix or any execution route. No new scope. For `call.start`, Zoe derives
+owner and device from the validated instance key; for other calls and turns,
+Zoe uses the matched session's recorded owner, device and generation, never
+caller-supplied actor fields. Client commands `voice.text_input`, `ui.screen`,
+`ui.rendered` and `ui.action` are unchanged.
 
 One Zoe-internal worker is the sole classification trigger. It runs Register
 then Steward when required, outside the applying transaction, and applies the

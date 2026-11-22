@@ -9,6 +9,24 @@ The component contracts define model inputs and outputs, producers and consumers
 persistence, recovery, and verification obligations for these flows. Code links
 identify implementation locations, not conformance.
 
+## Instance boundary
+
+A Zoe instance is the product boundary. There is no product workspace in
+the UI, wire contracts, persisted state, or runner authorization. Within the
+instance, retain owner, device, task, and runner scope and assignment checks
+where they apply. Event cursors are instance-local; command idempotency remains
+owner-scoped. Apple filters local history and pending command replay by the
+authenticated instance identity, not server URL alone. Key rotation does not
+change instance identity; a fresh instance does not inherit the previous
+instance's pending commands or history.
+
+Runner execution directories and their filesystem permissions are separate
+from product identity and remain unchanged.
+
+Removal requires a fresh Zoe instance, with no migration of old Zoe state and
+no compatibility with older Zoe clients or runners. The gateway wire contract
+and gateway database are unchanged.
+
 ## Main flow
 
 ```text

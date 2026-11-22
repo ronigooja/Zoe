@@ -8,8 +8,8 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 | Producer / fields | Consumer and transformation |
 |---|---|
-| Explicit memory_write: full register request and owner/workspace scope | Worker searches existing memories, selects add/replace/none, validates operations and persists in Mem0/Qdrant. No original-utterance duplicate execution input or Steward task. |
-| Recall: full register request and owner/workspace scope | Worker scoped search returns stored texts; deliver those texts unchanged to voice. No task, answer model, second register round or fixed not-found speech. |
+| Explicit memory_write: full register request and owner scope | Worker searches existing memories, selects add/replace/none, validates operations and persists in Mem0/Qdrant. No original-utterance duplicate execution input or Steward task. |
+| Recall: full register request and owner scope | Worker scoped search returns stored texts; deliver those texts unchanged to voice. No task, answer model, second register round or fixed not-found speech. |
 | Scheduled batch: original transcripts and confirmed context events in a fixed owner interval | Memory worker ingests chronological chunks; Go does not extract facts. |
 | Register compact/raw/live from original dialogue, confirmed context events and M | Compact covers M to retained compact right edge; raw covers that edge to current input, then live current sentence. Rebuild compact from source, not incrementally. |
 

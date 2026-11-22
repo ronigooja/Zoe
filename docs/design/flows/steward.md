@@ -6,7 +6,7 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 ## Inputs and outputs
 
-The server retrieves owner/workspace-scoped task facts, preserving full goals, pending questions and retained additions. Titles, quoted original utterances and per-call aliases are not selectors. The exact schemas are:
+The server retrieves owner-scoped task facts, preserving full goals, pending questions and retained additions. Titles, quoted original utterances and per-call aliases are not selectors. The exact schemas are:
 
 ```typescript
 type StewardInput = {

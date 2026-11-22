@@ -54,7 +54,7 @@ row. `{session_id}` is the Zoe `voice_session_id`, not the gateway handle.
 `call.start` uses the dial input validation, conflict and 503 codes. Missing
 or invalid runner credentials use `401 unauthenticated`; missing or invalid
 instance keys use that same error with `error.details.credential: "instance_key"`.
-Disallowed runner scope or workspace returns `403 forbidden`. On this route
+Disallowed runner scope returns `403 forbidden`. On this route
 the gateway maps only the instance-key 401 to the dial's 401; runner auth
 failure maps to `503 voice_unavailable`.
 For `call.established` and `call.ended`, use the same 400/401/403 codes,
@@ -128,7 +128,7 @@ middleware. The gateway does not verify, hash or retain the instance key;
 both identities and validates the client's key using the
 [existing instance-key check and rotation](../../../internal/control/auth.go)
 (constant-time SHA-256 digest comparison and credential generation), and
-establishes the workspace, owner and device from the validated key. Rotation
+establishes the owner and device from the validated key. Rotation
 takes effect immediately without synchronization to the gateway. For hangup,
 the gateway forwards the currently presented bearer in memory only to Zoe's
 existing owner-scoped `GET /v1/voice/sessions/{session_id}` for the Zoe ID bound
@@ -191,7 +191,7 @@ or authority to reuse an account.
 
 ## Persistence and idempotency
 
-- `call.start` deduplicates by `(workspace, owner, request_id)` before admission.
+- `call.start` deduplicates by `(owner, request_id)` before admission.
   Hash the decoded create payload with SHA-256 over Go `encoding/json.Marshal`:
   fields in order `request_id`, `offer_sdp`, `voice`, `voice_mode`,
   `language_code`; omit empty optional strings and do not normalize/default
