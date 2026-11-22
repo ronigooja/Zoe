@@ -2,7 +2,6 @@ package voice
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -14,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/control"
