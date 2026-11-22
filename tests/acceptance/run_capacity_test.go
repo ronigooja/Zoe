@@ -3,6 +3,7 @@ package acceptance
 import (
 	"context"
 	"encoding/json"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"net/http"
 	"strconv"
 	"testing"
@@ -15,7 +16,11 @@ func TestConfiguredRunCapKeepsUnknownOutcomeFenced(t *testing.T) {
 	code, deviceToken := reviewToken(t), reviewToken(t)
 	runnerTokens := []string{reviewToken(t), reviewToken(t), reviewToken(t), reviewToken(t), reviewToken(t)}
 	profile := control.RuntimeProfile{ID: "worker", RuntimeRouteID: "native", ModelRouteID: "model", Role: "worker", IsolationPolicy: "opencode-workspace-write-v1"}
-	_, h := reviewServer(t, control.Config{DefaultProfileID: "worker", MaxRuns: 4, Profiles: map[string]control.RuntimeProfile{"worker": profile}}, func(s *control.Server) {
+	policy, err := limits.Defaults().With("max_concurrent_runs", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, h := reviewServer(t, control.Config{DefaultProfileID: "worker", Limits: policy, Profiles: map[string]control.RuntimeProfile{"worker": profile}}, func(s *control.Server) {
 		for i, token := range runnerTokens {
 			if err := s.RegisterRunnerCredential(context.Background(), token, "runner-"+strconv.Itoa(i), []string{"default"}, []string{"runner:claim", "runner:observe", "runner:control:read"}); err != nil {
 				t.Fatal(err)

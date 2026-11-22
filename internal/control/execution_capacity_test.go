@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"testing"
 	"time"
 
@@ -96,7 +97,7 @@ func TestSnapshotExecutionCapacityRetainsUnknownSlotsAndExplainsQueue(t *testing
 
 func TestConfiguredCapacityLimitChangesAvailableSlots(t *testing.T) {
 	store, server, key := instanceAuthFixture(t)
-	server.cfg.MaxRuns = 3
+	server.cfg.Limits, _ = limits.Defaults().With("max_concurrent_runs", 3)
 	at := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,owner_subject_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('configured-task','default','owner','configured','goal','user','profile','active',1,?,?, 'instance','command')`, at, at); err != nil {
 		t.Fatal(err)

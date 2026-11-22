@@ -37,16 +37,16 @@ Divider.axis=horizontal|vertical;
 Button.variant=default|primary|borderless.
 Every component accepts numeric weight.
 
-Output two blocks in order: <ui-meta>...</ui-meta> then <a2ui-json>...</a2ui-json>, at most 65536 UTF-8 bytes.
+Output two blocks in order: <ui-meta>...</ui-meta> then <a2ui-json>...</a2ui-json>, within the supplied total byte limit.
 Each JSON object has unique keys.
 ui-meta contains container (popover or window), size (integer width and height), and feedback only as specified by the active mode; no other keys.
 Popover width is 280..600 and height 200..720; window width is 320..1200 and height 240..1000; size must not exceed screen when supplied.
-a2ui-json is a bare JSON array of 1..64 messages for one new surface.
+a2ui-json is a nonempty bare JSON array of messages for one new surface, within the supplied message limit.
 Each message is an object whose sole key is createSurface, updateComponents or updateDataModel; the server adds version.
 Start with exactly one createSurface, followed by the updates that populate it.
 Use one nonempty placeholder surfaceId of at most 256 UTF-8 bytes throughout; the server assigns the identity.
 createSurface contains only surfaceId.
-updateComponents contains only surfaceId and components, an array of 1..256 component objects.
+updateComponents contains only surfaceId and components, a nonempty array of component objects within the supplied component limit.
 Each component has a unique nonempty string id of at most 256 UTF-8 bytes, a component key naming its kind, and that kind's properties; include exactly one component with id root.
 updateDataModel contains only surfaceId, optional string path and optional value; missing value removes the path.
 
@@ -54,7 +54,7 @@ updateDataModel contains only surfaceId, optional string path and optional value
 task is null for pure presentation, or contains the authoritative result for task_ui, including redisplay.
 Mode: show.
 Present content for viewing.
-feedback is required nonempty plain-language display context of at most 8000 UTF-8 bytes describing the pending presentation.
+feedback is required nonempty plain-language display context describing the pending presentation, within the supplied UTF-8 byte limit.
 Complete example output:
 <ui-meta>{"container":"window","feedback":"The requested text is ready to show.","size":{"width":400,"height":300}}</ui-meta>
 <a2ui-json>[{"createSurface":{"surfaceId":"screen"}},{"updateComponents":{"surfaceId":"screen","components":[{"id":"root","component":"Column","children":["title"]},{"id":"title","component":"Text","text":"Shopping list"}]}}]</a2ui-json>

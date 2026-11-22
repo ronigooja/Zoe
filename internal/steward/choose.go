@@ -81,6 +81,11 @@ type Choice struct {
 	Reply      *string `json:"reply"`
 }
 
+// InputLimitError carries counts only, so the caller can log it against a turn ID.
+type InputLimitError struct{ Bytes, Limit int }
+
+func (e *InputLimitError) Error() string { return "steward_input_too_large" }
+
 var ErrNoMatch = errors.New("no exact steward candidate identity match")
 var ErrNoQuestion = errors.New("no exact steward pending question identity match")
 
@@ -106,7 +111,8 @@ func (c *Client) ChooseLatest(ctx context.Context, load func(context.Context) (I
 	call := logging.ModelCallFromContext(ctx, "steward")
 	defer func() {
 		call.Result(choice, errorKind(resultErr))
-		if resultErr != nil {
+		var oversized *InputLimitError
+		if resultErr != nil && !errors.As(resultErr, &oversized) {
 			logging.Errorf("steward status=choose_failed error_kind=%s", errorKind(resultErr))
 		}
 	}()
@@ -122,6 +128,9 @@ func (c *Client) ChooseLatest(ctx context.Context, load func(context.Context) (I
 		data, err := json.Marshal(input)
 		if err != nil {
 			return "", errors.New("could not encode steward choice input")
+		}
+		if limit := c.limits.Int("steward_input_max_bytes"); len(data) > limit {
+			return "", &InputLimitError{Bytes: len(data), Limit: limit}
 		}
 		call.Input(c.instructions, string(data))
 		attemptCtx, cancel := context.WithTimeout(ctx, c.timeout)

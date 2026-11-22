@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -103,7 +104,7 @@ func (s *Service) deliverDurableText(ctx context.Context, workspace, owner, kind
 		return false, "checkpoint_storage"
 	}
 	for ordinal, remaining := 0, text; len(remaining) > 0; ordinal++ {
-		n := min(8000, len(remaining))
+		n := min(limits.GatewayTextChunkBytes, len(remaining))
 		for n < len(remaining) && !utf8.RuneStart(remaining[n]) {
 			n--
 		}

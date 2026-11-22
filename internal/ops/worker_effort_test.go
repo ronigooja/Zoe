@@ -176,6 +176,7 @@ func TestProviderEffortOnlyChangeRendersAndRestartsOpenCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.ReasoningEffort = "high"
+	setProviderTestLimits(t)
 	if _, err := m.ConfigureProvider(context.Background(), d, c, server.Client()); err != nil {
 		t.Fatal(err)
 	}

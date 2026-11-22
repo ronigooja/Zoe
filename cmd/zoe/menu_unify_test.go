@@ -31,6 +31,7 @@ func workerMenuFixture(t *testing.T, status int) (string, string) {
 	}))
 	t.Cleanup(s.Close)
 	root := t.TempDir()
+	writeTestLimits(t, root)
 	key := filepath.Join(root, "worker-key")
 	if err := os.WriteFile(key, []byte("fixture-key\n"), 0600); err != nil {
 		t.Fatal(err)

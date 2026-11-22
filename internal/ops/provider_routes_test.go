@@ -36,6 +36,7 @@ func TestConfigureProviderModelChangeRewritesAllRoutesPreservingFields(t *testin
 				return nil, nil
 			})
 			model := "cliproxyapi/test-model"
+			setProviderTestLimits(t)
 			_, err := m.ConfigureProvider(context.Background(), d, ProviderConfig{BaseURL: server.URL, Model: model, SecretPath: filepath.Join(d.Root, "token"), Secret: "next"}, server.Client())
 			if err != nil {
 				t.Fatal(err)
@@ -92,6 +93,7 @@ func TestConfigureProviderReloadFailureRestoresOldRoutes(t *testing.T) {
 		}
 		return nil, nil
 	})
+	setProviderTestLimits(t)
 	_, err := m.ConfigureProvider(context.Background(), d, ProviderConfig{BaseURL: server.URL, Model: "cliproxyapi/test-model", SecretPath: filepath.Join(d.Root, "token"), Secret: "next"}, server.Client())
 	if err == nil || !strings.Contains(err.Error(), "route reload failure") {
 		t.Fatalf("configure error = %v", err)
@@ -116,6 +118,7 @@ func TestConfigureProviderInvalidOrAbsentRoutesUntouched(t *testing.T) {
 				t.Fatal(err)
 			}
 			m := NewManager(func(context.Context, string, ...string) ([]byte, error) { return nil, nil })
+			setProviderTestLimits(t)
 			_, err := m.ConfigureProvider(context.Background(), d, ProviderConfig{BaseURL: server.URL, Model: "cliproxyapi/test-model", SecretPath: filepath.Join(d.Root, "token"), Secret: "next"}, server.Client())
 			if err != nil {
 				t.Fatal(err)

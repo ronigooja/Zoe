@@ -207,7 +207,7 @@ func (s *Service) commandUIAction(ctx context.Context, tx *sql.Tx, cmd control.C
 		}
 	}
 	if voiceInput {
-		if err := insertTextInput(ctx, tx, cmd, text); err != nil {
+		if err := s.insertTextInput(ctx, tx, cmd, text); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE ui_requests SET status='input_received',chat_input=0,updated_at=? WHERE id=?`, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano), p.RequestID)

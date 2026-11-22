@@ -120,6 +120,10 @@ func (s *Service) classifyDelegation(parent context.Context, id string) {
 			}
 		}
 	}
+	var oversized *steward.InputLimitError
+	if errors.As(err, &oversized) {
+		logging.Errorf("steward_input_too_large turn_id=%s session_id=%s input_bytes=%d limit_bytes=%d", id, session, oversized.Bytes, oversized.Limit)
+	}
 	if parent.Err() != nil {
 		return
 	}
@@ -153,7 +157,7 @@ func (s *Service) classifyDelegation(parent context.Context, id string) {
 		}
 	}
 	logging.Infof("voice_routing id=%s failed=%t storage_error=%t", id, err != nil, writeErr != nil)
-	if err != nil || writeErr != nil {
+	if (err != nil && oversized == nil) || writeErr != nil {
 		logging.Errorf("voice_routing_failure id=%s error_kind=routing_or_storage", id)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"io"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 )
 
 type Client struct {
+	limits                                    limits.Set
 	base, model, effort, thinking, key, style string
 	http                                      *http.Client
 	mu                                        sync.Mutex
@@ -54,7 +56,7 @@ func Timeout(prefix string, getenv func(string) string, def, min, max int) (time
 	return time.Duration(ms) * time.Millisecond, nil
 }
 
-func FromEnv(prefix string, getenv func(string) string, readFile func(string) ([]byte, error), def, min, max int) (*Client, error) {
+func FromEnv(prefix string, getenv func(string) string, readFile func(string) ([]byte, error), def, min, max int, sets ...limits.Set) (*Client, error) {
 	if getenv == nil || readFile == nil {
 		return nil, errors.New("model configuration functions are required")
 	}
@@ -97,7 +99,7 @@ func FromEnv(prefix string, getenv func(string) string, readFile func(string) ([
 	if err != nil {
 		return nil, err
 	}
-	return &Client{base: base, model: model, effort: effort, thinking: thinking, key: key, http: &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}, Timeout: timeout}}, nil
+	return &Client{limits: limits.Resolve(sets), base: base, model: model, effort: effort, thinking: thinking, key: key, http: &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}, Timeout: timeout}}, nil
 }
 
 func (c *Client) Style() string {
@@ -250,9 +252,13 @@ func (c *Client) call(ctx context.Context, style, instructions, input string) ([
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, resp.StatusCode, &HTTPError{StatusCode: resp.StatusCode}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	limit := c.limits.Int64("model_api_response_max_bytes")
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, resp.StatusCode, errors.New("could not read model response")
+	}
+	if int64(len(body)) > limit {
+		return nil, resp.StatusCode, errors.New("model response exceeds byte limit")
 	}
 	return body, resp.StatusCode, nil
 }

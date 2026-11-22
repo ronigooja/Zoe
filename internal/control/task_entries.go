@@ -15,11 +15,6 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 )
 
-const (
-	defaultTaskEntriesLimit = 50
-	maxTaskEntriesLimit     = 100
-)
-
 type taskEntriesCursor struct {
 	Version   int    `json:"v"`
 	TaskID    string `json:"task_id"`
@@ -48,7 +43,7 @@ func (s *Server) handleTaskEntries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, apiError(http.StatusBadRequest, "invalid_request", "task_id is required", nil))
 		return
 	}
-	limit, err := parseTaskEntriesLimit(r.URL.Query().Get("limit"))
+	limit, err := s.parseTaskEntriesLimit(r.URL.Query().Get("limit"))
 	if err != nil {
 		writeError(w, apiError(http.StatusBadRequest, "invalid_request", "limit must be an integer from 1 to 100", nil))
 		return
@@ -66,12 +61,12 @@ func (s *Server) handleTaskEntries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
-func parseTaskEntriesLimit(raw string) (int, error) {
+func (s *Server) parseTaskEntriesLimit(raw string) (int, error) {
 	if raw == "" {
-		return defaultTaskEntriesLimit, nil
+		return s.cfg.Limits.Int("task_entries_page_default"), nil
 	}
 	limit, err := strconv.Atoi(raw)
-	if err != nil || limit < 1 || limit > maxTaskEntriesLimit {
+	if err != nil || limit < 1 || limit > s.cfg.Limits.Int("task_entries_page_max") {
 		return 0, errors.New("limit out of range")
 	}
 	return limit, nil

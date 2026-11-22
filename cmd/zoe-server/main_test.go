@@ -16,25 +16,6 @@ import (
 	"time"
 )
 
-func TestMaxRunsEnvDefaultValidAndInvalid(t *testing.T) {
-	t.Setenv("ZOE_MAX_RUNS", "")
-	if got := maxRunsEnv(); got != 12 {
-		t.Fatalf("default=%d", got)
-	}
-	for _, value := range []string{"1", "64", "12"} {
-		t.Setenv("ZOE_MAX_RUNS", value)
-		if maxRunsEnv() == 0 {
-			t.Fatalf("valid %s rejected", value)
-		}
-	}
-	for _, value := range []string{"0", "65", "not-a-number"} {
-		t.Setenv("ZOE_MAX_RUNS", value)
-		if maxRunsEnv() != 0 {
-			t.Fatalf("invalid %s accepted", value)
-		}
-	}
-}
-
 func TestWaitLimitEnvExactDurationAndConfigRange(t *testing.T) {
 	for _, tc := range []struct {
 		value string
@@ -67,7 +48,7 @@ func TestServerSubprocessBootstrapAndRestart(t *testing.T) {
 		t.Fatalf("build server: %v\n%s", err, output)
 	}
 	missing := exec.Command(binary)
-	missing.Env = append(os.Environ(), "ZOE_PROMPT_DIR="+t.TempDir())
+	missing.Env = append(os.Environ(), "ZOE_LIMITS_FILE=../../deploy/limits.json", "ZOE_PROMPT_DIR="+t.TempDir())
 	missingOutput, err := missing.CombinedOutput()
 	if err == nil || !bytes.Contains(missingOutput, []byte("prompt_missing: ui_controller")) {
 		t.Fatalf("missing prompt did not fail safely: %v", err)
@@ -88,7 +69,7 @@ func TestServerSubprocessBootstrapAndRestart(t *testing.T) {
 	var stderr bytes.Buffer
 	start := func() *exec.Cmd {
 		cmd := exec.Command(binary)
-		cmd.Env = append(os.Environ(), "ZOE_LISTEN_ADDR="+addr, "ZOE_DATABASE_PATH="+db, "ZOE_INSTANCE_KEY="+startupKey, "ZOE_VOICE_GATEWAY_URL=", "ZOE_VOICE_GATEWAY_API_KEY=", "ZOE_PROMPT_DIR=../../deploy/prompts")
+		cmd.Env = append(os.Environ(), "ZOE_LISTEN_ADDR="+addr, "ZOE_DATABASE_PATH="+db, "ZOE_INSTANCE_KEY="+startupKey, "ZOE_VOICE_GATEWAY_URL=", "ZOE_VOICE_GATEWAY_API_KEY=", "ZOE_LIMITS_FILE=../../deploy/limits.json", "ZOE_PROMPT_DIR=../../deploy/prompts")
 		for _, prefix := range []string{"ZOE_REGISTER", "ZOE_COMPACT"} {
 			cmd.Env = append(cmd.Env, prefix+"_BASE_URL=https://model.invalid", prefix+"_MODEL=fixture", prefix+"_API_KEY_FILE="+modelKey)
 		}

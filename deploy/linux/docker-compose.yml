@@ -26,7 +26,6 @@ services:
       ZOE_DATABASE_PATH: /var/lib/zoe/server/data/zoe.sqlite
       ZOE_RUNTIME_PROFILES: ${ZOE_RUNTIME_PROFILES:?set server-selected runtime profiles}
       ZOE_DEFAULT_PROFILE_ID: ${ZOE_DEFAULT_PROFILE_ID:?set default runtime profile}
-      ZOE_MAX_RUNS: ${ZOE_MAX_RUNS:-12}
       ZOE_WAIT_LIMIT_MINUTES: ${ZOE_WAIT_LIMIT_MINUTES:-30}
       ZOE_RUNNER_ID: ${ZOE_RUNNER_ID:-configured-runner}
       ZOE_RUNNER_WORKSPACES: ${ZOE_RUNNER_WORKSPACES:-default}
@@ -34,6 +33,7 @@ services:
       ZOE_CAPABILITY_RUNTIME_BACKEND: ${ZOE_CAPABILITY_RUNTIME_BACKEND:-}
       ZOE_AVAILABLE_CAPABILITY_IDS: ${ZOE_AVAILABLE_CAPABILITY_IDS:-}
       ZOE_MEMORY_API_URL: http://zoe-memory-worker:8788
+      ZOE_LIMITS_FILE: ${ZOE_LIMITS_FILE:-/etc/zoe/limits.json}
       ZOE_MEMORY_API_TOKEN_FILE: /run/secrets/memory_api_token
       ZOE_MEMORY_BATCH_INTERVAL_HOURS: ${ZOE_MEMORY_BATCH_INTERVAL_HOURS:-24}
       ZOE_MEM0_LLM_BASE_URL: ${ZOE_MEM0_LLM_BASE_URL:?set the existing external model gateway URL}
@@ -60,7 +60,6 @@ services:
       ZOE_COMPACT_REASONING_EFFORT: ${ZOE_COMPACT_REASONING_EFFORT:-}
       ZOE_COMPACT_THINKING: ${ZOE_COMPACT_THINKING:-}
       ZOE_COMPACT_TIMEOUT_MS: ${ZOE_COMPACT_TIMEOUT_MS:-600000}
-      ZOE_COMPACT_MAX_CHARACTERS: ${ZOE_COMPACT_MAX_CHARACTERS:-8000}
       ZOE_COMPACT_INTERVAL_MINUTES: ${ZOE_COMPACT_INTERVAL_MINUTES:-60}
       ZOE_STEWARD_BASE_URL: ${ZOE_STEWARD_BASE_URL:-}
       ZOE_STEWARD_API_STYLE: ${ZOE_STEWARD_API_STYLE:-}
@@ -74,13 +73,18 @@ services:
       ZOE_UI_CONTROLLER_REASONING_EFFORT: ${ZOE_UI_CONTROLLER_REASONING_EFFORT:-}
       ZOE_UI_CONTROLLER_THINKING: ${ZOE_UI_CONTROLLER_THINKING:-}
       ZOE_UI_CONTROLLER_TIMEOUT_MS: ${ZOE_UI_CONTROLLER_TIMEOUT_MS:-30000}
-      ZOE_UI_CONTROLLER_MAX_RETRIES: ${ZOE_UI_CONTROLLER_MAX_RETRIES:-0}
       ZOE_UI_CONTROLLER_API_KEY_FILE: ${ZOE_UI_CONTROLLER_API_KEY_FILE:+/run/secrets/ui_controller_api_key}
       ZOE_RECALL_HOLDING_TEXT: ${ZOE_RECALL_HOLDING_TEXT:-}
       ZOE_SECRET_FILE_MAP: ZOE_RUNNER_TOKEN=/run/secrets/runner_token${ZOE_VOICE_SECRET_MAP:-}
     entrypoint: ["/usr/local/bin/zoe-secret-entrypoint"]
     command: ["/usr/local/bin/zoe-server"]
     volumes:
+      - type: bind
+        source: ${ZOE_LIMITS_FILE:-/etc/zoe/limits.json}
+        target: ${ZOE_LIMITS_FILE:-/etc/zoe/limits.json}
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: /etc/zoe/prompts
         target: /etc/zoe/prompts
@@ -154,6 +158,7 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
     environment:
       HOME: /var/lib/zoe/memory
+      ZOE_LIMITS_FILE: ${ZOE_LIMITS_FILE:-/etc/zoe/limits.json}
       ZOE_MEMORY_API_TOKEN_FILE: /run/secrets/memory_api_token
       ZOE_MEMORY_API_ADDR: 0.0.0.0:8788
       ZOE_SECRET_FILE_MAP: ZOE_MEM0_LLM_API_KEY=/run/secrets/mem0_llm_api_key
@@ -167,6 +172,12 @@ services:
       ZOE_MEMORY_MODEL_CACHE: /var/lib/zoe/memory/models
       ZOE_MEM0_HISTORY_DB: /var/lib/zoe/memory/mem0-history.sqlite
     volumes:
+      - type: bind
+        source: ${ZOE_LIMITS_FILE:-/etc/zoe/limits.json}
+        target: ${ZOE_LIMITS_FILE:-/etc/zoe/limits.json}
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: /etc/zoe/prompts
         target: /etc/zoe/prompts

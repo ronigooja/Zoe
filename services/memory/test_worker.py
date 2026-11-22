@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from .memory_api import MemoryAPIServer
+from .limits import defaults
 from .worker import main
 
 
@@ -68,7 +69,7 @@ class MainTests(unittest.TestCase):
             with patch.dict(os.environ, {"ZOE_MEMORY_API_TOKEN_FILE": str(token_file),
                                         "ZOE_MEM0_LLM_MODEL": "test-model"}, clear=True), patch(
                 "services.memory.worker.ControlledMem0", return_value=backend
-            ), patch("services.memory.worker.create_memory_api", return_value=server), patch(
+            ), patch("services.memory.worker.load_limits", return_value=defaults()), patch("services.memory.worker.create_memory_api", return_value=server), patch(
                 "services.memory.worker.signal.signal", side_effect=register
             ) as register_signal:
                 thread.start()

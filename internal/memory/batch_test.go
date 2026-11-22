@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/ronigooja/Zoe/internal/memoryapi"
 )
+
+var ingestChunkBytes = limits.Defaults().Int("memory_ingest_chunk_bytes")
 
 func TestMemoryBatchInterval(t *testing.T) {
 	for _, value := range []string{"0", "169", "bad"} {
@@ -44,7 +47,7 @@ func TestMemoryIngestChunks(t *testing.T) {
 			t.Fatal("text changed")
 		}
 		for _, chunk := range chunks {
-			if len(chunk) == 0 || len(chunk) > ingestChunkBytes || !utf8.ValidString(chunk) || !ingestBodyFits(user, chunk) {
+			if len(chunk) == 0 || len(chunk) > ingestChunkBytes || !utf8.ValidString(chunk) || !batchBodyFits(user, chunk) {
 				t.Fatalf("invalid chunk: bytes=%d", len(chunk))
 			}
 		}

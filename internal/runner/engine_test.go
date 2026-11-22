@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -396,7 +397,7 @@ func TestContextUsageBelowBudgetDoesNotRotate(t *testing.T) {
 	f := completingRuntimeFake()
 	f.result = assistantUsage(2, 2, 1, 1)
 	e := testEngine(t, f, &controlFake{}, openTestJournal(t))
-	e.ContextTokenBudget = 10
+	e.Limits = withLimit(t, e.Limits, "runner_context_max_tokens", 10)
 	if err := e.Process(testContext(t), testClaim()); err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +413,7 @@ func TestContextUsageRotatesWithSameRuntimeSpecAndCompletes(t *testing.T) {
 	f.rotationMessages = []opencode.Message{assistantUsage(1, 1, 0, 0)}
 	c := &controlFake{}
 	e := testEngine(t, f, c, openTestJournal(t))
-	e.ContextTokenBudget = 10
+	e.Limits = withLimit(t, e.Limits, "runner_context_max_tokens", 10)
 	claim := testClaim()
 	claim.Goal = "finish the important goal"
 	if err := e.Process(testContext(t), claim); err != nil {
@@ -443,7 +444,7 @@ func TestRealFlatMessagesDriveRotationAndSummary(t *testing.T) {
 	if len(messages) != 5 || messages[0].Type != "user" || messages[0].Text == "" || len(messages[1].Parts) != 2 {
 		t.Fatalf("flat messages did not decode: %+v", messages)
 	}
-	e := &Engine{ContextTokenBudget: 1000, Runtime: &runtimeFake{}, Routes: map[string]Route{"profile": {Model: "cliproxyapi/gpt-6.1-sol"}}}
+	e := &Engine{Limits: withLimit(t, limits.Defaults(), "runner_context_max_tokens", 1000), Runtime: &runtimeFake{}, Routes: map[string]Route{"profile": {Model: "cliproxyapi/gpt-6.1-sol"}}}
 	claim := testClaim()
 	if !e.contextExceeded(context.Background(), claim, messages) {
 		t.Fatal("flat assistant usage did not exceed context budget")
@@ -459,7 +460,7 @@ func TestRealFlatMessagesDriveRotationAndSummary(t *testing.T) {
 	c := &controlFake{}
 	j := openTestJournal(t)
 	e = testEngine(t, f, c, j)
-	e.ContextTokenBudget = 1000
+	e.Limits = withLimit(t, e.Limits, "runner_context_max_tokens", 1000)
 	if err := e.Process(testContext(t), claim); err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +498,7 @@ func TestContextExceededUsesModelWindowRatioAndCaps(t *testing.T) {
 		t.Fatal("quarter-ratio usage above threshold did not exceed")
 	}
 	engine.ContextWindowRatio = 0.5
-	engine.ContextTokenBudget = 100
+	engine.Limits = withLimit(t, engine.Limits, "runner_context_max_tokens", 100)
 	if engine.contextExceeded(context.Background(), claim, []opencode.Message{assistantUsage(101, 0, 0, 0)}) != true {
 		t.Fatal("absolute cap did not lower threshold")
 	}
@@ -641,7 +642,7 @@ func TestRotationLimitTerminatesWithProofWithoutCreating(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := testEngine(t, f, cntl, j)
-	e.MaxRotations = 1
+	e.Limits = withLimit(t, e.Limits, "runner_max_rotations", 1)
 	if err := e.monitor(testContext(t), c, RuntimeBinding{SessionID: "session"}); err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +666,7 @@ func TestWaitingQuestionOverBudgetDoesNotRotate(t *testing.T) {
 		}
 	}
 	e := testEngine(t, f, cntl, openTestJournal(t))
-	e.ContextTokenBudget = 1
+	e.Limits = withLimit(t, e.Limits, "runner_context_max_tokens", 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { <-reported; cancel() }()
@@ -691,7 +692,7 @@ func TestWaitingPermissionOverBudgetDoesNotRotate(t *testing.T) {
 		}
 	}
 	e := testEngine(t, f, cntl, openTestJournal(t))
-	e.ContextTokenBudget = 1
+	e.Limits = withLimit(t, e.Limits, "runner_context_max_tokens", 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { <-reported; cancel() }()

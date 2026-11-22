@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"log"
 	"net/http"
@@ -205,9 +206,10 @@ func TestDiagnosticRateLimit(t *testing.T) {
 func TestDiagnosticLimiterBounded(t *testing.T) {
 	var limiter diagnosticLimiter
 	now := time.Now()
+	maxDiagnosticDevices := limits.Defaults().Int("diagnostic_max_devices")
 	for i := 0; i < maxDiagnosticDevices+10; i++ {
 		limiter.prune(now)
-		limiter.reserve(fmt.Sprint(i), now, 1)
+		limiter.reserve(fmt.Sprint(i), now, 1, maxDiagnosticDevices)
 		now = now.Add(time.Nanosecond)
 	}
 	if len(limiter.devices) != maxDiagnosticDevices {

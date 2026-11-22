@@ -62,6 +62,7 @@ func TestProviderConfigureTestStatusUsePersistedDeployment(t *testing.T) {
 	}))
 	defer provider.Close()
 	root := t.TempDir()
+	writeTestLimits(t, root)
 	secret := filepath.Join(root, "private-token")
 	var out, errOut bytes.Buffer
 	args := []string{"--root", root, "--url", provider.URL + "/v1", "--model", "chosen-model", "--secret-file", secret, "--token", token, "--non-interactive"}

@@ -201,7 +201,44 @@ def masked(ref):
     return ref.split('@')[-1].removeprefix('sha256:')[:12] if '@' in ref else 'unpinned'
 
 
-def validate(release, env, units, current_prefix, prompt_dir):
+LEGACY_LIMITS = {
+    'ZOE_COMPACT_MAX_CHARACTERS': 'compact_max_characters',
+    'ZOE_MAX_RUNS': 'max_concurrent_runs',
+    'ZOE_UI_CONTROLLER_MAX_RETRIES': 'ui_output_attempts',
+    'ZOE_AGENT_CONTEXT_TOKEN_BUDGET': 'runner_context_max_tokens',
+    'ZOE_AGENT_MAX_ROTATIONS': 'runner_max_rotations',
+}
+
+
+def check_limits_env(env, runner):
+    names = env_names(env)
+    if Path(runner).is_file():
+        names |= env_names_file(runner)
+    for name, key in LEGACY_LIMITS.items():
+        if name in names:
+            fail(name + ' was removed; move to ' + key + ' in ZOE_LIMITS_FILE')
+
+
+def limits_path(env):
+    names = []
+    for line in Path(env).read_text().splitlines():
+        if match := re.match(r'^\s*(?:export\s+)?ZOE_LIMITS_FILE\s*=(.*)$', line):
+            try:
+                parts = shlex.split(match[1], comments=True)
+            except ValueError:
+                parts = []
+            if len(parts) != 1 or any(c in parts[0] for c in '$`\n\r'):
+                fail('ZOE_LIMITS_FILE requires a literal file path')
+            names.append(parts[0])
+    if len(names) > 1:
+        fail('duplicate ZOE_LIMITS_FILE')
+    path = Path(os.environ.get('ZOE_LIMITS_FILE') or (names[0] if names else '') or '/etc/zoe/limits.json')
+    if not path.is_absolute() or '..' in path.parts or path == Path('/'):
+        fail('ZOE_LIMITS_FILE must be an absolute file path without parent traversal')
+    return str(path)
+
+
+def validate(release, env, units, current_prefix, prompt_dir, limit_file=None):
     root = Path(release)
     prompt_path = Path(prompt_dir)
     if not prompt_path.is_absolute() or '..' in prompt_path.parts:
@@ -243,6 +280,14 @@ def validate(release, env, units, current_prefix, prompt_dir):
                         if not (root / tokens[i + 1]).is_file():
                             fail('missing relative Compose path unit=' + unit)
     config = compose(release, env)
+    if limit_file is not None:
+        for service in ('zoe-server', 'zoe-memory-worker'):
+            spec = config['services'].get(service, {})
+            mounts = [v for v in spec.get('volumes', []) if v.get('target') == limit_file]
+            if (spec.get('environment', {}).get('ZOE_LIMITS_FILE') != limit_file or len(mounts) != 1
+                    or mounts[0].get('type') != 'bind' or mounts[0].get('source') != limit_file
+                    or mounts[0].get('read_only') is not True):
+                fail('missing read-only limits bind service=' + service)
     # Only the validated durable Qdrant directory may be created after preflight.
     storage = qdrant_storage(release, env, config)
     for service, spec in config['services'].items():
@@ -251,6 +296,10 @@ def validate(release, env, units, current_prefix, prompt_dir):
                 if service == 'qdrant' and volume.get('target') == '/qdrant/storage' and volume['source'] == storage:
                     continue
                 prompts = root / 'prompts'
+                if (limit_file is not None and service in ('zoe-server', 'zoe-memory-worker') and
+                        volume['source'] == limit_file and volume.get('target') == limit_file and
+                        volume.get('read_only') is True and (root / 'limits.json').is_file()):
+                    continue
                 if (service in ('zoe-server', 'zoe-memory-worker') and volume['source'] == prompt_dir and
                         volume.get('target') == prompt_dir and volume.get('read_only') is True and
                         prompts.is_dir() and any(p.is_file() and p.stat().st_size > 0 for p in prompts.iterdir())):
@@ -460,6 +509,10 @@ try:
         print('database counts=' + json.dumps(after, sort_keys=True))
     elif command == 'extract':
         extract(*args)
+    elif command == 'limits-path':
+        print(limits_path(*args))
+    elif command == 'check-limits-env':
+        check_limits_env(*args)
     elif command == 'validate':
         validate(*args)
     elif command == 'memory-token-path':
@@ -516,7 +569,7 @@ try:
                 continue
             if key not in running:
                 fail('missing running environment name=' + key)
-            if key in ('ZOE_VOICE_UPSTREAM_ROUTE', 'ZOE_STEWARD_TIMEOUT_MS', 'ZOE_UI_CONTROLLER_TIMEOUT_MS', 'ZOE_UI_CONTROLLER_MAX_RETRIES', 'ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS'):
+            if key in ('ZOE_VOICE_UPSTREAM_ROUTE', 'ZOE_STEWARD_TIMEOUT_MS', 'ZOE_UI_CONTROLLER_TIMEOUT_MS', 'ZOE_LIMITS_FILE', 'ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS'):
                 if running[key] != str(rendered[key]):
                     fail('running environment mismatch name=' + key)
             print('container environment name=' + key + ' verified')

@@ -5,4 +5,5 @@ Return an empty summary when there is nothing factual to summarize.
 Summarize what the user wanted to obtain and what the result established, using only facts from the input.
 Use the language of the content.
 
-Output only the minimal summary text, at most 200 characters, without headings, quotation marks or commentary.
+Use the character limit supplied with the input.
+Output only the minimal summary text without headings, quotation marks or commentary.

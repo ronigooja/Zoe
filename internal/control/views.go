@@ -24,7 +24,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	snapshot, err := loadSnapshot(r.Context(), tx, p.WorkspaceID, p.SubjectID, s.cfg.MaxRuns)
+	snapshot, err := loadSnapshot(r.Context(), tx, p.WorkspaceID, p.SubjectID, s.cfg.Limits.Int("max_concurrent_runs"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -42,7 +42,7 @@ func (s *Server) LoadSnapshotTx(ctx context.Context, tx *sql.Tx, p contracts.Pri
 	if err := requireOwnerSessionTx(ctx, tx, p); err != nil {
 		return contracts.Snapshot{}, err
 	}
-	return loadSnapshot(ctx, tx, p.WorkspaceID, p.SubjectID, s.cfg.MaxRuns)
+	return loadSnapshot(ctx, tx, p.WorkspaceID, p.SubjectID, s.cfg.Limits.Int("max_concurrent_runs"))
 }
 
 func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, maxRuns int) (contracts.Snapshot, error) {
@@ -318,7 +318,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		rows, err := tx.QueryContext(r.Context(), `SELECT e.cursor,e.event_type,e.payload,(e.subject_id=? OR ?=1 OR e.aggregate_type='workspace' OR (e.aggregate_type='project' AND EXISTS(SELECT 1 FROM projects p WHERE p.workspace_id=e.workspace_id AND p.id=e.aggregate_id AND (p.owner_subject_id=?))) OR (e.aggregate_type='task' AND EXISTS(SELECT 1 FROM tasks t WHERE t.workspace_id=e.workspace_id AND t.id=e.aggregate_id AND (t.owner_subject_id=?))) OR (e.aggregate_type='run' AND EXISTS(SELECT 1 FROM runs r JOIN tasks t ON t.id=r.task_id AND t.workspace_id=r.workspace_id WHERE r.workspace_id=e.workspace_id AND r.id=e.aggregate_id AND (t.owner_subject_id=?)))) AS visible FROM events e WHERE e.workspace_id=? AND e.cursor>? ORDER BY e.cursor LIMIT 100`, p.SubjectID, true, p.SubjectID, p.SubjectID, p.SubjectID, p.WorkspaceID, cursor)
+		rows, err := tx.QueryContext(r.Context(), `SELECT e.cursor,e.event_type,e.payload,(e.subject_id=? OR ?=1 OR e.aggregate_type='workspace' OR (e.aggregate_type='project' AND EXISTS(SELECT 1 FROM projects p WHERE p.workspace_id=e.workspace_id AND p.id=e.aggregate_id AND (p.owner_subject_id=?))) OR (e.aggregate_type='task' AND EXISTS(SELECT 1 FROM tasks t WHERE t.workspace_id=e.workspace_id AND t.id=e.aggregate_id AND (t.owner_subject_id=?))) OR (e.aggregate_type='run' AND EXISTS(SELECT 1 FROM runs r JOIN tasks t ON t.id=r.task_id AND t.workspace_id=r.workspace_id WHERE r.workspace_id=e.workspace_id AND r.id=e.aggregate_id AND (t.owner_subject_id=?)))) AS visible FROM events e WHERE e.workspace_id=? AND e.cursor>? ORDER BY e.cursor LIMIT ?`, p.SubjectID, true, p.SubjectID, p.SubjectID, p.SubjectID, p.WorkspaceID, cursor, s.cfg.Limits.Int("event_page_rows"))
 		if err != nil {
 			_ = tx.Rollback()
 			return

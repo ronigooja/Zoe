@@ -524,7 +524,7 @@ func (s *Server) handleInstanceFence(w http.ResponseWriter, r *http.Request) {
 		ExpectedEpoch int64  `json:"expected_epoch"`
 		Reason        string `json:"reason"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&request); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.cfg.Limits.Int64("instance_fence_max_bytes"))).Decode(&request); err != nil {
 		writeError(w, apiError(http.StatusBadRequest, "invalid_request", "invalid instance fence request", nil))
 		return
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"io"
 	"net/http"
 	"net/url"
@@ -40,9 +41,8 @@ type Config struct {
 	GatewayDialOrigin       string
 	GatewayAPIKey           string
 	HTTPClient              *http.Client
-	MaxOfferBytes           int64
+	Limits                  limits.Set
 	Now                     func() time.Time
-	OpeningContextBudget    int
 	// UpstreamRoute accepts only empty or avas; retained to reject legacy configuration.
 	UpstreamRoute          string
 	ResultDeliveryEnabled  bool
@@ -52,7 +52,6 @@ type Config struct {
 	ClassificationTimeout  time.Duration
 	Steward                TaskSteward
 	UIController           *modelclient.Client
-	UIControllerMaxRetries int
 	RecallTimeout          time.Duration
 	RecallLease            time.Duration
 }
@@ -75,14 +74,12 @@ type Service struct {
 	dialOrigin             string
 	key                    string
 	client                 *http.Client
-	maxSDP                 int64
+	limits                 limits.Set
 	now                    func() time.Time
-	openingBudget          int
 	resultDeliveryEnabled  bool
 	resultDeliveryInterval time.Duration
 	steward                TaskSteward
 	uiController           *modelclient.Client
-	uiControllerMaxRetries int
 	uiEventServer          *control.Server
 	register               *ContextRegister
 	classifying            sync.Map // Voice-turn row IDs currently being classified.
@@ -252,23 +249,16 @@ func newService(db *sql.DB, cfg Config) *Service {
 	clientCopy := *client
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	client = &clientCopy
-	if cfg.MaxOfferBytes <= 0 || cfg.MaxOfferBytes > 1<<20 {
-		cfg.MaxOfferBytes = 1 << 20
-	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
-	}
-	budget := cfg.OpeningContextBudget
-	if budget <= 0 {
-		budget = 8000
 	}
 	interval := cfg.ResultDeliveryInterval
 	if interval <= 0 {
 		interval = time.Second
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	s := &Service{resultReceiptAdapter: cfg.ResultDelivery.ReceiptAdapter, db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, now: now, openingBudget: budget, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, uiControllerMaxRetries: cfg.UIControllerMaxRetries, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit)}
+	s := &Service{resultReceiptAdapter: cfg.ResultDelivery.ReceiptAdapter, db: db, base: base, key: cfg.GatewayAPIKey, client: client, limits: cfg.Limits, now: now, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, cfg.Limits.Int("voice_recall_workers"))}
 	s.dialOrigin = validDialOrigin(cfg.GatewayDialOrigin)
 	if cfg.DiscoverResultReceipts && s.gatewayReady() && s.resultReceiptAdapter == nil {
 		s.resultCapability = &gatewayResultCapability{adapter: NewGatewayResultReceiptAdapter(s)}

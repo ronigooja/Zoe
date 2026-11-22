@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"net/http"
 	"strings"
 	"time"
@@ -56,13 +57,13 @@ func (s *Service) handleCallStart(w http.ResponseWriter, r *http.Request) {
 	// Go's JSON decoder replaces malformed UTF-8. Reject it before decoding
 	// the payload whose decoded fields form the durable idempotency key.
 	var raw json.RawMessage
-	if err := decodeRequest(w, r, 6*s.maxSDP+16_384, &raw); err != nil {
+	if err := decodeRequest(w, r, 6*s.limits.Int64("voice_sdp_max_bytes")+limits.CallStartJSONOverhead, &raw); err != nil {
 		control.WriteError(w, err)
 		return
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if !utf8.Valid(raw) || dec.Decode(&req) != nil || hasNullDialField(raw) || strings.TrimSpace(req.RequestID) == "" || strings.TrimSpace(req.OfferSDP) == "" || int64(len(req.OfferSDP)) > s.maxSDP {
+	if !utf8.Valid(raw) || dec.Decode(&req) != nil || hasNullDialField(raw) || strings.TrimSpace(req.RequestID) == "" || strings.TrimSpace(req.OfferSDP) == "" || int64(len(req.OfferSDP)) > s.limits.Int64("voice_sdp_max_bytes") {
 		control.WriteError(w, apiError(http.StatusBadRequest, "invalid_request", "request_id and a bounded offer_sdp are required", nil))
 		return
 	}
@@ -311,7 +312,7 @@ func (s *Service) handleCallEstablished(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req callEstablishedRequest
-	if err := decodeRequest(w, r, 64<<10, &req); err != nil || !req.callBinding.valid() {
+	if err := decodeRequest(w, r, s.limits.Int64("voice_lifecycle_max_bytes"), &req); err != nil || !req.callBinding.valid() {
 		control.WriteError(w, apiError(http.StatusBadRequest, "invalid_request", "invalid establishment report", nil))
 		return
 	}

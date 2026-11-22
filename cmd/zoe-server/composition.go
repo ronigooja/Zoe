@@ -25,7 +25,7 @@ func composeControlServer(store *storage.Store, controlConfig control.Config, vo
 	if err != nil {
 		return nil, err
 	}
-	voiceRepository := memory.NewRepositoryWithStore(store)
+	voiceRepository := memory.NewRepositoryWithStore(store, controlConfig.Limits)
 	if voiceConfig.Ready != nil {
 		voiceRepository.OnRetryChange = voiceConfig.Ready.PublishRetryState
 	}
@@ -37,6 +37,7 @@ func composeControlServer(store *storage.Store, controlConfig control.Config, vo
 	if err = voice.Register(server, store, voiceConfig); err != nil {
 		return nil, err
 	}
+	capabilityConfig.Limits = controlConfig.Limits
 	if err = capabilities.Register(server, store, capabilityConfig); err != nil {
 		return nil, err
 	}

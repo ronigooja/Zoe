@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"io"
 	"net/http"
 	"strings"
@@ -29,8 +30,7 @@ type Config struct {
 	RuntimeRouteID           string
 	ModelRouteID             string
 	Profiles                 map[string]RuntimeProfile
-	MaxRequestBytes          int64
-	MaxRuns                  int
+	Limits                   limits.Set
 	WaitLimit                time.Duration
 	PushSender               PushSender
 	Now                      func() time.Time
@@ -254,15 +254,6 @@ func NewServer(store *storage.Store, cfg Config) (*Server, error) {
 		return nil, errors.New("control server requires an open store")
 	}
 
-	if cfg.MaxRequestBytes <= 0 {
-		cfg.MaxRequestBytes = 1 << 20
-	}
-	if cfg.MaxRuns == 0 {
-		cfg.MaxRuns = 12
-	}
-	if cfg.MaxRuns < 1 || cfg.MaxRuns > 64 {
-		return nil, errors.New("max runs must be between 1 and 64")
-	}
 	if cfg.WaitLimit == 0 {
 		cfg.WaitLimit = 30 * time.Minute
 	}
@@ -598,7 +589,7 @@ func (s *Server) Handler() http.Handler {
 	root.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, apiError(http.StatusNotFound, "not_found", "route not found", nil))
 	}))
-	limited := requestLimit(s.cfg.MaxRequestBytes, root)
+	limited := requestLimit(s.cfg.Limits, root)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Set this outside routing and authentication so failures, including
 		// stale sessions and unsupported methods, cannot be cached either.
@@ -650,22 +641,20 @@ func decodeJSON(r *http.Request, dst any) error {
 	return nil
 }
 
-func requestLimit(max int64, next http.Handler) http.Handler {
+func requestLimit(config limits.Set, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
-			limit := max
+			limit := config.Int64("http_request_max_bytes")
 			if r.Method == http.MethodPost && r.URL.Path == "/runner/v1/voice/calls" {
 				// The voice limit is on the decoded SDP; JSON can use six bytes
 				// per escaped character. The handler enforces the decoded limit.
-				limit = maxCallStartJSONBytes
+				limit = config.Int64("http_call_start_max_bytes")
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
 		next.ServeHTTP(w, r)
 	})
 }
-
-const maxCallStartJSONBytes = 6*(1<<20) + 16_384
 
 func jsonMarshal(v any) ([]byte, error)   { return json.Marshal(v) }
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }

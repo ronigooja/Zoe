@@ -943,6 +943,12 @@ func statusOperation(args []string, _ io.Reader, out, errOut io.Writer) error {
 	}
 	writeRetryStatus(out, backoff.StatusPath, time.Now())
 	writePromptStatus(out, prompts.Dir())
+	path := d.LimitsPath()
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0444 != 0 {
+		fmt.Fprintf(out, "Limits: path=%s bytes=%d\n", safeLabel(path), info.Size())
+	} else {
+		fmt.Fprintf(out, "Limits: path=%s missing-or-unreadable\n", safeLabel(path))
+	}
 	current := filepath.Join(*optRoot, "releases", "current")
 	if revision, readErr := os.ReadFile(filepath.Join(current, "SOURCE_REVISION")); readErr == nil {
 		fmt.Fprintf(out, "Release: source-revision=%s\n", safeLabel(strings.TrimSpace(string(revision))))

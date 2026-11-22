@@ -3,13 +3,12 @@ package profiles
 import (
 	"errors"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"path/filepath"
 	"strings"
 
 	"github.com/ronigooja/Zoe/contracts"
 )
-
-const maxExternalDirectories = 8
 
 var deniedExternalRoots = map[string]bool{
 	"/": true, "/etc": true, "/root": true, "/var/lib/zoe": true, "/opt/zoe": true,
@@ -46,7 +45,7 @@ func ValidateProfileTier(id, tier string) error {
 	return nil
 }
 
-func EffectivePermissionSet(p Profile, taskScopes, extras []string) ([]contracts.PermissionRule, string, error) {
+func EffectivePermissionSet(p Profile, taskScopes, extras []string, sets ...limits.Set) ([]contracts.PermissionRule, string, error) {
 	tier := p.PermissionTier
 	if tier == "" {
 		tier = TierWorkspaceReadWrite
@@ -66,7 +65,7 @@ func EffectivePermissionSet(p Profile, taskScopes, extras []string) ([]contracts
 			tier = TierExternalPaths
 		}
 	}
-	externalDirs, err := externalDirectories(allScopes)
+	externalDirs, err := externalDirectories(allScopes, limits.Resolve(sets))
 	if err != nil {
 		return nil, "", err
 	}
@@ -114,7 +113,7 @@ func FullPermissionRules() []contracts.PermissionRule {
 	return rules
 }
 
-func externalDirectories(scopes []string) ([]string, error) {
+func externalDirectories(scopes []string, l limits.Set) ([]string, error) {
 	seen := map[string]bool{}
 	out := make([]string, 0)
 	for _, scope := range scopes {
@@ -131,8 +130,8 @@ func externalDirectories(scopes []string) ([]string, error) {
 			out = append(out, dir)
 		}
 	}
-	if len(out) > maxExternalDirectories {
-		return nil, fmt.Errorf("too many external directories (maximum %d)", maxExternalDirectories)
+	if len(out) > l.Int("profile_max_external_directories") {
+		return nil, fmt.Errorf("too many external directories (maximum %d)", l.Int("profile_max_external_directories"))
 	}
 	return out, nil
 }
@@ -153,7 +152,8 @@ func validateExternalDirectory(dir string) error {
 	return nil
 }
 
-func ValidateRuleset(rules []contracts.PermissionRule, tier string) error {
+func ValidateRuleset(rules []contracts.PermissionRule, tier string, sets ...limits.Set) error {
+	l := limits.Resolve(sets)
 	if tier == TierFull {
 		want := FullPermissionRules()
 		if len(rules) != len(want) {
@@ -185,8 +185,8 @@ func ValidateRuleset(rules []contracts.PermissionRule, tier string) error {
 		}
 		if r.Effect == "allow" && r.Action == "external_directory" {
 			externalCount++
-			if externalCount > maxExternalDirectories {
-				return fmt.Errorf("too many external directory rules (maximum %d)", maxExternalDirectories)
+			if externalCount > l.Int("profile_max_external_directories") {
+				return fmt.Errorf("too many external directory rules (maximum %d)", l.Int("profile_max_external_directories"))
 			}
 			if r.Resource == "*" || !strings.HasSuffix(r.Resource, "/*") {
 				return errors.New("external directory permission must be directory-scoped")

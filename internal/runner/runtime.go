@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
+	"github.com/ronigooja/Zoe/internal/limits"
 )
 
 const OpenCodeWorkspaceWritePolicy = "opencode-workspace-write-v1"
@@ -74,6 +76,7 @@ type FormReply interface {
 }
 
 type OpenCodeRuntime struct {
+	Limits                                            limits.Set
 	BaseURL, Username, Password, WorkspaceRoot, Model string
 	Client                                            *opencode.Client
 	HTTPClient                                        *httpClientFactory
@@ -132,7 +135,8 @@ func (r OpenCodeRuntime) Summarize(ctx context.Context, model, content string) (
 	}
 	b := RuntimeBinding{SessionID: session.ID}
 	defer r.Terminate(context.Background(), b)
-	if err := r.Client.Prompt(ctx, session.ID, "Summarize only the following old session content in at most 4000 tokens. Do not use tools. Return plain text only.\n\n"+truncateRuntime(content, 16000)); err != nil {
+	instruction := fmt.Sprintf("Summarize only the following old session content in at most %d tokens. Do not use tools. Return plain text only.\n\n", r.Limits.Int("runner_rotation_summary_max_tokens"))
+	if err := r.Client.Prompt(ctx, session.ID, instruction+truncateRuntime(content, r.Limits.Int("runner_rotation_summary_input_bytes"))); err != nil {
 		return "", err
 	}
 	deadline := time.NewTimer(8 * time.Second)

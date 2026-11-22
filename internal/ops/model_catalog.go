@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"io"
 	"net/http"
 	"net/url"
@@ -12,8 +13,6 @@ import (
 	"strings"
 	"time"
 )
-
-const maxOfficialCatalogSize = 16 << 20
 
 func modelMetadataPath(o LifecycleOptions) string {
 	return filepath.Join(openCodeRoot(o), "models.json")
@@ -51,7 +50,7 @@ func officialLimitMap(v map[string]any) map[string]ModelLimit {
 	return out
 }
 
-func fetchOfficialLimits(ctx context.Context) (map[string]ModelLimit, error) {
+func fetchOfficialLimits(ctx context.Context, policy limits.Set) (map[string]ModelLimit, error) {
 	rawURL := os.Getenv("ZOE_OPENCODE_OFFICIAL_CATALOG_URL")
 	if rawURL == "" {
 		rawURL = "https://models.opencode.ai/catalog.json"
@@ -80,8 +79,8 @@ func fetchOfficialLimits(ctx context.Context) (map[string]ModelLimit, error) {
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return nil, fmt.Errorf("official catalog HTTP %d", res.StatusCode)
 	}
-	b, err := io.ReadAll(io.LimitReader(res.Body, maxOfficialCatalogSize+1))
-	if err != nil || len(b) > maxOfficialCatalogSize {
+	b, err := io.ReadAll(io.LimitReader(res.Body, policy.Int64("model_catalog_max_bytes")+1))
+	if err != nil || len(b) > policy.Int("model_catalog_max_bytes") {
 		return nil, fmt.Errorf("official catalog too large")
 	}
 	var v map[string]any
@@ -91,8 +90,8 @@ func fetchOfficialLimits(ctx context.Context) (map[string]ModelLimit, error) {
 	return officialLimitMap(v), nil
 }
 
-func enrichProviderModels(ctx context.Context, result *ProbeResult) {
-	official, err := fetchOfficialLimits(ctx)
+func enrichProviderModels(ctx context.Context, result *ProbeResult, sets ...limits.Set) {
+	official, err := fetchOfficialLimits(ctx, limits.Resolve(sets))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Warning: official model catalog unavailable; using gateway metadata only")
 		official = nil
@@ -130,8 +129,8 @@ func enrichProviderModels(ctx context.Context, result *ProbeResult) {
 	if !seen[defaultID] && modelIDRE.MatchString(defaultID) {
 		out = append(out, ProviderModelMetadata{ID: defaultID, Name: defaultID})
 	}
-	if len(out) > 500 {
-		out = out[:500]
+	if limit := limits.Resolve(sets).Int("model_catalog_max_entries"); len(out) > limit {
+		out = out[:limit]
 	}
 	result.Models = out
 }

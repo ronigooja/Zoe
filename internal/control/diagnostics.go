@@ -14,12 +14,6 @@ import (
 	"github.com/ronigooja/Zoe/internal/logging"
 )
 
-const (
-	maxDiagnosticBatch   = 50
-	maxDiagnosticEvent   = 16 << 10
-	maxDiagnosticDevices = 1024
-)
-
 type clientDiagnosticRequest struct {
 	Events []clientDiagnosticEvent `json:"events"`
 }
@@ -60,7 +54,7 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 		writeError(w, apiError(http.StatusForbidden, "forbidden", "client scope is required", nil))
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.cfg.Limits.Int64("diagnostic_body_max_bytes")))
 	if err != nil {
 		writeError(w, apiError(http.StatusRequestEntityTooLarge, "diagnostics_too_large", "diagnostic batch is too large", nil))
 		return
@@ -75,8 +69,8 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req clientDiagnosticRequest
-	if err := json.Unmarshal(body, &req); err != nil || len(req.Events) == 0 || len(req.Events) > maxDiagnosticBatch {
-		writeError(w, apiError(http.StatusBadRequest, "invalid_request", "events must contain between 1 and 50 entries", nil))
+	if err := json.Unmarshal(body, &req); err != nil || len(req.Events) == 0 || len(req.Events) > s.cfg.Limits.Int("diagnostic_max_batch") {
+		writeError(w, apiError(http.StatusBadRequest, "invalid_request", "events must contain a positive bounded number of entries", nil))
 		return
 	}
 	deviceInput := strings.TrimSpace(r.Header.Get("X-Zoe-Installation-ID"))
@@ -93,7 +87,7 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 		now = s.diagnostics.now()
 	}
 	s.diagnostics.prune(now)
-	if len(s.diagnostics.devices[deviceHashText])+len(req.Events) > 200 {
+	if len(s.diagnostics.devices[deviceHashText])+len(req.Events) > s.cfg.Limits.Int("diagnostic_events_per_device") {
 		writeError(w, apiError(http.StatusTooManyRequests, "diagnostics_rate_limited", "diagnostic rate limit exceeded", nil))
 		return
 	}
@@ -111,7 +105,7 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 	pending := make([]pendingDiagnostic, 0, len(req.Events))
 	for _, event := range req.Events {
 		encoded, _ := json.Marshal(event)
-		if len(encoded) > maxDiagnosticEvent || !validDiagnosticEvent(event) || !strings.EqualFold(strings.TrimSpace(event.DeviceIDHash), deviceHashText) {
+		if len(encoded) > s.cfg.Limits.Int("diagnostic_event_max_bytes") || !validDiagnosticEvent(event) || !strings.EqualFold(strings.TrimSpace(event.DeviceIDHash), deviceHashText) {
 			writeError(w, apiError(http.StatusBadRequest, "invalid_diagnostic", "diagnostic event is invalid or too large", nil))
 			return
 		}
@@ -144,7 +138,7 @@ func (s *Server) handleClientDiagnostics(w http.ResponseWriter, r *http.Request)
 		pending = append(pending, pendingDiagnostic{id: id, level: level, event: event})
 	}
 	if len(pending) > 0 {
-		s.diagnostics.reserve(deviceHashText, now, len(pending))
+		s.diagnostics.reserve(deviceHashText, now, len(pending), s.cfg.Limits.Int("diagnostic_max_devices"))
 	}
 	for _, item := range pending {
 		event := item.event
@@ -191,11 +185,11 @@ func (l *diagnosticLimiter) prune(now time.Time) {
 	}
 }
 
-func (l *diagnosticLimiter) reserve(device string, now time.Time, count int) {
+func (l *diagnosticLimiter) reserve(device string, now time.Time, count, maxDevices int) {
 	if l.devices == nil {
 		l.devices = make(map[string][]time.Time)
 	}
-	if _, exists := l.devices[device]; !exists && len(l.devices) >= maxDiagnosticDevices {
+	if _, exists := l.devices[device]; !exists && len(l.devices) >= maxDevices {
 		oldest := ""
 		var at time.Time
 		for key, times := range l.devices {

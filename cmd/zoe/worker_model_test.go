@@ -42,6 +42,7 @@ func TestWorkerMenuModelQualification(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			root := t.TempDir()
+			writeTestLimits(t, root)
 			key := filepath.Join(root, "worker-key")
 			if err := os.WriteFile(key, []byte("fixture-key\n"), 0600); err != nil {
 				t.Fatal(err)

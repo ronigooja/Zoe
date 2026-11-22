@@ -179,8 +179,20 @@ cmp -s "$dl/server/bin/zoe" "$dl/cli/bin/zoe"
 # Resolve a missing legacy-host setting without editing or sourcing the env file.
 ZOE_MEMORY_API_TOKEN_FILE="$(state_op memory-token-path "$env_file")"
 export ZOE_MEMORY_API_TOKEN_FILE
+runner_env="$(dirname -- "$env_file")/zoe-runner.env"
+state_op check-limits-env "$env_file" "$runner_env"
+limits_file="$(state_op limits-path "$env_file")"
+[[ "$limits_file" == "$(env -u ZOE_LIMITS_FILE python3 "$helper" limits-path "$env_file")" ]] || {
+  echo 'Set ZOE_LIMITS_FILE in the stack environment file before deploying'; exit 1;
+}
+if [[ -f "$runner_env" ]]; then
+  [[ "$limits_file" == "$(env -u ZOE_LIMITS_FILE python3 "$helper" limits-path "$runner_env")" ]] || {
+    echo 'ZOE_LIMITS_FILE must resolve to the same path for the stack and runner'; exit 1;
+  }
+fi
+export ZOE_LIMITS_FILE="$limits_file"
 bash "$script_dir/deployment-candidate.sh" "$dl/server/release-manifest.json" --compose "$dl/server/deploy-linux/docker-compose.yml" --env-file "$env_file" --output "$scratch/plan.json" >/dev/null 2>&1
-state_op validate "$dl/server" "$env_file" "$units" "$current_prefix" "$prompt_dir"
+state_op validate "$dl/server" "$env_file" "$units" "$current_prefix" "$prompt_dir" "$limits_file"
 python3 - "$dl/server/release-manifest.json" "$sha" <<'PY'
 import json, sys
 manifest = json.load(open(sys.argv[1]))
@@ -197,9 +209,9 @@ step=prompts
 prompts() {
   local prompt_release="$dl/server"
   [[ -d "$prompt_release" ]] || prompt_release="$releases/$sha"
-  python3 - "$prompt_release" "$prompt_dir" "$prompts_mode" "$sha" "$1" <<'PY'
-import hashlib, json, os, pathlib, re, shutil, sys, tempfile
-release, host, mode, sha, action = sys.argv[1:]
+  python3 - "$prompt_release" "$prompt_dir" "$prompts_mode" "$sha" "$1" "$limits_file" <<'PY'
+import hashlib, json, os, pathlib, re, shutil, subprocess, sys, tempfile
+release, host, mode, sha, action, limit_file = sys.argv[1:]
 release, host = pathlib.Path(release), pathlib.Path(host)
 required = {'ui_controller.txt', 'register.txt', 'compact.txt', 'steward.txt', 'task_ui_display.txt', 'voice_instruction.txt', 'task_summary.txt', 'memory_ingest.txt', 'memory_write.txt', 'memory_custom.txt'}
 try:
@@ -209,46 +221,57 @@ try:
         raise ValueError('missing prompts')
     manifest = {p['path']: p['sha256'] for p in json.loads((release/'release-manifest.json').read_text())['artifacts']}
     sums = (release/'SHA256SUMS').read_text().splitlines()
+    if any(not re.fullmatch(r'[A-Za-z0-9_]+\.txt', p.name) for p in files):
+        raise ValueError('invalid prompt name')
     plans = []
-    for p in files:
-        if not re.fullmatch(r'[A-Za-z0-9_]+\.txt', p.name) or p.is_symlink() or not p.is_file():
-            raise ValueError('invalid prompt')
+    for p, dest in [(p, host/p.name) for p in files] + [(release/'limits.json', pathlib.Path(limit_file))]:
+        if p.is_symlink() or not p.is_file() or not (p.stat().st_mode & 0o444):
+            raise ValueError('invalid release config')
+        is_limits = p.name == 'limits.json'
+        if is_limits:
+            subprocess.run([release/'bin/zoe-server', 'validate-limits', p], check=True)
         data = p.read_bytes()
-        if not data or not (p.stat().st_mode & 0o444): raise ValueError('empty or unreadable prompt')
+        if not data: raise ValueError('empty release config')
         digest = hashlib.sha256(data).hexdigest()
-        if manifest.get('prompts/'+p.name) != digest or digest+'  prompts/'+p.name not in sums:
-            raise ValueError('unverified prompt')
-        dest = host/p.name
+        rel = p.relative_to(release).as_posix()
+        if manifest.get(rel) != digest or digest+'  '+rel not in sums:
+            raise ValueError('unverified release config')
         if dest.is_symlink() or (dest.exists() and not dest.is_file()): raise ValueError('invalid host prompt')
         if not dest.exists(): decision = 'install'
-        elif dest.read_bytes() == data: decision = 'identical'
+        elif dest.stat().st_size == len(data) and dest.read_bytes() == data: decision = 'identical'
         elif mode == 'keep': decision = 'keep(differs)'
         else: decision = 'overwrite'
-        if decision == 'overwrite' and os.path.lexists(host/(p.name+'.pre-'+sha[:12])):
+        if is_limits and decision in ('identical', 'keep(differs)'):
+            subprocess.run([release/'bin/zoe-server', 'validate-limits', dest], check=True)
+            if dest.stat().st_mode & 0o004 == 0:
+                raise ValueError('limits must be readable by container and runner users')
+        if decision == 'overwrite' and os.path.lexists(dest.with_name(dest.name+'.pre-'+sha[:12])):
             raise ValueError('backup exists')
         plans.append((p, dest, data, decision))
-    parent = host
-    while not parent.exists(): parent = parent.parent
-    if not parent.is_dir() or not (parent.stat().st_mode & 0o222) or not os.access(parent, os.W_OK | os.X_OK):
-        raise ValueError('prompt directory not writable')
+        parent = dest.parent
+        while not parent.exists(): parent = parent.parent
+        if not parent.is_dir() or not (parent.stat().st_mode & 0o222) or not os.access(parent, os.W_OK | os.X_OK):
+            raise ValueError('config directory not writable')
     if action == 'plan':
         for p, dest, data, decision in plans:
-            print(f'prompt name={p.name} bytes={len(data)} action={decision}')
+            kind = 'limits' if p.name == 'limits.json' else 'prompt'
+            size = dest.stat().st_size if decision == 'keep(differs)' else len(data)
+            print(f'{kind} name={p.name} bytes={size} action={decision}')
     else:
-        missing = not host.exists()
-        host.mkdir(mode=0o755, parents=True, exist_ok=True)
-        if missing: host.chmod(0o755)
         counts = {'install': 0, 'overwrite': 0, 'kept': 0}
         for p, dest, data, decision in plans:
             if decision not in ('install', 'overwrite'):
                 counts['kept'] += 1
                 continue
             if decision == 'overwrite':
-                backup = host/(p.name+'.pre-'+sha[:12])
+                backup = dest.with_name(dest.name+'.pre-'+sha[:12])
                 with backup.open('xb') as out, dest.open('rb') as old:
                     shutil.copyfileobj(old, out)
                 shutil.copystat(dest, backup)
-            fd, temporary = tempfile.mkstemp(prefix='.zoe-prompt-', dir=host)
+            missing = not dest.parent.exists()
+            dest.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            if missing: dest.parent.chmod(0o755)
+            fd, temporary = tempfile.mkstemp(prefix='.zoe-config-', dir=dest.parent)
             try:
                 with os.fdopen(fd, 'wb') as out:
                     out.write(data); out.flush(); os.fsync(out.fileno())
@@ -258,7 +281,7 @@ try:
                 if os.path.exists(temporary): os.unlink(temporary)
             counts[decision] += 1
         print(f"deploy step=prompts status=ok installed={counts['install']} kept={counts['kept']} overwritten={counts['overwrite']}")
-except (OSError, ValueError, KeyError, TypeError):
+except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError):
     sys.exit(1)
 PY
 }
@@ -270,7 +293,7 @@ if [[ "$dry_run" == true ]]; then
   else
     echo 'deploy plan=backup,prompts,memory-token,pull-changed-images,install-cli,switch,restart,verify'
   fi
-  echo 'deploy summary=dry-run; release,env,database,CLI,services unchanged; prompts unchanged'
+  echo 'deploy summary=dry-run; release,env,database,CLI,services unchanged; prompts and limits unchanged'
   exit 0
 fi
 step=backup
@@ -280,7 +303,10 @@ cp "$scratch/before.json" "$state/before.json"
 state_op backup "$db" "$db.pre-$backup_suffix"
 [[ ! -e "$env_file.pre-$backup_suffix" ]]
 cp -p "$env_file" "$env_file.pre-$backup_suffix"
-if ! cmp -s "$previous/bin/zoe-runner" "$dl/server/bin/zoe-runner"; then touch "$state/runner-changed"; fi
+if ! cmp -s "$previous/bin/zoe-runner" "$dl/server/bin/zoe-runner" || [[ ! -f "$limits_file" ]] ||
+    { [[ "$prompts_mode" == overwrite ]] && ! cmp -s "$limits_file" "$dl/server/limits.json"; }; then
+  touch "$state/runner-changed"
+fi
 if [[ ! -e "$releases/$sha" ]]; then
   chmod 0755 "$dl/server"
   mv -T "$dl/server" "$releases/$sha"

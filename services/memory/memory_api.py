@@ -1,6 +1,9 @@
 """Authenticated standard-library HTTP listener for the internal memory API."""
 from __future__ import annotations
 
+from typing import Mapping
+from .limits import defaults
+
 import hmac
 import hashlib
 import json
@@ -17,8 +20,6 @@ from .person_memory import MemoryAPIError, PersonMemory, check_deadline
 from .responses_llm import UpstreamUnauthorized
 
 LOG = logging.getLogger("zoe.memory.api")
-MAX_BODY_BYTES = 64 * 1024
-MAX_INGEST_BODY_BYTES = 256 * 1024
 
 
 def config_fingerprint(endpoint: str, model: str, effort: str, thinking: str, credential: str) -> str:
@@ -41,7 +42,9 @@ def _required_text(body: dict[str, Any], key: str) -> str:
 class MemoryAPIServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], backend: PersonMemory, token: str, timeout: float = 60):
+    def __init__(self, address: tuple[str, int], backend: PersonMemory, token: str, timeout: float = 60,
+                 limits: Mapping[str, int] | None = None):
+        self.limits = limits if limits is not None else defaults()
         self.backend = backend
         self.token = token.encode("utf-8")
         self.request_timeout = timeout
@@ -90,7 +93,8 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
             size = int(self.headers["Content-Length"])
         except (ValueError, TypeError):
             raise MemoryAPIError(400, "request_invalid") from None
-        limit = MAX_INGEST_BODY_BYTES if self.path == "/v1/memory/ingest" else MAX_BODY_BYTES
+        key = "memory_ingest_body_bytes" if self.path == "/v1/memory/ingest" else "memory_api_body_bytes"
+        limit = self.server.limits[key]
         if size > limit:
             raise MemoryAPIError(413, "body_too_large")
         if size < 0:
@@ -135,8 +139,8 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
             if set(body) - {"user", "request", "top_k"}:
                 raise MemoryAPIError(400, "request_invalid")
             request = _required_text(body, "request")
-            top_k = body.get("top_k", 8)
-            if type(top_k) is not int or not 1 <= top_k <= 20:
+            top_k = body.get("top_k", self.server.limits["memory_search_default"])
+            if type(top_k) is not int or not 1 <= top_k <= self.server.limits["memory_search_max"]:
                 raise MemoryAPIError(400, "request_invalid")
             return self.server.backend.search(user, request, top_k, self.deadline)
         if self.path.endswith("/write"):
@@ -195,7 +199,7 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
                      (time.monotonic() - started) * 1000)
 
 
-def create_memory_api(controlled: Any) -> MemoryAPIServer:
+def create_memory_api(controlled: Any, limits: Mapping[str, int] | None = None) -> MemoryAPIServer:
     token_file = os.environ.get("ZOE_MEMORY_API_TOKEN_FILE", "")
     if not token_file:
         raise ValueError("ZOE_MEMORY_API_TOKEN_FILE is required")
@@ -207,4 +211,5 @@ def create_memory_api(controlled: Any) -> MemoryAPIServer:
     timeout = float(os.environ.get("ZOE_MEMORY_API_TIMEOUT_SECONDS", "60"))
     if not 0 < timeout <= 120:
         raise ValueError("memory API timeout must be positive and at most 120 seconds")
-    return MemoryAPIServer((host, int(port)), PersonMemory(controlled.memory, controlled.prompts), token, timeout)
+    return MemoryAPIServer((host, int(port)), PersonMemory(controlled.memory, controlled.prompts, limits),
+                           token, timeout, limits)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -123,7 +124,7 @@ func TestAppendMonitorPausesPendingAndRotating(t *testing.T) {
 			r := &appendRuntime{runtimeFake: f}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 			defer cancel()
-			e := &Engine{Control: c, Runtime: r, Journal: j, PollInterval: time.Millisecond, ContextTokenBudget: 10, MaxRotations: 1}
+			e := &Engine{Control: c, Runtime: r, Journal: j, PollInterval: time.Millisecond, Limits: withLimit(t, withLimit(t, limits.Defaults(), "runner_context_max_tokens", 10), "runner_max_rotations", 1)}
 			if kind == "rotation" {
 				e.Routes = map[string]Route{claim.ProfileID: {Model: "provider/model"}}
 			}

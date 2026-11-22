@@ -12,5 +12,6 @@ RUN pip install --no-cache-dir \
     mem0ai==2.2.1 \
     qdrant-client==1.19.1
 COPY services /app/services
+COPY internal/limits/schema.json /app/internal/limits/schema.json
 
 CMD ["python", "-m", "services.memory.worker"]

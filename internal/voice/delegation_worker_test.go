@@ -198,7 +198,7 @@ func useStewardServer(t *testing.T, r *classificationRig, handle func(http.Respo
 	}))
 	t.Cleanup(server.Close)
 	env := map[string]string{"ZOE_STEWARD_BASE_URL": server.URL, "ZOE_STEWARD_MODEL": "fixture", "ZOE_STEWARD_API_KEY_FILE": "fixture"}
-	client, err := steward.FromEnv(func(key string) string { return env[key] }, func(string) ([]byte, error) { return []byte("fixture"), nil })
+	client, err := steward.FromEnv(func(key string) string { return env[key] }, func(string) ([]byte, error) { return []byte("fixture"), nil }, r.svc.limits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,6 +257,37 @@ func TestOversizedDelegationIsHandledWithOneErrorLog(t *testing.T) {
 				t.Fatalf("oversized delegation wrote %d tasks, entries or replies", n)
 			}
 		})
+	}
+}
+
+func TestOversizedStewardFactsFailClassificationWithoutModelOrAdmission(t *testing.T) {
+	r := newClassificationRig(t, nil)
+	r.svc.limits = mustLimits(t, "steward_input_max_bytes", 1024)
+	useStewardServer(t, r, func(w http.ResponseWriter, _ steward.Input) {
+		t.Error("oversized facts reached the model")
+		w.WriteHeader(http.StatusBadRequest)
+	})
+	const id = "oversized-steward-turn"
+	r.seedTurn(t, id)
+	r.seedTask(t, "candidate", "user-1")
+	r.exec(t, `UPDATE tasks SET status='complete',goal='candidate task',result=? WHERE id='candidate'`, strings.Repeat("private-fact", 200))
+	r.exec(t, `UPDATE voice_turns SET transcript_seq=1,exits='task',request='candidate task' WHERE id=?`, id)
+	var logs bytes.Buffer
+	oldOutput, oldFlags, oldLevel := log.Writer(), log.Flags(), logging.CurrentLevel()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	logging.SetLevel(logging.Info)
+	t.Cleanup(func() { log.SetOutput(oldOutput); log.SetFlags(oldFlags); logging.SetLevel(oldLevel) })
+	for range 2 {
+		r.svc.processDelegations(context.Background())
+	}
+	if writeJobCount(t, r.store, `SELECT count(*) FROM tasks`) != 1 ||
+		writeJobCount(t, r.store, `SELECT count(*) FROM voice_fast_replies WHERE text='Processing error.'`) != 1 {
+		t.Fatalf("did not fail closed: %s", logs.String())
+	}
+	if strings.Count(logs.String(), "level=error") != 1 || !strings.Contains(logs.String(), "steward_input_too_large turn_id="+id) ||
+		!strings.Contains(logs.String(), "limit_bytes=1024") || strings.Contains(logs.String(), "private-fact") {
+		t.Fatalf("unexpected diagnostics: %s", logs.String())
 	}
 }
 

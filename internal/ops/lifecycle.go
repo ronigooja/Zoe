@@ -175,6 +175,9 @@ func (m Manager) Install(ctx context.Context, o LifecycleOptions) (ReleaseManife
 	if err = m.stageRelease(o, manifest); err != nil {
 		return manifest, err
 	}
+	if err = installLifecycleLimits(o, manifest); err != nil {
+		return manifest, err
+	}
 	if err = m.switchCurrent(o, manifest.SourceRevision); err != nil {
 		return manifest, err
 	}
@@ -296,6 +299,9 @@ func (m Manager) Update(ctx context.Context, o LifecycleOptions) error {
 	current := filepath.Join(o.OptRoot, "releases", "current")
 	previous, _ := os.Readlink(current)
 	if err = m.stageRelease(o, manifest); err != nil {
+		return err
+	}
+	if err = installLifecycleLimits(o, manifest); err != nil {
 		return err
 	}
 	if err = m.pull(ctx, manifest); err != nil {
@@ -924,7 +930,7 @@ func (m Manager) stageRelease(o LifecycleOptions, manifest ReleaseManifest) erro
 				if e = os.WriteFile(filepath.Join(target, "bin", name), data, 0755); e != nil {
 					return e
 				}
-			} else if strings.HasPrefix(filepath.ToSlash(a.Path), "deploy-linux/") {
+			} else if a.Path == "limits.json" || strings.HasPrefix(filepath.ToSlash(a.Path), "deploy-linux/") {
 				data, e := os.ReadFile(src)
 				if e != nil {
 					return e
@@ -989,10 +995,10 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 	if err != nil {
 		return err
 	}
-	stack := map[string]string{"ZOE_SERVER_IMAGE": image(mfest, "zoe-server"), "ZOE_MEMORY_WORKER_IMAGE": image(mfest, "zoe-memory-worker"), "ZOE_SERVER_DATA_ROOT": filepath.Join(o.DataRoot, "server"), "ZOE_MEMORY_DATA_ROOT": filepath.Join(o.DataRoot, "memory"), "ZOE_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "runner-token"), "ZOE_MEM0_LLM_API_KEY_FILE": filepath.Join(o.Root, "secrets", "mem0-llm-api-key"), "ZOE_RUNTIME_PROFILES": profiles, "ZOE_DEFAULT_PROFILE_ID": "worker", "ZOE_MAX_RUNS": "12", "ZOE_COMPOSE_FILE": filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", "docker-compose.yml")}
+	stack := map[string]string{"ZOE_SERVER_IMAGE": image(mfest, "zoe-server"), "ZOE_MEMORY_WORKER_IMAGE": image(mfest, "zoe-memory-worker"), "ZOE_SERVER_DATA_ROOT": filepath.Join(o.DataRoot, "server"), "ZOE_MEMORY_DATA_ROOT": filepath.Join(o.DataRoot, "memory"), "ZOE_RUNNER_TOKEN_FILE": filepath.Join(o.Root, "secrets", "runner-token"), "ZOE_MEM0_LLM_API_KEY_FILE": filepath.Join(o.Root, "secrets", "mem0-llm-api-key"), "ZOE_RUNTIME_PROFILES": profiles, "ZOE_DEFAULT_PROFILE_ID": "worker", "ZOE_LIMITS_FILE": lifecycleLimitsPath(o.Root), "ZOE_COMPOSE_FILE": filepath.Join(o.OptRoot, "releases", "current", "deploy-linux", "docker-compose.yml")}
 	oldStack, _ := readEnv(filepath.Join(o.Root, "zoe-stack.env"))
 	stack["ZOE_MEMORY_API_TOKEN_FILE"] = filepath.Join(o.Root, "secrets", "memory-api-token")
-	for _, key := range []string{"ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_REGISTER_BASE_URL", "ZOE_REGISTER_MODEL", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_REGISTER_THINKING", "ZOE_REGISTER_TIMEOUT_MS", "ZOE_REGISTER_API_KEY_FILE", "ZOE_COMPACT_BASE_URL", "ZOE_COMPACT_MODEL", "ZOE_COMPACT_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_COMPACT_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE", "ZOE_UI_CONTROLLER_BASE_URL", "ZOE_UI_CONTROLLER_MODEL", "ZOE_UI_CONTROLLER_REASONING_EFFORT", "ZOE_UI_CONTROLLER_THINKING", "ZOE_UI_CONTROLLER_TIMEOUT_MS", "ZOE_UI_CONTROLLER_MAX_RETRIES", "ZOE_UI_CONTROLLER_API_KEY_FILE"} {
+	for _, key := range []string{"ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_REGISTER_BASE_URL", "ZOE_REGISTER_MODEL", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_REGISTER_THINKING", "ZOE_REGISTER_TIMEOUT_MS", "ZOE_REGISTER_API_KEY_FILE", "ZOE_COMPACT_BASE_URL", "ZOE_COMPACT_MODEL", "ZOE_COMPACT_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_COMPACT_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE", "ZOE_UI_CONTROLLER_BASE_URL", "ZOE_UI_CONTROLLER_MODEL", "ZOE_UI_CONTROLLER_REASONING_EFFORT", "ZOE_UI_CONTROLLER_THINKING", "ZOE_UI_CONTROLLER_TIMEOUT_MS", "ZOE_UI_CONTROLLER_API_KEY_FILE"} {
 		if value := strings.TrimSpace(oldStack[key]); value != "" {
 			stack[key] = value
 		}
@@ -1001,7 +1007,7 @@ func (m Manager) writeDeploymentFiles(o LifecycleOptions, mfest ReleaseManifest)
 	if _, err := strconv.Atoi(port); err != nil || port == "" {
 		port = "8787"
 	}
-	runnerEnv := map[string]string{"ZOE_OPENCODE_BASE_URL": "http://127.0.0.1:4096", "ZOE_OPENCODE_PASSWORD_FILE": "/run/credentials/zoe-runner.service/opencode-password", "ZOE_OPENCODE_WORKSPACE_ROOT": filepath.Join(o.DataRoot, "runner", "workspaces"), "ZOE_CONTROL_URL": "http://127.0.0.1:" + port, "ZOE_RUNNER_JOURNAL_PATH": filepath.Join(o.DataRoot, "runner", "journal.sqlite"), "ZOE_RUNNER_ROUTES": routes, "ZOE_OPENCODE_MODEL": model}
+	runnerEnv := map[string]string{"ZOE_LIMITS_FILE": lifecycleLimitsPath(o.Root), "ZOE_OPENCODE_BASE_URL": "http://127.0.0.1:4096", "ZOE_OPENCODE_PASSWORD_FILE": "/run/credentials/zoe-runner.service/opencode-password", "ZOE_OPENCODE_WORKSPACE_ROOT": filepath.Join(o.DataRoot, "runner", "workspaces"), "ZOE_CONTROL_URL": "http://127.0.0.1:" + port, "ZOE_RUNNER_JOURNAL_PATH": filepath.Join(o.DataRoot, "runner", "journal.sqlite"), "ZOE_RUNNER_ROUTES": routes, "ZOE_OPENCODE_MODEL": model}
 	if o.OpenCodeBinary != "" {
 		runnerEnv["ZOE_OPENCODE_BINARY"] = o.OpenCodeBinary
 	}
@@ -1137,7 +1143,7 @@ func isReleaseOwnedEnvKey(key string) bool {
 	case "ZOE_SERVER_IMAGE", "ZOE_MEMORY_WORKER_IMAGE",
 		"ZOE_SERVER_DATA_ROOT", "ZOE_MEMORY_DATA_ROOT", "ZOE_RUNNER_TOKEN_FILE",
 		"ZOE_MEMORY_API_TOKEN_FILE", "ZOE_MEM0_LLM_API_KEY_FILE", "ZOE_COMPOSE_FILE",
-		"ZOE_CONTROL_URL", "ZOE_RUNNER_JOURNAL_PATH":
+		"ZOE_CONTROL_URL", "ZOE_RUNNER_JOURNAL_PATH", "ZOE_LIMITS_FILE":
 		return true
 	default:
 		return false
@@ -1146,7 +1152,7 @@ func isReleaseOwnedEnvKey(key string) bool {
 
 func isOperatorOwnedEnvKey(key string) bool {
 	switch key {
-	case "ZOE_RUNTIME_PROFILES", "ZOE_DEFAULT_PROFILE_ID", "ZOE_MAX_RUNS", "ZOE_RUNNER_ROUTES", "ZOE_AGENT_CONTEXT_WINDOW_RATIO", "ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "ZOE_AGENT_MAX_ROTATIONS", "ZOE_AGENT_ROTATION_SUMMARY":
+	case "ZOE_RUNTIME_PROFILES", "ZOE_DEFAULT_PROFILE_ID", "ZOE_RUNNER_ROUTES", "ZOE_AGENT_CONTEXT_WINDOW_RATIO", "ZOE_AGENT_ROTATION_SUMMARY":
 		return true
 	case "ZOE_OPENCODE_BASE_URL", "ZOE_OPENCODE_PASSWORD_FILE", "ZOE_OPENCODE_WORKSPACE_ROOT", "ZOE_OPENCODE_MODEL", "ZOE_OPENCODE_REASONING_EFFORT", "ZOE_OPENCODE_BINARY", "ZOE_OPENCODE_USER":
 		return true
@@ -1154,7 +1160,7 @@ func isOperatorOwnedEnvKey(key string) bool {
 		return true
 	case "ZOE_VOICE_INGEST_TOKEN_FILE", "ZOE_VOICE_INGEST_ID", "ZOE_VOICE_INGEST_WORKSPACES":
 		return true
-	case "ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_REGISTER_BASE_URL", "ZOE_REGISTER_MODEL", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_REGISTER_THINKING", "ZOE_REGISTER_TIMEOUT_MS", "ZOE_REGISTER_API_KEY_FILE", "ZOE_COMPACT_BASE_URL", "ZOE_COMPACT_MODEL", "ZOE_COMPACT_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_COMPACT_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE", "ZOE_UI_CONTROLLER_BASE_URL", "ZOE_UI_CONTROLLER_MODEL", "ZOE_UI_CONTROLLER_REASONING_EFFORT", "ZOE_UI_CONTROLLER_THINKING", "ZOE_UI_CONTROLLER_TIMEOUT_MS", "ZOE_UI_CONTROLLER_MAX_RETRIES", "ZOE_UI_CONTROLLER_API_KEY_FILE":
+	case "ZOE_MEM0_LLM_PROVIDER", "ZOE_MEM0_LLM_MODEL", "ZOE_MEM0_LLM_BASE_URL", "ZOE_MEM0_LLM_REASONING_EFFORT", "ZOE_REGISTER_BASE_URL", "ZOE_REGISTER_MODEL", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_REGISTER_THINKING", "ZOE_REGISTER_TIMEOUT_MS", "ZOE_REGISTER_API_KEY_FILE", "ZOE_COMPACT_BASE_URL", "ZOE_COMPACT_MODEL", "ZOE_COMPACT_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_COMPACT_API_KEY_FILE", "ZOE_STEWARD_API_STYLE", "ZOE_STEWARD_BASE_URL", "ZOE_STEWARD_MODEL", "ZOE_STEWARD_REASONING_EFFORT", "ZOE_STEWARD_THINKING", "ZOE_STEWARD_TIMEOUT_MS", "ZOE_STEWARD_API_KEY_FILE", "ZOE_UI_CONTROLLER_BASE_URL", "ZOE_UI_CONTROLLER_MODEL", "ZOE_UI_CONTROLLER_REASONING_EFFORT", "ZOE_UI_CONTROLLER_THINKING", "ZOE_UI_CONTROLLER_TIMEOUT_MS", "ZOE_UI_CONTROLLER_API_KEY_FILE":
 		return true
 	default:
 		return false
@@ -1203,9 +1209,6 @@ func validOperatorEnvValue(key, value string) bool {
 	case "ZOE_AGENT_CONTEXT_WINDOW_RATIO":
 		n, err := strconv.ParseFloat(value, 64)
 		return err == nil && n > 0 && n < 1
-	case "ZOE_AGENT_CONTEXT_TOKEN_BUDGET", "ZOE_AGENT_MAX_ROTATIONS":
-		n, err := strconv.ParseInt(value, 10, 64)
-		return err == nil && n >= 0
 	case "ZOE_AGENT_ROTATION_SUMMARY":
 		return value == "on" || value == "off"
 	default:

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,7 @@ type Route struct {
 	ApprovalMode    string `json:"approval_mode"`
 }
 type Engine struct {
+	Limits                       limits.Set
 	Control                      RunnerAPI
 	Instance                     InstanceAuthority
 	Runtime                      Runtime
@@ -75,9 +77,7 @@ type Engine struct {
 	PollInterval, ObserveTimeout time.Duration
 	WaitLimit                    time.Duration
 	Now                          func() time.Time
-	ContextTokenBudget           int64
 	ContextWindowRatio           float64
-	MaxRotations                 int
 	RotationSummary              bool
 	RotationSummaryTimeout       time.Duration
 	windowMu                     sync.Mutex
@@ -100,7 +100,7 @@ func (e *Engine) RunOnce(ctx context.Context) error {
 }
 
 func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err error) {
-	if err := validateClaim(claim); err != nil {
+	if err := validateClaim(claim, e.Limits); err != nil {
 		return err
 	}
 	if e.Runtime == nil || e.Journal == nil {
@@ -515,9 +515,7 @@ func (e *Engine) rotationHasNoRoom(ctx context.Context, c contracts.JobClaim, ms
 		ratio = 0.5
 	}
 	limit := int64(float64(window) * ratio)
-	if e.ContextTokenBudget > 0 && e.ContextTokenBudget < limit {
-		limit = e.ContextTokenBudget
-	}
+	limit = min(limit, e.Limits.Int64("runner_context_max_tokens"))
 	if c.Budget.MaxContextTokens > 0 && (limit <= 0 || c.Budget.MaxContextTokens < limit) {
 		limit = c.Budget.MaxContextTokens
 	}
@@ -544,11 +542,6 @@ func (e *Engine) rotationHasNoRoom(ctx context.Context, c contracts.JobClaim, ms
 	return usage > 0 && usage >= limit
 }
 
-const (
-	rotationPromptLimit  = 24000
-	rotationSummaryLimit = 12000 // retained for legacy helper tests
-)
-
 func (e *Engine) contextExceeded(ctx context.Context, c contracts.JobClaim, msgs []opencode.Message) bool {
 	window, ok := e.contextWindow(ctx, c)
 	if !ok {
@@ -559,9 +552,7 @@ func (e *Engine) contextExceeded(ctx context.Context, c contracts.JobClaim, msgs
 		ratio = 0.5
 	}
 	limit := int64(float64(window) * ratio)
-	if e.ContextTokenBudget > 0 && e.ContextTokenBudget < limit {
-		limit = e.ContextTokenBudget
-	}
+	limit = min(limit, e.Limits.Int64("runner_context_max_tokens"))
 	if c.Budget.MaxContextTokens > 0 && (limit <= 0 || c.Budget.MaxContextTokens < limit) {
 		limit = c.Budget.MaxContextTokens
 	}
@@ -630,7 +621,8 @@ func (e *Engine) contextWindow(ctx context.Context, c contracts.JobClaim) (int64
 	return w, true
 }
 
-func rotationSummary(msgs []opencode.Message) string {
+func rotationSummary(msgs []opencode.Message, sets ...limits.Set) string {
+	rotationSummaryLimit := limits.Resolve(sets).Int("runner_rotation_summary_bytes")
 	var b strings.Builder
 	for i := len(msgs) - 1; i >= 0 && b.Len() < rotationSummaryLimit; i-- {
 		m := msgs[i]
@@ -655,8 +647,8 @@ func rotationSummary(msgs []opencode.Message) string {
 	return s
 }
 
-func rotationRecentMessages(msgs []opencode.Message) string {
-	const itemLimit = 300
+func rotationRecentMessages(msgs []opencode.Message, l limits.Set) string {
+	itemLimit := l.Int("runner_rotation_history_item_bytes")
 	var b strings.Builder
 	for _, m := range msgs {
 		role := messageRole(m)
@@ -761,10 +753,7 @@ func (e *Engine) rotate(ctx context.Context, c contracts.JobClaim, old RuntimeBi
 		return err
 	}
 	count := entry.RotationCount + 1
-	max := e.MaxRotations
-	if max <= 0 {
-		max = 3
-	}
+	max := e.Limits.Int("runner_max_rotations")
 	if count > max {
 		_ = e.Runtime.Abort(ctx, old)
 		return e.terminate(ctx, c, old, "context_rotation_limit_exceeded", false)
@@ -852,7 +841,7 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 	// Accepted inputs are never truncated; only derived session history is capped.
 	accepted := b.String()
 	b.Reset()
-	b.WriteString("\nFiles touched in the prior session: " + rotationFiles(msgs) + "\n\nRecent prior messages (chronological; verify against the workspace):\n" + rotationRecentMessages(msgs))
+	b.WriteString("\nFiles touched in the prior session: " + rotationFiles(msgs) + "\n\nRecent prior messages (chronological; verify against the workspace):\n" + rotationRecentMessages(msgs, e.Limits))
 	if e.RotationSummary {
 		if summarizer, ok := e.Runtime.(RotationSummarizer); ok {
 			timeout := e.RotationSummaryTimeout
@@ -860,16 +849,16 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 				timeout = 30 * time.Second
 			}
 			summaryCtx, cancel := context.WithTimeout(ctx, timeout)
-			summary, err := summarizer.Summarize(summaryCtx, e.Routes[c.ProfileID].Model, rotationSummary(msgs))
+			summary, err := summarizer.Summarize(summaryCtx, e.Routes[c.ProfileID].Model, rotationSummary(msgs, e.Limits))
 			cancel()
 			if err == nil && strings.TrimSpace(summary) != "" {
-				b.WriteString("\n\nUnverified context; verify against the workspace:\n" + truncate(summary, 16000))
+				b.WriteString("\n\nUnverified context; verify against the workspace:\n" + truncate(summary, e.Limits.Int("runner_rotation_summary_output_bytes")))
 			} else if err != nil {
 				logging.Warnf("rotation summary unavailable run_id=%s error_type=%T", safeRuntimeID(c.RunID), err)
 			}
 		}
 	}
-	remaining := rotationPromptLimit - len(accepted)
+	remaining := e.Limits.Int("runner_rotation_prompt_bytes") - len(accepted)
 	if remaining <= 0 {
 		return accepted
 	}
@@ -1040,9 +1029,10 @@ func (e *Engine) observeQueued(ctx context.Context, run string, observation cont
 }
 func (e *Engine) emitMessage(ctx context.Context, c contracts.JobClaim, kind, source, summary string, m opencode.Message) error {
 	out := messageText(m)
-	truncated := len(out) > 20000
+	limit := e.Limits.Int("runner_assistant_output_max_bytes")
+	truncated := len(out) > limit
 	if truncated {
-		out = out[:20000]
+		out = out[:limit]
 	}
 	var truncatedValue any
 	if truncated {
@@ -1224,7 +1214,7 @@ func (e *Engine) interval() time.Duration {
 	}
 	return time.Second
 }
-func validateClaim(c contracts.JobClaim) error {
+func validateClaim(c contracts.JobClaim, sets ...limits.Set) error {
 	if c.RunID == "" || c.TaskID == "" || c.AttemptID == "" || c.WorkspaceID == "" || c.Fence == 0 || c.ProfileID == "" || c.RuntimeRouteID == "" || c.ModelRouteID == "" || c.IsolationPolicy == "" {
 		return errors.New("runner claim is missing required identity")
 	}
@@ -1243,7 +1233,7 @@ func validateClaim(c contracts.JobClaim) error {
 	if c.PermissionTier == profiles.TierFull && (c.Agent != "zoe-steward" || c.Role != "worker") {
 		return errors.New("full tier requires resident Worker identity")
 	}
-	if err := profiles.ValidateRuleset(c.PermissionRules, c.PermissionTier); err != nil {
+	if err := profiles.ValidateRuleset(c.PermissionRules, c.PermissionTier, sets...); err != nil {
 		return fmt.Errorf("invalid runner claim permissions: %w", err)
 	}
 	return nil

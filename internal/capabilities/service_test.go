@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -439,7 +440,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 	if err = store.DB().QueryRowContext(ctx, `SELECT trigger_key FROM capability_trigger_definitions WHERE trigger_id=?`, eventTrigger).Scan(&eventKey); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < triggerEventPageSize; i++ {
+	for i := 0; i < limits.Defaults().Int("capability_trigger_page_rows"); i++ {
 		id := fmt.Sprintf("blocked-run-%03d", i)
 		if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_trigger_runs(trigger_run_id,trigger_id,workspace_id,deployment_id,trigger_key,dedupe_key,mode,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'program','queued',?,?)`, id, eventTrigger, "default", dep.ResourceID, eventKey, "blocked-"+id, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 			t.Fatal(err)
@@ -562,7 +563,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 		postCapabilityRunTerminalObservation(t, handler, runnerToken, runID, fixture.eventKind, fence)
 	}
 	tx = begin(t, store.DB())
-	if err = processTriggerEvents(ctx, tx, "default", time.Now().UTC()); err != nil {
+	if err = (&Service{}).processTriggerEvents(ctx, tx, "default", time.Now().UTC()); err != nil {
 		tx.Rollback()
 		t.Fatalf("terminal run event processing: %v", err)
 	}

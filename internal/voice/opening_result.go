@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"time"
 	"unicode/utf8"
 
@@ -32,8 +33,8 @@ type pendingOpeningResult struct{ EntryID, Text string }
 
 func pendingResultsForContext(ctx context.Context, db interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, workspace, owner string) ([]pendingOpeningResult, error) {
-	rows, err := db.QueryContext(ctx, `SELECT d.entry_id,t.goal,t.status,coalesce(t.summary_result,e.content) FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.task_id=d.task_id AND e.workspace_id=d.workspace_id WHERE d.workspace_id=? AND d.subject_id=? AND d.status='pending' AND e.kind='assistant_message' AND `+authoritativeResultPredicate+` AND `+resultNotInOpening+` AND NOT EXISTS(SELECT 1 FROM voice_result_chunks x WHERE x.entry_id=d.entry_id AND x.state!='pending') ORDER BY d.created_at,d.entry_id LIMIT 25`, workspace, owner)
+}, workspace, owner string, sets ...limits.Set) ([]pendingOpeningResult, error) {
+	rows, err := db.QueryContext(ctx, `SELECT d.entry_id,t.goal,t.status,coalesce(t.summary_result,e.content) FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.task_id=d.task_id AND e.workspace_id=d.workspace_id WHERE d.workspace_id=? AND d.subject_id=? AND d.status='pending' AND e.kind='assistant_message' AND `+authoritativeResultPredicate+` AND `+resultNotInOpening+` AND NOT EXISTS(SELECT 1 FROM voice_result_chunks x WHERE x.entry_id=d.entry_id AND x.state!='pending') ORDER BY d.created_at,d.entry_id LIMIT ?`, workspace, owner, limits.Resolve(sets).Int("opening_pending_results"))
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +54,7 @@ func (s *Service) openingRegisterText(ctx context.Context, p contracts.Principal
 	if s.register == nil {
 		return ""
 	}
-	text, err := s.register.AssembleContext(ctx, RegisterOwner{p.WorkspaceID, p.SubjectID}, s.now(), s.openingBudget)
+	text, err := s.register.AssembleContext(ctx, RegisterOwner{p.WorkspaceID, p.SubjectID}, s.now(), s.limits.Int("opening_context_runes"))
 	if err != nil {
 		return ""
 	}
@@ -67,10 +68,10 @@ func (s *Service) buildAVASOpeningContext(ctx context.Context, tx *sql.Tx, p con
 	if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(opening_context_version),0)+1 FROM voice_sessions WHERE workspace_id=? AND owner_id=?`, p.WorkspaceID, p.SubjectID).Scan(&c.Version); err != nil {
 		return nil, err
 	}
-	remaining := s.openingBudget
+	remaining := s.limits.Int("opening_context_runes")
 	appendItem := func(text string) bool {
 		cost := utf8.RuneCountInString(text)
-		if !utf8.ValidString(text) || len(c.Items) >= 128 || cost > remaining {
+		if !utf8.ValidString(text) || len(c.Items) >= limits.GatewayOpeningItems || cost > remaining {
 			return false
 		}
 		c.Items = append(c.Items, openingContextItem{Role: "user", Text: text})
@@ -80,7 +81,7 @@ func (s *Service) buildAVASOpeningContext(ctx context.Context, tx *sql.Tx, p con
 	if registerText != "" {
 		appendItem(registerText)
 	}
-	pending, err := pendingResultsForContext(ctx, tx, p.WorkspaceID, p.SubjectID)
+	pending, err := pendingResultsForContext(ctx, tx, p.WorkspaceID, p.SubjectID, s.limits)
 	if err != nil {
 		return nil, err
 	}

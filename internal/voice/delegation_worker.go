@@ -39,7 +39,7 @@ func (s *Service) delegationWorker(ctx context.Context) {
 }
 
 func (s *Service) processDelegations(ctx context.Context) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM voice_turns WHERE handoff_handled=0 AND transcript_seq IS NOT NULL ORDER BY confirmed_at,id LIMIT 25`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM voice_turns WHERE handoff_handled=0 AND transcript_seq IS NOT NULL ORDER BY confirmed_at,id LIMIT ?`, s.limits.Int("voice_delegation_sweep_rows"))
 	if err != nil {
 		return
 	}
@@ -65,7 +65,7 @@ func (s *Service) processDelegation(ctx context.Context, id string) {
 		return
 	}
 	defer s.classifying.Delete(id)
-	const maxRefreshes = 3
+	maxRefreshes := s.limits.Int("steward_selection_refreshes")
 	for refreshes := 0; ctx.Err() == nil; refreshes++ {
 		s.classifyDelegation(ctx, id)
 		err := s.applyDelegation(ctx, id)
@@ -142,7 +142,7 @@ func (s *Service) applyDelegation(ctx context.Context, id string) error {
 	}
 	if oversized != nil {
 		// Size rejection happens before task writes. Log only after the turn is durably handled.
-		logging.Errorf("voice_delegation_task_text_too_large id=%s request_bytes=%d limit_bytes=%d", id, oversized.requestBytes, control.MaxTaskTextBytes)
+		logging.Errorf("voice_delegation_task_text_too_large id=%s request_bytes=%d limit_bytes=%d", id, oversized.requestBytes, s.limits.Int("task_text_max_bytes"))
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"net"
 	"net/http"
 	"os"
@@ -28,6 +29,13 @@ import (
 
 func main() {
 	logging.ConfigureFromEnv()
+	if len(os.Args) == 3 && os.Args[1] == "validate-limits" {
+		if _, err := limits.Load(os.Args[2]); err != nil {
+			logging.Errorf("%s", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 {
 		if err := manageInstanceKey(os.Args[1], os.Args[2:]); err != nil {
 			logging.Errorf("instance key rotation failed: %T", err)
@@ -37,8 +45,9 @@ func main() {
 	}
 	if err := run(); err != nil {
 		var promptErr *prompts.Error
-		if errors.As(err, &promptErr) {
-			logging.Errorf("zoe-server stopped: %s", promptErr.Error())
+		var limitErr limits.Error
+		if errors.As(err, &promptErr) || errors.As(err, &limitErr) {
+			logging.Errorf("zoe-server stopped: %s", err.Error())
 		} else {
 			logging.Errorf("zoe-server stopped: %T", err)
 		}
@@ -47,7 +56,14 @@ func main() {
 }
 
 func run() error {
-	promptSet, err := prompts.Load(prompts.Dir())
+	if err := limits.RejectLegacyEnv(os.LookupEnv); err != nil {
+		return err
+	}
+	loaded, err := limits.Load(limits.Path())
+	if err != nil {
+		return err
+	}
+	promptSet, err := prompts.Load(prompts.Dir(), loaded)
 	if err != nil {
 		return err
 	}
@@ -56,7 +72,7 @@ func run() error {
 	if dbPath == "" {
 		return errors.New("ZOE_DATABASE_PATH is required")
 	}
-	registerConfig, err := registerConfigForStartup(os.Getenv, os.ReadFile, logging.Infof)
+	registerConfig, err := registerConfigForStartup(os.Getenv, os.ReadFile, logging.Infof, loaded)
 	if err != nil {
 		return err
 	}
@@ -95,10 +111,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	maxRuns := maxRunsEnv()
-	if maxRuns == 0 {
-		return errors.New("ZOE_MAX_RUNS must be an integer from 1 through 64")
-	}
 	waitLimit := waitLimitEnv()
 	if waitLimit == 0 {
 		return errors.New("ZOE_WAIT_LIMIT_MINUTES must be an integer from 1 through 1440")
@@ -113,10 +125,10 @@ func run() error {
 		DefaultProfileID:         strings.TrimSpace(os.Getenv("ZOE_DEFAULT_PROFILE_ID")),
 		Profiles:                 profiles,
 		PushSender:               pushSender,
-		MaxRuns:                  maxRuns,
+		Limits:                   loaded,
 		WaitLimit:                waitLimit,
 	}
-	stewardClient, err := steward.FromEnv(os.Getenv, os.ReadFile)
+	stewardClient, err := steward.FromEnv(os.Getenv, os.ReadFile, loaded)
 	if err != nil {
 		logging.Errorf("steward configuration: %T", err)
 		return err
@@ -126,11 +138,7 @@ func run() error {
 		stewardClient.SetInstructions(promptSet.Steward())
 		taskSteward = stewardClient
 	}
-	uiController, err := uiControllerFromEnv(os.Getenv, os.ReadFile)
-	if err != nil {
-		return err
-	}
-	uiMaxRetries, err := uiControllerMaxRetries(os.Getenv)
+	uiController, err := uiControllerFromEnv(os.Getenv, os.ReadFile, loaded)
 	if err != nil {
 		return err
 	}
@@ -140,7 +148,7 @@ func run() error {
 	}
 	ready := &voice.ReadyHandle{}
 	models := retryModelsFromLoaded(registerConfig, stewardClient, uiController)
-	server, err := composeControlServer(store, cfg, voice.Config{Ready: ready, RetryModels: models, DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: promptSet.VoiceInstruction(), UIControllerInstruction: promptSet.UIController(), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, UIControllerMaxRetries: uiMaxRetries, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), GatewayDialOrigin: os.Getenv("ZOE_VOICE_GATEWAY_DIAL_ORIGIN")}, capabilities.Config{
+	server, err := composeControlServer(store, cfg, voice.Config{Ready: ready, RetryModels: models, DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: promptSet.VoiceInstruction(), UIControllerInstruction: promptSet.UIController(), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, Limits: loaded, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), GatewayDialOrigin: os.Getenv("ZOE_VOICE_GATEWAY_DIAL_ORIGIN")}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	})
@@ -181,7 +189,7 @@ func run() error {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      0, // SSE streams are bounded by request context and shutdown.
 		IdleTimeout:       90 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		MaxHeaderBytes:    loaded.Int("http_header_max_bytes"),
 	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -285,17 +293,6 @@ func env(name, fallback string) string {
 		return value
 	}
 	return fallback
-}
-func maxRunsEnv() int {
-	v := strings.TrimSpace(os.Getenv("ZOE_MAX_RUNS"))
-	if v == "" {
-		return 12
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 || n > 64 {
-		return 0
-	}
-	return n
 }
 func waitLimitEnv() time.Duration {
 	v := strings.TrimSpace(os.Getenv("ZOE_WAIT_LIMIT_MINUTES"))

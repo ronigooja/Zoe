@@ -121,7 +121,7 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 	}
 	switch steward.Action(stewardAction) {
 	case steward.ActionNew, steward.ActionContinue, steward.ActionAppend, steward.ActionAnswer:
-		if len(content) > control.MaxTaskTextBytes {
+		if len(content) > s.limits.Int("task_text_max_bytes") {
 			return contracts.CommandResult{}, nil, &oversizedDelegation{requestBytes: len(content)}
 		}
 	}

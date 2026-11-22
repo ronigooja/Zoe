@@ -8,6 +8,7 @@ import threading
 from .config import WorkerConfig
 from .mem0_backend import ControlledMem0
 from .memory_api import MemoryAPIServer, create_memory_api
+from .limits import load_limits, reject_legacy_env
 from .prompts import load_prompts
 
 LOG = logging.getLogger("zoe.memory.worker")
@@ -52,10 +53,16 @@ def main() -> None:
     if not os.environ.get("ZOE_MEMORY_API_TOKEN_FILE", ""):
         LOG.error("ZOE_MEMORY_API_TOKEN_FILE is required; memory API cannot start")
         raise SystemExit(1)
-    prompts = load_prompts()
+    try:
+        reject_legacy_env()
+        limits = load_limits()
+    except ValueError as exc:
+        LOG.error("%s", exc)
+        raise SystemExit(1) from None
+    prompts = load_prompts(limits=limits)
     backend = ControlledMem0(WorkerConfig.from_env(), prompts)
     try:
-        serve_memory_api(create_memory_api(backend))
+        serve_memory_api(create_memory_api(backend, limits))
     finally:
         backend.memory.db.close()
 

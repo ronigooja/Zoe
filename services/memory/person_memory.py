@@ -1,6 +1,9 @@
 """Person-scoped Mem0 operations for the HTTP API."""
 from __future__ import annotations
 
+from typing import Mapping
+from .limits import defaults
+
 import hashlib
 import json
 import logging
@@ -21,7 +24,6 @@ class _ManifestReady(BaseException):
 
 def _canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-MAX_OPERATIONS = 8
 
 
 class MemoryAPIError(Exception):
@@ -46,7 +48,7 @@ def _text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip()) and value == value.strip()
 
 
-def validate_operations(raw: Any) -> list[dict[str, str]]:
+def validate_operations(raw: Any, limits: Mapping[str, int] | None = None) -> list[dict[str, str]]:
     def unique_object(pairs):
         result = {}
         for key, value in pairs:
@@ -60,7 +62,7 @@ def validate_operations(raw: Any) -> list[dict[str, str]]:
         if not isinstance(value, dict) or set(value) != {"operations"}:
             raise ValueError
         operations = value["operations"]
-        if not isinstance(operations, list) or len(operations) > MAX_OPERATIONS:
+        if not isinstance(operations, list) or len(operations) > (limits if limits is not None else defaults())["memory_write_max_operations"]:
             raise ValueError
         for item in operations:
             if not isinstance(item, dict) or item.get("op") not in {"add", "replace", "none"}:
@@ -82,7 +84,8 @@ class PersonMemory:
     not concurrent writers between read and upsert. Deploy one writer per store;
     Qdrant has no compare-and-swap and this is not distributed atomicity.
     """
-    def __init__(self, memory: Any, prompts: MemoryPrompts):
+    def __init__(self, memory: Any, prompts: MemoryPrompts, limits: Mapping[str, int] | None = None):
+        self.limits = limits if limits is not None else defaults()
         from .auth_tracking import attach_auth_tracker
         self.memory = memory
         self.prompts = prompts
@@ -289,7 +292,7 @@ class PersonMemory:
                     db.connection.commit()
             if row and row[1] is not None:
                 return self._apply_write(user_id, op_id, json.loads(row[1]), row[2], deadline)
-            existing = self._search(user, request, 5, deadline)
+            existing = self._search(user, request, self.limits["memory_write_recall_rows"], deadline)
             messages = [
                 {"role": "system", "content": self.prompts.memory_write},
                 {"role": "user", "content": json.dumps({
@@ -312,7 +315,7 @@ class PersonMemory:
                 LOG.info("memory_api llm_call component=memory_write status=%s error_kind=%s elapsed_ms=%d",
                          status, error_kind, (time.monotonic() - started) * 1000)
             LOG.debug("memory_api write model_output=%r", raw)
-            operations = validate_operations(raw)  # Validate the ENTIRE output before any write.
+            operations = validate_operations(raw, self.limits)  # Validate the ENTIRE output before any write.
             resolved = []
             for item in operations:
                 operation = {"op": item["op"], "text": item["text"]}
@@ -604,8 +607,8 @@ class PersonMemory:
                     (message_id, scope, text))
                 db.connection.execute(
                     "DELETE FROM messages WHERE session_scope=? AND id NOT IN "
-                    "(SELECT id FROM messages WHERE session_scope=? ORDER BY created_at DESC,id DESC LIMIT 10)",
-                    (scope, scope))
+                    "(SELECT id FROM messages WHERE session_scope=? ORDER BY created_at DESC,id DESC LIMIT ?)",
+                    (scope, scope, self.limits["memory_recent_rows"]))
                 db.connection.execute(
                     "UPDATE zoe_person_ingest_receipts SET status='done',result=? WHERE user_id=? AND chunk_id=?",
                     (json.dumps(outcome), user_id, chunk_id))

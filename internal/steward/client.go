@@ -4,6 +4,7 @@ package steward
 import (
 	"context"
 	"errors"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"net/http"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ const (
 )
 
 type Client struct {
+	limits       limits.Set
 	instructions string
 	transport    *modelclient.Client
 	timeout      time.Duration
@@ -42,7 +44,7 @@ func (c *Client) FingerprintConfig() (endpoint, model, effort, thinking string, 
 }
 
 // FromEnv applies only to ZOE_STEWARD_*; an empty base URL disables the model.
-func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) (*Client, error) {
+func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error), sets ...limits.Set) (*Client, error) {
 	if getenv == nil || readFile == nil {
 		return nil, errors.New("steward configuration functions are required")
 	}
@@ -50,7 +52,7 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 	if err != nil {
 		return nil, err
 	}
-	c, err := modelclient.FromEnv("ZOE_STEWARD", getenv, readFile, 30000, 200, 60000)
+	c, err := modelclient.FromEnv("ZOE_STEWARD", getenv, readFile, 30000, 200, 60000, sets...)
 	if err != nil || c == nil {
 		return nil, err
 	}
@@ -59,7 +61,7 @@ func FromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) 
 	}
 	h := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}, Timeout: timeout}
 	c.SetHTTPClient(h)
-	return &Client{transport: c, timeout: timeout, http: h}, nil
+	return &Client{limits: limits.Resolve(sets), transport: c, timeout: timeout, http: h}, nil
 }
 
 func (c *Client) SetInstructions(text string) { c.instructions = text }

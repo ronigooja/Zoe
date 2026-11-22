@@ -39,11 +39,9 @@ func (s *Service) taskCandidates(ctx context.Context, q rosterQueryer, workspace
 
 func (s *Service) taskCandidatesForSession(ctx context.Context, q rosterQueryer, workspace, owner, session, text string, now time.Time, limit int) ([]taskCandidate, error) {
 	if limit <= 0 {
-		limit = 8
+		limit = s.limits.Int("steward_candidate_default")
 	}
-	if limit > 20 {
-		limit = 20
-	}
+	limit = min(limit, s.limits.Int("steward_candidate_max"))
 	stamp := func(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 	read := func(query string, args ...any) ([]scoredTaskCandidate, error) {
 		rows, err := q.QueryContext(ctx, query, args...)
@@ -79,7 +77,7 @@ WHERE t.workspace_id=? AND t.owner_subject_id=?
 AND l.session_id=coalesce(nullif(?,''),(SELECT id FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND julianday(created_at)<=julianday(?) ORDER BY julianday(created_at) DESC,id DESC LIMIT 1))
 AND t.status IN ('queued','active','waiting','awaiting_user','paused')
 AND julianday(t.created_at) BETWEEN julianday(?) AND julianday(?)
-ORDER BY julianday(t.created_at) DESC,t.id DESC LIMIT 5`, workspace, owner, session, workspace, owner, stamp(now), stamp(now.Add(-time.Hour)), stamp(now))
+ORDER BY julianday(t.created_at) DESC,t.id DESC LIMIT ?`, workspace, owner, session, workspace, owner, stamp(now), stamp(now.Add(-time.Hour)), stamp(now), s.limits.Int("steward_recent_unresolved"))
 	if err != nil {
 		return nil, err
 	}

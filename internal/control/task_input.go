@@ -9,9 +9,6 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 )
 
-// MaxTaskTextBytes bounds a task goal, initial message, addition, or answer.
-const MaxTaskTextBytes = 20_000
-
 // TaskInput applies to task additions and exact pending-question answers.
 // A nil QuestionID is additional direction and never resolves an interaction.
 type TaskInput struct {
@@ -20,7 +17,7 @@ type TaskInput struct {
 }
 
 func (s *Server) AppendTaskInputTx(ctx context.Context, tx *sql.Tx, c CommandContext, taskID string, input TaskInput) (contracts.CommandResult, []contracts.Event, error) {
-	if taskID == "" || strings.TrimSpace(input.Content) == "" || len(input.Content) > MaxTaskTextBytes {
+	if taskID == "" || strings.TrimSpace(input.Content) == "" || len(input.Content) > s.cfg.Limits.Int("task_text_max_bytes") {
 		return contracts.CommandResult{}, nil, apiError(400, "invalid_request", "task_id and bounded content are required", nil)
 	}
 	version, status, err := taskVersionStatus(ctx, tx, c.Principal, taskID)

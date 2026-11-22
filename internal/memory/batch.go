@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"sort"
 	"time"
 	"unicode/utf8"
@@ -14,13 +15,12 @@ import (
 	"github.com/ronigooja/Zoe/internal/memoryapi"
 )
 
-const ingestChunkBytes = 200 * 1024
 const ingestObservationTime = "2006-01-02T15:04Z"
 
 // Reserve the exact fixed-length SHA-256 identities when sizing HTTP bodies.
-func batchBodyFits(user, text string) bool {
+func batchBodyFits(user, text string, sets ...limits.Set) bool {
 	data, _ := json.Marshal(map[string]string{"user": user, "text": text, "batch_id": fmt.Sprintf("%064d", 0), "chunk_id": fmt.Sprintf("%064d", 0)})
-	return len(data) <= 256*1024
+	return len(data) <= limits.Resolve(sets).Int("memory_ingest_body_bytes")
 }
 
 type ingestClient interface {
@@ -165,13 +165,15 @@ func (r *Repository) batchInput(ctx context.Context, workspace, principal string
 
 // ingestChunks preserves whole turns/events unless one block exceeds the limit.
 // JSON size is also bounded: escaping can make 200 KiB of text exceed 256 KiB.
-func ingestChunks(blocks []string, user string) []string {
+func ingestChunks(blocks []string, user string, sets ...limits.Set) []string {
+	config := limits.Resolve(sets)
+	ingestChunkBytes := config.Int("memory_ingest_chunk_bytes")
 	var chunks []string
 	current := ""
 	for _, block := range blocks {
 		for len(block) > 0 {
-			if len(block) <= ingestChunkBytes && batchBodyFits(user, block) {
-				if len(current)+len(block) > ingestChunkBytes || !batchBodyFits(user, current+block) {
+			if len(block) <= ingestChunkBytes && batchBodyFits(user, block, config) {
+				if len(current)+len(block) > ingestChunkBytes || !batchBodyFits(user, current+block, config) {
 					if current != "" {
 						chunks = append(chunks, current)
 						current = ""
@@ -187,7 +189,7 @@ func ingestChunks(blocks []string, user string) []string {
 			low, high := 0, min(len(block), ingestChunkBytes)
 			for low < high {
 				mid := low + (high-low+1)/2
-				if batchBodyFits(user, block[:mid]) {
+				if batchBodyFits(user, block[:mid], config) {
 					low = mid
 				} else {
 					high = mid - 1
@@ -221,7 +223,7 @@ func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspac
 		return 0, nil
 	}
 	user := memoryapi.User(workspace, principal)
-	if !batchBodyFits(user, "\u0000\u0000\u0000\u0000") {
+	if !batchBodyFits(user, "\u0000\u0000\u0000\u0000", r.limits) {
 		return 0, errors.New("memory ingest owner exceeds request limit")
 	}
 	var batchID string
@@ -250,7 +252,7 @@ func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspac
 		for _, entry := range entries {
 			blocks = append(blocks, entry.text)
 		}
-		chunks := ingestChunks(blocks, user)
+		chunks := ingestChunks(blocks, user, r.limits)
 		until = now.UnixNano()
 		batchID = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%d", user, boundary, until))))
 		if _, e = tx.ExecContext(ctx, `INSERT INTO memory_ingest_batches(id,workspace_id,principal_id,from_ns,until_ns) VALUES(?,?,?,?,?)`, batchID, workspace, principal, boundary, until); e != nil {

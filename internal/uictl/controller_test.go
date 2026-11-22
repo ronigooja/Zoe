@@ -2,6 +2,7 @@ package uictl
 
 import (
 	"encoding/json"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"regexp"
 	"strings"
 	"testing"
@@ -51,7 +52,7 @@ func TestOptionalPropertyDefinitionsAccepted(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := validateMessage(raw); err != nil {
+		if _, _, err := validateMessage(raw, limits.Defaults()); err != nil {
 			t.Errorf("documented %s.%s=%s rejected: %v", name, property, value, err)
 		}
 	}
@@ -160,7 +161,7 @@ func TestParse(t *testing.T) {
 		{"component_empty_id", strings.Replace(valid, `"id":"root"`, `"id":""`, 1), false},
 		{"path_type", fixture(strings.Replace(update, `"/value"`, `false`, 1)), false},
 		{"invalid_utf8", valid + string([]byte{255}), false},
-		{"oversized", valid + strings.Repeat(" ", MaxOutput), false},
+		{"oversized", valid + strings.Repeat(" ", limits.Defaults().Int("ui_output_max_bytes")), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(tc.text, nil, Show)
@@ -294,7 +295,7 @@ func TestBuildInput(t *testing.T) {
 	if string(b) != `{"task":null,"requests":[]}` {
 		t.Fatal(string(b))
 	}
-	if _, err = BuildInput([]string{strings.Repeat("x", 16*MaxState+1)}, nil, nil); err == nil {
+	if _, err = BuildInput([]string{strings.Repeat("x", limits.Defaults().Int("ui_input_state_multiplier")*limits.Defaults().Int("ui_state_max_bytes")+1)}, nil, nil); err == nil {
 		t.Fatal("accepted oversized input")
 	}
 	for _, request := range []string{"", "  ", "none"} {

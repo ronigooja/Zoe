@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"io"
 	"net/http"
 	"net/url"
@@ -198,7 +199,7 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 	}
 	remaining := text
 	for ordinal := 0; len(remaining) > 0; ordinal++ {
-		n := min(8000, len(remaining))
+		n := min(limits.GatewayTextChunkBytes, len(remaining))
 		for n < len(remaining) && !utf8.RuneStart(remaining[n]) {
 			n--
 		}

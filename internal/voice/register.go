@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"io"
 	"net"
 	"sort"
@@ -28,6 +29,7 @@ type RegisterModelConfig struct {
 	Timeout                                           time.Duration
 }
 type RegisterConfig struct {
+	Limits                 limits.Set
 	RegisterInstruction    string
 	CompactInstruction     string
 	TaskSummaryInstruction string
@@ -39,6 +41,7 @@ type RegisterConfig struct {
 	Interval               time.Duration
 }
 type ContextRegister struct {
+	limits                 limits.Set
 	registerInstruction    string
 	compactInstruction     string
 	taskSummaryInstruction string
@@ -77,7 +80,7 @@ func NewRegister(db *sql.DB, cfg RegisterConfig) (*ContextRegister, error) {
 		if model.Timeout != 0 {
 			values[prefix+"_TIMEOUT_MS"] = fmt.Sprint(model.Timeout.Milliseconds())
 		}
-		return modelclient.FromEnv(prefix, func(k string) string { return values[k] }, func(string) ([]byte, error) { return []byte(model.APIKey), nil }, def, min, max)
+		return modelclient.FromEnv(prefix, func(k string) string { return values[k] }, func(string) ([]byte, error) { return []byte(model.APIKey), nil }, def, min, max, cfg.Limits)
 	}
 	client, err := build("ZOE_REGISTER", cfg.Model, 30000, 500, 60000)
 	if err != nil {
@@ -90,7 +93,7 @@ func NewRegister(db *sql.DB, cfg RegisterConfig) (*ContextRegister, error) {
 	if cfg.CompactModel.Timeout == 0 {
 		cfg.CompactModel.Timeout = 10 * time.Minute
 	}
-	return &ContextRegister{registerInstruction: cfg.RegisterInstruction, compactInstruction: cfg.CompactInstruction, taskSummaryInstruction: cfg.TaskSummaryInstruction, db: db, model: client, compactModel: compact, compactTimeout: cfg.CompactModel.Timeout, rawWindow: cfg.RawWindow, boundary: cfg.MemoryBoundary, limit: cfg.CompactCharacters, interval: cfg.Interval}, nil
+	return &ContextRegister{limits: cfg.Limits, registerInstruction: cfg.RegisterInstruction, compactInstruction: cfg.CompactInstruction, taskSummaryInstruction: cfg.TaskSummaryInstruction, db: db, model: client, compactModel: compact, compactTimeout: cfg.CompactModel.Timeout, rawWindow: cfg.RawWindow, boundary: cfg.MemoryBoundary, limit: cfg.CompactCharacters, interval: cfg.Interval}, nil
 }
 
 type RouteResult struct {

@@ -89,7 +89,7 @@ func (s *Server) handleEntryDelivery(w http.ResponseWriter, r *http.Request) {
 	}
 	var in contracts.EntryDelivery
 	// Identity-only receipts are capped at 4096 bytes independently of question text.
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.cfg.Limits.Int64("entry_receipt_max_bytes")))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&in); err != nil {
 		writeError(w, apiError(400, "invalid_request", "invalid delivery", nil))

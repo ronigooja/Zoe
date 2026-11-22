@@ -3,6 +3,7 @@ package prompts
 
 import (
 	"errors"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,7 +12,6 @@ import (
 )
 
 const DefaultDir = "/etc/zoe/prompts"
-const MaxBytes = 16000
 
 var names = [...]string{"ui_controller", "register", "compact", "steward", "task_ui_display", "voice_instruction", "task_summary", "memory_ingest", "memory_write", "memory_custom"}
 
@@ -42,7 +42,8 @@ type Set struct{ entries map[string]entry }
 
 // Load reads every required prompt once. The size limit applies to file bytes,
 // before the optional final newline is removed.
-func Load(dir string) (*Set, error) {
+func Load(dir string, sets ...limits.Set) (*Set, error) {
+	maxBytes := limits.Resolve(sets).Int("prompt_file_max_bytes")
 	s := &Set{entries: make(map[string]entry, len(names))}
 	for _, name := range names {
 		path := filepath.Join(dir, name+".txt")
@@ -54,12 +55,12 @@ func Load(dir string) (*Set, error) {
 			}
 			return nil, &Error{category, name}
 		}
-		data, err := io.ReadAll(io.LimitReader(f, MaxBytes+1))
+		data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes)+1))
 		closeErr := f.Close()
 		if err != nil || closeErr != nil {
 			return nil, &Error{"prompt_unreadable", name}
 		}
-		if len(data) > MaxBytes {
+		if len(data) > maxBytes {
 			return nil, &Error{"prompt_too_large", name}
 		}
 		if !utf8.Valid(data) {

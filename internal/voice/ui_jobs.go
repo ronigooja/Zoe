@@ -49,7 +49,7 @@ func (s *Service) consumeUITaskEvents(ctx context.Context) {
 	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO ui_task_cursor(workspace_id) SELECT id FROM workspaces`); err != nil {
 		return
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT e.workspace_id,e.cursor,e.aggregate_id,e.payload,e.event_type FROM events e JOIN ui_task_cursor c ON c.workspace_id=e.workspace_id WHERE e.event_type IN ('task.assistant_message','run.worker_question') AND e.cursor>c.last_cursor ORDER BY e.workspace_id,e.cursor LIMIT 100`)
+	rows, err := tx.QueryContext(ctx, `SELECT e.workspace_id,e.cursor,e.aggregate_id,e.payload,e.event_type FROM events e JOIN ui_task_cursor c ON c.workspace_id=e.workspace_id WHERE e.event_type IN ('task.assistant_message','run.worker_question') AND e.cursor>c.last_cursor ORDER BY e.workspace_id,e.cursor LIMIT ?`, s.limits.Int("ui_event_sweep_rows"))
 	if err != nil {
 		return
 	}
@@ -145,7 +145,7 @@ func (s *Service) dispatchUIJobs(ctx context.Context) {
 	if err := s.pruneUISurfaces(ctx); err != nil {
 		return
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts FROM ui_jobs WHERE status='pending' AND julianday(next_attempt_at)<=julianday(?) ORDER BY created_at,rowid LIMIT 25`, s.now().UTC().Format(time.RFC3339Nano))
+	rows, err := s.db.QueryContext(ctx, `SELECT id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts FROM ui_jobs WHERE status='pending' AND julianday(next_attempt_at)<=julianday(?) ORDER BY created_at,rowid LIMIT ?`, s.now().UTC().Format(time.RFC3339Nano), s.limits.Int("ui_job_sweep_rows"))
 	if err != nil {
 		return
 	}
@@ -215,12 +215,12 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 	var screen uictl.Size
 	err = s.db.QueryRowContext(ctx, `SELECT width,height FROM ui_screens WHERE workspace_id=? AND owner_subject_id=?`, j.w, j.o).Scan(&screen.Width, &screen.Height)
 	if err == sql.ErrNoRows {
-		return uictl.BuildInput(requests, facts, nil)
+		return uictl.BuildInput(requests, facts, nil, s.limits)
 	}
 	if err != nil {
 		return nil, err
 	}
-	return uictl.BuildInput(requests, facts, &screen)
+	return uictl.BuildInput(requests, facts, &screen, s.limits)
 }
 func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 	now := s.now().UTC()
@@ -274,6 +274,8 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 		s.failUIJob(ctx, j, "input_invalid", false)
 		return
 	}
+	prompt += fmt.Sprintf("\n\nOutput limits: %d UTF-8 bytes total, %d messages, %d components per update, %d UTF-8 bytes of feedback.",
+		s.limits.Int("ui_output_max_bytes"), s.limits.Int("ui_max_messages"), s.limits.Int("ui_max_components"), s.limits.Int("ui_feedback_max_bytes"))
 	var parsed uictl.Output
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
@@ -287,7 +289,7 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 				return
 			}
 			input, err = json.Marshal(controllerInput)
-			if err != nil {
+			if err != nil || len(input) > s.limits.Int("ui_input_state_multiplier")*s.limits.Int("ui_state_max_bytes") {
 				s.failUIJob(ctx, j, "input_invalid", false)
 				return
 			}
@@ -312,14 +314,14 @@ func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 		if store.Clear(ctx, "ui_controller", "") == nil {
 			s.PublishRetryState()
 		}
-		parsed, err = uictl.Parse(output, controllerInput.Screen, mode)
+		parsed, err = uictl.Parse(output, controllerInput.Screen, mode, s.limits)
 		if err == nil {
 			call.Result(parsed, "")
 			break
 		}
 		code := "validation_failed:" + uictl.FailureCode(err)
 		call.Result(nil, code)
-		if attempt >= s.uiControllerMaxRetries {
+		if attempt >= (s.limits.Int("ui_output_attempts") - 1) {
 			s.failUIJob(ctx, j, code, false)
 			return
 		}
@@ -405,7 +407,7 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 		return err
 	}
 	o = uictl.AssignSurfaceID(o, id)
-	state, err := uictl.Apply(o)
+	state, err := uictl.Apply(o, s.limits)
 	if err != nil {
 		return errUIState
 	}

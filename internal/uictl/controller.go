@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"io"
 	"strings"
 	"unicode"
@@ -14,8 +15,6 @@ import (
 // Version is server-owned for every stored and emitted A2UI message.
 const Version = "v0.9.1"
 const CatalogID = "https://a2ui.org/specification/v0_9/basic_catalog.json"
-const MaxOutput = 64 << 10
-const MaxState = 256 << 10
 
 type Size struct {
 	Width  int `json:"width"`
@@ -41,7 +40,8 @@ type Task struct {
 	Question   string  `json:"question"`
 }
 
-func BuildInput(requests []string, task *Task, screen *Size) ([]byte, error) {
+func BuildInput(requests []string, task *Task, screen *Size, sets ...limits.Set) ([]byte, error) {
+	l := limits.Resolve(sets)
 	if requests == nil {
 		requests = []string{}
 	}
@@ -51,7 +51,7 @@ func BuildInput(requests []string, task *Task, screen *Size) ([]byte, error) {
 		}
 	}
 	b, err := json.Marshal(Input{Requests: requests, Task: task, Screen: screen})
-	if len(b) > 16*MaxState {
+	if len(b) > l.Int("ui_input_state_multiplier")*l.Int("ui_state_max_bytes") {
 		return nil, errors.New("input_limit")
 	}
 	return b, err
@@ -205,12 +205,13 @@ const (
 	ChatInput    Mode = "chat_input"
 )
 
-func Parse(text string, screen *Size, mode Mode) (Output, error) {
+func Parse(text string, screen *Size, mode Mode, sets ...limits.Set) (Output, error) {
+	l := limits.Resolve(sets)
 	var o Output
 	if mode != Show && mode != TaskQuestion && mode != ChatInput {
 		return o, errors.New("mode_invalid")
 	}
-	if len(text) > MaxOutput || !utf8.ValidString(text) {
+	if len(text) > l.Int("ui_output_max_bytes") || !utf8.ValidString(text) {
 		return o, errors.New("output_limit_or_utf8")
 	}
 	text = stripFence(text)
@@ -262,18 +263,18 @@ func Parse(text string, screen *Size, mode Mode) (Output, error) {
 		o.Feedback = ""
 	} else {
 		o.Feedback = strings.TrimSpace(o.Feedback)
-		if o.Feedback == "" || len(o.Feedback) > 8000 {
+		if o.Feedback == "" || len(o.Feedback) > l.Int("ui_feedback_max_bytes") {
 			return o, errors.New("feedback_semantics")
 		}
 	}
 	if err := json.Unmarshal([]byte(messages), &o.Messages); err != nil {
 		return o, errors.New("invalid_array")
 	}
-	if len(o.Messages) == 0 || len(o.Messages) > 64 {
+	if len(o.Messages) == 0 || len(o.Messages) > l.Int("ui_max_messages") {
 		return o, errors.New("message_limit")
 	}
 	for i, raw := range o.Messages {
-		kind, id, err := validateMessage(raw)
+		kind, id, err := validateMessage(raw, l)
 		if err != nil {
 			return o, err
 		}
@@ -351,7 +352,7 @@ func hasInputBinding(messages []json.RawMessage) bool {
 
 var components = map[string]bool{"Text": true, "Image": true, "Icon": true, "Video": true, "AudioPlayer": true, "Row": true, "Column": true, "List": true, "Card": true, "Tabs": true, "Divider": true, "Modal": true, "Button": true, "CheckBox": true, "TextField": true, "DateTimeInput": true, "ChoicePicker": true, "Slider": true}
 
-func validateMessage(raw []byte) (string, string, error) {
+func validateMessage(raw []byte, l limits.Set) (string, string, error) {
 	m, err := decodeObject(raw, "version", "createSurface", "updateComponents", "updateDataModel")
 	if err != nil {
 		return "", "", err
@@ -407,7 +408,7 @@ func validateMessage(raw []byte) (string, string, error) {
 		}
 	case "updateComponents":
 		var cs []map[string]json.RawMessage
-		if json.Unmarshal(p["components"], &cs) != nil || len(cs) == 0 || len(cs) > 256 {
+		if json.Unmarshal(p["components"], &cs) != nil || len(cs) == 0 || len(cs) > l.Int("ui_max_components") {
 			return "", "", errors.New("components")
 		}
 		seen := map[string]bool{}
@@ -475,14 +476,15 @@ func AssignSurfaceID(o Output, id string) Output {
 }
 
 // Apply builds one new document; no stored state can be continued or replaced.
-func Apply(o Output) (State, error) {
+func Apply(o Output, sets ...limits.Set) (State, error) {
+	l := limits.Resolve(sets)
 	var state []json.RawMessage
 	root := false
 	if len(o.Messages) == 0 {
 		return State{}, errors.New("create_sequence")
 	}
 	for i, raw := range o.Messages {
-		kind, id, err := validateMessage(raw)
+		kind, id, err := validateMessage(raw, l)
 		if err != nil || id != o.SurfaceID {
 			return State{}, errors.New("state_message")
 		}
@@ -509,7 +511,7 @@ func Apply(o Output) (State, error) {
 		return State{}, errors.New("root_missing")
 	}
 	b, err := json.Marshal(state)
-	if err != nil || len(b) > MaxState {
+	if err != nil || len(b) > l.Int("ui_state_max_bytes") {
 		return State{}, errors.New("state_limit")
 	}
 	return State{Messages: state}, nil

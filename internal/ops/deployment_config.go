@@ -326,14 +326,18 @@ func (m Manager) ConfigureProvider(ctx context.Context, d Deployment, c Provider
 	if !d.HasSystemdRunner() {
 		return ProbeResult{}, errors.New("provider configuration requires the systemd zoe-runner.service deployment")
 	}
-	result := Probe(ctx, c, client)
+	policy, err := d.loadLimits()
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	result := Probe(ctx, c, client, policy)
 	if !result.OK() {
 		_ = saveProviderCheck(d, result)
 		return result, probeError("provider", result)
 	}
 	serviceOptions, managedOpenCode := providerOpenCodeOptions(d)
 	if managedOpenCode {
-		enrichProviderModels(ctx, &result)
+		enrichProviderModels(ctx, &result, policy)
 	}
 	paths := []string{d.RunnerEnv, c.SecretPath, filepath.Join(d.Root, "provider-deployment.json")}
 	if managedOpenCode {
@@ -496,7 +500,11 @@ func (m Manager) TestProvider(ctx context.Context, d Deployment, c ProviderConfi
 		return ProbeResult{}, err
 	}
 	defer unlock()
-	r := Probe(ctx, c, client)
+	policy, err := d.loadLimits()
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	r := Probe(ctx, c, client, policy)
 	if err := saveProviderCheck(d, r); err != nil {
 		return r, err
 	}

@@ -44,6 +44,7 @@ func TestProviderTransactionPreservesConfigAndTargetsOnlyRunner(t *testing.T) {
 		commands = append(commands, append([]string{name}, args...))
 		return nil, nil
 	})
+	setProviderTestLimits(t)
 	result, err := m.ConfigureProvider(context.Background(), d, ProviderConfig{BaseURL: server.URL, Model: "test-model", SecretPath: secret, Secret: "next"}, server.Client())
 	if err != nil || !result.OK() {
 		t.Fatalf("apply: %v %+v", err, result)
@@ -84,6 +85,7 @@ func TestProviderTransactionRestoresAfterPartialReload(t *testing.T) {
 		}
 		return nil, nil
 	})
+	setProviderTestLimits(t)
 	_, err := m.ConfigureProvider(context.Background(), d, ProviderConfig{BaseURL: server.URL, Model: "test-model", ReasoningEffort: "high", SecretPath: secret, Secret: "next"}, server.Client())
 	if err == nil || !strings.Contains(err.Error(), "partial failure") {
 		t.Fatalf("error=%v", err)
@@ -111,6 +113,7 @@ func TestRejectedStagedCredentialDoesNotOverwrite(t *testing.T) {
 		t.Error("reload before validation")
 		return nil, nil
 	})
+	setProviderTestLimits(t)
 	_, err := m.ConfigureProvider(context.Background(), d, ProviderConfig{BaseURL: s.URL, Model: "m", SecretPath: secret, Secret: "bad"}, s.Client())
 	if err == nil {
 		t.Fatal("accepted invalid credential")

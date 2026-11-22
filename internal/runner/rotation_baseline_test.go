@@ -52,8 +52,8 @@ func baselineEngine(t *testing.T, replacement [][]opencode.Message) (*Engine, *b
 	// Use the overridden Messages method while retaining the standard fake's
 	// Create, Prompt, Status, and termination behavior.
 	e.Runtime = f
-	e.ContextTokenBudget = 10
-	e.MaxRotations = 2
+	e.Limits = withLimit(t, e.Limits, "runner_context_max_tokens", 10)
+	e.Limits = withLimit(t, e.Limits, "runner_max_rotations", 2)
 	return e, f, c, testClaim()
 }
 

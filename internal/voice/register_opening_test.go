@@ -14,7 +14,7 @@ func TestRegisterOpeningReadsStoredContextWithoutModel(t *testing.T) {
 	f := newRegisterFixture(t)
 	f.session("opening-history", "default", "owner")
 	f.turn("opening-history", 1, "user", "the lunar mission", f.now)
-	svc := newService(f.db, Config{ContextRegister: f.r, Now: func() time.Time { return f.now }, OpeningContextBudget: 200, UpstreamRoute: "avas"})
+	svc := newService(f.db, Config{ContextRegister: f.r, Now: func() time.Time { return f.now }, Limits: mustLimits(t, "opening_context_runes", 200), UpstreamRoute: "avas"})
 	defer svc.Stop()
 	text := svc.openingRegisterText(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "owner"})
 	if text != "user: the lunar mission\n" || f.calls != 0 {
@@ -38,7 +38,7 @@ func TestRegisterFirstSharedRuneBudget(t *testing.T) {
 	register := r.svc.openingRegisterText(context.Background(), openingTestOwner)
 	result := "Task result:\nGoal: goal\nStatus: awaiting_user\nResult: 短答案"
 	budget := utf8.RuneCountInString(register + result)
-	r.svc.openingBudget = budget
+	r.svc.limits = mustLimits(t, "opening_context_runes", int64(budget))
 	opening := reserveTestOpening(t, r, "opening")
 	if register == "" || len(opening.Items) != 2 || opening.Items[0].Text != register || opening.Items[1].Text != result || openingCharsFor(opening) != budget {
 		t.Fatalf("opening=%+v budget=%d register=%q", opening, budget, register)

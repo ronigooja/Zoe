@@ -85,12 +85,12 @@ func TestRotationPromptIsBounded(t *testing.T) {
 	f.messages, f.rotationMessages = messages, rotationReplacement(messages)
 	e := testEngine(t, f, &c.controlFake, openTestJournal(t))
 	e.Control = c
-	e.ContextTokenBudget = 1000
+	e.Limits = withLimit(t, e.Limits, "runner_context_max_tokens", 1000)
 	if err := e.Process(testContext(t), rotationClaim()); err != nil {
 		t.Fatal(err)
 	}
 	prompt := assertRotationSpec(t, f)
-	if len(prompt) > rotationPromptLimit || !strings.Contains(prompt, "finish the rotation goal") || !strings.Contains(prompt, "newest instruction") {
+	if len(prompt) > e.Limits.Int("runner_rotation_prompt_bytes") || !strings.Contains(prompt, "finish the rotation goal") || !strings.Contains(prompt, "newest instruction") {
 		t.Fatalf("bounded prompt len=%d", len(prompt))
 	}
 }

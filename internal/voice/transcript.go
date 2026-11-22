@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"io"
 	"net/http"
 	"strings"
@@ -18,8 +19,8 @@ import (
 	"github.com/ronigooja/Zoe/internal/control"
 )
 
-const maxTranscriptTurnBytes = 64 << 10
-const maxTranscriptBatchBytes = 512 << 10
+const maxTranscriptTurnBytes = limits.GatewayTranscriptTurnBytes
+const maxTranscriptBatchBytes = limits.GatewayTranscriptBatchBytes
 
 // TranscriptTurn is a verbatim voice turn. Seq is assigned by the gateway per session.
 type TranscriptTurn struct {
@@ -54,7 +55,7 @@ func (s *Service) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		MediaGeneration  int64            `json:"media_generation"`
 		Turns            []TranscriptTurn `json:"turns"`
 	}
-	if err := json.Unmarshal(body, &req); err != nil || !utf8.Valid(body) || req.GatewaySessionID == "" || req.MediaGeneration < 1 || len(req.Turns) == 0 || len(req.Turns) > 200 {
+	if err := json.Unmarshal(body, &req); err != nil || !utf8.Valid(body) || req.GatewaySessionID == "" || req.MediaGeneration < 1 || len(req.Turns) == 0 || len(req.Turns) > limits.GatewayTranscriptTurns {
 		control.WriteError(w, apiError(http.StatusBadRequest, "invalid_request", "one to 200 transcript turns are required", nil))
 		return
 	}
@@ -117,7 +118,7 @@ func (s *Service) storeTranscript(ctx context.Context, principal contracts.Runne
 	received := now.Format(time.RFC3339Nano)
 	for _, turn := range turns {
 		var delegation string
-		if turn.DelegationID != nil && (json.Unmarshal(turn.DelegationID, &delegation) != nil || delegation == "" || utf8.RuneCountInString(delegation) > 256 || turn.Role != "user" || strings.TrimSpace(turn.Text) == "") {
+		if turn.DelegationID != nil && (json.Unmarshal(turn.DelegationID, &delegation) != nil || delegation == "" || utf8.RuneCountInString(delegation) > limits.GatewayDelegationIDRunes || turn.Role != "user" || strings.TrimSpace(turn.Text) == "") {
 			return 0, 0, apiError(http.StatusBadRequest, "invalid_request", "delegation_id requires 1–256 code points and a nonblank user turn", nil)
 		}
 		var text, role string

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"net/http"
 	"sort"
 	"strings"
@@ -20,6 +21,7 @@ import (
 )
 
 type Service struct {
+	limits                 limits.Set
 	db                     *sql.DB
 	server                 *control.Server
 	availableCapabilityIDs map[string]struct{}
@@ -30,6 +32,7 @@ type Service struct {
 // registry rejects every manifest capability. RuntimeBackend stays empty
 // unless an independently configured runner adapter is available.
 type Config struct {
+	Limits                 limits.Set
 	AvailableCapabilityIDs []string
 	RuntimeBackend         string
 }
@@ -77,7 +80,7 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 	if err := RegisterMigrations(store); err != nil {
 		return err
 	}
-	svc := &Service{db: store.DB(), server: server, availableCapabilityIDs: available, runtimeBackend: runtimeBackend}
+	svc := &Service{limits: cfg.Limits, db: store.DB(), server: server, availableCapabilityIDs: available, runtimeBackend: runtimeBackend}
 	if err := svc.registerTaskSource(); err != nil {
 		return err
 	}
@@ -118,7 +121,7 @@ func (s *Service) submitRelease(ctx context.Context, tx *sql.Tx, cmd control.Com
 	if err := decode(req.Payload, &p); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
-	if err := validateManifest(&p.Manifest); err != nil {
+	if err := validateManifest(&p.Manifest, s.limits); err != nil {
 		return contracts.CommandResult{}, nil, control.NewAPIError(400, "invalid_manifest", err.Error(), nil)
 	}
 	for _, capabilityID := range p.Manifest.Capabilities {
@@ -472,7 +475,7 @@ func (s *Service) claimDeployment(w http.ResponseWriter, r *http.Request) {
 		if !runnerHasCapabilityScope(runner, "capability:deploy") {
 			return control.NewAPIError(403, "forbidden", "capability:deploy runner scope required", nil)
 		}
-		current, err := activeDeploymentClaim(r.Context(), tx, runner)
+		current, err := s.activeDeploymentClaim(r.Context(), tx, runner)
 		if err != nil {
 			return err
 		}
@@ -480,7 +483,7 @@ func (s *Service) claimDeployment(w http.ResponseWriter, r *http.Request) {
 			claim = current
 			return nil
 		}
-		rows, err := tx.QueryContext(r.Context(), `SELECT j.attempt_id,j.fence,j.operation,j.deployment_id,j.workspace_id,j.claim_json,j.cleanup_only,d.revoked_at FROM capability_deployment_jobs j JOIN capability_deployments d ON d.deployment_id=j.deployment_id WHERE j.status='pending' AND j.fence=d.latest_fence ORDER BY j.created_at LIMIT 100`)
+		rows, err := tx.QueryContext(r.Context(), `SELECT j.attempt_id,j.fence,j.operation,j.deployment_id,j.workspace_id,j.claim_json,j.cleanup_only,d.revoked_at FROM capability_deployment_jobs j JOIN capability_deployments d ON d.deployment_id=j.deployment_id WHERE j.status='pending' AND j.fence=d.latest_fence ORDER BY j.created_at LIMIT ?`, s.limits.Int("capability_deployment_page_rows"))
 		if err != nil {
 			return err
 		}
@@ -515,7 +518,7 @@ func (s *Service) claimDeployment(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal(x.claimJSON, &snapshot); err != nil {
 				return err
 			}
-			if err := validateManifest(&snapshot.Manifest); err != nil {
+			if err := validateManifest(&snapshot.Manifest, s.limits); err != nil {
 				return control.NewAPIError(500, "invalid_claim_snapshot", "deployment claim manifest failed immutable validation", nil)
 			}
 			if snapshot.WorkspaceID != x.workspace || snapshot.DeploymentID != x.deployment || snapshot.AttemptID != x.attempt || snapshot.Fence != x.fence || snapshot.DesiredOp != x.op || snapshot.CleanupOnly != (x.cleanupOnly == 1) {
@@ -570,7 +573,7 @@ func (s *Service) currentDeploymentClaim(w http.ResponseWriter, r *http.Request)
 	var claim *contracts.DeploymentClaim
 	err := s.server.RunnerTransaction(r.Context(), func(tx *sql.Tx, runner contracts.RunnerPrincipal) error {
 		var err error
-		claim, err = activeDeploymentClaim(r.Context(), tx, runner)
+		claim, err = s.activeDeploymentClaim(r.Context(), tx, runner)
 		return err
 	})
 	if err != nil {
@@ -593,7 +596,7 @@ func (s *Service) unresolvedDeploymentClaims(w http.ResponseWriter, r *http.Requ
 	var claims []contracts.DeploymentClaim
 	err := s.server.RunnerTransaction(r.Context(), func(tx *sql.Tx, runner contracts.RunnerPrincipal) error {
 		var err error
-		claims, err = unresolvedDeploymentClaims(r.Context(), tx, runner)
+		claims, err = s.loadUnresolvedDeploymentClaims(r.Context(), tx, runner)
 		return err
 	})
 	if err != nil {
@@ -606,15 +609,15 @@ func (s *Service) unresolvedDeploymentClaims(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, claims)
 }
 
-func activeDeploymentClaim(ctx context.Context, tx *sql.Tx, runner contracts.RunnerPrincipal) (*contracts.DeploymentClaim, error) {
-	claims, err := unresolvedDeploymentClaims(ctx, tx, runner)
+func (s *Service) activeDeploymentClaim(ctx context.Context, tx *sql.Tx, runner contracts.RunnerPrincipal) (*contracts.DeploymentClaim, error) {
+	claims, err := s.loadUnresolvedDeploymentClaims(ctx, tx, runner)
 	if err != nil || len(claims) == 0 {
 		return nil, err
 	}
 	return &claims[0], nil
 }
 
-func unresolvedDeploymentClaims(ctx context.Context, tx *sql.Tx, runner contracts.RunnerPrincipal) ([]contracts.DeploymentClaim, error) {
+func (s *Service) loadUnresolvedDeploymentClaims(ctx context.Context, tx *sql.Tx, runner contracts.RunnerPrincipal) ([]contracts.DeploymentClaim, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT j.claim_json,j.status,d.desired_state,j.workspace_id FROM capability_deployment_jobs j JOIN capability_deployments d ON d.deployment_id=j.deployment_id WHERE j.runner_id=? AND j.status IN ('claimed','uncertain') ORDER BY j.claimed_at ASC`, runner.RunnerID)
 	if err != nil {
 		return nil, err
@@ -638,7 +641,7 @@ func unresolvedDeploymentClaims(ctx context.Context, tx *sql.Tx, runner contract
 			rows.Close()
 			return nil, err
 		}
-		if err := validateManifest(&claim.Manifest); err != nil {
+		if err := validateManifest(&claim.Manifest, s.limits); err != nil {
 			rows.Close()
 			return nil, control.NewAPIError(500, "invalid_claim_snapshot", "deployment claim manifest failed immutable validation", nil)
 		}
@@ -867,12 +870,13 @@ func nullableString(value string) any {
 	return value
 }
 
-func validateManifest(m *contracts.CapabilityManifest) error {
-	if m.SchemaVersion != 1 || !strings.HasPrefix(m.ArtifactRef, "oci://") && !strings.HasPrefix(m.ArtifactRef, "https://") || !validDigest(m.ArtifactDigest) || !strings.Contains(m.ArtifactRef, "@"+m.ArtifactDigest) || strings.TrimSpace(m.Entrypoint) == "" || len(m.Entrypoint) > 500 || len(m.Args) > 128 || len(m.Capabilities) == 0 || len(m.Capabilities) > 64 || len(m.Mounts) > 64 || len(m.Triggers) > 32 || !budgetPositive(m.Budget) || m.HealthCheck == nil {
+func validateManifest(m *contracts.CapabilityManifest, sets ...limits.Set) error {
+	l := limits.Resolve(sets)
+	if m.SchemaVersion != 1 || !strings.HasPrefix(m.ArtifactRef, "oci://") && !strings.HasPrefix(m.ArtifactRef, "https://") || !validDigest(m.ArtifactDigest) || !strings.Contains(m.ArtifactRef, "@"+m.ArtifactDigest) || strings.TrimSpace(m.Entrypoint) == "" || len(m.Entrypoint) > l.Int("capability_manifest_entrypoint_max_bytes") || len(m.Args) > l.Int("capability_manifest_max_args") || len(m.Capabilities) == 0 || len(m.Capabilities) > l.Int("capability_manifest_max_capabilities") || len(m.Mounts) > l.Int("capability_manifest_max_mounts") || len(m.Triggers) > l.Int("capability_manifest_max_triggers") || !budgetPositive(m.Budget) || m.HealthCheck == nil {
 		return errors.New("schema version, content-addressed artifact, entrypoint, capability IDs, health check, and positive resource budget are required")
 	}
 	for _, arg := range m.Args {
-		if len(arg) > 4096 || strings.ContainsAny(arg, "\x00\r\n") {
+		if len(arg) > l.Int("capability_manifest_arg_max_bytes") || strings.ContainsAny(arg, "\x00\r\n") {
 			return errors.New("entrypoint arguments exceed server limits")
 		}
 	}
@@ -906,7 +910,7 @@ func validateManifest(m *contracts.CapabilityManifest) error {
 		}
 	}
 	for _, trigger := range m.Triggers {
-		if err := validateTrigger(trigger, m.Capabilities); err != nil {
+		if err := validateTrigger(trigger, m.Capabilities, l); err != nil {
 			return err
 		}
 	}
@@ -921,8 +925,8 @@ func validateManifest(m *contracts.CapabilityManifest) error {
 		return m.Triggers[i].Kind+"\x00"+m.Triggers[i].Source < m.Triggers[j].Kind+"\x00"+m.Triggers[j].Source
 	})
 	canonical, err := json.Marshal(m)
-	if err != nil || len(canonical) > 256*1024 {
-		return errors.New("manifest exceeds the 256 KiB admission limit")
+	if err != nil || len(canonical) > l.Int("capability_manifest_max_bytes") {
+		return errors.New("manifest exceeds the admission byte limit")
 	}
 	return nil
 }
@@ -967,7 +971,7 @@ func validExecutableName(value string) bool {
 	return true
 }
 
-func validateTrigger(trigger contracts.CapabilityTrigger, capabilityIDs []string) error {
+func validateTrigger(trigger contracts.CapabilityTrigger, capabilityIDs []string, l limits.Set) error {
 	switch trigger.Mode {
 	case "program", "worker", "super":
 	default:
@@ -976,10 +980,10 @@ func validateTrigger(trigger contracts.CapabilityTrigger, capabilityIDs []string
 	if trigger.FilterJSON != "" {
 		return errors.New("untyped trigger filters are not accepted")
 	}
-	if len(trigger.Scopes) > 32 {
+	if len(trigger.Scopes) > l.Int("capability_trigger_max_scopes") {
 		return errors.New("trigger scope list exceeds limits")
 	}
-	if len(trigger.Filters) > 32 {
+	if len(trigger.Filters) > l.Int("capability_trigger_max_filters") {
 		return errors.New("trigger filter list exceeds limits")
 	}
 	for _, scope := range trigger.Scopes {
@@ -988,7 +992,7 @@ func validateTrigger(trigger contracts.CapabilityTrigger, capabilityIDs []string
 		}
 	}
 	for _, filter := range trigger.Filters {
-		if !validTriggerFilter(filter) {
+		if !validTriggerFilter(filter, l.Int("capability_filter_value_max_bytes")) {
 			return fmt.Errorf("trigger filter %q/%q is unsupported", filter.Field, filter.Operator)
 		}
 	}
@@ -1012,7 +1016,7 @@ var supportedEventTypes = map[string]struct{}{
 	"capability.health.changed": {}, "capability.run.completed": {}, "capability.run.failed": {},
 }
 
-func validTriggerFilter(filter contracts.CapabilityTriggerFilter) bool {
+func validTriggerFilter(filter contracts.CapabilityTriggerFilter, maxBytes int) bool {
 	fields := map[string]struct{}{"event_type": {}, "aggregate_type": {}, "aggregate_id": {}, "subject_id": {}, "status": {}, "project_id": {}, "task_id": {}}
 	if _, ok := fields[filter.Field]; !ok {
 		return false
@@ -1023,7 +1027,7 @@ func validTriggerFilter(filter contracts.CapabilityTriggerFilter) bool {
 	if filter.Operator == "exists" {
 		return filter.Value == "" || filter.Value == "true" || filter.Value == "false"
 	}
-	return len(filter.Value) <= 256 && !strings.ContainsAny(filter.Value, "\x00\r\n")
+	return len(filter.Value) <= maxBytes && !strings.ContainsAny(filter.Value, "\x00\r\n")
 }
 
 func decode(raw json.RawMessage, dst any) error {

@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from services.memory.prompts import MemoryPrompts, NAMES, load_prompts
+from services.memory.limits import defaults
 
 
 class PromptTests(unittest.TestCase):
@@ -76,6 +77,7 @@ class PromptTests(unittest.TestCase):
                     else:
                         path.write_bytes(data)
                     with patch.dict(os.environ, {"ZOE_PROMPT_DIR": str(self.directory), "ZOE_MEMORY_API_TOKEN_FILE": "fixture"}), \
+                            patch.object(worker, "load_limits", return_value=defaults()), \
                             patch.object(worker, "ControlledMem0") as backend, patch.object(worker, "serve_memory_api") as serve:
                         with self.assertRaises(ValueError):
                             worker.main()
@@ -87,20 +89,24 @@ class PromptTests(unittest.TestCase):
         from services.memory import worker, memory_api
         prompts = load_prompts(self.directory)
         controlled = Mock(prompts=prompts)
-        with patch.object(worker, "load_prompts", return_value=prompts) as loader, \
+        policy = defaults()
+        with patch.object(worker, "load_limits", return_value=policy) as load_limits, \
+                patch.object(worker, "load_prompts", return_value=prompts) as loader, \
                 patch.object(worker.WorkerConfig, "from_env", return_value="config"), \
                 patch.object(worker, "ControlledMem0", return_value=controlled) as backend, \
-                patch.object(worker, "create_memory_api", return_value="server"), \
+                patch.object(worker, "create_memory_api", return_value="server") as create, \
                 patch.object(worker, "serve_memory_api"), \
                 patch.dict(os.environ, {"ZOE_MEMORY_API_TOKEN_FILE": "fixture"}):
             worker.main()
-            loader.assert_called_once_with()
+            load_limits.assert_called_once_with()
+            loader.assert_called_once_with(limits=policy)
             backend.assert_called_once_with("config", prompts)
+            create.assert_called_once_with(controlled, policy)
         with patch.dict(os.environ, {"ZOE_MEMORY_API_TOKEN_FILE": "fixture", "ZOE_MEMORY_API_ADDR": "127.0.0.1:0"}), \
                 patch.object(Path, "read_text", return_value="token"), \
                 patch.object(memory_api, "PersonMemory") as person, patch.object(memory_api, "MemoryAPIServer"):
-            memory_api.create_memory_api(controlled)
-            person.assert_called_once_with(controlled.memory, prompts)
+            memory_api.create_memory_api(controlled, policy)
+            person.assert_called_once_with(controlled.memory, prompts, policy)
 
     def test_custom_instruction_reaches_mem0(self):
         from services.memory import mem0_backend

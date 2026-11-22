@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"io"
 	"net/http"
 	"sync"
@@ -86,7 +87,7 @@ func (s *Service) probeResultCapability(ctx context.Context) bool {
 	var version, evidence string
 	var maxBytes int
 	return json.Unmarshal(capability["version"], &version) == nil && version == "v1" &&
-		json.Unmarshal(capability["max_text_bytes"], &maxBytes) == nil && maxBytes == 8000 &&
+		json.Unmarshal(capability["max_text_bytes"], &maxBytes) == nil && maxBytes == limits.GatewayTextChunkBytes &&
 		json.Unmarshal(capability["applied_evidence"], &evidence) == nil && evidence == "local_transport_writes_and_durable_receipt"
 }
 

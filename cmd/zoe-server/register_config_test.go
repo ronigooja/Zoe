@@ -84,7 +84,7 @@ func TestRegisterStartupOptionalGroups(t *testing.T) {
 }
 
 func TestRegisterDisabledValidatesExplicitSettings(t *testing.T) {
-	for _, name := range []string{"ZOE_REGISTER_TIMEOUT_MS", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_MAX_CHARACTERS", "ZOE_COMPACT_INTERVAL_MINUTES", "ZOE_REGISTER_RAW_WINDOW_MINUTES"} {
+	for _, name := range []string{"ZOE_REGISTER_TIMEOUT_MS", "ZOE_COMPACT_TIMEOUT_MS", "ZOE_REGISTER_REASONING_EFFORT", "ZOE_COMPACT_THINKING", "ZOE_COMPACT_INTERVAL_MINUTES", "ZOE_REGISTER_RAW_WINDOW_MINUTES"} {
 		t.Run(name, func(t *testing.T) {
 			_, err := registerConfigFromEnv(func(k string) string {
 				if k == name {
@@ -133,7 +133,7 @@ func TestRegisterConfigRanges(t *testing.T) {
 		min, max int
 	}{
 		{"ZOE_REGISTER_TIMEOUT_MS", 500, 60000}, {"ZOE_COMPACT_TIMEOUT_MS", 5000, 600000},
-		{"ZOE_COMPACT_MAX_CHARACTERS", 500, 100000}, {"ZOE_COMPACT_INTERVAL_MINUTES", 1, 1440}, {"ZOE_REGISTER_RAW_WINDOW_MINUTES", 5, 1440},
+		{"ZOE_COMPACT_INTERVAL_MINUTES", 1, 1440}, {"ZOE_REGISTER_RAW_WINDOW_MINUTES", 5, 1440},
 	} {
 		for _, raw := range []string{strconv.Itoa(field.min), strconv.Itoa(field.max), strconv.Itoa(field.min - 1), strconv.Itoa(field.max + 1), "invalid"} {
 			t.Run(field.name+raw, func(t *testing.T) {
@@ -159,10 +159,6 @@ func TestRegisterConfigRanges(t *testing.T) {
 				case "ZOE_COMPACT_TIMEOUT_MS":
 					if cfg.CompactModel.Timeout != time.Duration(value)*time.Millisecond {
 						t.Fatal("compact timeout ignored")
-					}
-				case "ZOE_COMPACT_MAX_CHARACTERS":
-					if cfg.CompactCharacters != value {
-						t.Fatal("limit ignored")
 					}
 				case "ZOE_COMPACT_INTERVAL_MINUTES":
 					if cfg.Interval != time.Duration(value)*time.Minute {

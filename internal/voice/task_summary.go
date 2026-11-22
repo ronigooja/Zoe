@@ -39,7 +39,7 @@ func (r *ContextRegister) summarizeTasks(ctx context.Context, now time.Time) err
 	if err != nil || !due {
 		return err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id FROM tasks WHERE status='complete' AND summary_result IS NULL ORDER BY created_at,id LIMIT 50`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id FROM tasks WHERE status='complete' AND summary_result IS NULL ORDER BY created_at,id LIMIT ?`, r.limits.Int("task_summary_sweep_rows"))
 	if err != nil {
 		return err
 	}
@@ -87,11 +87,13 @@ func (r *ContextRegister) summarizeTasks(ctx context.Context, now time.Time) err
 
 func (r *ContextRegister) summarizeTask(ctx context.Context, id string) error {
 	var input struct {
+		MaxRunes  int      `json:"max_summary_characters"`
 		Goal      string   `json:"goal"`
 		Status    string   `json:"status"`
 		Additions []string `json:"additions"`
 		Result    string   `json:"result"`
 	}
+	input.MaxRunes = r.limits.Int("task_summary_max_runes")
 	var version int64
 	// Snapshot all input in one read, including additions in conversational order.
 	var additions string
@@ -118,7 +120,7 @@ FROM tasks t WHERE t.id=? AND t.status='complete' AND t.summary_result IS NULL`,
 		return err
 	}
 	output = strings.TrimSpace(output)
-	if !utf8.ValidString(output) || utf8.RuneCountInString(output) > 200 {
+	if !utf8.ValidString(output) || utf8.RuneCountInString(output) > input.MaxRunes {
 		return errors.New("invalid task summary output")
 	}
 	// A retry after an uncertain write is safe: it can only fill a still-NULL

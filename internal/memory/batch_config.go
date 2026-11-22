@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"math/rand"
 	"strconv"
@@ -25,12 +24,6 @@ func BatchInterval(value string) (time.Duration, error) {
 	return time.Duration(hours) * time.Hour, nil
 }
 
-func ingestBodyFits(user, text string) bool {
-	data, _ := json.Marshal(map[string]string{"user": user, "text": text})
-	return len(data) <= 256*1024
-}
-
-// StartBatches starts no goroutine when the worker client is disabled.
 func (r *Repository) StartBatches(ctx context.Context, client *memoryapi.Client, interval time.Duration) bool {
 	if client == nil {
 		return false

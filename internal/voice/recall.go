@@ -16,8 +16,6 @@ import (
 // memoryWriteHolding identifies receiver-reconciled writes in the durable queue.
 const memoryWriteHolding = "memory_write_holding"
 
-// recallWorkerLimit bounds model work per service, including persistence retries.
-const recallWorkerLimit = 4
 const recallPersistAttempts = 3
 
 func (s *Service) recallTimeout() time.Duration {
@@ -128,7 +126,7 @@ func (s *Service) persistRecallRetryStatus(ctx context.Context, id, text, termin
 // compare-and-set prevents retried handoffs/dispatchers starting twice.
 func (s *Service) dispatchRecall(ctx context.Context) {
 	s.recoverRecall(ctx, false)
-	rows, err := s.db.QueryContext(ctx, `SELECT j.id,j.workspace_id,j.owner_id,h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.status='pending' AND h.status='delivered' LIMIT 25`)
+	rows, err := s.db.QueryContext(ctx, `SELECT j.id,j.workspace_id,j.owner_id,h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.status='pending' AND h.status='delivered' LIMIT ?`, s.limits.Int("voice_recall_sweep_rows"))
 	if err != nil {
 		return
 	}

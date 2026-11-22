@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"strconv"
 	"strings"
 	"time"
@@ -23,8 +24,8 @@ func registerMissingEnv(getenv func(string) string) []string {
 	return missing
 }
 
-func registerConfigForStartup(getenv func(string) string, readFile func(string) ([]byte, error), logf func(string, ...any)) (*voice.RegisterConfig, error) {
-	cfg, err := registerConfigFromEnv(getenv, readFile)
+func registerConfigForStartup(getenv func(string) string, readFile func(string) ([]byte, error), logf func(string, ...any), sets ...limits.Set) (*voice.RegisterConfig, error) {
+	cfg, err := registerConfigFromEnv(getenv, readFile, sets...)
 	if err != nil {
 		return nil, fmt.Errorf("register configuration: %w", err)
 	}
@@ -35,7 +36,7 @@ func registerConfigForStartup(getenv func(string) string, readFile func(string) 
 }
 
 // registerConfigFromEnv enables the register only when both model groups are complete.
-func registerConfigFromEnv(getenv func(string) string, readFile func(string) ([]byte, error)) (*voice.RegisterConfig, error) {
+func registerConfigFromEnv(getenv func(string) string, readFile func(string) ([]byte, error), sets ...limits.Set) (*voice.RegisterConfig, error) {
 	load := func(prefix string, def, min, max int) (voice.RegisterModelConfig, error) {
 		var cfg voice.RegisterModelConfig
 		if _, err := modelclient.Timeout(prefix, getenv, def, min, max); err != nil {
@@ -83,10 +84,6 @@ func registerConfigFromEnv(getenv func(string) string, readFile func(string) ([]
 		}
 		return def, nil
 	}
-	limit, err := integer("ZOE_COMPACT_MAX_CHARACTERS", 8000, 500, 100000)
-	if err != nil {
-		return nil, err
-	}
 	interval, err := integer("ZOE_COMPACT_INTERVAL_MINUTES", 60, 1, 1440)
 	if err != nil {
 		return nil, err
@@ -98,5 +95,5 @@ func registerConfigFromEnv(getenv func(string) string, readFile func(string) ([]
 	if len(registerMissingEnv(getenv)) != 0 {
 		return nil, nil
 	}
-	return &voice.RegisterConfig{Model: model, CompactModel: compact, CompactCharacters: limit, Interval: time.Duration(interval) * time.Minute, RawWindow: time.Duration(window) * time.Minute}, nil
+	return &voice.RegisterConfig{Model: model, CompactModel: compact, CompactCharacters: limits.Resolve(sets).Int("compact_max_characters"), Limits: limits.Resolve(sets), Interval: time.Duration(interval) * time.Minute, RawWindow: time.Duration(window) * time.Minute}, nil
 }

@@ -138,6 +138,7 @@ func TestDeploymentModeProviderPersistsCorrectedDescriptor(t *testing.T) {
 	}
 	s := modelServer(t)
 	key := filepath.Join(root, "provider-key")
+	setProviderTestLimits(t)
 	r, err := m.ConfigureProvider(context.Background(), d, ProviderConfig{BaseURL: s.URL, Model: "test-model", Secret: "next", SecretPath: key}, s.Client())
 	if err != nil || !r.OK() {
 		t.Fatalf("ConfigureProvider on hybrid deployment: %v", err)

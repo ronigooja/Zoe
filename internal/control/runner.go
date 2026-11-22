@@ -68,7 +68,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if !executionCapacityAvailable(active, s.cfg.MaxRuns) {
+	if !executionCapacityAvailable(active, s.cfg.Limits.Int("max_concurrent_runs")) {
 		_ = tx.Rollback()
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -191,7 +191,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 	if chosen.parent != "" {
 		capabilityIDs = intersectStrings(capabilityIDs, pregrant)
 	}
-	rules, impact, err := profiles.EffectivePermissionSet(profiles.Profile{ID: profile.ID, PermissionTier: profile.PermissionTier}, profile.Scopes, nil)
+	rules, impact, err := profiles.EffectivePermissionSet(profiles.Profile{ID: profile.ID, PermissionTier: profile.PermissionTier}, profile.Scopes, nil, s.cfg.Limits)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -1021,8 +1021,8 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 	// may omit it when the runtime produced no partial assistant output.
 	if observation.Kind == "result" || (observation.Kind == "failure" && len(observation.Result) != 0) {
 		summary := string(observation.Result)
-		if len(summary) > 20000 {
-			summary = summary[:20000]
+		if limit := s.cfg.Limits.Int("runner_result_evidence_max_bytes"); len(summary) > limit {
+			summary = summary[:limit]
 		}
 		if len(observation.Result) == 0 || !json.Valid(observation.Result) {
 			writeError(w, apiError(400, "invalid_request", "result must be valid JSON", nil))
@@ -1065,8 +1065,8 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 				writeError(w, err)
 				return
 			}
-			if len(assistantOutput) > 20000 {
-				assistantOutput = assistantOutput[:20000]
+			if limit := s.cfg.Limits.Int("runner_assistant_output_max_bytes"); len(assistantOutput) > limit {
+				assistantOutput = assistantOutput[:limit]
 			}
 			var existing string
 			// Deduplicate by authoritative run identity, not by task text: two

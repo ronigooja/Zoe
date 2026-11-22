@@ -129,7 +129,7 @@ func (s *Server) AdmitTaskTx(ctx context.Context, tx *sql.Tx, in AdmissionContex
 	}
 	in.Title = strings.TrimSpace(in.Title)
 	in.Goal = strings.TrimSpace(in.Goal)
-	if in.Title == "" || in.Goal == "" || len(in.Title) > 300 || len(in.Goal) > MaxTaskTextBytes || len(in.InitialMessage) > MaxTaskTextBytes {
+	if in.Title == "" || in.Goal == "" || len(in.Title) > 300 || len(in.Goal) > s.cfg.Limits.Int("task_text_max_bytes") || len(in.InitialMessage) > s.cfg.Limits.Int("task_text_max_bytes") {
 		return TaskAdmissionResult{}, apiError(400, "invalid_request", "task title and goal are required and must fit limits", nil)
 	}
 	if len(in.GrantSnapshot) != 0 && !json.Valid(in.GrantSnapshot) {
@@ -207,7 +207,7 @@ func (s *Server) AdmitTaskTx(ctx context.Context, tx *sql.Tx, in AdmissionContex
 		if err != nil {
 			return TaskAdmissionResult{}, err
 		}
-		if strings.TrimSpace(sourceRequest.Title) == "" || strings.TrimSpace(sourceRequest.Goal) == "" || len(sourceRequest.Title) > 300 || len(sourceRequest.Goal) > MaxTaskTextBytes || len(sourceRequest.InitialMessage) > MaxTaskTextBytes {
+		if strings.TrimSpace(sourceRequest.Title) == "" || strings.TrimSpace(sourceRequest.Goal) == "" || len(sourceRequest.Title) > 300 || len(sourceRequest.Goal) > s.cfg.Limits.Int("task_text_max_bytes") || len(sourceRequest.InitialMessage) > s.cfg.Limits.Int("task_text_max_bytes") {
 			return TaskAdmissionResult{}, apiError(400, "invalid_source", "validated task source returned invalid task content", nil)
 		}
 		in.Title, in.Goal, in.InitialMessage = sourceRequest.Title, sourceRequest.Goal, sourceRequest.InitialMessage

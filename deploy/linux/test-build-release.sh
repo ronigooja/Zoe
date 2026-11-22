@@ -8,11 +8,12 @@ mkdir "$task/shims"
 # Keep dirty input fixtures out of the developer's working tree.
 git clone --quiet --shared "$repo" "$task/input"
 cp "$repo/deploy/linux/build-release.sh" "$task/input/deploy/linux/"
+cp "$repo/deploy/limits.json" "$task/input/deploy/limits.json"
 mkdir -p "$task/input/deploy/prompts"
 for name in ui_controller register compact steward task_ui_display voice_instruction task_summary memory_ingest memory_write memory_custom; do
   printf 'fixture %s\n' "$name" > "$task/input/deploy/prompts/$name.txt"
 done
-git -C "$task/input" add deploy/prompts deploy/linux/build-release.sh
+git -C "$task/input" add deploy/prompts deploy/limits.json deploy/linux/build-release.sh
 git -C "$task/input" -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'fixture release prompts'
 FIXTURE_SHA="$(git -C "$task/input" rev-parse HEAD)"
 FIXTURE_TREE="$(git -C "$task/input" rev-parse "$FIXTURE_SHA^{tree}")"
@@ -76,6 +77,11 @@ with tarfile.open(root/'server-linux-amd64.tar.gz') as tar:
     manifest=json.load(tar.extractfile('./release-manifest.json'))
     assert len(manifest['images'])==3
     sums=tar.extractfile('./SHA256SUMS').read().decode()
+    policy = tar.extractfile('./limits.json').read()
+    assert json.loads(policy)['opening_context_runes'] == 8000
+    digest = hashlib.sha256(policy).hexdigest()
+    assert digest+'  limits.json' in sums.splitlines()
+    assert any(item['path']=='limits.json' and item['sha256']==digest for item in manifest['artifacts'])
     for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction', 'task_summary', 'memory_ingest', 'memory_write', 'memory_custom']:
         path='prompts/'+name+'.txt'; data=tar.extractfile('./'+path).read()
         digest=hashlib.sha256(data).hexdigest()

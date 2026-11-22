@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -57,7 +58,7 @@ func rotationEngine(t *testing.T, f *rotationSummarizerFake, control RunnerAPI, 
 	e.Runtime = f
 	e.Control = control
 	e.Routes["profile"] = Route{ProfileID: "profile", Harness: "opencode", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Model: "provider/configured"}
-	e.ContextTokenBudget = 1
+	e.Limits = withLimit(t, e.Limits, "runner_context_max_tokens", 1)
 	return e
 }
 
@@ -112,7 +113,7 @@ func TestRotationSummarizerSuccessIsLabeledAndPersisted(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := f.createdSpecs[1].Prompt
-	if !strings.Contains(prompt, "Unverified context; verify against the workspace:\nsummary text") || s.calls != 1 || s.model != "provider/configured" || len(s.input) > rotationSummaryLimit {
+	if !strings.Contains(prompt, "Unverified context; verify against the workspace:\nsummary text") || s.calls != 1 || s.model != "provider/configured" || len(s.input) > limits.Defaults().Int("runner_rotation_summary_bytes") {
 		t.Fatalf("summary call=%d model=%q input=%d prompt=%q", s.calls, s.model, len(s.input), prompt)
 	}
 	entry, _, err := j.Entry(context.Background(), rotationClaim().RunID)

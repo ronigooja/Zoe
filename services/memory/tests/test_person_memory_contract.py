@@ -428,7 +428,8 @@ class PersonMemoryContractTests(unittest.TestCase):
         handler = object.__new__(MemoryAPIHandler)
         handler.command = "POST"
         handler.deadline = time.monotonic() + 5
-        handler.server = SimpleNamespace(backend=Mock())
+        from services.memory.limits import defaults
+        handler.server = SimpleNamespace(backend=Mock(), limits=defaults())
         for route, old in (
             ("write", {"user": "u", "sentence": "s", "restatement": "r"}),
             ("search", {"user": "u", "query": "q"}),

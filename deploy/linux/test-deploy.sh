@@ -236,12 +236,23 @@ with tempfile.TemporaryDirectory() as directory:
         file = repo/relative
         values = {name: 'fixture' for name in re.findall(r'\$\{([A-Z_0-9]+):\?', file.read_text())}
         values['ZOE_MEMORY_DATA_ROOT'] = str(pathlib.Path(directory)/'memory')
+        values['ZOE_LIMITS_FILE'] = str(pathlib.Path(directory)/'limits.override.json')
         env_file.write_text(''.join(name+'='+value+'\n' for name, value in values.items()))
         # Do not let the developer's exported settings override this fixture.
         env = {name: value for name, value in os.environ.items() if not name.startswith('ZOE_')}
         rendered = subprocess.check_output([sys.executable, str(repo/'deploy/linux/deploy-state.py'),
                                             'compose', str(repo), str(env_file), str(file)], env=env, text=True)
-        qdrant = json.loads(rendered)['services']['qdrant']
+        services = json.loads(rendered)['services']
+        targets = ['zoe-server', 'zoe-memory-worker'] if relative.startswith('deploy/') else ['memory-worker']
+        for service in targets:
+            spec = services[service]
+            override = values['ZOE_LIMITS_FILE']
+            assert spec['environment']['ZOE_LIMITS_FILE'] == override
+            matching = [m for m in spec['volumes'] if m.get('target') == override]
+            assert len(matching) == 1 and matching[0]['type'] == 'bind'
+            assert matching[0]['source'] == override and matching[0]['read_only']
+            assert matching[0].get('bind', {}).get('create_host_path', False) is False
+        qdrant = services['qdrant']
         mounts = qdrant.get('volumes', [])
         assert len(mounts) == 1, (relative, mounts)
         mount = mounts[0]
@@ -480,7 +491,7 @@ memory_token.write_text('fixture-memory-token\n')
 memory_token.chmod(0o600)
 os.chown(memory_token, 65532, 65532)
 env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
-       'ZOE_DEFAULT_PROFILE_ID': 'worker', 'ZOE_MAX_RUNS': '12',
+       'ZOE_DEFAULT_PROFILE_ID': 'worker', 'ZOE_LIMITS_FILE': str(p/'host-limits.json'),
        'ZOE_SERVER_DATA_ROOT': str(p/'data/server'),
        'ZOE_MEMORY_DATA_ROOT': str(p/'data/memory'),
        'ZOE_MEM0_LLM_API_KEY_FILE': str(p/'secrets/mem0-llm-api-key'),
@@ -489,7 +500,7 @@ env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
        'ZOE_RUNNER_TOKEN_FILE': str(p/'secrets/runner-token'),
        'ZOE_MEMORY_WORKER_IMAGE': 'ghcr.io/test/zoe-memory-worker@sha256:'+'3'*64,
        'ZOE_RUNNER_IMAGE': 'ghcr.io/test/zoe-runner@sha256:'+'4'*64,
-       'ZOE_VOICE_UPSTREAM_ROUTE': 'avas', 'ZOE_STEWARD_TIMEOUT_MS': '30000', 'ZOE_UI_CONTROLLER_TIMEOUT_MS': '30000', 'ZOE_UI_CONTROLLER_MAX_RETRIES': '0',
+       'ZOE_VOICE_UPSTREAM_ROUTE': 'avas', 'ZOE_STEWARD_TIMEOUT_MS': '30000', 'ZOE_UI_CONTROLLER_TIMEOUT_MS': '30000',
        'ZOE_VOICE_CLASSIFICATION_TIMEOUT_MS': '35000', 'ZOE_REGISTER_TIMEOUT_MS': '30000',
        'ZOE_MEMORY_BATCH_INTERVAL_HOURS': '24',
        'ZOE_MEMORY_API_URL': 'http://zoe-memory-worker:8788',
@@ -498,7 +509,7 @@ env = {'ZOE_SERVER_IMAGE': 'ghcr.io/test/zoe-server@sha256:'+'1'*64,
        'ZOE_REGISTER_API_KEY_FILE': '/run/secrets/register_api_key',
        'ZOE_COMPACT_BASE_URL': 'https://compact.invalid', 'ZOE_COMPACT_MODEL': 'compact',
        'ZOE_COMPACT_API_KEY_FILE': '/run/secrets/compact_api_key',
-       'ZOE_COMPACT_TIMEOUT_MS': '600000', 'ZOE_COMPACT_MAX_CHARACTERS': '8000',
+       'ZOE_COMPACT_TIMEOUT_MS': '600000',
         'ZOE_COMPACT_INTERVAL_MINUTES': '60', 'ZOE_REGISTER_RAW_WINDOW_MINUTES': '60',
         'ZOE_UI_CONTROLLER_BASE_URL': 'https://ui.invalid', 'ZOE_UI_CONTROLLER_MODEL': 'ui',
          'ZOE_UI_CONTROLLER_API_KEY_FILE': '/run/secrets/ui_controller_api_key'}
@@ -551,12 +562,18 @@ config['services']['zoe-memory-worker'] = {'environment': {
     'volumes': [{'type': 'bind', 'source': str(p/'data'), 'target': '/var/lib/zoe/memory'}]}
 config['services']['zoe-server']['volumes'].append({'type':'bind', 'source':str(p/'prompts'),
                                                     'target':str(p/'prompts'), 'read_only':True})
+for service in ['zoe-server', 'zoe-memory-worker']:
+    config['services'][service]['environment']['ZOE_LIMITS_FILE'] = str(p/'host-limits.json')
+    config['services'][service]['volumes'].append({'type':'bind', 'source':str(p/'host-limits.json'),
+                                                    'target':str(p/'host-limits.json'), 'read_only':True})
 (p/'config.json').write_text(json.dumps(config))
 for revision in [old, new]:
     root = p/'releases'/revision if revision == old else p/'source'
     (root/'bin').mkdir(parents=True); (root/'deploy-linux').mkdir()
     for name in ['zoe-server', 'zoe-runner', 'zoe-secret-entrypoint', 'zoe']:
         text = '#!/bin/sh\nexit 0\n# '+revision+'\n'
+        if name == 'zoe-server':
+            text = '#!/bin/sh\nif [ "$1" = validate-limits ]; then exec python3 -c \'from services.memory.limits import load_limits; import sys; load_limits(sys.argv[1])\' "$2"; fi\n'
         if name == 'zoe': text = '#!/bin/sh\ntest "$1" = --source-revision && echo '+revision+'\n'
         (root/'bin'/name).write_text(text); (root/'bin'/name).chmod(0o755)
     (root/'SOURCE_REVISION').write_text(revision+'\n')
@@ -590,6 +607,15 @@ for revision in [old, new]:
 root = p/'source'
 case = os.environ['CASE']
 (root/'prompts').mkdir()
+shutil.copy(repo/'deploy/limits.json', root/'limits.json')
+if case in ('prompt-keep', 'prompt-overwrite', 'prompt-identical', 'prompt-dry', 'limits-invalid', 'runner-unchanged-error'):
+    limits = json.loads((root/'limits.json').read_text())
+    limits['voice_recall_workers'] = 0 if case == 'limits-invalid' else 5
+    (p/'host-limits.json').write_text(json.dumps(limits))
+if case == 'limits-absent-release': (root/'limits.json').unlink()
+if case == 'limits-legacy-env':
+    with (p/'stack.env').open('a') as env: env.write('ZOE_MAX_RUNS=12\n')
+    shutil.copy(p/'stack.env', p/'initial-env')
 for name in ['ui_controller', 'register', 'compact', 'steward', 'task_ui_display', 'voice_instruction', 'task_summary', 'memory_ingest', 'memory_write', 'memory_custom']:
     (root/'prompts'/(name+'.txt')).write_text('PROMPT_SECRET_SENTINEL '+name+'\n')
 if case == 'prompt-missing': (root/'prompts/register.txt').unlink()
@@ -817,7 +843,7 @@ PY
   export ZOE_RELEASES_DIR="$FIXTURE/releases" ZOE_ENV_FILE="$FIXTURE/stack.env" ZOE_DB_PATH="$FIXTURE/db.sqlite"
   export ZOE_API_URL=http://local/healthz ZOE_UNITS_DIR="$FIXTURE/units" ZOE_BIN_DIR="$FIXTURE/bin"
   export ZOE_DEPLOY_LOG_DIR="$FIXTURE/logs" ZOE_DEPLOY_HEALTH_ATTEMPTS=1
-  export ZOE_PROMPT_DIR="$FIXTURE/prompts"
+  export ZOE_PROMPT_DIR="$FIXTURE/prompts" PYTHONPATH="$repo_root"
 }
 deploy() { PATH="$FIXTURE/shims:$PATH" bash "$repo_root/deploy/linux/deploy.sh" --sha "$new" "$@"; }
 unchanged() {
@@ -891,17 +917,24 @@ fixture dry-run
 deploy --dry-run
 unchanged
 [[ ! -e "$FIXTURE/releases/$new" && ! -e "$FIXTURE/releases/$new.dl" ]]
-for failure in prompt-missing prompt-unwritable; do
+for failure in prompt-missing prompt-unwritable limits-invalid; do
   fixture "$failure"
   if deploy; then echo "expected refusal: $failure"; exit 1; fi
   unchanged
   grep -q 'deploy step=prompts status=failed' "$FIXTURE/logs/$new.log"
+done
+for failure in limits-legacy-env limits-absent-release; do
+  fixture "$failure"
+  if deploy --dry-run; then echo "expected refusal: $failure"; exit 1; fi
+  unchanged
 done
 fixture prompt-dry
 deploy --dry-run --prompts overwrite
 unchanged
 [[ "$(cat "$FIXTURE/prompts/register.txt")" == 'old content' ]]
 [[ ! -e "$FIXTURE/prompts/register.txt.pre-${new:0:12}" ]]
+[[ ! -e "$FIXTURE/host-limits.json.pre-${new:0:12}" ]]
+grep -q 'limits name=limits.json .*action=overwrite' "$FIXTURE/logs/$new.log"
 grep -q 'action=overwrite' "$FIXTURE/logs/$new.log"
 if grep -q PROMPT_SECRET_SENTINEL "$FIXTURE/logs/$new.log"; then exit 1; fi
 fixture prompt-keep
@@ -914,8 +947,12 @@ for name in memory_ingest memory_write memory_custom; do
 done
 [[ "$(stat -c '%a:%u:%g' "$FIXTURE/prompts/compact.txt")" == 644:0:0 ]]
 grep -q 'action=keep(differs)' "$FIXTURE/logs/$new.log"
+grep -q '"voice_recall_workers": 5' "$FIXTURE/host-limits.json"
+[[ ! -e "$FIXTURE/host-limits.json.pre-${new:0:12}" ]]
 fixture prompt-overwrite
 deploy --prompts overwrite
+cmp -s "$repo_root/deploy/limits.json" "$FIXTURE/host-limits.json"
+grep -q '"voice_recall_workers": 5' "$FIXTURE/host-limits.json.pre-${new:0:12}"
 [[ "$(cat "$FIXTURE/prompts/register.txt.pre-${new:0:12}")" == 'old content' ]]
 [[ "$(cat "$FIXTURE/prompts/register.txt")" == 'PROMPT_SECRET_SENTINEL register' ]]
 fixture prompt-identical

@@ -23,7 +23,7 @@ The server selects `show`, `task_question` (a pending question_id), or
 plus only the active mode section. Startup rejects missing or empty sections.
 Mode is not duplicated in model input JSON.
 
-Show requires nonempty feedback of at most 8000 bytes; input modes require a
+Show requires nonempty feedback within the [feedback limit](configuration.md#zoe-limits); input modes require a
 bound TextField and submit event and store empty feedback. Model ui-meta never
 selects input mode. Persisted requests, `ui.surface` SSE payloads and recovery
 entries use server-owned booleans `task_question` and `chat_input`.

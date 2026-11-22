@@ -67,7 +67,7 @@ func uiFlowModel(t *testing.T, output *string, mu *sync.Mutex) *modelclient.Clie
 		matched := false
 		for _, mode := range []string{"show", "task_question", "chat_input"} {
 			instruction, err := prompts.UIInstruction(wantPrompt, mode)
-			matched = matched || (err == nil && instruction == body.Instructions)
+			matched = matched || (err == nil && strings.HasPrefix(body.Instructions, instruction+"\n\nOutput limits:"))
 		}
 		if !matched {
 			t.Error("UI controller did not receive the loaded prompt")
@@ -596,7 +596,7 @@ func TestUIValidationRetries(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := uiTargetRig(t)
 			uiFlowServer(t, r)
-			r.svc.uiControllerMaxRetries = tc.retries
+			r.svc.limits = mustLimits(t, "ui_output_attempts", int64(tc.retries+1))
 			var inputs []string
 			invalid := uiFlowOutput(strings.Replace(uiFlowCreate, `"version":"v0.9.1"`, `"version":123`, 1), false)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

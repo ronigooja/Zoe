@@ -11,12 +11,12 @@ import (
 	"github.com/ronigooja/Zoe/internal/control"
 )
 
-func validTextInput(text string) bool {
-	return utf8.ValidString(text) && strings.TrimSpace(text) != "" && len(text) <= 20000
+func (s *Service) validTextInput(text string) bool {
+	return utf8.ValidString(text) && strings.TrimSpace(text) != "" && len(text) <= s.limits.Int("voice_text_max_bytes")
 }
 
-func insertTextInput(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, text string) error {
-	if !validTextInput(text) {
+func (s *Service) insertTextInput(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, text string) error {
+	if !s.validTextInput(text) {
 		return apiError(400, "invalid_request", "Text input is invalid", nil)
 	}
 	at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
@@ -36,7 +36,7 @@ func (s *Service) commandVoiceTextInput(ctx context.Context, tx *sql.Tx, cmd con
 	if err := decodePayload(req.Payload, &p); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
-	err := insertTextInput(ctx, tx, cmd, p.Text)
+	err := s.insertTextInput(ctx, tx, cmd, p.Text)
 	return contracts.CommandResult{ResourceType: "voice_text_input", ResourceID: cmd.CommandID}, nil, err
 }
 
@@ -47,7 +47,7 @@ type voiceInputDelivery struct {
 
 func (s *Service) dispatchVoiceInputs(ctx context.Context) {
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT 'user_text',command_id,workspace_id,owner_subject_id,text,attempts FROM voice_text_inputs WHERE status='pending' AND coalesce(next_attempt_at,'')<=? UNION ALL SELECT kind,source_id,workspace_id,owner_subject_id,text,attempts FROM voice_input_notices WHERE status='pending' AND coalesce(next_attempt_at,'')<=? LIMIT 25`, now, now)
+	rows, err := s.db.QueryContext(ctx, `SELECT 'user_text',command_id,workspace_id,owner_subject_id,text,attempts FROM voice_text_inputs WHERE status='pending' AND coalesce(next_attempt_at,'')<=? UNION ALL SELECT kind,source_id,workspace_id,owner_subject_id,text,attempts FROM voice_input_notices WHERE status='pending' AND coalesce(next_attempt_at,'')<=? LIMIT ?`, now, now, s.limits.Int("voice_text_sweep_rows"))
 	if err != nil {
 		return
 	}

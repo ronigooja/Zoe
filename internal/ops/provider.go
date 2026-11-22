@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"io"
 	"math"
 	"net/http"
@@ -343,7 +344,7 @@ func modelLimit(raw map[string]any) ModelLimit {
 }
 
 // Probe checks the provider's models endpoint and reports coarse outcomes.
-func Probe(ctx context.Context, c ProviderConfig, client *http.Client) ProbeResult {
+func Probe(ctx context.Context, c ProviderConfig, client *http.Client, sets ...limits.Set) ProbeResult {
 	normalized, err := c.Normalized()
 	if err != nil {
 		return ProbeResult{Model: c.Model, ErrorCategory: "invalid_configuration", ErrorReason: err.Error()}
@@ -393,7 +394,7 @@ func Probe(ctx context.Context, c ProviderConfig, client *http.Client) ProbeResu
 		Data   []map[string]any `json:"data"`
 		Models []map[string]any `json:"models"`
 	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(&raw); err != nil {
+	if err := json.NewDecoder(io.LimitReader(res.Body, limits.Resolve(sets).Int64("model_catalog_max_bytes"))).Decode(&raw); err != nil {
 		result.ErrorCategory = "invalid_response"
 		return result
 	}
@@ -412,8 +413,8 @@ func Probe(ctx context.Context, c ProviderConfig, client *http.Client) ProbeResu
 			result.Models = append(result.Models, ProviderModelMetadata{ID: id, Name: id, Limit: modelLimit(model)})
 		}
 	}
-	if len(result.Models) > 500 {
-		result.Models = result.Models[:500]
+	if limit := limits.Resolve(sets).Int("model_catalog_max_entries"); len(result.Models) > limit {
+		result.Models = result.Models[:limit]
 	}
 	if !result.ModelAvailable {
 		for _, model := range raw.Models {

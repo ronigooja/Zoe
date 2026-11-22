@@ -9,7 +9,6 @@ import (
 	"unicode/utf8"
 )
 
-const resultDeliveryMaxAttempts = 3
 const fastReplyLease = 30 * time.Second
 
 // resultDeliveryLease bounds how long a claimed delivery is hidden from other dispatchers.
@@ -46,7 +45,7 @@ func (s *Service) consumeResultEvents(ctx context.Context) {
 	if err = tx.QueryRowContext(ctx, `SELECT last_cursor FROM voice_result_cursor WHERE id=1`).Scan(&last); err != nil {
 		return
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT cursor,event_id,workspace_id,aggregate_id,payload FROM events WHERE event_type='task.assistant_message' AND cursor>? ORDER BY cursor LIMIT 25`, last)
+	rows, err := tx.QueryContext(ctx, `SELECT cursor,event_id,workspace_id,aggregate_id,payload FROM events WHERE event_type='task.assistant_message' AND cursor>? ORDER BY cursor LIMIT ?`, last, s.limits.Int("voice_result_sweep_rows"))
 	if err != nil {
 		return
 	}
@@ -103,7 +102,7 @@ func (s *Service) consumeResultEvents(ctx context.Context) {
 
 func (s *Service) dispatchResults(ctx context.Context) {
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT entry_id,workspace_id,task_id,run_id,subject_id,attempts FROM voice_result_deliveries d WHERE status='pending' AND last_error_code!='awaiting_context' AND next_attempt_at<=? AND `+resultNotInOpening+` ORDER BY next_attempt_at LIMIT 25`, now)
+	rows, err := s.db.QueryContext(ctx, `SELECT entry_id,workspace_id,task_id,run_id,subject_id,attempts FROM voice_result_deliveries d WHERE status='pending' AND last_error_code!='awaiting_context' AND next_attempt_at<=? AND `+resultNotInOpening+` ORDER BY next_attempt_at LIMIT ?`, now, s.limits.Int("voice_result_sweep_rows"))
 	if err != nil {
 		return
 	}
@@ -133,7 +132,7 @@ const fastReplyOldBinding = ` EXISTS(SELECT 1 FROM voice_text_checkpoints c WHER
 
 func (s *Service) dispatchFastReplies(ctx context.Context) {
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT f.id,f.workspace_id,f.session_id,f.generation,f.attempts FROM voice_fast_replies f JOIN voice_sessions o ON o.id=f.session_id AND o.workspace_id=f.workspace_id AND o.generation=f.generation JOIN voice_sessions v ON v.workspace_id=o.workspace_id AND v.owner_id=o.owner_id AND v.state='active' AND v.gateway_session_id!='' AND v.gateway_media_generation>0 WHERE f.status='pending' AND (f.next_attempt_at<=? OR `+fastReplyOldBinding+`) AND f.intent_kind NOT IN ('recall_holding','memory_write_holding') AND trim(f.text,char(9,10,11,12,13,32))!='' ORDER BY f.created_at,f.id LIMIT 25`, now)
+	rows, err := s.db.QueryContext(ctx, `SELECT f.id,f.workspace_id,f.session_id,f.generation,f.attempts FROM voice_fast_replies f JOIN voice_sessions o ON o.id=f.session_id AND o.workspace_id=f.workspace_id AND o.generation=f.generation JOIN voice_sessions v ON v.workspace_id=o.workspace_id AND v.owner_id=o.owner_id AND v.state='active' AND v.gateway_session_id!='' AND v.gateway_media_generation>0 WHERE f.status='pending' AND (f.next_attempt_at<=? OR `+fastReplyOldBinding+`) AND f.intent_kind NOT IN ('recall_holding','memory_write_holding') AND trim(f.text,char(9,10,11,12,13,32))!='' ORDER BY f.created_at,f.id LIMIT ?`, now, s.limits.Int("voice_fast_reply_sweep_rows"))
 	if err != nil {
 		return
 	}
@@ -236,7 +235,7 @@ func (s *Service) finishFastReply(id, status, code string) {
 	_, _ = s.db.Exec(`UPDATE voice_fast_replies SET status=?,last_error_code=?,updated_at=? WHERE id=? AND status='pending'`, status, code, s.now().UTC().Format(time.RFC3339Nano), id)
 }
 func (s *Service) retryFastReply(id string, attempt int, code string) {
-	if attempt >= resultDeliveryMaxAttempts {
+	if attempt >= s.limits.Int("voice_delivery_attempts") {
 		s.finishFastReply(id, "failed", code)
 		return
 	}
@@ -257,7 +256,7 @@ func (s *Service) finishResult(id, status, code string) {
 	_, _ = s.db.Exec(`UPDATE voice_result_deliveries AS d SET status=?,last_error_code=?,updated_at=? WHERE entry_id=? AND status='pending' AND `+resultNotInOpening, status, code, s.now().UTC().Format(time.RFC3339Nano), id)
 }
 func (s *Service) retryResult(id string, attempt int, code string) {
-	if attempt >= resultDeliveryMaxAttempts {
+	if attempt >= s.limits.Int("voice_delivery_attempts") {
 		s.finishResult(id, "failed", code)
 		return
 	}

@@ -97,7 +97,7 @@ func (s *Service) handleCallEnded(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req callEndedRequest
-	if err := decodeRequest(w, r, 64<<10, &req); err != nil || !req.valid(receivedAt) {
+	if err := decodeRequest(w, r, s.limits.Int64("voice_lifecycle_max_bytes"), &req); err != nil || !req.valid(receivedAt) {
 		control.WriteError(w, apiError(http.StatusBadRequest, "invalid_request", "invalid end report", nil))
 		return
 	}

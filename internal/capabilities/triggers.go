@@ -17,8 +17,6 @@ import (
 	"github.com/ronigooja/Zoe/internal/control"
 )
 
-const triggerEventPageSize = 100
-
 type triggerEventRecord struct {
 	id, kind, at, subject, aggregateType, aggregateID string
 	cursor                                            int64
@@ -142,7 +140,7 @@ func (s *Service) claimTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 	var claim *contracts.CapabilityTriggerClaim
 	err := s.server.RunnerTransaction(r.Context(), func(tx *sql.Tx, runner contracts.RunnerPrincipal) error {
-		if current, err := activeTriggerClaim(r.Context(), tx, runner); err != nil {
+		if current, err := s.activeTriggerClaim(r.Context(), tx, runner); err != nil {
 			return err
 		} else if current != nil {
 			claim = current
@@ -173,7 +171,7 @@ func (s *Service) claimTrigger(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			var err error
-			claim, err = claimQueuedProgramTrigger(r.Context(), tx, runner, workspace, now)
+			claim, err = s.claimQueuedProgramTrigger(r.Context(), tx, runner, workspace, now)
 			if err != nil {
 				return err
 			}
@@ -256,10 +254,10 @@ func (s *Service) processTriggerAdmissions(ctx context.Context, tx *sql.Tx, runn
 		if !control.HasRunnerScope(runner, "capability:deploy", workspace) {
 			continue
 		}
-		if err := processTriggerEvents(ctx, tx, workspace, now); err != nil {
+		if err := s.processTriggerEvents(ctx, tx, workspace, now); err != nil {
 			return err
 		}
-		if err := enqueueDueSchedules(ctx, tx, workspace, now); err != nil {
+		if err := s.enqueueDueSchedules(ctx, tx, workspace, now); err != nil {
 			return err
 		}
 		if err := s.admitQueuedTaskTriggers(ctx, tx, workspace, now); err != nil {
@@ -291,7 +289,7 @@ func (s *Service) currentTriggerClaim(w http.ResponseWriter, r *http.Request) {
 	var claim *contracts.CapabilityTriggerClaim
 	err := s.server.RunnerTransaction(r.Context(), func(tx *sql.Tx, runner contracts.RunnerPrincipal) error {
 		var err error
-		claim, err = activeTriggerClaim(r.Context(), tx, runner)
+		claim, err = s.activeTriggerClaim(r.Context(), tx, runner)
 		return err
 	})
 	if err != nil {
@@ -305,7 +303,7 @@ func (s *Service) currentTriggerClaim(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, claim)
 }
 
-func activeTriggerClaim(ctx context.Context, tx *sql.Tx, runner contracts.RunnerPrincipal) (*contracts.CapabilityTriggerClaim, error) {
+func (s *Service) activeTriggerClaim(ctx context.Context, tx *sql.Tx, runner contracts.RunnerPrincipal) (*contracts.CapabilityTriggerClaim, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT claim_json,state,workspace_id FROM capability_trigger_runs WHERE runner_id=? AND state IN ('claimed','running','uncertain') ORDER BY updated_at DESC LIMIT 2`, runner.RunnerID)
 	if err != nil {
 		return nil, err
@@ -344,13 +342,13 @@ func activeTriggerClaim(ctx context.Context, tx *sql.Tx, runner contracts.Runner
 	if err := json.Unmarshal(item.body, &claim); err != nil {
 		return nil, err
 	}
-	if err := validateManifest(&claim.Manifest); err != nil {
+	if err := validateManifest(&claim.Manifest, s.limits); err != nil {
 		return nil, control.NewAPIError(500, "invalid_claim_snapshot", "trigger claim manifest failed immutable validation", nil)
 	}
 	return &claim, nil
 }
 
-func processTriggerEvents(ctx context.Context, tx *sql.Tx, workspace string, now time.Time) error {
+func (s *Service) processTriggerEvents(ctx context.Context, tx *sql.Tx, workspace string, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO capability_trigger_cursors(workspace_id,cursor) VALUES(?,0) ON CONFLICT(workspace_id) DO NOTHING`, workspace); err != nil {
 		return err
 	}
@@ -358,7 +356,7 @@ func processTriggerEvents(ctx context.Context, tx *sql.Tx, workspace string, now
 	if err := tx.QueryRowContext(ctx, `SELECT cursor FROM capability_trigger_cursors WHERE workspace_id=?`, workspace).Scan(&cursor); err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT event_id,cursor,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,payload FROM events WHERE workspace_id=? AND cursor>? ORDER BY cursor LIMIT ?`, workspace, cursor, triggerEventPageSize)
+	rows, err := tx.QueryContext(ctx, `SELECT event_id,cursor,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,payload FROM events WHERE workspace_id=? AND cursor>? ORDER BY cursor LIMIT ?`, workspace, cursor, s.limits.Int("capability_trigger_page_rows"))
 	if err != nil {
 		return err
 	}
@@ -430,7 +428,7 @@ func processTriggerEvents(ctx context.Context, tx *sql.Tx, workspace string, now
 				return err
 			}
 		}
-		if err := enqueueEventRuns(ctx, tx, workspace, event, now); err != nil {
+		if err := s.enqueueEventRuns(ctx, tx, workspace, event, now); err != nil {
 			return err
 		}
 		cursor = event.cursor
@@ -462,7 +460,7 @@ func reconcileTriggerRunTaskStatus(ctx context.Context, tx *sql.Tx, workspace, t
 	return err
 }
 
-func enqueueEventRuns(ctx context.Context, tx *sql.Tx, workspace string, event triggerEventRecord, now time.Time) error {
+func (s *Service) enqueueEventRuns(ctx context.Context, tx *sql.Tx, workspace string, event triggerEventRecord, now time.Time) error {
 	rows, err := tx.QueryContext(ctx, `SELECT trigger_id,deployment_id,trigger_key,mode,filters FROM capability_trigger_definitions WHERE workspace_id=? AND enabled=1 AND kind='event' AND source=? ORDER BY trigger_id`, workspace, event.kind)
 	if err != nil {
 		return err
@@ -516,7 +514,7 @@ func enqueueEventRuns(ctx context.Context, tx *sql.Tx, workspace string, event t
 			return err
 		}
 		state, code := "queued", ""
-		if len(payload) > 64*1024 {
+		if len(payload) > s.limits.Int("capability_trigger_payload_max_bytes") {
 			payload = []byte("{}")
 			state, code = "failed", "event_payload_too_large"
 		}
@@ -676,8 +674,8 @@ func deploymentTriggerAdmission(ctx context.Context, tx *sql.Tx, triggerID strin
 	return nil
 }
 
-func enqueueDueSchedules(ctx context.Context, tx *sql.Tx, workspace string, now time.Time) error {
-	rows, err := tx.QueryContext(ctx, `SELECT t.trigger_id,t.deployment_id,t.trigger_key,t.interval_seconds,t.missed_run_policy,t.next_run_at,t.mode FROM capability_trigger_definitions t JOIN capability_deployments d ON d.deployment_id=t.deployment_id AND d.grant_id=t.grant_id AND d.release_digest=t.release_digest AND d.version=t.expected_deployment_version AND d.config_ref=t.config_ref AND d.config_sha256=t.config_sha256 JOIN capability_grants g ON g.grant_id=t.grant_id AND g.deployment_id=d.deployment_id AND g.release_digest=d.release_digest WHERE t.workspace_id=? AND t.enabled=1 AND t.kind='schedule' AND t.next_run_at<=? AND d.desired_state='running' AND d.observed_state='running' AND g.expires_at>? ORDER BY t.next_run_at,t.trigger_id LIMIT ?`, workspace, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), triggerEventPageSize)
+func (s *Service) enqueueDueSchedules(ctx context.Context, tx *sql.Tx, workspace string, now time.Time) error {
+	rows, err := tx.QueryContext(ctx, `SELECT t.trigger_id,t.deployment_id,t.trigger_key,t.interval_seconds,t.missed_run_policy,t.next_run_at,t.mode FROM capability_trigger_definitions t JOIN capability_deployments d ON d.deployment_id=t.deployment_id AND d.grant_id=t.grant_id AND d.release_digest=t.release_digest AND d.version=t.expected_deployment_version AND d.config_ref=t.config_ref AND d.config_sha256=t.config_sha256 JOIN capability_grants g ON g.grant_id=t.grant_id AND g.deployment_id=d.deployment_id AND g.release_digest=d.release_digest WHERE t.workspace_id=? AND t.enabled=1 AND t.kind='schedule' AND t.next_run_at<=? AND d.desired_state='running' AND d.observed_state='running' AND g.expires_at>? ORDER BY t.next_run_at,t.trigger_id LIMIT ?`, workspace, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), s.limits.Int("capability_trigger_page_rows"))
 	if err != nil {
 		return err
 	}
@@ -726,8 +724,8 @@ func enqueueDueSchedules(ctx context.Context, tx *sql.Tx, workspace string, now 
 	return nil
 }
 
-func claimQueuedProgramTrigger(ctx context.Context, tx *sql.Tx, runner contracts.RunnerPrincipal, workspace string, now time.Time) (*contracts.CapabilityTriggerClaim, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT r.trigger_run_id,r.trigger_id,r.deployment_id,r.trigger_key,r.event_id,r.scheduled_for,r.event_payload,r.mode,t.release_digest,t.grant_id,t.scopes,d.service_id,d.config_ref,d.config_sha256,g.scope_kind,g.scope_id,g.principal_id,g.actions,g.budget,g.expires_at,rel.manifest FROM capability_trigger_runs r JOIN capability_trigger_definitions t ON t.trigger_id=r.trigger_id JOIN capability_deployments d ON d.deployment_id=r.deployment_id AND d.grant_id=t.grant_id AND d.release_digest=t.release_digest AND d.version=t.expected_deployment_version AND d.config_ref=t.config_ref AND d.config_sha256=t.config_sha256 JOIN capability_grants g ON g.grant_id=t.grant_id AND g.deployment_id=d.deployment_id AND g.release_digest=d.release_digest JOIN capability_releases rel ON rel.digest=t.release_digest AND rel.workspace_id=t.workspace_id WHERE r.workspace_id=? AND r.state='queued' AND r.mode='program' AND t.enabled=1 AND d.revoked_at IS NULL AND d.desired_state='running' AND d.observed_state='running' AND g.revoked_at IS NULL AND g.expires_at>? AND (SELECT count(*) FROM capability_trigger_runs active WHERE active.trigger_id=t.trigger_id AND active.state IN ('claimed','running','uncertain','waiting')) < CAST(json_extract(g.budget,'$.concurrency') AS INTEGER) ORDER BY r.created_at,r.trigger_run_id LIMIT ?`, workspace, now.Format(time.RFC3339Nano), triggerEventPageSize)
+func (s *Service) claimQueuedProgramTrigger(ctx context.Context, tx *sql.Tx, runner contracts.RunnerPrincipal, workspace string, now time.Time) (*contracts.CapabilityTriggerClaim, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT r.trigger_run_id,r.trigger_id,r.deployment_id,r.trigger_key,r.event_id,r.scheduled_for,r.event_payload,r.mode,t.release_digest,t.grant_id,t.scopes,d.service_id,d.config_ref,d.config_sha256,g.scope_kind,g.scope_id,g.principal_id,g.actions,g.budget,g.expires_at,rel.manifest FROM capability_trigger_runs r JOIN capability_trigger_definitions t ON t.trigger_id=r.trigger_id JOIN capability_deployments d ON d.deployment_id=r.deployment_id AND d.grant_id=t.grant_id AND d.release_digest=t.release_digest AND d.version=t.expected_deployment_version AND d.config_ref=t.config_ref AND d.config_sha256=t.config_sha256 JOIN capability_grants g ON g.grant_id=t.grant_id AND g.deployment_id=d.deployment_id AND g.release_digest=d.release_digest JOIN capability_releases rel ON rel.digest=t.release_digest AND rel.workspace_id=t.workspace_id WHERE r.workspace_id=? AND r.state='queued' AND r.mode='program' AND t.enabled=1 AND d.revoked_at IS NULL AND d.desired_state='running' AND d.observed_state='running' AND g.revoked_at IS NULL AND g.expires_at>? AND (SELECT count(*) FROM capability_trigger_runs active WHERE active.trigger_id=t.trigger_id AND active.state IN ('claimed','running','uncertain','waiting')) < CAST(json_extract(g.budget,'$.concurrency') AS INTEGER) ORDER BY r.created_at,r.trigger_run_id LIMIT ?`, workspace, now.Format(time.RFC3339Nano), s.limits.Int("capability_trigger_page_rows"))
 	if err != nil {
 		return nil, err
 	}
@@ -777,7 +775,7 @@ func claimQueuedProgramTrigger(ctx context.Context, tx *sql.Tx, runner contracts
 		if err := json.Unmarshal(item.scopesRaw, &scopes); err != nil {
 			return nil, err
 		}
-		if err := validateManifest(&manifest); err != nil {
+		if err := validateManifest(&manifest, s.limits); err != nil {
 			return nil, control.NewAPIError(500, "invalid_claim_snapshot", "trigger claim manifest failed immutable validation", nil)
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE capability_trigger_definitions SET fence_counter=fence_counter+1 WHERE trigger_id=?`, item.triggerID); err != nil {

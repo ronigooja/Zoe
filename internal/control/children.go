@@ -33,7 +33,7 @@ func (s *Server) handleChildProposal(w http.ResponseWriter, r *http.Request) {
 	req.Title = strings.TrimSpace(req.Title)
 	req.Goal = strings.TrimSpace(req.Goal)
 	req.ProfileID = strings.TrimSpace(req.ProfileID)
-	if req.ProposalID == "" || len(req.ProposalID) > 128 || req.Attempt == "" || len(req.Attempt) > 128 || req.Fence == 0 || req.Kind != "child_task" || req.Title == "" || req.Goal == "" || len(req.Title) > 300 || len(req.Goal) > 20000 || req.ProfileID == "" || len(req.ProfileID) > 128 {
+	if req.ProposalID == "" || len(req.ProposalID) > 128 || req.Attempt == "" || len(req.Attempt) > 128 || req.Fence == 0 || req.Kind != "child_task" || req.Title == "" || req.Goal == "" || len(req.Title) > 300 || len(req.Goal) > s.cfg.Limits.Int("task_text_max_bytes") || req.ProfileID == "" || len(req.ProfileID) > 128 {
 		writeError(w, apiError(http.StatusBadRequest, "invalid_request", "proposal_id, attempt, fence, child_task kind, title, goal, and profile_id are required", nil))
 		return
 	}

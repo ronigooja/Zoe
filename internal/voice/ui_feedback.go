@@ -12,7 +12,7 @@ type uiFeedback struct {
 }
 
 func (s *Service) dispatchUIFeedback(ctx context.Context) {
-	rows, err := s.db.QueryContext(ctx, `SELECT d.request_id,d.workspace_id,d.owner_subject_id,d.text,d.attempts FROM ui_feedback_deliveries d JOIN ui_requests r ON r.id=d.request_id WHERE d.status='pending' AND coalesce(d.next_attempt_at,'')<=? AND r.status IN ('failed','rendered') ORDER BY d.created_at,d.request_id LIMIT 25`, s.now().UTC().Format(time.RFC3339Nano))
+	rows, err := s.db.QueryContext(ctx, `SELECT d.request_id,d.workspace_id,d.owner_subject_id,d.text,d.attempts FROM ui_feedback_deliveries d JOIN ui_requests r ON r.id=d.request_id WHERE d.status='pending' AND coalesce(d.next_attempt_at,'')<=? AND r.status IN ('failed','rendered') ORDER BY d.created_at,d.request_id LIMIT ?`, s.now().UTC().Format(time.RFC3339Nano), s.limits.Int("voice_feedback_sweep_rows"))
 	if err != nil {
 		return
 	}
