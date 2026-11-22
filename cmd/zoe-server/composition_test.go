@@ -91,10 +91,3 @@ func TestComposedServerUsesWorkerOnlyMemoryAndRegistersExport(t *testing.T) {
 		}
 	}
 }
-
-func TestVoiceAccountMediaAdapterRequiresExplicitSecureGatewayConfiguration(t *testing.T) {
-	t.Setenv("ZOE_VOICE_ACCOUNT_MEDIA_ENABLED", "true")
-	if _, err := composeControlServer(nil, control.Config{}, voice.Config{}, capabilities.Config{}); err == nil {
-		t.Fatal("account media adapter enabled without a configured HTTPS gateway and deployment key")
-	}
-}

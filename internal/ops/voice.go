@@ -17,26 +17,24 @@ func WritePrivateFile(path string, data []byte) error {
 	return writeFileAtomicOwnedWithChown(path, data, 0600, memoryWorkerUID, memoryWorkerGID, ModelKeyChown, effectiveUID)
 }
 
-func WriteVoiceEnvAtomic(path, baseURL, secretPath string, accountMedia bool) error {
-	old, err := readEnv(path)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
+func WriteVoiceEnvAtomic(path, baseURL, secretPath string) error {
 	lines := []string{}
-	if b, e := os.ReadFile(path); e == nil {
+	if b, err := os.ReadFile(path); err == nil {
 		for _, line := range strings.Split(string(b), "\n") {
 			key, _, ok := strings.Cut(strings.TrimSpace(line), "=")
-			if ok && strings.HasPrefix(key, "ZOE_VOICE_") {
-				continue
+			if ok {
+				switch key {
+				case "ZOE_VOICE_GATEWAY_URL", "ZOE_VOICE_GATEWAY_API_KEY_FILE", "ZOE_VOICE_SECRET_MAP", "ZOE_VOICE_ACCOUNT_MEDIA_ENABLED":
+					continue
+				}
 			}
 			if strings.TrimSpace(line) != "" {
 				lines = append(lines, line)
 			}
 		}
+	} else if !os.IsNotExist(err) {
+		return err
 	}
-	if old == nil {
-		old = map[string]string{}
-	}
-	lines = append(lines, "ZOE_VOICE_GATEWAY_URL="+strconv.Quote(baseURL), "ZOE_VOICE_GATEWAY_API_KEY_FILE="+strconv.Quote(secretPath), "ZOE_VOICE_SECRET_MAP=,ZOE_VOICE_GATEWAY_API_KEY=/run/secrets/voice_gateway_api_key", "ZOE_VOICE_ACCOUNT_MEDIA_ENABLED="+strconv.Quote(strconv.FormatBool(accountMedia)))
+	lines = append(lines, "ZOE_VOICE_GATEWAY_URL="+strconv.Quote(baseURL), "ZOE_VOICE_GATEWAY_API_KEY_FILE="+strconv.Quote(secretPath), "ZOE_VOICE_SECRET_MAP=,ZOE_VOICE_GATEWAY_API_KEY=/run/secrets/voice_gateway_api_key")
 	return writeFileAtomic(path, []byte(strings.Join(lines, "\n")+"\n"), 0600)
 }

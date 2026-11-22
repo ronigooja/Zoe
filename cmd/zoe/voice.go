@@ -31,7 +31,6 @@ func voiceConfigureOperation(args []string, in io.Reader, out, errOut io.Writer)
 	tokenFile := fs.String("token-file", "", "read compatibility API key from a private file")
 	secretFile := fs.String("secret-file", "", "private destination for the API key")
 	nonInteractive := fs.Bool("non-interactive", false, "require URL and token without prompting")
-	enableMedia := fs.Bool("enable-account-media", false, "enable experimental account lease integration")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -96,10 +95,10 @@ func voiceConfigureOperation(args []string, in io.Reader, out, errOut io.Writer)
 	if err = ops.WritePrivateFile(*secretFile, []byte(value+"\n")); err != nil {
 		return err
 	}
-	if err = ops.WriteVoiceEnvAtomic(d.StackEnv, *base, *secretFile, *enableMedia); err != nil {
+	if err = ops.WriteVoiceEnvAtomic(d.StackEnv, *base, *secretFile); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Voice gateway configuration saved. URL: %s\nAPI key file: %s\nAccount media: %t\n", *base, *secretFile, *enableMedia)
+	fmt.Fprintf(out, "Voice gateway configuration saved. URL: %s\nAPI key file: %s\n", *base, *secretFile)
 	// The Compose service is zoe-server; zoe-runner.service is a systemd
 	// unit and is not a valid Compose target. Systemd supervises this Compose
 	// stack, so the same reload is required in both deployment modes.
@@ -173,7 +172,7 @@ func voiceStatusOperation(args []string, _ io.Reader, out, errOut io.Writer) err
 	}
 	path := v["ZOE_VOICE_GATEWAY_API_KEY_FILE"]
 	info, statErr := os.Stat(path)
-	fmt.Fprintf(out, "Voice gateway URL: %s\nAPI key configured: %t\nAPI key file: %s\nAccount media: %s\n", v["ZOE_VOICE_GATEWAY_URL"], statErr == nil && info.Mode().Perm()&0077 == 0, path, v["ZOE_VOICE_ACCOUNT_MEDIA_ENABLED"])
+	fmt.Fprintf(out, "Voice gateway URL: %s\nAPI key configured: %t\nAPI key file: %s\nGateway dial origin configured: %t\n", v["ZOE_VOICE_GATEWAY_URL"], statErr == nil && info.Mode().Perm()&0077 == 0, path, v["ZOE_VOICE_GATEWAY_DIAL_ORIGIN"] != "")
 	return nil
 }
 

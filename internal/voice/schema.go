@@ -279,8 +279,22 @@ ALTER TABLE ui_requests RENAME COLUMN voice_input TO chat_input;`)
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 208, Name: "opening_result_reservations", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 208, Name: "opening_result_reservations", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, openingResultSchema)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 210, Name: "gateway_call_lifecycle", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN lifecycle_runner_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE voice_sessions ADD COLUMN call_start_response BLOB NOT NULL DEFAULT '';
+ALTER TABLE voice_sessions ADD COLUMN call_established_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE voice_sessions ADD COLUMN call_ended_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE voice_sessions ADD COLUMN call_closed_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE voice_sessions ADD COLUMN call_end_evidence_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE voice_account_terminations ADD COLUMN gateway_evidence BLOB NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX voice_lifecycle_gateway_binding ON voice_sessions(gateway_session_id, gateway_media_generation)
+WHERE lifecycle_runner_id<>'' AND gateway_session_id<>'';`)
 		return err
 	}})
 }

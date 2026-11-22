@@ -70,6 +70,9 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 	after := snapshot()
 	baseline := make(map[string][]string, len(after))
 	for name, obj := range after {
+		if name == "voice_lifecycle_gateway_binding" {
+			continue
+		}
 		if obj[2] == "voice_context_events" || obj[2] == "voice_result_opening" || name == "voice_result_opening_release_terminal" {
 			continue
 		}
@@ -77,6 +80,14 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 			continue
 		}
 		copyObj := append([]string(nil), obj...)
+		if name == "voice_sessions" {
+			for _, definition := range []string{"lifecycle_runner_id TEXT", "call_start_response BLOB", "call_established_hash TEXT", "call_ended_reason TEXT", "call_closed_at TEXT", "call_end_evidence_hash TEXT"} {
+				copyObj[3] = strings.Replace(copyObj[3], ", "+definition+" NOT NULL DEFAULT ''", "", 1)
+			}
+		}
+		if name == "voice_account_terminations" {
+			copyObj[3] = strings.Replace(copyObj[3], ", gateway_evidence BLOB NOT NULL DEFAULT ''", "", 1)
+		}
 		if name == "voice_context_registers" {
 			copyObj[3] = strings.Replace(copyObj[3], ", event_watermark INTEGER NOT NULL DEFAULT 0", "", 1)
 		}
@@ -103,7 +114,7 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 		t.Fatalf("voice-owned schema differs from reference: got=%v want=%v", owned, reference.Objects)
 	}
 	for table, want := range reference.Columns {
-		rows, err := store.DB().Query(`SELECT name,type,"notnull",dflt_value,pk FROM pragma_table_info(?) WHERE NOT (?='ui_requests' AND name='chat_input') AND NOT (?='tasks' AND name='summary_result') AND NOT (?='voice_context_registers' AND name='event_watermark') ORDER BY cid`, table, table, table, table)
+		rows, err := store.DB().Query(`SELECT name,type,"notnull",dflt_value,pk FROM pragma_table_info(?) WHERE NOT (?='ui_requests' AND name='chat_input') AND NOT (?='tasks' AND name='summary_result') AND NOT (?='voice_context_registers' AND name='event_watermark') AND NOT (?='voice_sessions' AND name IN ('lifecycle_runner_id','call_start_response','call_established_hash','call_ended_reason','call_closed_at','call_end_evidence_hash')) AND NOT (?='voice_account_terminations' AND name='gateway_evidence') ORDER BY cid`, table, table, table, table, table, table)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,7 +143,7 @@ func TestVoiceBaselineSchemaMatchesReference(t *testing.T) {
 		}
 	}
 	var version, count int
-	if err = store.DB().QueryRow(`SELECT max(version),count(*) FROM schema_migrations WHERE namespace='voice'`).Scan(&version, &count); err != nil || version != 208 || count != 9 {
+	if err = store.DB().QueryRow(`SELECT max(version),count(*) FROM schema_migrations WHERE namespace='voice'`).Scan(&version, &count); err != nil || version != 210 || count != 10 {
 		t.Fatalf("voice receipt=%d/%d err=%v", version, count, err)
 	}
 	var changesBefore, changesAfter int

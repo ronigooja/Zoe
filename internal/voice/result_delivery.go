@@ -30,7 +30,7 @@ func (s *Service) resultDispatcher() {
 			s.consumeResultEvents(s.recallCtx)
 			s.dispatchResults(s.recallCtx)
 			s.dispatchFastReplies(s.recallCtx)
-		case <-s.reaperStop:
+		case <-s.recallCtx.Done():
 			return
 		}
 	}

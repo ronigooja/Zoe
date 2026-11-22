@@ -18,7 +18,6 @@ import (
 func TestComposedReceiptSchedulerIndependentOfAccountMediaAndRegister(t *testing.T) {
 	for _, mode := range []string{"supported", "unsupported", "no_gateway"} {
 		t.Run(mode, func(t *testing.T) {
-			t.Setenv("ZOE_VOICE_ACCOUNT_MEDIA_ENABLED", "false")
 			var probes, sends atomic.Int32
 			gw := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "Bearer owner-key" {

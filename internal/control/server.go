@@ -653,11 +653,19 @@ func decodeJSON(r *http.Request, dst any) error {
 func requestLimit(max int64, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, max)
+			limit := max
+			if r.Method == http.MethodPost && r.URL.Path == "/runner/v1/voice/calls" {
+				// The voice limit is on the decoded SDP; JSON can use six bytes
+				// per escaped character. The handler enforces the decoded limit.
+				limit = maxCallStartJSONBytes
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+const maxCallStartJSONBytes = 6*(1<<20) + 16_384
 
 func jsonMarshal(v any) ([]byte, error)   { return json.Marshal(v) }
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }

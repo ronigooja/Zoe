@@ -3,7 +3,6 @@ package voice
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -38,14 +37,12 @@ type Config struct {
 	UIControllerInstruction string
 	IngestEnabled           bool
 	GatewayURL              string
+	GatewayDialOrigin       string
 	GatewayAPIKey           string
 	HTTPClient              *http.Client
 	MaxOfferBytes           int64
-	AccountMediaLifecycle   AccountMediaLifecycle
-	HeartbeatTimeout        time.Duration
 	Now                     func() time.Time
 	OpeningContextBudget    int
-	ContextCharBudget       int
 	// UpstreamRoute accepts only empty or avas; retained to reject legacy configuration.
 	UpstreamRoute          string
 	ResultDeliveryEnabled  bool
@@ -75,14 +72,12 @@ type Service struct {
 	resultCapability       *gatewayResultCapability
 	db                     *sql.DB
 	base                   *url.URL
+	dialOrigin             string
 	key                    string
 	client                 *http.Client
 	maxSDP                 int64
-	accountMedia           AccountMediaLifecycle
-	heartbeatTimeout       time.Duration
 	now                    func() time.Time
 	openingBudget          int
-	contextCharBudget      int
 	resultDeliveryEnabled  bool
 	resultDeliveryInterval time.Duration
 	steward                TaskSteward
@@ -102,8 +97,6 @@ type Service struct {
 	started                bool
 	stopped                bool
 	workers                sync.WaitGroup
-	reaperStop             chan struct{}
-	reaperDone             chan struct{}
 }
 
 type gatewayRequestIDContextKey struct{}
@@ -125,38 +118,9 @@ type createRequest struct {
 }
 
 type sessionResponse struct {
-	SessionID               string `json:"voice_session_id"`
-	Generation              int64  `json:"generation"`
-	State                   string `json:"state"`
-	AnswerSDP               string `json:"answer_sdp,omitempty"`
-	AccountLeaseID          string `json:"account_lease_id,omitempty"`
-	AccountLeaseGeneration  int64  `json:"account_lease_generation,omitempty"`
-	AccountLeaseAccountHash []byte `json:"-"`
-	OpeningContextDelivery  string `json:"opening_context_delivery,omitempty"`
-	OpeningContextVersion   int    `json:"opening_context_version,omitempty"`
-	OpeningContextChars     int    `json:"opening_context_chars,omitempty"`
-	GatewayContextChars     int    `json:"gateway_context_chars,omitempty"`
-}
-
-type gatewaySessionRequest struct {
-	OfferSDP       string          `json:"offer_sdp"`
-	VoiceSessionID string          `json:"voice_session_id,omitempty"`
-	Voice          string          `json:"voice,omitempty"`
-	VoiceMode      string          `json:"voice_mode,omitempty"`
-	LanguageCode   string          `json:"language_code,omitempty"`
-	OpeningContext *openingContext `json:"opening_context,omitempty"`
-	Instructions   string          `json:"instructions,omitempty"`
-}
-
-type gatewaySessionResponse struct {
-	AnswerSDP              string                `json:"answer_sdp"`
-	VoiceSessionID         string                `json:"voice_session_id"`
-	VoiceSessionGeneration int64                 `json:"voice_session_generation,omitempty"`
-	AccountLeaseID         string                `json:"account_lease_id,omitempty"`
-	AccountLeaseGeneration int64                 `json:"account_lease_generation,omitempty"`
-	AccountID              string                `json:"account_id,omitempty"`
-	ContextChars           int                   `json:"context_chars,omitempty"`
-	OpeningContext         *openingContextResult `json:"opening_context,omitempty"`
+	SessionID  string `json:"voice_session_id"`
+	Generation int64  `json:"generation"`
+	State      string `json:"state"`
 }
 
 type gatewayOutcomeResponse struct {
@@ -190,7 +154,6 @@ type openingContextResult struct {
 	Applied     bool   `json:"applied"`
 	Version     int    `json:"version,omitempty"`
 	Silent      any    `json:"silent,omitempty"`
-	Supported   *bool  `json:"supported,omitempty"`
 }
 
 func openingCharsFor(c *openingContext) int {
@@ -267,12 +230,10 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 	if err := server.RegisterTaskSourceHandler("voice", svc.admitVoiceTask); err != nil {
 		return err
 	}
-	if err := server.RegisterCommand("voice.pool.reconcile", svc.commandReconcilePool); err != nil {
-		return err
-	}
 	if cfg.IngestEnabled {
 		if err := server.RegisterRunnerRoutes(func(mux *http.ServeMux) {
 			mux.HandleFunc("POST /runner/v1/voice/turns", svc.handleTranscript)
+			svc.registerCallRoutes(mux)
 		}); err != nil {
 			return err
 		}
@@ -282,11 +243,7 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 		mux.HandleFunc("GET /v1/ui/snapshot", svc.handleUISnapshot)
 		mux.HandleFunc("GET /v1/voice/pool/status", svc.handlePoolStatus)
 		mux.HandleFunc("GET /v1/voice/config", svc.handleVoiceConfig)
-		mux.HandleFunc("POST /v1/voice/sessions", svc.handleCreate)
 		mux.HandleFunc("GET /v1/voice/sessions/{session_id}", svc.handleReadSession)
-		mux.HandleFunc("POST /v1/voice/sessions/{session_id}/connected", svc.handleConnected)
-		mux.HandleFunc("POST /v1/voice/sessions/{session_id}/heartbeat", svc.handleHeartbeat)
-		mux.HandleFunc("POST /v1/voice/sessions/{session_id}/hangup", svc.handleHangup)
 		mux.HandleFunc("GET /v1/voice/sessions/{session_id}/turns", svc.handleTurns)
 		mux.HandleFunc("GET /v1/voice/sessions/{session_id}/receipts", svc.handleReceipts)
 	})
@@ -301,18 +258,11 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if client == nil {
 		client = &http.Client{Timeout: 25 * time.Second}
 	}
-	if cfg.MaxOfferBytes <= 0 {
+	clientCopy := *client
+	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	client = &clientCopy
+	if cfg.MaxOfferBytes <= 0 || cfg.MaxOfferBytes > 1<<20 {
 		cfg.MaxOfferBytes = 1 << 20
-	}
-	timeout := cfg.HeartbeatTimeout
-	if timeout == 0 {
-		timeout = 60 * time.Second
-	}
-	if timeout < 30*time.Second {
-		timeout = 30 * time.Second
-	}
-	if timeout > 600*time.Second {
-		timeout = 600 * time.Second
 	}
 	now := cfg.Now
 	if now == nil {
@@ -322,16 +272,13 @@ func newService(db *sql.DB, cfg Config) *Service {
 	if budget <= 0 {
 		budget = 8000
 	}
-	contextBudget := cfg.ContextCharBudget
-	if contextBudget <= 0 {
-		contextBudget = 12000
-	}
 	interval := cfg.ResultDeliveryInterval
 	if interval <= 0 {
 		interval = time.Second
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	s := &Service{resultReceiptAdapter: cfg.ResultDelivery.ReceiptAdapter, db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, accountMedia: cfg.AccountMediaLifecycle, heartbeatTimeout: timeout, now: now, openingBudget: budget, contextCharBudget: contextBudget, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, uiControllerMaxRetries: cfg.UIControllerMaxRetries, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit), reaperStop: make(chan struct{}), reaperDone: make(chan struct{})}
+	s := &Service{resultReceiptAdapter: cfg.ResultDelivery.ReceiptAdapter, db: db, base: base, key: cfg.GatewayAPIKey, client: client, maxSDP: cfg.MaxOfferBytes, now: now, openingBudget: budget, resultDeliveryEnabled: cfg.ResultDeliveryEnabled, resultDeliveryInterval: interval, register: cfg.ContextRegister, steward: cfg.Steward, uiController: cfg.UIController, uiControllerMaxRetries: cfg.UIControllerMaxRetries, recall: cfg, recallCtx: workerCtx, recallCancel: workerCancel, recallSlots: make(chan struct{}, recallWorkerLimit)}
+	s.dialOrigin = validDialOrigin(cfg.GatewayDialOrigin)
 	if cfg.DiscoverResultReceipts && s.gatewayReady() && s.resultReceiptAdapter == nil {
 		s.resultCapability = &gatewayResultCapability{adapter: NewGatewayResultReceiptAdapter(s)}
 	}
@@ -339,38 +286,6 @@ func newService(db *sql.DB, cfg Config) *Service {
 		s.resultDeliveryEnabled = true
 	}
 	return s
-}
-
-func (s *Service) rotateIfOverBudget(ctx context.Context, p contracts.Principal) error {
-	if s.contextCharBudget <= 0 {
-		return nil
-	}
-	var id, gatewayID, state string
-	var generation int64
-	var chars int
-	err := s.db.QueryRowContext(ctx, `SELECT id,gateway_session_id,state,generation,gateway_context_chars FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND state='active'`, p.WorkspaceID, p.SubjectID).Scan(&id, &gatewayID, &state, &generation, &chars)
-	if errors.Is(err, sql.ErrNoRows) || chars <= s.contextCharBudget {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if gatewayID == "" {
-		return apiError(http.StatusConflict, "voice_outcome_unknown", "over-budget voice session has no gateway binding", nil)
-	}
-	response, _, err := s.callGateway(ctx, http.MethodDelete, "/v1/voice/sessions/"+url.PathEscape(gatewayID), nil)
-	if err != nil {
-		return apiError(http.StatusServiceUnavailable, "voice_outcome_unknown", "voice rotation outcome is unknown", nil)
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return apiError(http.StatusServiceUnavailable, "voice_outcome_unknown", "voice rotation was not confirmed", nil)
-	}
-	_, err = s.db.ExecContext(ctx, `UPDATE voice_sessions SET state='ended',gateway_unbound=1,offer_answer='',ended_at=?,updated_at=? WHERE id=? AND generation=? AND state='active'`, s.now().UTC().Format(time.RFC3339Nano), s.now().UTC().Format(time.RFC3339Nano), id, generation)
-	if err == nil {
-		_, err = s.db.ExecContext(ctx, `UPDATE voice_pool_state SET blocked=0,reason_code='',source_session_id='',updated_at=?,updated_by='context_rotation' WHERE id=1 AND source_session_id=?`, s.now().UTC().Format(time.RFC3339Nano), id)
-	}
-	return err
 }
 
 func (s *Service) Start() {
@@ -389,8 +304,10 @@ func (s *Service) Start() {
 		s.register.Start(s.recallCtx)
 	}
 	s.recoverRecall(s.recallCtx, true)
-	s.workers.Add(1)
-	go func() { defer s.workers.Done(); s.reaper() }()
+	if s.gatewayReady() {
+		s.workers.Add(1)
+		go func() { defer s.workers.Done(); s.reconcileCallsLoop(s.recallCtx) }()
+	}
 	if s.resultDeliveryEnabled || s.register != nil {
 		s.workers.Add(1)
 		go func() { defer s.workers.Done(); s.resultDispatcher() }()
@@ -402,28 +319,12 @@ func (s *Service) Stop() {
 	if !s.stopped {
 		s.stopped = true
 		s.recallCancel()
-		close(s.reaperStop)
 	}
 	s.lifecycleMu.Unlock()
 	if s.register != nil {
 		s.register.Stop()
 	}
 	s.workers.Wait()
-}
-
-func (s *Service) reaper() {
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	defer close(s.reaperDone)
-	for {
-		select {
-		case <-s.reaperStop:
-			return
-		case <-ticker.C:
-			s.reapStale(context.Background())
-			s.attestStaleCreates(context.Background())
-		}
-	}
 }
 
 func (s *Service) queryGatewayOutcome(ctx context.Context, requestID string) gatewayCreationOutcome {
@@ -510,69 +411,23 @@ func (s *Service) attestStaleCreates(ctx context.Context) {
 		return
 	}
 	for _, c := range candidates {
-		if outcome := s.queryGatewayOutcome(ctx, c.requestID); outcome.recoverable() {
+		outcome := s.queryGatewayOutcome(ctx, c.requestID)
+		if outcome.recoverable() {
 			if err := s.resolveGatewayCreateOutcome(ctx, c.id, c.generation, c.state, c.requestID, outcome); err != nil {
 				logging.Errorf("voice gateway attestation resolution failed for session %s: %T", c.id, err)
 			}
-		}
-	}
-}
-
-func (s *Service) reapStale(ctx context.Context) {
-	cutoff := s.now().UTC().Add(-s.heartbeatTimeout)
-	cutoffValue := cutoff.Format("2006-01-02T15:04:05.000000000Z")
-	// julianday parses RFC3339 fractional seconds numerically; a text comparison
-	// is incorrect because RFC3339Nano trims trailing fractional zeroes.
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM voice_sessions WHERE state='active' AND julianday(COALESCE(heartbeat_at,created_at,updated_at)) < julianday(?)`, cutoffValue)
-	if err != nil {
-		logging.Errorf("voice reaper query failed: %T", err)
-		return
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			continue
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Close(); err != nil {
-		logging.Errorf("voice reaper rows close failed: %T", err)
-		return
-	}
-	for _, id := range ids {
-		claim, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET state='ending',updated_at=? WHERE id=? AND state='active' AND julianday(COALESCE(heartbeat_at,created_at,updated_at)) < julianday(?)`, s.now().UTC().Format(time.RFC3339Nano), id, cutoffValue)
-		if err != nil {
-			logging.Errorf("voice reaper claim failed: %T", err)
-			continue
-		}
-		changed, _ := claim.RowsAffected()
-		if changed != 1 {
-			continue
-		}
-		var gatewayID, accountLeaseID, workspaceID, ownerID string
-		var generation, accountLeaseGeneration, gatewayMediaGeneration int64
-		var gatewayUnbound, gatewayUnbindUnknown int
-		if err := s.db.QueryRowContext(ctx, `SELECT workspace_id,owner_id,gateway_session_id,generation,account_lease_id,account_lease_generation,gateway_media_generation,gateway_unbound,gateway_unbind_unknown FROM voice_sessions WHERE id=? AND state='ending'`, id).Scan(&workspaceID, &ownerID, &gatewayID, &generation, &accountLeaseID, &accountLeaseGeneration, &gatewayMediaGeneration, &gatewayUnbound, &gatewayUnbindUnknown); err != nil {
-			logging.Errorf("voice reaper load failed: %T", err)
-			continue
-		}
-		if gatewayID == "" {
-			if err := s.markSession(ctx, id, generation, "ending", "quarantined", "gateway_session_unbound", nil, ""); err != nil {
-				logging.Errorf("voice reaper quarantine failed for session %s: %T", id, err)
+		} else if ctx.Err() == nil {
+			kind := outcome.Outcome
+			if kind == "" {
+				kind = "unknown"
 			}
-			continue
-		}
-		// Missing heartbeat implies the client stopped its local media, so media_closed is trusted for this system reclaim.
-		_, _, _, err = s.releaseSession(ctx, contracts.Principal{WorkspaceID: workspaceID, SubjectID: ownerID}, id, generation, gatewayID, accountLeaseID, accountLeaseGeneration, gatewayMediaGeneration, gatewayUnbound, gatewayUnbindUnknown, true)
-		if err != nil {
-			logging.Errorf("voice reaper release failed for session %s: %T", id, err)
+			logging.Errorf("voice session %s establishment unresolved: outcome=%s", c.id, kind)
 		}
 	}
 }
 
 func (s *Service) gatewayReady() bool {
-	return s.base != nil && s.base.Host != "" && s.base.User == nil && s.base.RawQuery == "" && s.base.Fragment == "" && s.base.Scheme == "https" && strings.TrimSpace(s.key) != ""
+	return s.base != nil && s.base.Hostname() != "" && s.base.User == nil && s.base.RawQuery == "" && !s.base.ForceQuery && s.base.Fragment == "" && s.base.Scheme == "https" && strings.TrimSpace(s.key) != ""
 }
 
 func (s *Service) callGateway(ctx context.Context, method, endpoint string, body []byte) (*http.Response, string, error) {
@@ -580,7 +435,14 @@ func (s *Service) callGateway(ctx context.Context, method, endpoint string, body
 		return nil, "", errors.New("Space voice gateway is not configured")
 	}
 	u := *s.base
-	u.Path = strings.TrimRight(s.base.Path, "/") + endpoint
+	path, query, _ := strings.Cut(endpoint, "?")
+	u.RawPath = strings.TrimRight(s.base.EscapedPath(), "/") + path
+	var err error
+	u.Path, err = url.PathUnescape(u.RawPath)
+	if err != nil {
+		return nil, "", err
+	}
+	u.RawQuery = query
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -600,196 +462,6 @@ func (s *Service) callGateway(ctx context.Context, method, endpoint string, body
 	}
 	response, err := s.client.Do(req)
 	return response, requestID, err
-}
-
-func (s *Service) create(ctx context.Context, p contracts.Principal, req createRequest) (sessionResponse, error) {
-	if !s.gatewayReady() {
-		return sessionResponse{}, apiError(http.StatusServiceUnavailable, "voice_unavailable", "Space voice gateway is not configured", nil)
-	}
-	if p.WorkspaceID == "" || p.SubjectID == "" || p.DeviceID == "" {
-		return sessionResponse{}, apiError(http.StatusUnauthorized, "unauthenticated", "authenticated workspace, subject, and device are required", nil)
-	}
-	if strings.TrimSpace(req.RequestID) == "" || strings.TrimSpace(req.OfferSDP) == "" || int64(len(req.OfferSDP)) > s.maxSDP {
-		return sessionResponse{}, apiError(http.StatusBadRequest, "invalid_request", "request_id and a bounded offer_sdp are required", nil)
-	}
-	if req.VoiceMode != "" && req.VoiceMode != "primary_assistant" && req.VoiceMode != "wingman" {
-		return sessionResponse{}, apiError(http.StatusBadRequest, "invalid_request", "unsupported voice_mode", nil)
-	}
-	if err := s.rotateIfOverBudget(ctx, p); err != nil {
-		return sessionResponse{}, err
-	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return sessionResponse{}, err
-	}
-	hash := sha256.Sum256(body)
-	var id, state, gatewayID, accountLeaseID string
-	var generation int64
-	var accountLeaseGeneration int64
-	var gatewayMediaGeneration, gatewayContextChars int64
-	var openingDelivery string
-	var openingVersion, openingChars int
-	var accountLeaseAccountHash []byte
-	var answer []byte
-	var existingHash []byte
-	err = s.db.QueryRowContext(ctx, `SELECT id,generation,state,gateway_session_id,offer_answer,request_hash,account_lease_id,account_lease_generation,account_id_hash,gateway_media_generation,opening_context_delivery,opening_context_version,opening_context_chars,gateway_context_chars FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND request_id=?`, p.WorkspaceID, p.SubjectID, req.RequestID).
-		Scan(&id, &generation, &state, &gatewayID, &answer, &existingHash, &accountLeaseID, &accountLeaseGeneration, &accountLeaseAccountHash, &gatewayMediaGeneration, &openingDelivery, &openingVersion, &openingChars, &gatewayContextChars)
-	if err == nil {
-		if !bytes.Equal(existingHash, hash[:]) {
-			return sessionResponse{}, apiError(http.StatusConflict, "idempotency_conflict", "request_id was already used with different session input", nil)
-		}
-		if state != "active" {
-			return sessionResponse{}, apiError(http.StatusConflict, "voice_outcome_unknown", "the prior media negotiation is unresolved; start a new session only after quarantining this lease", nil)
-		}
-		if len(answer) == 0 {
-			return sessionResponse{}, apiError(http.StatusConflict, "voice_request_already_bound", "this media generation was already acknowledged; read its session state", nil)
-		}
-		var saved gatewaySessionResponse
-		if err := json.Unmarshal(answer, &saved); err != nil {
-			return sessionResponse{}, err
-		}
-		return sessionResponse{SessionID: id, Generation: generation, State: state, AnswerSDP: saved.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, OpeningContextDelivery: openingDelivery, OpeningContextVersion: openingVersion, OpeningContextChars: openingChars, GatewayContextChars: int(gatewayContextChars)}, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return sessionResponse{}, err
-	}
-	if err := s.recoverQuarantinedCreate(ctx); err != nil {
-		return sessionResponse{}, err
-	}
-	id = uuid.NewString()
-	gatewayRequestID := uuid.NewString()
-	registerText := s.openingRegisterText(ctx, p)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return sessionResponse{}, err
-	}
-	defer tx.Rollback()
-	var blocked int
-	if err := tx.QueryRowContext(ctx, `SELECT blocked FROM voice_pool_state WHERE id=1`).Scan(&blocked); err != nil {
-		return sessionResponse{}, err
-	}
-	if blocked != 0 {
-		return sessionResponse{}, apiError(http.StatusServiceUnavailable, "voice_pool_quarantined", "Space account pool is blocked pending operator reconciliation", nil)
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,gateway_request_id,generation,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,'allocating',?,?)`, id, p.WorkspaceID, p.SubjectID, p.DeviceID, req.RequestID, hash[:], gatewayRequestID, now, now); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			return sessionResponse{}, apiError(http.StatusConflict, "voice_lease_busy", "another voice media generation is active or awaiting negotiation for this user", nil)
-		}
-		return sessionResponse{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE voice_pool_state SET blocked=1,reason_code='negotiation_in_progress',source_session_id=?,updated_at=?,updated_by='system' WHERE id=1`, id, now); err != nil {
-		return sessionResponse{}, err
-	}
-	opening, err := s.buildAVASOpeningContext(ctx, tx, p, id, registerText, s.now().UTC().Format(time.RFC3339Nano))
-	if err != nil {
-		return sessionResponse{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return sessionResponse{}, err
-	}
-	// The gateway owns account selection and returns only its opaque sticky
-	// session handle. Zoe never receives or records an account credential/id.
-	instructions := s.recall.InstructionText
-	gatewayBody, _ := json.Marshal(gatewaySessionRequest{OfferSDP: req.OfferSDP, Voice: req.Voice, VoiceMode: req.VoiceMode, LanguageCode: req.LanguageCode, OpeningContext: opening, Instructions: instructions})
-	response, _, callErr := s.callGateway(withGatewayRequestID(ctx, gatewayRequestID), http.MethodPost, "/v1/voice/sessions", gatewayBody)
-	if callErr != nil {
-		return sessionResponse{}, s.failedGatewayCreate(ctx, id, gatewayRequestID)
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		code := "gateway_rejected"
-		state := "failed"
-		if response.StatusCode >= 500 || response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests {
-			code, state = "gateway_outcome_unknown", "quarantined"
-		}
-		if state == "quarantined" {
-			return sessionResponse{}, s.failedGatewayCreate(ctx, id, gatewayRequestID)
-		}
-		_ = s.markSession(context.WithoutCancel(ctx), id, 1, "allocating", state, code, nil, "")
-		return sessionResponse{}, apiError(http.StatusBadGateway, "voice_gateway_rejected", "Space gateway rejected media negotiation", map[string]any{"status": response.StatusCode, "request_id": gatewayRequestID})
-	}
-	var upstream gatewaySessionResponse
-	if err := json.NewDecoder(io.LimitReader(response.Body, s.maxSDP*2)).Decode(&upstream); err != nil || strings.TrimSpace(upstream.AnswerSDP) == "" || strings.TrimSpace(upstream.VoiceSessionID) == "" {
-		_ = s.markSession(ctx, id, 1, "allocating", "quarantined", "gateway_response_invalid", nil, "")
-		return sessionResponse{}, apiError(http.StatusBadGateway, "voice_outcome_unknown", "Space gateway response is incomplete; media lease quarantined", nil)
-	}
-	if upstream.VoiceSessionGeneration < 0 {
-		_ = s.markSession(ctx, id, 1, "allocating", "quarantined", "gateway_media_generation_invalid", nil, "")
-		return sessionResponse{}, apiError(http.StatusBadGateway, "voice_outcome_unknown", "Space gateway returned an invalid media generation; media lease quarantined", nil)
-	}
-	openingDelivery = "unverified"
-	openingVersion = opening.Version
-	openingChars = openingCharsFor(opening)
-	if strictOpeningReceipt(opening, upstream.OpeningContext) {
-		openingDelivery = "delivered"
-	} else if upstream.OpeningContext != nil && upstream.OpeningContext.Supported != nil && !*upstream.OpeningContext.Supported {
-		openingDelivery = "unsupported"
-	}
-	// The gateway's account ID is sensitive correlation data. Persist only the
-	// answer and opaque lease identity; the account ID is hashed below.
-	answerJSON, _ := json.Marshal(struct {
-		AnswerSDP string `json:"answer_sdp"`
-	}{AnswerSDP: upstream.AnswerSDP})
-	if err := s.markSessionWith(ctx, id, 1, "allocating", "active", "", answerJSON, upstream.VoiceSessionID, func(tx *sql.Tx) error {
-		if err := s.acknowledgeOpeningResults(ctx, tx, p, id, opening, upstream.OpeningContext); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, `UPDATE voice_sessions SET opening_context_delivery=?,gateway_context_chars=? WHERE id=?`, openingDelivery, upstream.ContextChars, id)
-		return err
-	}); err != nil {
-		// The gateway created a session, but Zoe could not durably bind it. Keep
-		// the allocating lease; do not free a potentially live media resource.
-		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_outcome_unknown", "media was negotiated but its durable binding failed; lease remains isolated", nil)
-	}
-	// The Space gateway intentionally keeps account_id server-side. Its
-	// downstream contract exposes only the opaque lease identity and
-	// generation, which are sufficient for an exact release request.
-	leaseProvided := upstream.AccountLeaseID != "" || upstream.AccountLeaseGeneration != 0
-	if leaseProvided {
-		if strings.TrimSpace(upstream.AccountLeaseID) == "" || len(upstream.AccountLeaseID) > 512 || strings.TrimSpace(upstream.AccountLeaseID) != upstream.AccountLeaseID || upstream.AccountLeaseGeneration < 1 {
-			_ = s.markSession(ctx, id, 1, "active", "quarantined", "gateway_account_lease_invalid", nil, "")
-			return sessionResponse{}, apiError(http.StatusBadGateway, "voice_outcome_unknown", "Space gateway returned an incomplete account lease identity; media lease quarantined", nil)
-		}
-		accountHash := []byte{}
-		if strings.TrimSpace(upstream.AccountID) != "" && len(upstream.AccountID) <= 256 && strings.TrimSpace(upstream.AccountID) == upstream.AccountID {
-			hash := sha256.Sum256([]byte(upstream.AccountID))
-			accountHash = hash[:]
-		}
-		if _, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET account_lease_id=?,account_lease_generation=?,account_id_hash=?,gateway_media_generation=? WHERE id=? AND state='active'`, upstream.AccountLeaseID, upstream.AccountLeaseGeneration, accountHash, upstream.VoiceSessionGeneration, id); err != nil {
-			// The upstream media exists but its account lease identity is not durably bound.
-			// Keep the owner pool fenced; a future hangup cannot claim account-scoped release.
-			return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_outcome_unknown", "media lease identity could not be durably bound; account pool remains isolated", nil)
-		}
-		accountLeaseID, accountLeaseGeneration, accountLeaseAccountHash = upstream.AccountLeaseID, upstream.AccountLeaseGeneration, accountHash
-	} else if _, err := s.db.ExecContext(ctx, `UPDATE voice_sessions SET gateway_media_generation=? WHERE id=? AND state='active'`, upstream.VoiceSessionGeneration, id); err != nil {
-		return sessionResponse{}, apiError(http.StatusInternalServerError, "voice_outcome_unknown", "media generation could not be durably bound; account pool remains isolated", nil)
-	}
-	return sessionResponse{SessionID: id, Generation: 1, State: "active", AnswerSDP: upstream.AnswerSDP, AccountLeaseID: accountLeaseID, AccountLeaseGeneration: accountLeaseGeneration, AccountLeaseAccountHash: accountLeaseAccountHash, OpeningContextDelivery: openingDelivery, OpeningContextVersion: openingVersion, OpeningContextChars: openingChars, GatewayContextChars: upstream.ContextChars}, nil
-}
-
-// failedGatewayCreate applies only to uncertain create failures. Persist recovery
-// independently of the client connection; a disconnected client must not strand
-// an allocating lease after the gateway proves non-establishment or local closure.
-func (s *Service) failedGatewayCreate(ctx context.Context, sessionID, requestID string) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	if err := s.markSession(ctx, sessionID, 1, "allocating", "quarantined", "gateway_outcome_unknown", nil, ""); err != nil {
-		return err
-	}
-	if outcome := s.queryGatewayOutcome(ctx, requestID); outcome.recoverable() {
-		if err := s.resolveGatewayCreateOutcome(ctx, sessionID, 1, "quarantined", requestID, outcome); err != nil {
-			return err
-		}
-		var state, code string
-		if err := s.db.QueryRowContext(ctx, `SELECT state,last_error_code FROM voice_sessions WHERE id=?`, sessionID).Scan(&state, &code); err != nil {
-			return err
-		}
-		if state == "failed" && (code == "gateway_never_established" || code == "gateway_negotiation_released") {
-			return apiError(http.StatusServiceUnavailable, "voice_gateway_negotiation_failed", "Space gateway confirmed negotiation failed without an active local relay; retry with a new request_id", map[string]any{"request_id": requestID})
-		}
-	}
-	return apiError(http.StatusServiceUnavailable, "voice_outcome_unknown", "Space gateway outcome is unknown; media lease quarantined", map[string]any{"request_id": requestID})
 }
 
 // recoverQuarantinedCreate applies only to the pool's unresolved, unbound create
@@ -850,7 +522,7 @@ func (s *Service) resolveGatewayCreateOutcome(ctx context.Context, sessionID str
 	}
 	defer tx.Rollback()
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	result, err := tx.ExecContext(ctx, `UPDATE voice_sessions SET state='failed',last_error_code=?,updated_at=? WHERE id=? AND generation=? AND state=? AND gateway_session_id='' AND gateway_request_id=? AND last_error_code IN ('','gateway_outcome_unknown')`, code, now, sessionID, generation, expectedState, requestID)
+	result, err := tx.ExecContext(ctx, `UPDATE voice_sessions SET state='failed',last_error_code=?,updated_at=? WHERE id=? AND generation=? AND state=? AND gateway_session_id='' AND gateway_request_id=? AND last_error_code IN ('','gateway_outcome_unknown') AND EXISTS(SELECT 1 FROM voice_pool_state WHERE id=1 AND blocked=1 AND source_session_id=?)`, code, now, sessionID, generation, expectedState, requestID, sessionID)
 	if err != nil {
 		return err
 	}
@@ -883,55 +555,6 @@ func (s *Service) resolveGatewayCreateOutcome(ctx context.Context, sessionID str
 		event := contracts.Event{EventID: eventID, WorkspaceID: workspace, SubjectID: owner, Cursor: fmt.Sprint(cursor), SchemaVersion: 1, Type: "voice.pool.reconciled", AggregateType: "voice_pool", AggregateID: "default", AggregateVersion: 1, OccurredAt: s.now().UTC(), Payload: payload}
 		eventPayload, _ := json.Marshal(event)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, eventID, workspace, cursor, 1, event.Type, now, owner, event.AggregateType, event.AggregateID, event.AggregateVersion, eventPayload); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-// markSession applies a generation/state-fenced transition only while the session
-// owns the pool. A stale caller cannot mutate either the session or another fence.
-func (s *Service) markSession(ctx context.Context, id string, generation int64, expectedState, state, code string, answer []byte, gatewayID string) error {
-	return s.markSessionWith(ctx, id, generation, expectedState, state, code, answer, gatewayID, nil)
-}
-
-func (s *Service) markSessionWith(ctx context.Context, id string, generation int64, expectedState, state, code string, answer []byte, gatewayID string, beforeCommit func(*sql.Tx) error) error {
-	if expectedState != "allocating" && expectedState != "active" && expectedState != "ending" && expectedState != "quarantined" {
-		return nil
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := tx.ExecContext(ctx, `UPDATE voice_sessions SET state=?,last_error_code=?,offer_answer=coalesce(?,offer_answer),gateway_session_id=CASE WHEN ?='' THEN gateway_session_id ELSE ? END,gateway_unbind_unknown=CASE WHEN ? IN ('gateway_release_unknown','gateway_release_failed') THEN 1 ELSE gateway_unbind_unknown END,updated_at=? WHERE id=? AND generation=? AND state=? AND EXISTS(SELECT 1 FROM voice_pool_state WHERE id=1 AND source_session_id=voice_sessions.id)`, state, code, answer, gatewayID, gatewayID, code, now, id, generation, expectedState)
-	if err != nil {
-		return err
-	}
-	if n, err := result.RowsAffected(); err != nil {
-		return err
-	} else if n == 0 {
-		if state == "active" {
-			return apiError(http.StatusConflict, "voice_generation_stale", "voice session no longer owns the allocating lease", nil)
-		}
-		return nil
-	}
-	if state == "quarantined" {
-		if _, err := tx.ExecContext(ctx, `UPDATE voice_pool_state SET blocked=1,reason_code=?,updated_at=?,updated_by='system' WHERE id=1 AND source_session_id=?`, code, now, id); err != nil {
-			return err
-		}
-	} else if state == "active" {
-		if _, err := tx.ExecContext(ctx, `UPDATE voice_pool_state SET blocked=1,reason_code='active_session',updated_at=?,updated_by='system' WHERE id=1 AND source_session_id=?`, now, id); err != nil {
-			return err
-		}
-	} else if state == "failed" {
-		if _, err := tx.ExecContext(ctx, `UPDATE voice_pool_state SET blocked=0,reason_code='',source_session_id='',updated_at=?,updated_by='system' WHERE id=1 AND source_session_id=? AND reason_code='negotiation_in_progress'`, now, id); err != nil {
-			return err
-		}
-	}
-	if beforeCommit != nil {
-		if err := beforeCommit(tx); err != nil {
 			return err
 		}
 	}
