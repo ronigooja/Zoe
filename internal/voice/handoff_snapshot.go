@@ -41,7 +41,7 @@ func stewardSnapshot(ctx context.Context, q rosterQueryer, workspace, owner stri
 	return hex.EncodeToString(hash.Sum(nil)), rows.Err()
 }
 
-func (s *Service) validateStewardSnapshotTx(ctx context.Context, tx *sql.Tx, p contracts.Principal, source handoffPayload) error {
+func (s *Service) validateStewardSnapshotTx(ctx context.Context, tx *sql.Tx, p contracts.Principal, source delegationIdentity) error {
 	var accepted, id string
 	if err := tx.QueryRowContext(ctx, `SELECT steward_snapshot,id FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, p.WorkspaceID, source.SessionID, source.Generation, source.TurnID, source.Revision).Scan(&accepted, &id); err != nil {
 		return err
@@ -55,8 +55,12 @@ func (s *Service) validateStewardSnapshotTx(ctx context.Context, tx *sql.Tx, p c
 		if accepted == "" {
 			branch = "snapshot_empty"
 		}
-		logging.Infof("selection_stale branch=%s turn=%s accepted_empty=%t equal=%t", branch, id, accepted == "", current == accepted)
-		return apiError(409, "selection_stale", "task facts changed; retry handoff to refresh Steward selection", nil)
+		return staleSelection(branch, id)
 	}
 	return nil
+}
+
+func staleSelection(branch, id string) error {
+	logging.Infof("selection_stale branch=%s turn=%s", branch, id)
+	return errStaleSelection
 }

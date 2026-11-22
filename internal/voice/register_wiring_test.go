@@ -2,17 +2,13 @@ package voice
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/steward"
 	"github.com/ronigooja/Zoe/internal/storage"
@@ -53,89 +49,6 @@ func registerDisabledHTTPServer(t *testing.T, cfg Config) (*httptest.Server, *st
 		t.Fatal(err)
 	}
 	return ts, store, key
-}
-
-func TestHandoffSnapshotRefreshRetainsRegister(t *testing.T) {
-	for _, action := range []steward.Action{steward.ActionNew, steward.ActionClarify} {
-		t.Run(string(action), func(t *testing.T) {
-			var routes, choices atomic.Int32
-			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				routes.Add(1)
-				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"route":"task","request":"A complete accepted request."}`})
-			}))
-			defer model.Close()
-			modelCfg := RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
-			cfg := Config{RegisterConfig: &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: modelCfg, CompactModel: modelCfg, CompactCharacters: 1000}}
-			var mutate func()
-			cfg.Steward = classificationStewardFunc(func(_ context.Context, input steward.Input) (steward.Choice, error) {
-				choices.Add(1)
-				if input.Request != "A complete accepted request." {
-					t.Errorf("request changed: %q", input.Request)
-				}
-				if mutate != nil {
-					change := mutate
-					mutate = nil
-					change()
-				}
-				if action == steward.ActionClarify {
-					reply := "Which task?"
-					return steward.Choice{Action: action, Reply: &reply}, nil
-				}
-				return steward.Choice{Action: action}, nil
-			})
-			ts, store, key := registerDisabledHTTPServer(t, cfg)
-			// Commit alone, including a transaction that rolls back, must call no model.
-			hash := sha256.Sum256([]byte("original"))
-			status, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "snapshot-commit", "voice.turn.commit", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "snapshot", "revision": 1, "content": "original", "user_confirmed": true})
-			if status != 200 {
-				t.Fatalf("commit: %d %s", status, raw)
-			}
-			if routes.Load() != 0 || choices.Load() != 0 {
-				t.Fatal("commit launched classification")
-			}
-			var id string
-			if err := store.DB().QueryRow(`SELECT id FROM voice_turns WHERE turn_id='snapshot'`).Scan(&id); err != nil {
-				t.Fatal(err)
-			}
-			svc := newService(store.DB(), cfg)
-			register, err := NewRegister(store.DB(), *cfg.RegisterConfig)
-			if err != nil {
-				t.Fatal(err)
-			}
-			svc.register = register
-			tx, err := store.DB().BeginTx(context.Background(), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, _, err = svc.commandCommitTurn(context.Background(), tx, control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "instance", Scopes: []string{"client:command"}}, CommandID: "rolled-back", AcceptedAt: time.Now().UTC()}, contracts.CommandRequest{Payload: resolvedRequestJSON(map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "rollback", "revision": 1, "content": "rolled back original", "user_confirmed": true})})
-			_ = tx.Rollback()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if routes.Load() != 0 || choices.Load() != 0 {
-				t.Fatal("rolled back commit launched model")
-			}
-			mutate = func() {
-				// Complete an actual concurrent DB write while Steward is outside authority.
-				done := make(chan error, 1)
-				go func() {
-					_, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,status,version,created_by_device_id,command_id,profile_id,created_at,updated_at,owner_subject_id) VALUES('concurrent','default','duplicate','Other task','voice','queued',1,'instance','cmd','zoe-steward',?,?, 'owner')`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
-					done <- err
-				}()
-				if err := <-done; err != nil {
-					t.Error(err)
-				}
-			}
-			svc.classifyCommittedTurn(id)
-			status, _, raw = handoffCommand(t, ts.Client(), ts.URL, key, "snapshot-handoff", "voice.turn.handoff", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "snapshot", "revision": 1, "content_hash": fmt.Sprintf("%x", hash)})
-			if status != 200 {
-				t.Fatalf("refresh: %d %s", status, raw)
-			}
-			if routes.Load() != 1 || choices.Load() != 2 {
-				t.Fatalf("calls register=%d steward=%d", routes.Load(), choices.Load())
-			}
-		})
-	}
 }
 
 func TestResolvedRequestHandoffFoundation(t *testing.T) {
@@ -192,7 +105,8 @@ func TestResolvedRequestHandoffFoundation(t *testing.T) {
 					return steward.Choice{Action: steward.Action(action), TaskID: &selected}, nil
 				}
 			})
-			ts, store, key := registerDisabledHTTPServer(t, cfg)
+			cfg.IngestEnabled = true
+			ts, store, _ := registerDisabledHTTPServer(t, cfg)
 			if action == "stale" {
 				changeFacts = func() {
 					if _, err := store.DB().Exec(`UPDATE tasks SET version=version+1 WHERE id=?`, selected); err != nil {
@@ -201,7 +115,7 @@ func TestResolvedRequestHandoffFoundation(t *testing.T) {
 				}
 			}
 			if action != "new" && action != "chat" && action != "none" && action != "missing" {
-				selected = commitAndHandoff(t, ts, key, "seed", "original seed").ResourceID
+				selected = delegateTurn(t, ts, store, "seed", "original seed").ResourceID
 				if action == "continue" || action == "redisplay" {
 					if _, err := store.DB().Exec(`UPDATE tasks SET status='complete',result='Authoritative result' WHERE id=?`, selected); err != nil {
 						t.Fatal(err)
@@ -215,7 +129,7 @@ func TestResolvedRequestHandoffFoundation(t *testing.T) {
 			if selected != "" {
 				before = 1
 			}
-			result := commitAndHandoff(t, ts, key, "current", "delete it")
+			result := delegateTurn(t, ts, store, "current", "delete it")
 			var count int
 			if err := store.DB().QueryRow(`SELECT count(*) FROM tasks`).Scan(&count); err != nil {
 				t.Fatal(err)
@@ -257,6 +171,28 @@ func TestResolvedRequestHandoffFoundation(t *testing.T) {
 					t.Fatalf("rejected/nonexecuting action admitted work: count=%d", count)
 				}
 			}
+			switch action {
+			case "cancel":
+				var status string
+				if err := store.DB().QueryRow(`SELECT status FROM tasks WHERE id=?`, selected).Scan(&status); err != nil || status != "canceled" {
+					t.Fatalf("cancel status=%q err=%v", status, err)
+				}
+			case "report", "clarify", "none", "missing", "foreign", "answer_stale":
+				want := stewardErrorSpeech
+				if action == "report" {
+					want = "The draft task is queued."
+				} else if action == "clarify" {
+					want = "Which draft?"
+				}
+				var reply string
+				if err := store.DB().QueryRow(`SELECT text FROM voice_fast_replies WHERE turn_id='current'`).Scan(&reply); err != nil || reply != want {
+					t.Fatalf("held reply=%q want=%q err=%v", reply, want, err)
+				}
+			case "chat":
+				if n := writeJobCount(t, store, `SELECT count(*) FROM voice_fast_replies`); n != 0 || received.Request != "" {
+					t.Fatalf("chat triggered a reply or Steward: replies=%d request=%q", n, received.Request)
+				}
+			}
 			if action != "chat" && action != "none" && action != "missing" && received.Request != full {
 				t.Fatalf("Steward request=%q", received.Request)
 			}
@@ -265,33 +201,11 @@ func TestResolvedRequestHandoffFoundation(t *testing.T) {
 					t.Fatalf("candidate=%+v", candidate)
 				}
 			}
-			if action == "cancel" || action == "report" || action == "clarify" || action == "redisplay" {
-				hash := sha256.Sum256([]byte("delete it"))
-				status, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "repeat-nonexecution", "voice.turn.handoff", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "current", "revision": 1, "content_hash": fmt.Sprintf("%x", hash)})
-				if status != 200 {
-					t.Fatalf("action replay: %d %s", status, raw)
-				}
-				var n int
-				if err := store.DB().QueryRow(`SELECT count(*) FROM tasks`).Scan(&n); err != nil || n != count {
-					t.Fatalf("action replay admitted work count=%d err=%v", n, err)
-				}
+			// A replay of the same transcript and delegation identity cannot add work.
+			if replay := delegateTurn(t, ts, store, "current", "delete it"); replay != result {
+				t.Fatalf("result changed on replay: first=%+v second=%+v", result, replay)
 			}
-			// Same revision and a later corrected revision share stable entry linkage.
 			if action == "append" || action == "answer" || action == "append_pending" {
-				hash := sha256.Sum256([]byte("delete it"))
-				status, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "repeat-current", "voice.turn.handoff", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "current", "revision": 1, "content_hash": fmt.Sprintf("%x", hash)})
-				if status != 200 {
-					t.Fatalf("repeat: %d %s", status, raw)
-				}
-				status, _, raw = handoffCommand(t, ts.Client(), ts.URL, key, "revision-current", "voice.turn.commit", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "current", "revision": 2, "content": "corrected provenance", "user_confirmed": true})
-				if status != 200 {
-					t.Fatalf("revision: %d %s", status, raw)
-				}
-				hash = sha256.Sum256([]byte("corrected provenance"))
-				status, _, raw = handoffCommand(t, ts.Client(), ts.URL, key, "handoff-revision-current", "voice.turn.handoff", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "current", "revision": 2, "content_hash": fmt.Sprintf("%x", hash)})
-				if status != 200 {
-					t.Fatalf("revision handoff: %d %s", status, raw)
-				}
 				var n int
 				if err := store.DB().QueryRow(`SELECT count(*) FROM voice_task_inputs WHERE turn_id='current'`).Scan(&n); err != nil || n != 1 {
 					t.Fatalf("stable input receipts=%d err=%v", n, err)

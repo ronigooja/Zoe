@@ -279,8 +279,16 @@ ALTER TABLE ui_requests RENAME COLUMN voice_input TO chat_input;`)
 	}}); err != nil {
 		return err
 	}
-	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 208, Name: "opening_result_reservations", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 208, Name: "opening_result_reservations", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, openingResultSchema)
+		return err
+	}}); err != nil {
+		return err
+	}
+	return store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 209, Name: "transcript_delegation", Up: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE voice_sessions ADD COLUMN lifecycle_runner_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE voice_turns ADD COLUMN transcript_seq INTEGER CHECK(transcript_seq>=0);
+CREATE INDEX voice_pending_delegations ON voice_turns(confirmed_at,id) WHERE handoff_handled=0 AND transcript_seq IS NOT NULL;`)
 		return err
 	}})
 }

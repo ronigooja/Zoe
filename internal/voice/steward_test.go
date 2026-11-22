@@ -26,8 +26,8 @@ func (f *fakeSteward) Choose(context.Context, steward.Input) (steward.Choice, er
 func TestStewardOrdinaryTaskSentencesDispatch(t *testing.T) {
 	for i, text := range []string{"is it done", "is it done yet", "how is it going", "any progress", "what did we discuss yesterday", "recall last week's conversation", "what did I ask before", "remind me what we said"} {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			ts, store, key := handoffHTTPServer(t)
-			r := commitAndHandoff(t, ts, key, fmt.Sprint(i), text)
+			ts, store, _ := handoffHTTPServer(t)
+			r := delegateTurn(t, ts, store, fmt.Sprint(i), text)
 			var status string
 			if err := store.DB().QueryRow(`SELECT status FROM tasks WHERE id=?`, r.ResourceID).Scan(&status); err != nil {
 				t.Fatal(err)
@@ -45,9 +45,8 @@ func TestStewardChooseNewDoesNotAskForConfirmation(t *testing.T) {
 	gateway := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { posts.Add(1); w.WriteHeader(200) }))
 	defer gateway.Close()
 	cfg := Config{Steward: f, GatewayURL: gateway.URL, GatewayAPIKey: "key", HTTPClient: gateway.Client(), Now: time.Now}
-	ts, store, key := handoffHTTPServerWithConfig(t, cfg)
-	_, _ = store.DB().Exec(`UPDATE voice_sessions SET gateway_session_id='gateway-handoff' WHERE id='handoff-session'`)
-	r := commitAndHandoff(t, ts, key, "ask", "please handle this")
+	ts, store, _ := handoffHTTPServerWithConfig(t, cfg)
+	r := delegateTurn(t, ts, store, "ask", "please handle this")
 	var status, interaction, question string
 	if err := store.DB().QueryRow(`SELECT status,interaction_state,interaction_question FROM tasks WHERE id=?`, r.ResourceID).Scan(&status, &interaction, &question); err != nil {
 		t.Fatal(err)
@@ -65,8 +64,8 @@ func TestStewardChooseNewDoesNotAskForConfirmation(t *testing.T) {
 
 func TestStewardHighImpactIsOrdinaryQueuedWork(t *testing.T) {
 	f := &fakeSteward{}
-	ts, store, key := handoffHTTPServerWithConfig(t, Config{Steward: f})
-	r := commitAndHandoff(t, ts, key, "high-steward", "delete the old project")
+	ts, store, _ := handoffHTTPServerWithConfig(t, Config{Steward: f})
+	r := delegateTurn(t, ts, store, "high-steward", "delete the old project")
 	var status, interaction string
 	_ = store.DB().QueryRow(`SELECT status,interaction_state FROM tasks WHERE id=?`, r.ResourceID).Scan(&status, &interaction)
 	if status != "queued" || interaction != "none" || f.calls.Load() != 1 {
@@ -76,8 +75,8 @@ func TestStewardHighImpactIsOrdinaryQueuedWork(t *testing.T) {
 
 func TestStewardUnavailableCreatesNoTask(t *testing.T) {
 	for _, err := range []error{errors.New("provider unavailable"), context.DeadlineExceeded} {
-		ts, store, key := handoffHTTPServerWithConfig(t, Config{Steward: &fakeSteward{err: err}})
-		commitAndHandoff(t, ts, key, "failed-steward", "what did we discuss last week")
+		ts, store, _ := handoffHTTPServerWithConfig(t, Config{Steward: &fakeSteward{err: err}})
+		delegateTurn(t, ts, store, "failed-steward", "what did we discuss last week")
 		var tasks int
 		if e := store.DB().QueryRow(`SELECT count(*) FROM tasks`).Scan(&tasks); e != nil {
 			t.Fatal(e)

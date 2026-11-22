@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/contracts"
-	"github.com/ronigooja/Zoe/internal/logging"
 )
 
 // priorTaskContext applies to continuation admission; it is never goal text.
@@ -36,8 +35,7 @@ func readPriorTaskContext(ctx context.Context, tx *sql.Tx, p contracts.Principal
 	var version int64
 	err := tx.QueryRowContext(ctx, `SELECT goal,status,result,version FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND id=?`, p.WorkspaceID, p.SubjectID, id).Scan(&prior.Goal, &prior.Status, &result, &version)
 	if errors.Is(err, sql.ErrNoRows) {
-		logging.Infof("selection_stale branch=task_unavailable turn=%s", turnID)
-		return nil, 0, apiError(409, "selection_stale", "selected task is unavailable", nil)
+		return nil, 0, staleSelection("task_unavailable", turnID)
 	}
 	if err != nil {
 		return nil, 0, err
@@ -67,8 +65,7 @@ func validatePendingQuestionTx(ctx context.Context, tx *sql.Tx, p contracts.Prin
 		return err
 	}
 	if !valid {
-		logging.Infof("selection_stale branch=question_unavailable turn=%s", turnID)
-		return apiError(409, "selection_stale", "selected pending question is unavailable", nil)
+		return staleSelection("question_unavailable", turnID)
 	}
 	return nil
 }
@@ -86,13 +83,4 @@ func appendedEntryID(events []contracts.Event) string {
 		}
 	}
 	return ""
-}
-
-func (s *Service) staleDecisionTx(_ context.Context, _ *sql.Tx, _ string, _ handoffPayload, turnID string, versionChanged bool) error {
-	branch := "stale_decision"
-	if versionChanged {
-		branch = "version_changed"
-	}
-	logging.Infof("selection_stale branch=%s turn=%s", branch, turnID)
-	return apiError(409, "selection_stale", "task facts changed; retry handoff to refresh selection", nil)
 }

@@ -3,6 +3,7 @@ package voice
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"math"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/storage"
 )
@@ -28,7 +30,7 @@ func transcriptHTTPServer(t *testing.T) (*httptest.Server, *storage.Store, strin
 	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, ingestTestToken, "voice-gateway", []string{"default"}, []string{"voice:turn:ingest"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`UPDATE voice_sessions SET gateway_session_id=id,gateway_media_generation=1`); err != nil {
+	if _, err := store.DB().Exec(`UPDATE voice_sessions SET gateway_session_id=id,gateway_media_generation=1,lifecycle_runner_id='voice-gateway'`); err != nil {
 		t.Fatal(err)
 	}
 	return ts, store, ingestTestToken
@@ -40,7 +42,13 @@ func transcriptTurn(seq int64, role, text string) TranscriptTurn {
 
 func postTranscript(t *testing.T, ts *httptest.Server, key, session string, turns ...TranscriptTurn) (int, map[string]int) {
 	t.Helper()
-	body, err := json.Marshal(map[string]any{"gateway_session_id": session, "media_generation": 1, "turns": turns})
+	status, result, _ := postTranscriptGeneration(t, ts, key, session, 1, turns...)
+	return status, result
+}
+
+func postTranscriptGeneration(t *testing.T, ts *httptest.Server, key, session string, mediaGeneration int64, turns ...TranscriptTurn) (int, map[string]int, string) {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"gateway_session_id": session, "media_generation": mediaGeneration, "turns": turns})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +72,119 @@ func postTranscript(t *testing.T, ts *httptest.Server, key, session string, turn
 	if resp.StatusCode == http.StatusOK && json.Unmarshal(raw, &result) != nil {
 		t.Fatalf("invalid response: %s", raw)
 	}
-	return resp.StatusCode, result
+	var failure contracts.ErrorEnvelope
+	if resp.StatusCode >= 400 && strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") && json.Unmarshal(raw, &failure) != nil {
+		t.Fatalf("invalid error envelope: %s", raw)
+	}
+	return resp.StatusCode, result, failure.Error.Code
+}
+
+func TestDelegationDurableOnTranscriptDuplicateAndTurnReplay(t *testing.T) {
+	ts, store, key := transcriptHTTPServer(t)
+	if _, err := store.DB().Exec(`UPDATE voice_sessions SET generation=7 WHERE id='handoff-session'`); err != nil {
+		t.Fatal(err)
+	}
+	text := "  original 世界\n"
+	turn := markedTranscript(8, strings.Repeat("😀", 256), text)
+	if status, _ := postTranscript(t, ts, key, "handoff-session", transcriptTurn(8, "user", text)); status != 200 {
+		t.Fatal(status)
+	}
+	for range 2 {
+		if status, result := postTranscript(t, ts, key, "handoff-session", turn); status != 200 || result["accepted"] != 0 || result["duplicates"] != 1 {
+			t.Fatalf("status=%d counts=%v", status, result)
+		}
+	}
+	var storedID, content, keyID, confirmed string
+	var gen, rev, seq int64
+	var hash []byte
+	if err := store.DB().QueryRow(`SELECT turn_id,content,command_id,confirmed_at,generation,revision,transcript_seq,content_hash FROM voice_turns`).Scan(&storedID, &content, &keyID, &confirmed, &gen, &rev, &seq, &hash); err != nil {
+		t.Fatal(err)
+	}
+	want := sha256.Sum256([]byte(text))
+	if storedID != strings.Repeat("😀", 256) || content != text || keyID != delegationKey("handoff-session", 7, storedID, 1) || confirmed == "" || gen != 7 || rev != 1 || seq != 8 || !bytes.Equal(hash, want[:]) {
+		t.Fatalf("incorrect bound delegation: %q %d %d %d", content, gen, rev, seq)
+	}
+	if n := writeJobCount(t, store, `SELECT count(*) FROM voice_turns`); n != 1 {
+		t.Fatal(n)
+	}
+}
+
+func TestDelegationBatchConflictsAndStorageFailureRollBackBothTables(t *testing.T) {
+	ts, store, key := transcriptHTTPServer(t)
+	if status, _ := postTranscript(t, ts, key, "handoff-session", markedTranscript(0, "existing", "first")); status != 200 {
+		t.Fatal(status)
+	}
+	cases := []struct {
+		turn   TranscriptTurn
+		status int
+		code   string
+	}{
+		{markedTranscript(0, "other", "different"), 409, "transcript_conflict"},
+		{markedTranscript(2, "existing", "different"), 409, "turn_revision_conflict"},
+		{markedTranscript(2, "reject", "force failure"), 500, "internal"},
+	}
+	if _, err := store.DB().Exec(`CREATE TRIGGER reject_delegation BEFORE INSERT ON voice_turns WHEN NEW.turn_id='reject' BEGIN SELECT RAISE(ABORT,'test storage failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		if status, _, code := postTranscriptGeneration(t, ts, key, "handoff-session", 1, markedTranscript(1, "new", "must roll back"), tc.turn); status != tc.status || code != tc.code {
+			t.Fatalf("status=%d code=%q want=%d %q", status, code, tc.status, tc.code)
+		}
+		if n := writeJobCount(t, store, `SELECT (SELECT count(*) FROM voice_turns)+(SELECT count(*) FROM voice_transcript_turns)`); n != 2 {
+			t.Fatalf("partial commit: %d rows", n)
+		}
+	}
+}
+
+func TestDelegationIngestValidation(t *testing.T) {
+	ts, store, key := transcriptHTTPServer(t)
+	for _, field := range []string{`null`, `42`, `""`, `"` + strings.Repeat("😀", 257) + `"`} {
+		turn := transcriptTurn(1, "user", "valid text")
+		turn.DelegationID = json.RawMessage(field)
+		if status, _, code := postTranscriptGeneration(t, ts, key, "handoff-session", 1, turn); status != 400 || code != "invalid_request" {
+			t.Fatalf("status=%d code=%s", status, code)
+		}
+	}
+	assistant := markedTranscript(2, "invalid", "assistant text")
+	assistant.Role = "assistant"
+	for _, turn := range []TranscriptTurn{assistant, markedTranscript(3, "invalid", "\n\t ")} {
+		if status, _ := postTranscript(t, ts, key, "handoff-session", turn); status != 400 {
+			t.Fatal(status)
+		}
+	}
+	if n := writeJobCount(t, store, `SELECT count(*) FROM voice_transcript_turns`); n != 0 {
+		t.Fatal(n)
+	}
+}
+
+func TestLateDelegationUsesOriginalBindingAndRejectsDifferentRunner(t *testing.T) {
+	ts, store, key := transcriptHTTPServer(t)
+	now := time.Now().UTC()
+	if _, err := store.DB().Exec(`UPDATE voice_sessions SET state='ended',ended_at=? WHERE id='handoff-session'; INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_session_id,gateway_media_generation,lifecycle_runner_id) VALUES('replacement','default','owner','instance','next',X'01',7,'active',?,?, 'handoff-session',2,'voice-gateway')`, now.Add(-9*time.Minute).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := postTranscript(t, ts, key, "handoff-session", markedTranscript(1, "late", "original call")); status != 200 {
+		t.Fatal(status)
+	}
+	if n := writeJobCount(t, store, `SELECT count(*) FROM voice_turns WHERE session_id='handoff-session' AND generation=1 AND turn_id='late'`); n != 1 {
+		t.Fatal(n)
+	}
+	if _, err := store.DB().Exec(`UPDATE voice_sessions SET ended_at=? WHERE id='handoff-session'`, now.Add(-11*time.Minute).Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, code := postTranscriptGeneration(t, ts, key, "handoff-session", 1, markedTranscript(2, "too late", "never execute")); status != 409 || code != "transcript_window_closed" {
+		t.Fatalf("status=%d code=%s", status, code)
+	}
+	const other = "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDA"
+	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, other, "different-gateway", []string{"default"}, []string{"voice:turn:ingest"}); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, code := postTranscriptGeneration(t, ts, other, "handoff-session", 2, markedTranscript(2, "foreign", "never execute")); status != 403 || code != "forbidden" {
+		t.Fatalf("status=%d code=%s", status, code)
+	}
+	if n := writeJobCount(t, store, `SELECT count(*) FROM voice_turns`); n != 1 {
+		t.Fatal(n)
+	}
 }
 
 func TestTranscriptEndpointStoresBothRolesVerbatimInSeqOrder(t *testing.T) {
@@ -260,7 +380,7 @@ func TestIngestTokenCannotCallOtherEndpoints(t *testing.T) {
 }
 
 func TestIngestTokenIsDisabledWhenNoTokenFileConfigured(t *testing.T) {
-	ts, store, _ := handoffHTTPServer(t)
+	ts, store, _ := registerDisabledHTTPServer(t, Config{})
 	if err := control.RegisterRunnerCredentialIfMissing(context.Background(), store, ingestTestToken, "voice-gateway", []string{"default"}, []string{"voice:turn:ingest"}); err != nil {
 		t.Fatal(err)
 	}

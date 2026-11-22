@@ -37,7 +37,7 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 			}))
 			defer model.Close()
 			cfg := RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
-			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(context.Context, steward.Input) (steward.Choice, error) {
+			ts, store, _ := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(context.Context, steward.Input) (steward.Choice, error) {
 				mu.Lock()
 				defer mu.Unlock()
 				return choice, nil
@@ -45,7 +45,7 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 			uiTargetSchema(t, store.DB())
 			target := ""
 			if strings.HasPrefix(name, "attach_") || strings.HasPrefix(name, "complete_") {
-				target = commitAndHandoff(t, ts, key, "seed", "research the lunar mission").ResourceID
+				target = delegateTurn(t, ts, store, "seed", "research the lunar mission").ResourceID
 				flag, status := 0, "active"
 				if name == "attach_keeps" || name == "complete_clears" {
 					flag = 1
@@ -75,7 +75,7 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 				routes = []string{"task", "ui"}
 			}
 			mu.Unlock()
-			r := commitAndHandoff(t, ts, key, "display", "show the lunar mission information")
+			r := delegateTurn(t, ts, store, "display", "show the lunar mission information")
 			var exits string
 			var uiHandled int
 			if err := store.DB().QueryRow(`SELECT exits,ui_handled FROM voice_turns WHERE turn_id='display'`).Scan(&exits, &uiHandled); err != nil {
@@ -99,7 +99,7 @@ func TestUIExitsAndTaskDisplay(t *testing.T) {
 				_ = store.DB().QueryRow(`SELECT count(*) FROM tasks`).Scan(&tasks)
 				_ = store.DB().QueryRow(`SELECT count(*) FROM voice_fast_replies`).Scan(&replies)
 				_ = store.DB().QueryRow(`SELECT handoff_handled FROM voice_turns WHERE turn_id='display'`).Scan(&handled)
-				if tasks != 0 || replies != 0 || handled != 0 || r.ResourceType != "voice_turn" {
+				if tasks != 0 || replies != 0 || handled != 1 || r.ResourceType != "voice_turn" {
 					t.Fatalf("UI-only tasks=%d replies=%d handled=%d receipt=%+v", tasks, replies, handled, r)
 				}
 				return
@@ -212,7 +212,7 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 			}))
 			defer model.Close()
 			cfg := RegisterModelConfig{BaseURL: model.URL, Model: "fixture", APIKey: "fixture"}
-			ts, store, key := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(_ context.Context, input steward.Input) (steward.Choice, error) {
+			ts, store, _ := handoffHTTPServerWithConfig(t, Config{RegisterConfig: &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: cfg, CompactModel: cfg, CompactCharacters: 1000}, Steward: classificationStewardFunc(func(_ context.Context, input steward.Input) (steward.Choice, error) {
 				mu.Lock()
 				defer mu.Unlock()
 				if input.DisplayRequested != (len(routes) == 2) {
@@ -221,7 +221,7 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 				return choice, nil
 			})})
 			uiTargetSchema(t, store.DB())
-			target := commitAndHandoff(t, ts, key, "seed", "research the lunar mission").ResourceID
+			target := delegateTurn(t, ts, store, "seed", "research the lunar mission").ResourceID
 			status := "complete"
 			if mode == "running_none" {
 				status = "active"
@@ -277,7 +277,7 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 				choice = steward.Choice{Action: steward.ActionReport, TaskID: &target, Reply: &reply}
 			}
 			mu.Unlock()
-			commitAndHandoff(t, ts, key, "display", "show the earlier result")
+			delegateTurn(t, ts, store, "display", "show the earlier result")
 			var storedAction string
 			if err := store.DB().QueryRow(`SELECT steward_action FROM voice_turns WHERE turn_id='display'`).Scan(&storedAction); err != nil {
 				t.Fatal(err)
@@ -303,7 +303,7 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 				if count(`SELECT ui_handled FROM voice_turns WHERE turn_id='display'`) != 1 || count(`SELECT count(*) FROM ui_requests WHERE source='task' AND request='Show the earlier lunar mission result.'`) != 1 {
 					t.Fatal("missing UI receipt or handled marker")
 				}
-				commitAndHandoff(t, ts, key, "display-again", "show the earlier result")
+				delegateTurn(t, ts, store, "display-again", "show the earlier result")
 				// The dispatcher may also create task_entry:older. Only the two
 				// turn-keyed jobs belong to these explicit redisplays.
 				rows, err := store.DB().Query(`SELECT dedupe_key FROM ui_jobs WHERE kind='task_entry' ORDER BY dedupe_key`)

@@ -105,7 +105,7 @@ Follow the [unified voice release](media.md#release).
 
 ## Implementation locations
 
-[Transcript ingest](../../../internal/voice/transcript.go), [voice handlers](../../../internal/voice/handlers.go), [task commands](../../../internal/control/core_handlers.go), [runner claims](../../../internal/control/runner.go), [entry delivery](../../../internal/control/entry_deliveries.go), [Worker engine](../../../internal/runner/engine.go).
+[Transcript ingest](../../../internal/voice/transcript.go), [delegation worker](../../../internal/voice/delegation_worker.go), [task commands](../../../internal/control/core_handlers.go), [runner claims](../../../internal/control/runner.go), [entry delivery](../../../internal/control/entry_deliveries.go), [Worker engine](../../../internal/runner/engine.go).
 
 ## Verification obligations
 

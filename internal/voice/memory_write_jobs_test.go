@@ -3,7 +3,6 @@ package voice
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/memoryapi"
@@ -30,6 +28,11 @@ func memoryWriteJobFixture(t *testing.T) (*storage.Store, *Service, func()) {
 		return time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC)
 	}})
 	t.Cleanup(svc.Stop)
+	server, err := control.NewServer(store, control.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.uiEventServer = server
 	at := svc.now().UTC().Format(time.RFC3339Nano)
 	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('handoff-session','default','owner','instance','request',X'01',1,'active',?,?)`, at, at); err != nil {
 		t.Fatal(err)
@@ -38,28 +41,16 @@ func memoryWriteJobFixture(t *testing.T) (*storage.Store, *Service, func()) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256([]byte(writeSentence))
-	_, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request) VALUES('write-turn','default','handoff-session',1,'write-turn',1,?,?,?,'write-command','memory_write',?)`, writeSentence, hash[:], svc.now().Format(time.RFC3339Nano), writeRestatement)
+	_, err = store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request,transcript_seq) VALUES('write-turn','default','handoff-session',1,'write-turn',1,?,?,?,'write-command','memory_write',?,0)`, writeSentence, hash[:], svc.now().Format(time.RFC3339Nano), writeRestatement)
 	if err != nil {
 		t.Fatal(err)
 	}
 	handoff := func() {
 		t.Helper()
-		tx, err := store.DB().BeginTx(context.Background(), nil)
-		if err != nil {
+		if err := svc.applyDelegation(context.Background(), "write-turn"); err != nil {
 			t.Fatal(err)
 		}
-		defer tx.Rollback()
-		cmd := control.CommandContext{CommandID: "write-handoff", AcceptedAt: svc.now(), Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "instance", Scopes: []string{"client:command"}}}
-		result, _, err := svc.commandHandoff(context.Background(), tx, cmd, contracts.CommandRequest{Payload: mustJSON(handoffPayload{SessionID: "handoff-session", Generation: 1, TurnID: "write-turn", Revision: 1, ContentHash: hex.EncodeToString(hash[:])})}, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if result.ResourceType != "voice_turn" || result.ResourceID != "write-turn" {
-			t.Fatalf("result=%+v", result)
-		}
-		if err := tx.Commit(); err != nil {
-			t.Fatal(err)
-		}
+
 	}
 	return store, svc, handoff
 }

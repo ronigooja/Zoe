@@ -18,7 +18,7 @@ import (
 func randomID() (string, error) { id, err := uuid.NewRandom(); return id.String(), err }
 
 // redisplayTaskTx presents an existing completed result without changing task work.
-func (s *Service) redisplayTaskTx(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, p handoffPayload, task string, screenDisplay bool) (contracts.CommandResult, []contracts.Event, error) {
+func (s *Service) redisplayTaskTx(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, p delegationIdentity, task string, screenDisplay bool) (contracts.CommandResult, []contracts.Event, error) {
 	result := contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}
 	var authoritative string
 	err := sql.ErrNoRows

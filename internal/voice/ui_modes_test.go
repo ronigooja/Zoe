@@ -33,8 +33,10 @@ func TestChatInputRegisterJob(t *testing.T) {
 	r := uiTargetRig(t)
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('input-session','default','owner','device-1','input',X'01',1,'ended',?,?)`, at, at)
-	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request) VALUES('input-turn','default','input-session',1,'input',1,'type',X'01',?,'input','chat_input','Show an input box on the screen for conversation text.')`, at)
-	r.svc.createRegisterUIJobs(context.Background())
+	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request,transcript_seq) VALUES('input-turn','default','input-session',1,'input',1,'type',X'01',?,'input','chat_input','Show an input box on the screen for conversation text.',0)`, at)
+	if err := r.svc.applyDelegation(context.Background(), "input-turn"); err != nil {
+		t.Fatal(err)
+	}
 	var id string
 	if err := r.store.DB().QueryRow(`SELECT id FROM ui_requests WHERE voice_turn_id='input-turn' AND task_id IS NULL`).Scan(&id); err != nil {
 		t.Fatal(err)

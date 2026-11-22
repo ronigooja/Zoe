@@ -273,53 +273,6 @@ func TestResultConsumerEnqueuesFromEventAndAdvancesCursor(t *testing.T) {
 	}
 }
 
-func TestVoiceTurnCommitRequiresConfirmationAndDeduplicatesStableRevision(t *testing.T) {
-	ctx := context.Background()
-	store, svc := newVoiceTestService(t, Config{})
-	_, err := store.DB().ExecContext(ctx, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('session-1','default','user-1','device-1','request-1',X'01',1,'active',?,?)`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
-	if err != nil {
-		t.Fatal(err)
-	}
-	principal := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1", Scopes: []string{"voice:turn:commit"}}
-	command := func(confirmed bool, text string) (contracts.CommandResult, []contracts.Event, error) {
-		tx, err := store.DB().BeginTx(ctx, nil)
-		if err != nil {
-			return contracts.CommandResult{}, nil, err
-		}
-		payload, _ := json.Marshal(commitTurnPayload{SessionID: "session-1", Generation: 1, TurnID: "turn-a", Revision: 2, ProviderMessage: "provider-message-a", Content: text, UserConfirmed: confirmed})
-		result, events, err := svc.commandCommitTurn(ctx, tx, control.CommandContext{CommandID: "command-a", Principal: principal, AcceptedAt: time.Now().UTC()}, contracts.CommandRequest{Payload: payload})
-		if err != nil {
-			_ = tx.Rollback()
-			return result, events, err
-		}
-		if err := tx.Commit(); err != nil {
-			return result, events, err
-		}
-		return result, events, nil
-	}
-	if _, _, err := command(false, "请创建一个任务"); err == nil {
-		t.Fatal("unconfirmed voice text was accepted as a committed turn")
-	}
-	first, events, err := command(true, "请创建一个任务")
-	if err != nil || first.ResourceID == "" || len(events) != 1 || events[0].Type != "voice.turn.committed" {
-		t.Fatalf("confirmed turn not durably proposed: result=%#v events=%#v err=%v", first, events, err)
-	}
-	second, events, err := command(true, "请创建一个任务")
-	if err != nil || second.ResourceID != first.ResourceID || len(events) != 0 {
-		t.Fatalf("duplicate stable revision was not deduplicated: result=%#v events=%#v err=%v", second, events, err)
-	}
-	if _, _, err := command(true, "请创建另一个任务"); err == nil {
-		t.Fatal("same turn revision with different content did not conflict")
-	}
-	var tasks int
-	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks`).Scan(&tasks); err != nil {
-		t.Fatal(err)
-	}
-	if tasks != 0 {
-		t.Fatalf("voice turn directly created %d task(s); task.create must remain a separate command", tasks)
-	}
-}
-
 func TestVoiceTaskAdmissionBindsStableTurnAcrossRevisions(t *testing.T) {
 	ctx := context.Background()
 	store, svc := newVoiceTestService(t, Config{})
@@ -388,10 +341,11 @@ func TestVoiceTaskAdmissionBindsStableTurnAcrossRevisions(t *testing.T) {
 }
 
 func handoffHTTPServer(t *testing.T) (*httptest.Server, *storage.Store, string) {
-	return handoffHTTPServerWithConfig(t, Config{})
+	return handoffHTTPServerWithConfig(t, Config{IngestEnabled: true})
 }
 
 func handoffHTTPServerWithConfig(t *testing.T, voiceCfg Config) (*httptest.Server, *storage.Store, string) {
+	voiceCfg.IngestEnabled = true
 	return handoffHTTPServerWithScopes(t, voiceCfg, nil)
 }
 
@@ -477,46 +431,9 @@ func mustJSON(value any) json.RawMessage {
 	return raw
 }
 
-func TestVoiceHandoffHTTPRejectsReplayConflictAndStaleGeneration(t *testing.T) {
-	ts, store, key := handoffHTTPServer(t)
-	content := "research the current release notes"
-	hash := sha256.Sum256([]byte(content))
-	_, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "commit-1", "voice.turn.commit", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "turn-1", "revision": 1, "content": content, "user_confirmed": true})
-	if strings.Contains(raw, `"status":"accepted"`) == false {
-		t.Fatalf("commit failed: %s", raw)
-	}
-	payload := map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "turn-1", "revision": 1, "content_hash": fmt.Sprintf("%x", hash[:])}
-	status, first, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-1", "voice.turn.handoff", payload)
-	if status != http.StatusOK || first.ResourceID == "" {
-		t.Fatalf("handoff failed: status=%d body=%s", status, raw)
-	}
-	status, second, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-1", "voice.turn.handoff", payload)
-	if status != http.StatusOK || second.ResourceID != first.ResourceID {
-		t.Fatalf("idempotent replay changed receipt: status=%d body=%s", status, raw)
-	}
-	payload["content_hash"] = strings.Repeat("0", 64)
-	if status, _, _ = handoffCommand(t, ts.Client(), ts.URL, key, "handoff-conflict", "voice.turn.handoff", payload); status != http.StatusConflict {
-		t.Fatalf("conflicting hash status=%d, want 409", status)
-	}
-	_, _ = store.DB().Exec(`UPDATE voice_sessions SET state='ended',generation=2 WHERE id='handoff-session'`)
-	payload["generation"] = 1
-	payload["content_hash"] = fmt.Sprintf("%x", hash[:])
-	if status, _, _ = handoffCommand(t, ts.Client(), ts.URL, key, "handoff-stale", "voice.turn.handoff", payload); status != http.StatusConflict {
-		t.Fatalf("stale generation status=%d, want 409", status)
-	}
-}
-
 func TestVoiceHandoffHTTPLowImpactUsesStewardTaskAdmission(t *testing.T) {
-	ts, store, key := handoffHTTPServer(t)
-	content := "research the current release notes"
-	hash := sha256.Sum256([]byte(content))
-	if status, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "commit-low", "voice.turn.commit", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "turn-low", "revision": 1, "content": content, "user_confirmed": true}); status != http.StatusOK {
-		t.Fatalf("commit status=%d body=%s", status, raw)
-	}
-	status, receipt, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-low", "voice.turn.handoff", map[string]any{"session_id": "handoff-session", "generation": 1, "turn_id": "turn-low", "revision": 1, "content_hash": fmt.Sprintf("%x", hash[:])})
-	if status != http.StatusOK {
-		t.Fatalf("handoff status=%d body=%s", status, raw)
-	}
+	ts, store, _ := handoffHTTPServer(t)
+	receipt := delegateTurn(t, ts, store, "turn-low", "research the current release notes")
 	var source, profile, taskStatus string
 	if err := store.DB().QueryRow(`SELECT source,profile_id,status FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&source, &profile, &taskStatus); err != nil {
 		t.Fatal(err)
@@ -526,26 +443,9 @@ func TestVoiceHandoffHTTPLowImpactUsesStewardTaskAdmission(t *testing.T) {
 	}
 }
 
-func commitAndHandoff(t *testing.T, ts *httptest.Server, key, id, content string) contracts.CommandReceipt {
-	return commitAndHandoffSession(t, ts, key, "handoff-session", id, content)
-}
-
-func commitAndHandoffSession(t *testing.T, ts *httptest.Server, key, session, id, content string) contracts.CommandReceipt {
-	t.Helper()
-	hash := sha256.Sum256([]byte(content))
-	if status, _, raw := handoffCommand(t, ts.Client(), ts.URL, key, "commit-"+id, "voice.turn.commit", map[string]any{"session_id": session, "generation": 1, "turn_id": id, "revision": 1, "content": content, "user_confirmed": true}); status != http.StatusOK {
-		t.Fatalf("commit status=%d body=%s", status, raw)
-	}
-	status, receipt, raw := handoffCommand(t, ts.Client(), ts.URL, key, "handoff-"+id, "voice.turn.handoff", map[string]any{"session_id": session, "generation": 1, "turn_id": id, "revision": 1, "content_hash": fmt.Sprintf("%x", hash[:])})
-	if status != http.StatusOK {
-		t.Fatalf("handoff status=%d body=%s", status, raw)
-	}
-	return receipt
-}
-
 func TestHandoffDefaultFixtureAdmitsTask(t *testing.T) {
-	ts, store, key := handoffHTTPServer(t)
-	receipt := commitAndHandoff(t, ts, key, "no-classifier", "is it done")
+	ts, store, _ := handoffHTTPServer(t)
+	receipt := delegateTurn(t, ts, store, "no-classifier", "is it done")
 	var count int
 	_ = store.DB().QueryRow(`SELECT count(*) FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&count)
 	if count != 1 {
@@ -567,24 +467,14 @@ func TestHandoffFixturesIsolateRetainedConnection(t *testing.T) {
 		// server/store cleanup, so the previous SQLite database remains alive.
 		parent.Cleanup(func() { _ = conn.Close() })
 	})
-	ts, store, key := handoffHTTPServer(t)
-	receipt := commitAndHandoff(t, ts, key, "isolated-fixture", "research release notes")
+	ts, store, _ := handoffHTTPServer(t)
+	receipt := delegateTurn(t, ts, store, "isolated-fixture", "research release notes")
 	var count int
 	if err := store.DB().QueryRow(`SELECT count(*) FROM tasks WHERE id=?`, receipt.ResourceID).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
 		t.Fatalf("tasks=%d, want 1", count)
-	}
-}
-
-func TestHandoffUsesPersistedCategoryWhenCacheEntryIsMissing(t *testing.T) {
-	store, svc := newVoiceTestService(t, Config{})
-	at := time.Now().UTC().Format(time.RFC3339Nano)
-	_, _ = store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('persisted-session','default','owner','device','persisted-request',X'01',1,'active',?,?)`, at, at)
-	_, _ = store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits) VALUES('persisted-turn','default','persisted-session',1,'persisted-category',1,'is it done',X'01',?,'cmd','task')`, at)
-	if got := svc.ensureClassified(context.Background(), "default", "persisted-session", 1, "persisted-category", 1); got != "task" {
-		t.Fatalf("persisted category=%q", got)
 	}
 }
 

@@ -106,7 +106,16 @@ func (r RouteResult) Exits() string {
 	return r.Route
 }
 
-func (r *ContextRegister) Route(ctx context.Context, owner RegisterOwner, sentence string, now time.Time) (result RouteResult, resultErr error) {
+func (r *ContextRegister) Route(ctx context.Context, owner RegisterOwner, sentence string, now time.Time) (RouteResult, error) {
+	return r.route(ctx, owner, sentence, now, currentTranscript{})
+}
+
+type currentTranscript struct {
+	session string
+	seq     sql.NullInt64
+}
+
+func (r *ContextRegister) route(ctx context.Context, owner RegisterOwner, sentence string, now time.Time, current currentTranscript) (result RouteResult, resultErr error) {
 	started := time.Now()
 	kind := "db"
 	defer func() {
@@ -124,7 +133,7 @@ func (r *ContextRegister) Route(ctx context.Context, owner RegisterOwner, senten
 	if validRegisterOwner(owner) != nil {
 		kind = "config"
 	}
-	layers, err := r.Layers(ctx, owner, now)
+	layers, err := r.snapshotForTurn(ctx, owner, now, current)
 	if err != nil {
 		return RouteResult{}, err
 	}
@@ -268,6 +277,10 @@ func validRegisterOwner(o RegisterOwner) error {
 }
 
 func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now time.Time) (registerState, error) {
+	return r.snapshotForTurn(ctx, o, now, currentTranscript{})
+}
+
+func (r *ContextRegister) snapshotForTurn(ctx context.Context, o RegisterOwner, now time.Time, current currentTranscript) (registerState, error) {
 	var s registerState
 	if err := validRegisterOwner(o); err != nil {
 		return s, err
@@ -394,6 +407,10 @@ func (r *ContextRegister) snapshot(ctx context.Context, o RegisterOwner, now tim
 		return a.seq < b.seq
 	})
 	for _, t := range s.turns {
+		// Ingest has already persisted the utterance supplied as Current sentence.
+		if current.seq.Valid && t.eventOrder == 0 && t.session == current.session && t.seq == current.seq.Int64 {
+			continue
+		}
 		late := t.received.After(s.BuiltAt)
 		if t.eventOrder != 0 {
 			late = t.eventOrder > s.eventWatermark

@@ -20,41 +20,15 @@ import (
 
 var uiRetryJitter = rand.Float64
 
-func (s *Service) createRegisterUIJobs(ctx context.Context) {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Service) createRegisterUIJobTx(ctx context.Context, tx *sql.Tx, turn, workspace, owner, request, at string) error {
+	id, err := randomID()
 	if err != nil {
-		return
+		return err
 	}
-	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT v.id,v.workspace_id,s.owner_id,v.request FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id WHERE v.exits IN ('ui','chat_input') AND v.ui_handled=0 AND trim(coalesce(v.request,''))<>'' AND NOT EXISTS(SELECT 1 FROM ui_requests r WHERE r.voice_turn_id=v.id) ORDER BY v.confirmed_at LIMIT 25`)
-	if err != nil {
-		return
+	if _, err = tx.ExecContext(ctx, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,voice_turn_id,request,created_at,updated_at) VALUES(?,?,?,'register',?,?,?,?)`, id, workspace, owner, turn, request, at, at); err != nil {
+		return err
 	}
-	type turn struct{ id, w, o, request string }
-	var turns []turn
-	for rows.Next() {
-		var t turn
-		if rows.Scan(&t.id, &t.w, &t.o, &t.request) != nil {
-			rows.Close()
-			return
-		}
-		turns = append(turns, t)
-	}
-	rows.Close()
-	at := s.now().UTC().Format(time.RFC3339Nano)
-	for _, t := range turns {
-		id, e := randomID()
-		if e != nil {
-			return
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,voice_turn_id,request,created_at,updated_at) VALUES(?,?,?,'register',?,?,?,?)`, id, t.w, t.o, t.id, t.request, at, at); err != nil {
-			return
-		}
-		if err = s.insertUIJobTx(ctx, tx, t.w, t.o, "register", t.id, id, at); err != nil {
-			return
-		}
-	}
-	_ = tx.Commit()
+	return s.insertUIJobTx(ctx, tx, workspace, owner, "register", turn, id, at)
 }
 func (s *Service) insertUIJobTx(ctx context.Context, tx *sql.Tx, w, o, kind, key, request, at string) error {
 	id, err := randomID()

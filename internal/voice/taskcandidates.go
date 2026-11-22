@@ -34,6 +34,10 @@ coalesce(t.result,''),t.summary_result,t.version`
 // taskCandidates retrieves bounded lexical candidates across calls. Ranking chooses
 // membership; the final facts are oldest first. It performs no writes or inference.
 func (s *Service) taskCandidates(ctx context.Context, q rosterQueryer, workspace, owner, text string, now time.Time, limit int) ([]taskCandidate, error) {
+	return s.taskCandidatesForSession(ctx, q, workspace, owner, "", text, now, limit)
+}
+
+func (s *Service) taskCandidatesForSession(ctx context.Context, q rosterQueryer, workspace, owner, session, text string, now time.Time, limit int) ([]taskCandidate, error) {
 	if limit <= 0 {
 		limit = 8
 	}
@@ -72,10 +76,10 @@ func (s *Service) taskCandidates(ctx context.Context, q rosterQueryer, workspace
 	selected, err := read(`SELECT `+candidateColumns+`,0 FROM tasks t
 JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id
 WHERE t.workspace_id=? AND t.owner_subject_id=?
-AND l.session_id=(SELECT id FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND julianday(created_at)<=julianday(?) ORDER BY julianday(created_at) DESC,id DESC LIMIT 1)
+AND l.session_id=coalesce(nullif(?,''),(SELECT id FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND julianday(created_at)<=julianday(?) ORDER BY julianday(created_at) DESC,id DESC LIMIT 1))
 AND t.status IN ('queued','active','waiting','awaiting_user','paused')
 AND julianday(t.created_at) BETWEEN julianday(?) AND julianday(?)
-ORDER BY julianday(t.created_at) DESC,t.id DESC LIMIT 5`, workspace, owner, workspace, owner, stamp(now), stamp(now.Add(-time.Hour)), stamp(now))
+ORDER BY julianday(t.created_at) DESC,t.id DESC LIMIT 5`, workspace, owner, session, workspace, owner, stamp(now), stamp(now.Add(-time.Hour)), stamp(now))
 	if err != nil {
 		return nil, err
 	}

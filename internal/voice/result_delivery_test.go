@@ -556,7 +556,7 @@ func TestRegisterIsNeverCalledInsideATransaction(t *testing.T) {
 	r.seedCall(t, "s-lock", "user-1", 1)
 	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('turn-lock','default','s-lock',1,'turn',1,'is it done',X'01',?, 'cmd')`, at)
 	done := make(chan struct{})
-	go func() { svc.classifyCommittedTurn("turn-lock"); close(done) }()
+	go func() { svc.classifyTurnFixture("turn-lock"); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(time.Second):

@@ -126,7 +126,7 @@ func TestInteractiveClassificationHTTPFailures(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					s.classifyCommittedTurn(id)
+					s.classifyTurnFixture(id)
 					var exits, action, snapshot string
 					if err := db.DB().QueryRow(`SELECT exits,steward_action,steward_snapshot FROM voice_turns WHERE id=?`, id).Scan(&exits, &action, &snapshot); err != nil {
 						t.Fatal(err)
@@ -204,7 +204,7 @@ func TestInteractiveRegisterClassificationDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	s.classifyCommittedTurn("deadline")
+	s.classifyTurnFixture("deadline")
 	if elapsed := time.Since(start); elapsed > 2*time.Second || slept != time.Second || calls.Load() != 2 {
 		t.Fatalf("elapsed=%v slept=%v calls=%d", elapsed, slept, calls.Load())
 	}

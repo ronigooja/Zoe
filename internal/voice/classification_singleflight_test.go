@@ -85,7 +85,7 @@ func classifyAsync(s *Service, id string) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		s.classifyCommittedTurn(id)
+		s.classifyTurnFixture(id)
 	}()
 	return done
 }
@@ -103,7 +103,7 @@ func TestClassificationSingleFlightSameRow(t *testing.T) {
 	waitClassification(t, classifyAsync(r.svc, "same-row"))
 	unblock()
 	waitClassification(t, first)
-	r.svc.classifyCommittedTurn("same-row")
+	r.svc.classifyTurnFixture("same-row")
 	if r.routes.Load() != 1 || r.choices.Load() != 1 {
 		t.Fatalf("Route=%d Choose=%d, want one each", r.routes.Load(), r.choices.Load())
 	}
@@ -145,7 +145,7 @@ func TestClassificationConcurrentRouteAcceptancePreservesWinner(t *testing.T) {
 		r.exec(t, `UPDATE voice_turns SET exits='chat',request=NULL WHERE id='route-race'`)
 	})
 	r.seedTurn(t, "route-race")
-	r.svc.classifyCommittedTurn("route-race")
+	r.svc.classifyTurnFixture("route-race")
 	if r.routes.Load() != 1 || r.choices.Load() != 0 {
 		t.Fatalf("Route=%d Choose=%d; losing route must not reach Steward", r.routes.Load(), r.choices.Load())
 	}
@@ -155,12 +155,12 @@ func TestClassificationConcurrentRouteAcceptancePreservesWinner(t *testing.T) {
 func TestClassificationSelectionRefreshReusesAcceptedRegister(t *testing.T) {
 	r := newClassificationRig(t, nil)
 	r.seedTurn(t, "refresh-row")
-	r.svc.classifyCommittedTurn("refresh-row")
+	r.svc.classifyTurnFixture("refresh-row")
 	// Preflight invalidates only the selection when authoritative task facts
 	// change. The accepted register request must survive selection refreshes.
 	r.exec(t, `UPDATE voice_turns SET steward_snapshot='',steward_action='' WHERE id='refresh-row'`)
-	r.svc.classifyCommittedTurn("refresh-row")
-	r.svc.classifyCommittedTurn("refresh-row")
+	r.svc.classifyTurnFixture("refresh-row")
+	r.svc.classifyTurnFixture("refresh-row")
 	if r.routes.Load() != 1 || r.choices.Load() != 2 {
 		t.Fatalf("Route=%d Choose=%d; refresh must run only Steward once", r.routes.Load(), r.choices.Load())
 	}
@@ -181,12 +181,12 @@ func TestClassificationSingleFlightRetryAfterFailure(t *testing.T) {
 	// Routing errors normally persist an error sentinel. A storage failure leaves
 	// the row eligible for a retry without changing that fail-closed behavior.
 	r.exec(t, `CREATE TRIGGER classification_write_failure BEFORE UPDATE ON voice_turns BEGIN SELECT RAISE(FAIL,'fixture storage failure'); END`)
-	r.svc.classifyCommittedTurn("retry-row")
+	r.svc.classifyTurnFixture("retry-row")
 	if _, loaded := r.svc.classifying.Load("retry-row"); loaded {
 		t.Fatal("failed classification retained registry entry")
 	}
 	r.exec(t, `DROP TRIGGER classification_write_failure`)
-	r.svc.classifyCommittedTurn("retry-row")
+	r.svc.classifyTurnFixture("retry-row")
 	if attempts != 2 || r.routes.Load() != 1 || r.choices.Load() != 1 {
 		t.Fatalf("attempts=%d Route=%d Choose=%d", attempts, r.routes.Load(), r.choices.Load())
 	}
@@ -195,12 +195,12 @@ func TestClassificationSingleFlightRetryAfterFailure(t *testing.T) {
 
 func TestClassificationSingleFlightReleasesOnPanicAndEarlyReturn(t *testing.T) {
 	r := newClassificationRig(t, nil)
-	r.svc.classifyCommittedTurn("missing-row")
+	r.svc.classifyTurnFixture("missing-row")
 	if _, loaded := r.svc.classifying.Load("missing-row"); loaded {
 		t.Fatal("early return retained registry entry")
 	}
 	r.seedTurn(t, "missing-row")
-	r.svc.classifyCommittedTurn("missing-row")
+	r.svc.classifyTurnFixture("missing-row")
 	r.assertResult(t, "missing-row", "task", "new")
 	r.seedTurn(t, "panic-row")
 	r.svc.register.boundary = func(context.Context, RegisterOwner) (time.Time, error) { panic("fixture panic") }
@@ -210,13 +210,13 @@ func TestClassificationSingleFlightReleasesOnPanicAndEarlyReturn(t *testing.T) {
 				t.Error("expected register panic")
 			}
 		}()
-		r.svc.classifyCommittedTurn("panic-row")
+		r.svc.classifyTurnFixture("panic-row")
 	}()
 	if _, loaded := r.svc.classifying.Load("panic-row"); loaded {
 		t.Fatal("panic retained registry entry")
 	}
 	r.svc.register.boundary = nil
-	r.svc.classifyCommittedTurn("panic-row")
+	r.svc.classifyTurnFixture("panic-row")
 	r.assertResult(t, "panic-row", "task", "new")
 }
 
@@ -229,7 +229,7 @@ func TestClassificationSingleFlightDiscardedLogs(t *testing.T) {
 		r.exec(t, `UPDATE voice_turns SET exits='chat',steward_action='' WHERE id='discard-row'`)
 		return steward.Choice{Action: "new"}, nil
 	})
-	r.svc.classifyCommittedTurn("discard-row")
+	r.svc.classifyTurnFixture("discard-row")
 	text := logs.String()
 	if !strings.Contains(text, "level=warn voice_routing_discarded id=discard-row reason=already_classified") {
 		t.Fatalf("missing discarded WARN: %s", text)
@@ -243,16 +243,25 @@ func TestClassificationSingleFlightDiscardedLogs(t *testing.T) {
 	r.svc.steward = classificationStewardFunc(func(context.Context, steward.Input) (steward.Choice, error) {
 		return steward.Choice{Action: "new"}, nil
 	})
-	r.svc.classifyCommittedTurn("winning-row")
+	r.svc.classifyTurnFixture("winning-row")
 	if !strings.Contains(logs.String(), "level=info voice_routing id=winning-row failed=false storage_error=false") {
 		t.Fatalf("winning success log changed: %s", logs.String())
 	}
 	logs.Reset()
 	r.seedTurn(t, "failed-row")
 	r.svc.register.boundary = func(context.Context, RegisterOwner) (time.Time, error) { return time.Time{}, errors.New("fixture") }
-	r.svc.classifyCommittedTurn("failed-row")
+	r.svc.classifyTurnFixture("failed-row")
 	if !strings.Contains(logs.String(), "voice_routing id=failed-row failed=true storage_error=false") || !strings.Contains(logs.String(), "level=error voice_routing_failure id=failed-row error_kind=routing_or_storage") {
 		t.Fatalf("winning error logs changed: %s", logs.String())
 	}
 	r.assertResult(t, "failed-row", "error", "")
+}
+
+// Exercise classification by itself in model and storage fault fixtures.
+func (s *Service) classifyTurnFixture(id string) {
+	if !s.claimClassification(id) {
+		return
+	}
+	defer s.classifying.Delete(id)
+	s.classifyDelegation(context.Background(), id)
 }

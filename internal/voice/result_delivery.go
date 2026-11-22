@@ -21,8 +21,6 @@ func (s *Service) resultDispatcher() {
 	for {
 		select {
 		case <-t.C:
-			s.classifyCommittedTurns(s.recallCtx)
-			s.createRegisterUIJobs(s.recallCtx)
 			s.consumeUITaskEvents(s.recallCtx)
 			s.dispatchUIJobs(s.recallCtx)
 			s.dispatchUIFeedback(s.recallCtx)
@@ -34,44 +32,6 @@ func (s *Service) resultDispatcher() {
 			return
 		}
 	}
-}
-
-func (s *Service) classifyCommittedTurns(ctx context.Context) {
-	if s.register == nil {
-		return
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,content FROM voice_turns WHERE exits IS NULL ORDER BY confirmed_at LIMIT 25`)
-	if err != nil {
-		return
-	}
-	type turn struct{ id, content string }
-	var turns []turn
-	for rows.Next() {
-		var t turn
-		if rows.Scan(&t.id, &t.content) == nil {
-			turns = append(turns, t)
-		}
-	}
-	rows.Close()
-	for _, t := range turns {
-		s.classifyCommittedTurn(t.id)
-	}
-}
-
-func (s *Service) ensureClassified(ctx context.Context, workspace, session string, generation int64, turn string, revision int64) string {
-	deadline := time.Now().Add(1500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		var category string
-		if err := s.db.QueryRowContext(ctx, `SELECT coalesce(exits,'') FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, workspace, session, generation, turn, revision).Scan(&category); err == nil && category != "" {
-			return category
-		}
-		select {
-		case <-ctx.Done():
-			return ""
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
-	return ""
 }
 
 // consumeResultEvents is the voice-owned boundary between control events and delivery rows.

@@ -104,8 +104,10 @@ func uiFlowServer(t *testing.T, r *deliveryRig) {
 func uiFlowRegister(t *testing.T, r *deliveryRig) {
 	t.Helper()
 	r.seedCall(t, "call", "owner", 1)
-	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request) VALUES('turn','default','call',1,'turn',1,'original sentence',X'01',?,'turn-command','ui','resolved request')`, r.now().Format(time.RFC3339Nano))
-	r.svc.createRegisterUIJobs(context.Background())
+	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request,transcript_seq) VALUES('turn','default','call',1,'turn',1,'original sentence',X'01',?,'turn-command','ui','resolved request',0)`, r.now().Format(time.RFC3339Nano))
+	if err := r.svc.applyDelegation(context.Background(), "turn"); err != nil {
+		t.Fatal(err)
+	}
 	r.svc.dispatchUIJobs(context.Background())
 }
 
@@ -138,7 +140,9 @@ func TestUIRegisterJobFlow(t *testing.T) {
 	if _, exists := e.Payload["deleted"]; exists {
 		t.Fatal("removed field in surface event")
 	}
-	r.svc.createRegisterUIJobs(context.Background())
+	if err := r.svc.applyDelegation(context.Background(), "turn"); err != nil {
+		t.Fatal(err)
+	}
 	var jobs int
 	_ = r.store.DB().QueryRow(`SELECT count(*) FROM ui_jobs`).Scan(&jobs)
 	if jobs != 1 {

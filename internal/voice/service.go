@@ -237,10 +237,6 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 		}
 	}
 	server.RegisterShutdownHook(svc.Stop)
-	svc.Start()
-	if err := server.RegisterCommand("voice.turn.commit", svc.commandCommitTurn); err != nil {
-		return err
-	}
 	if err := server.RegisterCommand("voice.text_input", svc.commandVoiceTextInput); err != nil {
 		return err
 	}
@@ -256,17 +252,10 @@ func Register(server *control.Server, store *storage.Store, cfg Config) error {
 	if err := server.RegisterCommand("voice.task.link", svc.commandLinkTask); err != nil {
 		return err
 	}
-	if err := server.RegisterCommand("voice.turn.handoff", func(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
-		return svc.commandHandoff(ctx, tx, cmd, req, server)
-	}); err != nil {
-		return err
-	}
-	if err := server.RegisterCommandPreflight("voice.turn.handoff", svc.prepareHandoff); err != nil {
-		return err
-	}
 	if err := server.RegisterTaskSourceHandler("voice", svc.admitVoiceTask); err != nil {
 		return err
 	}
+	svc.Start()
 	if err := server.RegisterCommand("voice.pool.reconcile", svc.commandReconcilePool); err != nil {
 		return err
 	}
@@ -391,6 +380,10 @@ func (s *Service) Start() {
 	s.recoverRecall(s.recallCtx, true)
 	s.workers.Add(1)
 	go func() { defer s.workers.Done(); s.reaper() }()
+	if s.uiEventServer != nil {
+		s.workers.Add(1)
+		go func() { defer s.workers.Done(); s.delegationWorker(s.recallCtx) }()
+	}
 	if s.resultDeliveryEnabled || s.register != nil {
 		s.workers.Add(1)
 		go func() { defer s.workers.Done(); s.resultDispatcher() }()
