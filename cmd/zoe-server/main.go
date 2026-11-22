@@ -140,7 +140,7 @@ func run() error {
 	}
 	ready := &voice.ReadyHandle{}
 	models := retryModelsFromLoaded(registerConfig, stewardClient, uiController)
-	server, err := composeControlServer(store, cfg, voice.Config{Ready: ready, RetryModels: models, DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: promptSet.VoiceInstruction(), UIControllerInstruction: promptSet.UIController(), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, UIControllerMaxRetries: uiMaxRetries, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), HeartbeatTimeout: voiceHeartbeatTimeout()}, capabilities.Config{
+	server, err := composeControlServer(store, cfg, voice.Config{Ready: ready, RetryModels: models, DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: promptSet.VoiceInstruction(), UIControllerInstruction: promptSet.UIController(), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, UIControllerMaxRetries: uiMaxRetries, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), GatewayDialOrigin: os.Getenv("ZOE_VOICE_GATEWAY_DIAL_ORIGIN")}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	})
@@ -221,20 +221,6 @@ func run() error {
 		return err
 	}
 	return nil
-}
-
-// ZOE_VOICE_HEARTBEAT_TIMEOUT_SECONDS controls stale-session reclaim; values
-// are clamped by the voice service to 30..600 seconds (default 60).
-func voiceHeartbeatTimeout() time.Duration {
-	value := strings.TrimSpace(os.Getenv("ZOE_VOICE_HEARTBEAT_TIMEOUT_SECONDS"))
-	if value == "" {
-		return 60 * time.Second
-	}
-	seconds, err := time.ParseDuration(value + "s")
-	if err != nil {
-		return 60 * time.Second
-	}
-	return seconds
 }
 
 func configuredPushSender() (control.PushSender, error) {

@@ -36,7 +36,7 @@ under the prompt lifecycle above.
 
 ### Voice configuration
 
-See the [authenticated AVAS configuration response](media.md#apple-signaling-and-configuration).
+Set `ZOE_VOICE_GATEWAY_DIAL_ORIGIN` to the client-reachable HTTPS origin advertised in the [authenticated AVAS configuration response](media.md#apple-signaling-and-configuration). It is independent of Zoe's private gateway API URL.
 
 ## Persistence and idempotency
 

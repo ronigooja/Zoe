@@ -140,24 +140,51 @@ func ensureInstanceActor(ctx context.Context, db *sql.Tx, now string) error {
 
 func (s *Server) instanceAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		provided, err := instanceKeyHash(bearer(r))
+		p, err := s.authenticateInstanceKey(r.Context(), bearer(r), nil)
 		if err != nil {
-			writeError(w, apiError(http.StatusUnauthorized, "unauthenticated", "valid instance bearer required", nil))
+			writeError(w, err)
 			return
 		}
-		var expected []byte
-		var generation int64
-		if err = s.store.DB().QueryRowContext(r.Context(), `SELECT key_hash,generation FROM instance_auth WHERE singleton=1`).Scan(&expected, &generation); err != nil || len(expected) != len(provided) || subtle.ConstantTimeCompare(expected, provided) != 1 {
-			writeError(w, apiError(http.StatusUnauthorized, "unauthenticated", "instance credential is not recognized", nil))
-			return
-		}
-		p := contracts.Principal{Generation: generation, InstallationID: r.Header.Get("X-Zoe-Installation-ID"), WorkspaceID: "default", SubjectID: "owner", DeviceID: "instance", Scopes: append([]string(nil), s.cfg.InstanceScopes...)}
+		p.InstallationID = r.Header.Get("X-Zoe-Installation-ID")
 		if required := requiredCoreDeviceScope(r); required != "" && !HasScope(p, required) {
 			writeError(w, apiError(403, "forbidden", "instance lacks required scope", nil))
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), devicePrincipalKey{}, p)))
 	})
+}
+
+// AuthenticateForwardedInstanceKey checks the raw instance key on an
+// independently authenticated runner request.
+func (s *Server) AuthenticateForwardedInstanceKey(ctx context.Context, key string) (contracts.Principal, error) {
+	return s.authenticateInstanceKey(ctx, key, map[string]string{"credential": "instance_key"})
+}
+
+func (s *Server) authenticateInstanceKey(ctx context.Context, key string, details any) (contracts.Principal, error) {
+	provided, err := instanceKeyHash(key)
+	if err != nil {
+		return contracts.Principal{}, apiError(http.StatusUnauthorized, "unauthenticated", "valid instance bearer required", details)
+	}
+	var expected []byte
+	var generation int64
+	err = s.store.DB().QueryRowContext(ctx, `SELECT key_hash,generation FROM instance_auth WHERE singleton=1`).Scan(&expected, &generation)
+	if details != nil && err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return contracts.Principal{}, apiError(http.StatusServiceUnavailable, "voice_unavailable", "voice authorization is unavailable", nil)
+	}
+	if err != nil || subtle.ConstantTimeCompare(expected, provided) != 1 {
+		return contracts.Principal{}, apiError(http.StatusUnauthorized, "unauthenticated", "instance credential is not recognized", details)
+	}
+	return contracts.Principal{Generation: generation, WorkspaceID: "default", SubjectID: "owner", DeviceID: "instance", Scopes: append([]string(nil), s.cfg.InstanceScopes...)}, nil
+}
+
+// RequireForwardedInstanceKeyTx fences a call admission against key rotation.
+func RequireForwardedInstanceKeyTx(ctx context.Context, tx *sql.Tx, p contracts.Principal) error {
+	err := requireOwnerSessionTx(ctx, tx, p)
+	var fault *APIError
+	if errors.As(err, &fault) && fault.Status == http.StatusUnauthorized {
+		return apiError(http.StatusUnauthorized, "unauthenticated", "instance credential is not recognized", map[string]string{"credential": "instance_key"})
+	}
+	return err
 }
 
 // Recheck within each mutation transaction. Instance credentials are rotated
@@ -229,13 +256,26 @@ func (s *Server) runnerAuth(next http.Handler) http.Handler {
 		// A voice ingest service credential is never a general runner credential,
 		// including routes which otherwise only filter rows rather than deny.
 		for _, scope := range p.Scopes {
-			if scope == "voice:turn:ingest" && (r.Method != http.MethodPost || r.URL.Path != "/runner/v1/voice/turns") {
-				writeError(w, apiError(http.StatusForbidden, "forbidden", "voice ingest credential is restricted to transcript ingestion", nil))
+			if scope == "voice:turn:ingest" && !voiceRunnerRoute(r) {
+				writeError(w, apiError(http.StatusForbidden, "forbidden", "voice ingest credential is restricted to voice runner routes", nil))
 				return
 			}
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), runnerPrincipalKey{}, p)))
 	})
+}
+
+func voiceRunnerRoute(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	switch r.URL.Path {
+	case "/runner/v1/voice/turns", "/runner/v1/voice/calls":
+		return true
+	}
+	path, ok := strings.CutPrefix(r.URL.Path, "/runner/v1/voice/calls/")
+	id, action, found := strings.Cut(path, "/")
+	return ok && found && id != "" && id != "." && id != ".." && (action == "established" || action == "ended")
 }
 
 // RegisterRunnerCredential stores only a digest of a deployment-provisioned bearer.

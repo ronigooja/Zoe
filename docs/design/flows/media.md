@@ -240,7 +240,7 @@ the old client is unsupported.
 
 ## Implementation locations
 
-[Account media](../../../internal/voice/account_media.go), [gateway HTTP](../../../internal/voice/account_media_http.go), [service recovery](../../../internal/voice/service.go).
+[Call admission and binding](../../../internal/voice/calls.go), [termination and evidence reconciliation](../../../internal/voice/call_end.go).
 
 ## Verification obligations
 

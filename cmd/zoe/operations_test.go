@@ -187,7 +187,7 @@ func TestMemoryConfigureConsumesCRLFAnswersFromSingleChunk(t *testing.T) {
 func TestVoiceConfigureAndStatus(t *testing.T) {
 	containerKeyFixture(t)
 	root := t.TempDir()
-	_ = os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_COMPOSE_FILE=/tmp/zoe-compose.yaml\nCOMPOSE_PROJECT_NAME=zoe\n"), 0600)
+	_ = os.WriteFile(filepath.Join(root, "zoe-stack.env"), []byte("ZOE_COMPOSE_FILE=/tmp/zoe-compose.yaml\nCOMPOSE_PROJECT_NAME=zoe\nZOE_VOICE_GATEWAY_DIAL_ORIGIN=https://dial.example.test\n"), 0600)
 	oldMode := os.Getenv("ZOE_DEPLOYMENT_MODE")
 	_ = os.Setenv("ZOE_DEPLOYMENT_MODE", "compose")
 	t.Cleanup(func() { _ = os.Setenv("ZOE_DEPLOYMENT_MODE", oldMode) })
@@ -204,7 +204,7 @@ func TestVoiceConfigureAndStatus(t *testing.T) {
 	if err := voiceStatusOperation([]string{"--root", root}, nil, &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Voice gateway URL: https://voice.example.test") || strings.Contains(out.String(), "voice-secret") {
+	if !strings.Contains(out.String(), "Voice gateway URL: https://voice.example.test") || !strings.Contains(out.String(), "Gateway dial origin configured: true") || strings.Contains(out.String(), "voice-secret") {
 		t.Fatalf("status omitted voice settings: %s", out.String())
 	}
 }
