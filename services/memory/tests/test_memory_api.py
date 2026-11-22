@@ -244,8 +244,7 @@ class MemoryAPITests(unittest.TestCase):
         with patch.object(self.memory, "add", return_value=result) as add:
             self.assertEqual(self.request("/v1/memory/ingest", {"user": "u", "batch_id": "batch", "chunk_id": "chunk", "text": "transcript"}),
                              (502, {"error_kind": "ingest_unplanned"}))
-        add.assert_called_once_with("transcript", user_id=person_user_id("u"), infer=True,
-                                    prompt=PROMPTS.memory_ingest)
+        add.assert_called_once_with("transcript", user_id=person_user_id("u"), infer=True)
 
     def test_ingest_person_isolation_and_ownership_history(self):
         self.memory.llm.generate_response.return_value = '{"memory":[{"text":"private-fact"}]}'

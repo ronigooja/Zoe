@@ -94,6 +94,7 @@ class PersonMemory:
         self._ingest_context = None
         self._ingest_facts = None
         self._ingest_hashes = set()
+        self._ingest_existing = []
         self._write_context = None
         # History has no user column in Mem0 2.2.1. Keep IDs, not content, so
         # even deleted vectors' history remains safely attributable on retry.
@@ -180,6 +181,10 @@ class PersonMemory:
             results = original_search(*args, **kwargs)
             if self._ingest_context is not None:
                 self._ingest_hashes = {item.payload.get("hash") for item in results}
+                self._ingest_existing = [
+                    {"id": str(index), "text": item.payload.get("data", "")}
+                    for index, item in enumerate(results)
+                ]
             return results
 
         memory.vector_store.search = vector_search
@@ -487,9 +492,17 @@ class PersonMemory:
             original_save_messages = db.save_messages
             extracted = None
 
-            def generate(*args, **kwargs):
+            def generate(messages, **kwargs):
                 nonlocal extracted
-                raw = original_generate(*args, **kwargs)
+                # Keep Mem0's retrieval and persistence, but own the actual model input.
+                # In particular, its default system prompt enables assistant extraction.
+                raw = original_generate(messages=[
+                    {"role": "system", "content": self.prompts.memory_ingest},
+                    {"role": "user", "content": json.dumps({
+                        "transcript": text,
+                        "existing_memories": self._ingest_existing,
+                    }, ensure_ascii=False)},
+                ], **kwargs)
                 # Fail closed before Mem0's permissive parser can turn malformed
                 # model output into a successful empty extraction.
                 try:
@@ -512,9 +525,10 @@ class PersonMemory:
             self._ingest_context = (user_id, batch_id, chunk_id, content_hash)
             self._ingest_facts = None
             self._ingest_hashes = set()
+            self._ingest_existing = []
             try:
                 try:
-                    self.memory.add(text, user_id=user_id, infer=True, prompt=self.prompts.memory_ingest)
+                    self.memory.add(text, user_id=user_id, infer=True)
                 except _ManifestReady:
                     pass
                 from .auth_tracking import check_auth
@@ -529,6 +543,7 @@ class PersonMemory:
                 raise
             finally:
                 self._ingest_context = None
+                self._ingest_existing = []
                 self.memory.llm.generate_response = original_generate
                 db.save_messages = original_save_messages
                 reset_request_timeout(timeout_token)

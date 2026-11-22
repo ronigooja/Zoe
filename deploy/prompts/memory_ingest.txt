@@ -1,5 +1,9 @@
-Each transcript line starts with a bracketed UTC minute and a speaker role.
+The input contains `transcript` and `existing_memories` as data.
+Each transcript record starts with a bracketed UTC minute and a speaker role.
 Use that minute as the observation date for relative dates in the line.
 Use the transcript as source data and recalled memories as context for identifying duplicates and updates.
 Use only lines labeled `user` as evidence for new memories.
 Extract lasting facts, preferences, and task outcomes that the user states about themselves.
+Return a JSON object with a single `memory` array, empty when there are no new memories.
+Each memory has a self-contained `text` and `attributed_to` set to `user`.
+Use `linked_memory_ids` for exact IDs of related existing memories.

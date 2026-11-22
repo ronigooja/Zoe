@@ -36,6 +36,7 @@ class PinnedWriteRecoveryTests(unittest.TestCase):
         self.addCleanup(self.vector_db.close)
         self.vector_db.execute("CREATE TABLE vectors(id TEXT PRIMARY KEY,payload TEXT,vector TEXT)")
         self.calls = []
+        self.existing = []
         self.raise_after = False
         for name in ("capture_event", "display_first_run_notice"):
             patcher = patch.object(main, name)
@@ -88,7 +89,7 @@ class PinnedWriteRecoveryTests(unittest.TestCase):
             self.fail("unintercepted update: intent must precede deterministic upsert")
 
         memory.vector_store = SimpleNamespace(insert=insert, update=update, get=get,
-            search=lambda **kwargs: [], list=lambda **kwargs: ([], None))
+            search=lambda **kwargs: self.existing, list=lambda **kwargs: ([], None))
         self.memory = memory
         self.backend = PersonMemory(memory, PROMPTS)
 
@@ -141,14 +142,20 @@ class PinnedWriteRecoveryTests(unittest.TestCase):
                 self.assertEqual(self.vector_db.execute("SELECT count(*) FROM vectors").fetchone()[0], 1)
 
     def test_public_infer_manifest_and_malformed_extraction(self):
-        source = "[2026-11-13T11:00Z] user: I moved here yesterday.\n"
+        source = ("[2026-11-13T11:00Z] user: I moved here yesterday.\n"
+                  "[2026-11-13T11:01Z] assistant: You have a pet iguana.\n")
+        self.existing = [SimpleNamespace(id="old", payload={"data": "Previously stored fact"})]
         self.memory.llm.generate_response.return_value = '{"memory":[{"text":"one"},{"text":"two"}]}'
         self.raise_after = True
         with self.assertRaises(RuntimeError):
             self.backend.ingest("owner", "batch", "chunk", source, time.monotonic() + 5)
         messages = self.memory.llm.generate_response.call_args.kwargs["messages"]
-        self.assertIn(PROMPTS.memory_ingest, messages[1]["content"])
-        self.assertIn(source.rstrip("\n"), messages[1]["content"])
+        self.assertEqual(messages, [
+            {"role": "system", "content": PROMPTS.memory_ingest},
+            {"role": "user", "content": json.dumps({"transcript": source, "existing_memories": [
+                {"id": "0", "text": "Previously stored fact"},
+            ]})},
+        ])
         digest = self.memory.db.connection.execute(
             "SELECT content_hash FROM zoe_person_ingest_receipts WHERE chunk_id='chunk'"
         ).fetchone()[0]
