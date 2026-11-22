@@ -34,6 +34,12 @@ configuration change clears its authentication stop. Its instruction file is
 `deploy/prompts/task_summary.txt`, installed as `/etc/zoe/prompts/task_summary.txt`
 under the prompt lifecycle above.
 
+### Voice configuration
+
+Zoe's authenticated `GET /v1/voice/config` response includes
+`gateway_dial_origin`, the gateway's HTTPS origin for AVAS dialing. See
+[dial authentication](media.md#avas-dial-authentication).
+
 ## Persistence and idempotency
 
 Keep previous known configuration and applied version. Record effective per-consumer configuration identity. Retain immutable release identity, retained configuration/data inventory and explicit backup/rollback references.

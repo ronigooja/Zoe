@@ -8,26 +8,51 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 | Producer / fields | Consumer and transformation |
 |---|---|
-| Authenticated Apple dial: SDP offer, settings and `request_id` | Client sends one request to the gateway, which returns the answer SDP or a visible failure. The dial authentication mechanism is to be defined. |
-| Gateway `call.start` over HTTPS: authenticated dial | Zoe establishes workspace, owner and device from the authenticated dial and enforces one active call per owner, including unresolved attempts. Zoe creates an `allocating` `voice_sessions` row and returns the Zoe session ID, [opening items](results.md#required-behavior) and instructions. |
+| Apple dial: SDP offer, settings and `request_id` | Client sends one request to the gateway. |
+| Gateway `call.start` | Zoe enforces one active call per owner, including unresolved attempts. Zoe creates an `allocating` `voice_sessions` row and returns the Zoe session ID, [opening items](results.md#required-behavior) and instructions. |
 | Gateway `call.established`: Zoe session reference, `gateway_session_id`, `media_generation`, `account_lease_id` and `account_lease_generation` | Zoe commits the binding and transitions `allocating` to `active` in one atomic update. |
 | Gateway `call.ended`: `gateway_session_id`, `media_generation`, reason and termination evidence when available | Zoe reconciles the exact session and lease. The report alone is not evidence. |
 
 ## Required behavior
 
-Gateway and Zoe authenticate service requests with existing credentials: the
-gateway uses its runner identity when calling Zoe, and Zoe uses its existing
-gateway bearer when calling the gateway. Neither service logs credentials.
+### AVAS dial authentication
+
+The client stores only Zoe's address and instance key. It gets the gateway's
+HTTPS dial origin from Zoe's [authenticated voice configuration](configuration.md#voice-configuration),
+not from the installation link. The client validates the gateway's TLS
+certificate and hostname using platform trust. Deployment must make the
+gateway's HTTPS dial endpoint reachable from the client's network.
+
+The client sends the same instance key as a bearer over HTTPS to Zoe and to the
+gateway. The gateway does not verify, hash or retain the key; it forwards the
+presented key in memory only in `call.start` over HTTPS, alongside its own runner
+credential. Zoe checks both identities: the runner identifies the gateway and
+must be authorized for `call.start` under the same workspace-scoped runner
+principal model as [transcript ingest](execution.md#required-behavior). Zoe
+validates the client's key using the [existing instance-key check and rotation](../../../internal/control/auth.go)
+(constant-time SHA-256 digest comparison and credential generation), and
+establishes the workspace, owner and device from the validated key. Rotation
+takes effect immediately without synchronization to the gateway.
+
+Neither service logs, persists or echoes the presented instance key, including
+in errors or telemetry. The gateway rejects a dial without a key locally.
+
+### Call lifecycle
+
+Zoe uses its existing gateway bearer when calling the gateway.
 
 The gateway owns the AVAS call. It must receive a successful `call.start`
-response before creating the upstream session and client relay. If Zoe is
-unavailable or refuses, no upstream session is created. After negotiation the
-gateway sends `call.established` and must receive Zoe's acknowledgement of the
-committed binding before returning the answer SDP or forwarding transcript,
-delegation or end reports. `call.established` targets the row created at
-`call.start`; later ingest sees the complete binding, not an absent or
-half-bound row. Lifecycle reports use the same runner identity, workspace
-authorization and [transcript channel](execution.md#required-behavior).
+response before allocating relay ports, selecting an upstream account, or
+creating the upstream session or client relay. After negotiation the gateway
+sends `call.established` and must receive Zoe's
+acknowledgement of the committed binding before returning the answer SDP or
+forwarding transcript, delegation or end reports. The gateway returns the
+answer SDP only in the authenticated HTTPS dial response. The media connection
+is the one negotiated by that offer and answer, including the SDP's ICE
+credentials and DTLS fingerprints. `call.established` targets the row created
+at `call.start`; later ingest sees the complete binding. Lifecycle reports use
+the gateway's runner identity, workspace authorization and
+[transcript channel](execution.md#required-behavior).
 
 Zoe retains the owner, device, Zoe session ID/generation, `gateway_session_id`,
 `gateway_media_generation` and opening manifest/reservations. Results, fast
@@ -70,8 +95,9 @@ or authority to reuse an account.
 
 ## Failure and recovery
 
-`call.start` is synchronous: failure fails the dial. Lifecycle reports use the
-[short in-memory retry](execution.md#failure-and-recovery), with no persistent
+`call.start` is synchronous: Zoe unavailability or refusal (including an invalid
+or rotated-out key) fails the dial visibly without creating an upstream session.
+Lifecycle reports use the [short in-memory retry](execution.md#failure-and-recovery), with no persistent
 outbox. Exhaustion and terminal failures (including 404/409 on ingest) are
 visible faults, not reasons to bypass the binding or retry creation.
 
