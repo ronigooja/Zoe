@@ -2,8 +2,43 @@ import XCTest
 import A2UISwiftCore
 @testable import ZoeKit
 
+private final class TestClock: SilenceClock {
+    var date: Date
+    init(_ date: Date = Date(timeIntervalSince1970: 0)) { self.date = date }
+    func now() -> Date { date }
+}
+
+
 @MainActor
 final class ScreenTests: XCTestCase {
+    func testSilenceDoesNotCountInteractionAndTimesOutDeterministically() {
+        let clock = TestClock()
+        let controller = SilenceController(timeoutSeconds: 10, clock: clock)
+        controller.noteVoiceActivity()
+        controller.setInteractionInProgress(true)
+        clock.date = Date(timeIntervalSince1970: 100)
+        XCTAssertEqual(controller.tick(), .none)
+        clock.date = Date(timeIntervalSince1970: 1000)
+        XCTAssertEqual(controller.tick(), .none)
+        controller.setInteractionInProgress(false)
+        XCTAssertEqual(controller.tick(), .none)
+        clock.date = Date(timeIntervalSince1970: 1010)
+        XCTAssertEqual(controller.tick(), .timedOut)
+        XCTAssertEqual(controller.tick(), .none)
+        controller.reset()
+        XCTAssertEqual(controller.tick(), .none)
+    }
+
+    func testDefaultSilenceTimeoutIsSixtySeconds() {
+        let clock = TestClock()
+        let controller = SilenceController(clock: clock)
+        controller.noteVoiceActivity()
+        clock.date = Date(timeIntervalSince1970: 59)
+        XCTAssertEqual(controller.tick(), .none)
+        clock.date = Date(timeIntervalSince1970: 60)
+        XCTAssertEqual(controller.tick(), .timedOut)
+    }
+
     func testSurfaceLifecycleAndUnknownUpdate() throws {
         var store = SurfaceStore()
         store.update(id: "missing", messages: [])

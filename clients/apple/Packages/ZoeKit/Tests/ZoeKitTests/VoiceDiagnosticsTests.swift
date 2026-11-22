@@ -5,7 +5,7 @@ import XCTest
 final class VoiceDiagnosticsTests: XCTestCase {
     func testReasonCodesAndBoundedSummaries() {
         XCTAssertEqual(Set(VoiceEndReason.allCases.map(\.rawValue)), Set([
-            "voice_end_event", "user_toggle_off", "media_loss_connection",
+            "silence_timeout", "voice_end_event", "user_toggle_off", "media_loss_connection",
             "media_loss_audio", "media_loss_data_channel",
             "app_terminate", "connection_cleared", "setup_failed", "other"
         ]))

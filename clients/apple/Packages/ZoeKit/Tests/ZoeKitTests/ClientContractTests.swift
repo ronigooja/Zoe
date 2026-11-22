@@ -45,6 +45,11 @@ private struct VoiceFixtureCredential: BearerTokenProviding {
     func bearerToken() throws -> String { "synthetic-instance-key" }
 }
 
+private final class VoiceContractSilenceClock: SilenceClock {
+    var date = Date(timeIntervalSince1970: 0)
+    func now() -> Date { date }
+}
+
 private struct VoiceContractKeyStore: InstanceKeyStoring {
     func load() throws -> InstanceKey? { try InstanceKey(String(repeating: "A", count: 43)) }
     func replace(_ key: InstanceKey) throws {}
@@ -78,6 +83,32 @@ private actor AsyncTestGate {
 }
 
 final class ClientContractTests: XCTestCase {
+    @MainActor func testSilenceTimeoutClosesLocalMediaBeforeGatewayHangup() async throws {
+        let clock = VoiceContractSilenceClock()
+        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!, silenceClock: clock)
+        let api = try voiceContractAPI()
+        let call = try voiceDialFixture("zoe-id", generation: 4, handle: "gateway-handle")
+        model.installVoiceSessionForTesting(call, api: api, origin: URL(string: "https://gateway.example:8443")!)
+        var events: [String] = []
+        model.voiceLocalMediaStopObserverForTesting = { events.append("local_close") }
+        ContractURLProtocol.responseHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "https://gateway.example:8443/client/v1/voice/calls/gateway-handle/hangup")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-instance-key")
+            XCTAssertTrue((Self.requestBody(request) ?? Data()).isEmpty)
+            events.append("gateway_hangup")
+            return (204, [:], Data())
+        }
+        clock.date = Date(timeIntervalSince1970: 59)
+        await model.tickVoiceSilenceForTesting()
+        XCTAssertTrue(events.isEmpty)
+        clock.date = Date(timeIntervalSince1970: 60)
+        await model.tickVoiceSilenceForTesting()
+        await model.tickVoiceSilenceForTesting()
+        XCTAssertEqual(events, ["local_close", "gateway_hangup"])
+        XCTAssertEqual(model.voiceStatus, .idle)
+    }
+
     private static let voiceConfigBody = #"{"version":"v1","gateway_dial_origin":"https://gateway.example:8443","defaults":{"voice":"cove","voice_mode":"wingman","language_code":"auto"},"voices":[{"id":"cove","name":"Cove"}],"voice_modes":[],"languages":[],"webrtc":{"data_channel":{"label":"zoe","negotiated":true,"id":0},"ice_servers":[],"receive_audio":true,"receive_video":false}}"#
     private static let voicePoolBody = #"{"blocked":true,"reason_code":"voice_pool_quarantined","updated_at":"now","account_lease_identity":false,"account_scoped_termination":false,"trusted_termination_evidence":false}"#
     private static let dialAnswer = Data(#"{"voice_session_id":"zoe-call","gateway_session_id":"gateway-call","generation":4,"answer_sdp":"answer"}"#.utf8)

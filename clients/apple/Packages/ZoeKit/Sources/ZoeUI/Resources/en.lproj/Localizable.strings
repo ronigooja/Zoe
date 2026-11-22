@@ -9,7 +9,10 @@
 "Zoe" = "Zoe";
 "Enter a valid Zoe server URL." = "Enter a valid Zoe server URL.";
 "Failed" = "Failed";
+"Hang up after silence" = "Hang up after silence";
 "Local media is closed, but gateway hangup is unconfirmed. Retry hangup before starting another call." = "Local media is closed, but gateway hangup is unconfirmed. Retry hangup before starting another call.";
+"Silence" = "Silence";
+"Silence timeout (seconds)" = "Silence timeout (seconds)";
 "The WebRTC connection closed." = "The WebRTC connection closed.";
 "The WebRTC connection failed." = "The WebRTC connection failed.";
 "The WebRTC connection was lost." = "The WebRTC connection was lost.";

@@ -48,6 +48,8 @@ public final class ZoeAppModel: ObservableObject {
     @Published public private(set) var voicePoolStatus: VoicePoolStatus?
     @Published public private(set) var voiceStatus: VoiceIntegrationStatus = .idle
     @Published public private(set) var continuousVoiceEnabled: Bool
+    @Published public private(set) var silenceHangupEnabled: Bool
+    @Published public private(set) var silenceTimeoutSeconds: Double
     @Published public private(set) var popoverCloseDelaySeconds: Double
     @Published public private(set) var windowCloseDelaySeconds: Double
     @Published public private(set) var newUISurfaceBehavior: NewUISurfaceBehavior
@@ -72,6 +74,7 @@ public final class ZoeAppModel: ObservableObject {
     var voiceDiagnosticObserverForTesting: ((String, String) -> Void)?
     var voiceCensusSummaryForTesting: String { voiceEventCensus.summary() }
     func reportVoiceCensusForTesting() { reportVoiceCensusIfNeeded() }
+    func tickVoiceSilenceForTesting() async { await checkVoiceSilence() }
     var voiceLocalMediaStopObserverForTesting: (() -> Void)?
     var voiceStatusObserverForTesting: ((VoiceIntegrationStatus) -> Void)?
     var voiceHangupOverrideForTesting: ((String) async throws -> Void)?
@@ -172,7 +175,8 @@ public final class ZoeAppModel: ObservableObject {
     private var voiceStartInProgress = false
     private var voiceStartedAt: Date?
     private var diagnosticConnectedAt: Date?
-    private let diagnosticNow: () -> Date
+    private var silenceResetDiagnostics = SilenceResetDiagnostics()
+    private var voiceActivityCoalescer = VoiceActivityCoalescer()
     private var voiceEventCensus = EventCensusDiagnostics()
     private var voiceInnerEventCensus = EventCensusDiagnostics(completeTypes: true)
     private var censusEndRecorded = false
@@ -197,9 +201,14 @@ public final class ZoeAppModel: ObservableObject {
     #if os(macOS)
     private var terminationObserver: NSObjectProtocol?
     #endif
-    public init(defaults: UserDefaults = .standard, diagnosticNow: @escaping () -> Date = { Date() }) {
+    public init(defaults: UserDefaults = .standard, silenceClock: SilenceClock = SystemSilenceClock()) {
         self.defaults = defaults
-        self.diagnosticNow = diagnosticNow
+        let savedEnabled = defaults.object(forKey: "zoe.voice.silenceHangupEnabled") == nil ? true : defaults.bool(forKey: "zoe.voice.silenceHangupEnabled")
+        let savedTimeout = (defaults.object(forKey: "zoe.voice.silenceTimeoutSeconds") as? NSNumber)?.doubleValue ?? 60
+        let timeout = savedTimeout.isFinite ? min(3600, max(10, savedTimeout)) : 60
+        silenceHangupEnabled = savedEnabled
+        silenceTimeoutSeconds = timeout
+        silence = SilenceController(timeoutSeconds: timeout, isEnabled: savedEnabled, clock: silenceClock)
         // A legacy Zoe hangup has no gateway handle and cannot be replayed.
         defaults.removeObject(forKey: "zoe.voice.pendingHangup")
         popoverCloseDelaySeconds = SurfaceClosePolicy.validatedDelay((defaults.object(forKey: "zoe.ui.popoverCloseDelaySeconds") as? NSNumber)?.doubleValue ?? 60)
@@ -214,11 +223,12 @@ public final class ZoeAppModel: ObservableObject {
         defaults.set(identifier, forKey: "zoe.installationID")
         continuousVoiceEnabled = defaults.bool(forKey: continuousVoiceKey)
         loadVoicePreference()
-        voiceCensusTask = Task { @MainActor [weak self] in
+        voiceMonitorTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, !Task.isCancelled else { return }
                 self.reportVoiceCensusIfNeeded()
+                await self.checkVoiceSilence()
             }
         }
 #if os(macOS)
@@ -233,7 +243,7 @@ public final class ZoeAppModel: ObservableObject {
 
     deinit {
         eventTask?.cancel()
-        voiceCensusTask?.cancel()
+        voiceMonitorTask?.cancel()
         for task in voiceHangupRetryTasks.values { task.cancel() }
         #if os(macOS)
         if let terminationObserver { NotificationCenter.default.removeObserver(terminationObserver) }
@@ -312,6 +322,23 @@ public final class ZoeAppModel: ObservableObject {
         await startVoice(voice: nil, voiceMode: nil, languageCode: nil, trigger: trigger)
     }
 
+    public func setSilenceHangupEnabled(_ enabled: Bool) {
+        let before = silenceSettings
+        silenceHangupEnabled = enabled
+        defaults.set(enabled, forKey: "zoe.voice.silenceHangupEnabled")
+        silence.isEnabled = enabled
+        recordSilenceSettingChange(from: before)
+    }
+
+    public func setSilenceTimeoutSeconds(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        let before = silenceSettings
+        silenceTimeoutSeconds = min(3600, max(10, seconds))
+        defaults.set(silenceTimeoutSeconds, forKey: "zoe.voice.silenceTimeoutSeconds")
+        silence.timeoutSeconds = silenceTimeoutSeconds
+        recordSilenceSettingChange(from: before)
+    }
+
     public func setNewUISurfaceBehavior(_ behavior: NewUISurfaceBehavior) {
         newUISurfaceBehavior = behavior
         defaults.set(behavior.rawValue, forKey: "zoe.ui.newUISurfaceBehavior")
@@ -329,9 +356,16 @@ public final class ZoeAppModel: ObservableObject {
         defaults.set(windowCloseDelaySeconds, forKey: "zoe.ui.windowCloseDelaySeconds")
     }
 
-    private var diagnosticElapsed: TimeInterval { diagnosticConnectedAt.map { diagnosticNow().timeIntervalSince($0) } ?? 0 }
+    private var silenceSettings: String { DiagnosticSummaries.settings(enabled: silenceHangupEnabled, seconds: silenceTimeoutSeconds) }
+    private var silenceSettingsSuffix: String { DiagnosticSummaries.settingsSuffix(enabled: silenceHangupEnabled, seconds: silenceTimeoutSeconds) }
+    private var diagnosticElapsed: TimeInterval { diagnosticConnectedAt.map { silence.diagnosticNow.timeIntervalSince($0) } ?? 0 }
 
-    private func recordVoiceTrace(phase: String, summary: String) {
+    private func recordSilenceSettingChange(from before: String) {
+        guard before != silenceSettings else { return }
+        (voiceAPI ?? api)?.recordDiagnostic(phase: "silence_setting_changed", requestPath: "client", errorSummary: "\(before)->\(silenceSettings)", level: .info, voiceSessionID: voiceSession?.voiceSessionId, voiceGeneration: voiceSession?.generation, voiceMediaEpoch: voiceSessionMediaEpoch)
+    }
+
+    private func recordVoiceTrace(phase: String, summary: String, upload: Bool = false) {
         #if DEBUG
         voiceDiagnosticObserverForTesting?(phase, summary)
         #endif
@@ -340,7 +374,23 @@ public final class ZoeAppModel: ObservableObject {
         let epoch = voiceSessionMediaEpoch ?? voiceMediaEpoch
         Task {
             await api.recordDiagnosticAndWait(phase: phase, requestPath: "client", errorSummary: String(summary.prefix(200)), level: .info, voiceSessionID: session?.voiceSessionId, voiceGeneration: session?.generation, voiceMediaEpoch: epoch)
+            if upload { api.triggerDiagnosticUpload() }
         }
+    }
+
+    private func recordSilenceReset(type: String) {
+        if let summary = silenceResetDiagnostics.note(type: type, now: silence.diagnosticNow, elapsed: diagnosticElapsed) {
+            recordVoiceTrace(phase: "silence_reset", summary: summary)
+        }
+    }
+
+    private func checkVoiceSilence() async {
+        guard let session = voiceSession, let api = voiceAPI,
+              let epoch = voiceSessionMediaEpoch, epoch == voiceMediaEpoch, !voiceSessionMediaClosed,
+              silence.tick() == .timedOut else { return }
+        let summary = DiagnosticSummaries.timeout(age: silence.lastActivityAge, timeout: silence.timeoutSeconds, enabled: silence.isEnabled, interaction: silence.interactionInProgress, elapsed: diagnosticElapsed)
+        recordVoiceTrace(phase: "silence_tick_timeout", summary: summary, upload: true)
+        await finishVoiceSession(session, api: api, mediaEpoch: epoch, lossReason: nil, reason: .silenceTimeout)
     }
 
     private func reportVoiceCensusIfNeeded() {
@@ -360,14 +410,19 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     private func noteVoiceConnected() {
-        // Connected calls exclude setup time from end-duration accounting.
+        // Connected calls exclude setup time from the silence window and end duration.
         voiceStartedAt = Date()
-        diagnosticConnectedAt = diagnosticNow()
+        diagnosticConnectedAt = silence.diagnosticNow
+        silenceResetDiagnostics = SilenceResetDiagnostics()
+        voiceActivityCoalescer = VoiceActivityCoalescer()
         voiceEventCensus = EventCensusDiagnostics()
         voiceInnerEventCensus = EventCensusDiagnostics(completeTypes: true)
         censusEndRecorded = false
         censusEarlyRecorded = false
         censusNextReportElapsed = 60
+        silence.reset()
+        silence.noteVoiceActivity()
+        recordSilenceReset(type: "connect")
     }
 
     public func receiveInstallationLink(_ url: URL) {
@@ -504,6 +559,7 @@ public final class ZoeAppModel: ObservableObject {
         let oldAPI = voiceAPI
         let oldEpoch = voiceSessionMediaEpoch
         let oldDuration = voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        silence.reset()
         _ = voiceMediaFence.stop(voiceMediaEpoch)
         let oldTransport = voiceTransport
         let oldAudio = voiceAudioSession
@@ -595,6 +651,7 @@ public final class ZoeAppModel: ObservableObject {
         censusEarlyRecorded = false
         censusNextReportElapsed = 60
         diagnosticConnectedAt = nil
+        silence.reset()
         voiceStartedAt = Date()
         defer { voiceStartInProgress = false }
         let mediaEpoch = voiceMediaFence.beginAttempt()
@@ -625,7 +682,7 @@ public final class ZoeAppModel: ObservableObject {
             let offer = try await createVoiceOffer(config: config, api: api, generation: generation, mediaEpoch: mediaEpoch)
             try requireVoiceAttempt(generation: generation, mediaEpoch: mediaEpoch)
             diagnosticPhase = "gateway_dial"
-            api.recordDiagnostic(phase: "voice_start", requestPath: Self.gatewayDialPath, errorSummary: trigger, level: .info, voiceMediaEpoch: mediaEpoch)
+            api.recordDiagnostic(phase: "voice_start", requestPath: Self.gatewayDialPath, errorSummary: trigger + silenceSettingsSuffix, level: .info, voiceMediaEpoch: mediaEpoch)
             let payload = VoiceDialRequest(
                 requestID: UUID().uuidString.lowercased(),
                 offerSDP: offer,
@@ -667,7 +724,7 @@ public final class ZoeAppModel: ObservableObject {
                 hangupUnconfirmed = !(await requestVoiceHangup(allocatedSession, api: api, phase: "setup_hangup", epoch: mediaEpoch))
             } else if canPublishEnd {
                 let reason = voiceAttemptEndReason ?? .setupFailed
-                let summary = reason.summary(duration: voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0)
+                let summary = reason.summary(duration: voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0) + silenceSettingsSuffix
                 let census = voiceEventCensus.summary()
                 let typeReports = voiceInnerEventCensus.typeReports()
                 censusEndRecorded = true
@@ -767,7 +824,7 @@ public final class ZoeAppModel: ObservableObject {
     private static let gatewayHangupPath = "/client/v1/voice/calls/{gateway_session_id}/hangup"
 
     private func deliverVoiceEnd(_ session: GatewayCall, api: APIClient, mediaEpoch: UInt64, reason: VoiceEndReason, duration: TimeInterval? = nil) {
-        let summary = reason.summary(duration: duration ?? voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0)
+        let summary = reason.summary(duration: duration ?? voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0) + silenceSettingsSuffix
         let census = censusEndRecorded ? nil : voiceEventCensus.summary()
         let typeReports = censusEndRecorded ? [] : voiceInnerEventCensus.typeReports()
         censusEndRecorded = true
@@ -959,6 +1016,7 @@ public final class ZoeAppModel: ObservableObject {
 
     private func closeVoiceLocalMedia(mediaEpoch: UInt64) {
         guard voiceMediaFence.stop(mediaEpoch) else { return }
+        silence.reset()
         #if DEBUG
         voiceLocalMediaStopObserverForTesting?()
         #endif
@@ -1152,13 +1210,18 @@ public final class ZoeAppModel: ObservableObject {
             event = inner
         }
         let type = (event["type"] as? String) ?? ""
+        let activity = VoiceActivityClassifier.isActivity(event: event)
         let outerType = (outer["type"] as? String) ?? "missing"
-        voiceEventCensus.note(type: outerType)
+        voiceEventCensus.note(type: outerType, activity: activity)
         if outerType == "data_message", event["type"] as? String != outerType {
-            voiceEventCensus.note(type: "data_message/" + String(type.prefix(48)))
+            voiceEventCensus.note(type: "data_message/" + String(type.prefix(48)), activity: activity)
         }
         if type != "data_message" {
-            voiceInnerEventCensus.note(type: type)
+            voiceInnerEventCensus.note(type: type, activity: activity)
+        }
+        if activity, voiceActivityCoalescer.shouldReset(now: silence.diagnosticNow) {
+            silence.noteVoiceActivity()
+            recordSilenceReset(type: type)
         }
         if type == "voice.end" || type == "voice_end" ||
             ((type == "function_call" || type == "tool_call") && ((event["name"] as? String) == "voice.end" || (event["name"] as? String) == "voice_end")) {
@@ -1179,7 +1242,8 @@ public final class ZoeAppModel: ObservableObject {
 
     private var workspaceID: String?
     private var eventCursor: String?
-    private var voiceCensusTask: Task<Void, Never>?
+    public let silence: SilenceController
+    private var voiceMonitorTask: Task<Void, Never>?
 
     private func validateConnection() async throws {
         guard let api else { throw ZoeError.missingCredential }

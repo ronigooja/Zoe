@@ -2,6 +2,7 @@ import Foundation
 import ZoeKit
 
 enum VoiceEndReason: String, CaseIterable {
+    case silenceTimeout = "silence_timeout"
     case voiceEndEvent = "voice_end_event"
     case userToggleOff = "user_toggle_off"
     case mediaLossConnection = "media_loss_connection"
