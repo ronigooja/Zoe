@@ -354,18 +354,6 @@
       "voice_result_chunks",
       ""
     ],
-    "voice_result_availability": [
-      "table",
-      "voice_result_availability",
-      "voice_result_availability",
-      "CREATE TABLE voice_result_availability (\n entry_id TEXT NOT NULL, session_id TEXT NOT NULL, generation INTEGER NOT NULL,\n available_at TEXT NOT NULL, PRIMARY KEY(entry_id,session_id,generation)\n)"
-    ],
-    "sqlite_autoindex_voice_result_availability_1": [
-      "index",
-      "sqlite_autoindex_voice_result_availability_1",
-      "voice_result_availability",
-      ""
-    ],
     "voice_text_checkpoints": [
       "table",
       "voice_text_checkpoints",
@@ -2219,36 +2207,6 @@
       ],
       [
         "state",
-        "TEXT",
-        1,
-        null,
-        0
-      ]
-    ],
-    "voice_result_availability": [
-      [
-        "entry_id",
-        "TEXT",
-        1,
-        null,
-        1
-      ],
-      [
-        "session_id",
-        "TEXT",
-        1,
-        null,
-        2
-      ],
-      [
-        "generation",
-        "INTEGER",
-        1,
-        null,
-        3
-      ],
-      [
-        "available_at",
         "TEXT",
         1,
         null,

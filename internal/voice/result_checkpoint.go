@@ -33,10 +33,6 @@ CREATE TABLE voice_result_chunks (
  delivery_id TEXT NOT NULL UNIQUE, content_hash TEXT NOT NULL, text TEXT NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('pending','attempted','confirmed','unknown')),
  PRIMARY KEY(entry_id,ordinal)
-);
-CREATE TABLE voice_result_availability (
- entry_id TEXT NOT NULL, session_id TEXT NOT NULL, generation INTEGER NOT NULL,
- available_at TEXT NOT NULL, PRIMARY KEY(entry_id,session_id,generation)
 );`
 
 // ResultChunkRequest binds an immutable payload to the actual gateway media generation.
