@@ -693,6 +693,7 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(renders, 1)
         try await model.recoverGlobalStateForTesting(api: api)
         XCTAssertEqual(renders, 1)
+        await model.waitForRecoveryACKForTesting()
     }
 
     #if os(macOS)

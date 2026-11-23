@@ -88,6 +88,9 @@ public final class ZoeAppModel: ObservableObject {
     func recoverGlobalStateForTesting(api: APIClient) async throws {
         try await recoverGlobalState(using: api, generation: connectionGeneration.value)
     }
+    func waitForRecoveryACKForTesting() async {
+        await recoveryACKTask?.value
+    }
     func installRecoveryCoordinatorForTesting(_ coordinator: CommandCoordinator) {
         self.coordinator = coordinator
     }
