@@ -127,10 +127,8 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 	}
 	{
 		if stewardAction == string(steward.ActionReport) || stewardAction == string(steward.ActionClarify) {
-			if stewardAction == string(steward.ActionReport) && prior == nil {
-				return contracts.CommandResult{}, nil, apiError(409, "invalid_selection", "report requires a selected task", nil)
-			}
-			if stewardAction == string(steward.ActionReport) {
+			matchedReport := stewardAction == string(steward.ActionReport) && prior != nil
+			if matchedReport {
 				// Defer the original result until this report reply commits delivered;
 				// the summary itself never acknowledges the original result.
 				if _, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET last_error_code='awaiting_context' WHERE subject_id=? AND task_id=? AND status='pending' AND `+resultNotInOpening+` AND NOT EXISTS(SELECT 1 FROM voice_result_chunks c WHERE c.entry_id=d.entry_id AND c.state!='pending')`, cmd.Principal.SubjectID, stewardTaskID); err != nil {
@@ -147,7 +145,7 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 			}
 			err := s.heldReplyTx(ctx, tx, cmd, p, reply)
 			if err == nil {
-				_, err = tx.ExecContext(ctx, `UPDATE voice_fast_replies SET intent_kind='task_report',report_turn_id=CASE WHEN ?='report' THEN ? ELSE NULL END WHERE session_id=? AND generation=? AND turn_id=?`, stewardAction, turnID, p.SessionID, p.Generation, p.TurnID)
+				_, err = tx.ExecContext(ctx, `UPDATE voice_fast_replies SET intent_kind='task_report',report_turn_id=CASE WHEN ? THEN ? ELSE NULL END WHERE session_id=? AND generation=? AND turn_id=?`, matchedReport, turnID, p.SessionID, p.Generation, p.TurnID)
 			}
 			return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}, nil, err
 		}

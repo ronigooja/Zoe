@@ -115,6 +115,26 @@ func TestDelegationApplyRevalidatesPersistedSnapshot(t *testing.T) {
 	}
 }
 
+func TestDelegationReportWithoutMatchingTaskQueuesOnlyReply(t *testing.T) {
+	r := newClassificationRig(t, nil)
+	r.seedTurn(t, "missing-task-report")
+	r.exec(t, `UPDATE voice_turns SET transcript_seq=1 WHERE id='missing-task-report'`)
+	const reply = "No matching task record was found."
+	useStewardServer(t, r, func(w http.ResponseWriter, _ steward.Input) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": `{"action":"report","task_id":null,"question_id":null,"reply":"` + reply + `"}`})
+	})
+	r.svc.processDelegation(context.Background(), "missing-task-report")
+	r.assertResult(t, "missing-task-report", "task", "report")
+	var text string
+	var linked sql.NullString
+	if err := r.store.DB().QueryRow(`SELECT text,report_turn_id FROM voice_fast_replies`).Scan(&text, &linked); err != nil || text != reply || linked.Valid {
+		t.Fatalf("reply=%q linked=%+v err=%v", text, linked, err)
+	}
+	if n := writeJobCount(t, r.store, `SELECT count(*) FROM tasks`); n != 0 {
+		t.Fatalf("report admitted %d tasks", n)
+	}
+}
+
 func TestStewardRereadsSummaryOnStaleSelectionAndTransportRetry(t *testing.T) {
 	for _, retry := range []bool{false, true} {
 		t.Run(map[bool]string{false: "stale selection", true: "transport retry"}[retry], func(t *testing.T) {

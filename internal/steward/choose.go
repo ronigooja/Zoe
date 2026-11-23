@@ -235,7 +235,7 @@ func parseChoice(output string) (Choice, error) {
 	case ActionAnswer:
 		task, question = true, true
 	case ActionReport:
-		task, reply = true, true
+		task, reply = choice.TaskID != nil, true
 	case ActionClarify:
 		reply = true
 	default:

@@ -14,11 +14,12 @@ report: the user wants factual state, progress, result or handling of identified
 cancel: the user wants identified work withdrawn or stopped.
 redisplay: the user wants an existing authoritative result presented unchanged.
 clarify: the user's intent or task/question reference is insufficiently determined.
-Ambiguity requires clarify, including unresolved references or intent with an empty task list.
+Use clarify when the intent or the subject itself is ambiguous.
 
 Use only exact stable IDs supplied in tasks and pending_questions.
 For answer, question_id belongs to the selected task's pending_questions.
-For report, reply is a nonempty fact-grounded response about the selected task.
+For report with a matching task, give a fact-grounded reply about that task.
+For report about an identifiable subject with no matching task, state that no matching task record was found for that subject.
 For clarify, reply is a nonempty resolving question.
 Replies follow the request's language.
 
@@ -27,6 +28,6 @@ action is exactly one of new, append, answer, continue, report, cancel, redispla
 For new, task_id, question_id and reply are JSON null.
 For append, continue, cancel and redisplay, task_id is required; question_id and reply are JSON null.
 For answer, task_id and question_id are required; reply is JSON null.
-For report, task_id and reply are required; question_id is JSON null.
+For report, reply is required, task_id is the matching task's ID or JSON null, and question_id is JSON null.
 For clarify, reply is required; task_id and question_id are JSON null.
 Every non-null value is a nonempty string.

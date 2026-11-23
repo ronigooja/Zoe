@@ -103,6 +103,9 @@ func TestParseChoiceExactNullability(t *testing.T) {
 	for _, action := range []Action{ActionNew, ActionAppend, ActionAnswer, ActionContinue, ActionReport, ActionCancel, ActionRedisplay, ActionClarify} {
 		want := validChoice(action)
 		for _, field := range []string{"task_id", "question_id", "reply"} {
+			if action == ActionReport && field == "task_id" {
+				continue
+			}
 			var fields map[string]any
 			_ = json.Unmarshal([]byte(encoded(want)), &fields)
 			if fields[field] == nil {
@@ -127,6 +130,13 @@ func TestParseChoiceExactNullability(t *testing.T) {
 				t.Fatalf("accepted missing %s/%s", action, field)
 			}
 		}
+	}
+}
+
+func TestParseReportWithoutMatchingTask(t *testing.T) {
+	got, err := parseChoice(`{"action":"report","task_id":null,"question_id":null,"reply":"No matching task record was found."}`)
+	if err != nil || got.Action != ActionReport || got.TaskID != nil || got.Reply == nil {
+		t.Fatalf("choice=%+v err=%v", got, err)
 	}
 }
 

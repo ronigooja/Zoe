@@ -40,12 +40,12 @@ Every key is present; irrelevant fields are null. IDs are real stable server-own
 | `append` | Additional direction for existing live work. | task_id | Persist the full request as an ordered addition and deliver to the original live session, without replacement work. |
 | `answer` | Response to a currently pending question of existing work. | task_id, question_id | Bind the full request as the answer to that exact pending question. |
 | `continue` | New work dependent on prior work rather than an addition to its live execution. | task_id | Admit a new task with the full request as goal and structured prior-task context. |
-| `report` | Request for factual state, progress, result or handling of identified work. | task_id, reply | Deliver the fact-grounded reply; do not execute or mutate the task. |
+| `report` | Request for factual state, progress, result or handling of identified work. | reply; task_id when a supplied task matches | Deliver the fact-grounded reply; do not execute or mutate the task. |
 | `cancel` | Withdrawal or stopping of identified work. | task_id | Apply cancellation to that task, preserving actual termination semantics. |
 | `redisplay` | Presentation of an existing authoritative result with no new work. | task_id | Send that result and request to UI_Controller; invoke no Worker. |
 | `clarify` | Intent or task/question reference is insufficiently determined. | reply | Ask the resolving question without admitting work. |
 
-Steward chooses semantically using these definitions and supplied context, not examples, keyword rules or newest-task heuristics. An empty candidate set does not imply `new`: unresolved references or intent require `clarify`. Ambiguity requires clarification instead of arbitrary selection. A report must identify a real supplied task; absence of a resolvable subject uses clarification, not an invented report task. Replies for report/clarify are nonempty and follow the request's language.
+Steward chooses semantically using these definitions and supplied context, not examples, keyword rules or newest-task heuristics. Use `clarify` when the intent or subject itself is ambiguous. A `report` about an identifiable subject with no matching task uses `task_id: null` and states that no matching task record was found. It does not ask a follow-up question or claim whether the upstream sent a delegation. The server sends only the reply and leaves tasks and results untouched. Replies for report/clarify are nonempty and follow the request's language.
 
 ## Persistence and idempotency
 
