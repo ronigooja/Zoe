@@ -13,7 +13,6 @@ final class VoiceConfigTests: XCTestCase {
           "languages": [],
           "webrtc": {
             "data_channel": {"label": "zoe", "negotiated": true, "id": 0},
-            "ice_servers": [{"urls":["stun:ice.example:3478"]}],
             "receive_audio": true,
             "receive_video": false
           }
@@ -25,7 +24,6 @@ final class VoiceConfigTests: XCTestCase {
         let config = try decoder.decode(VoiceConfig.self, from: data)
 
         XCTAssertEqual(config.gatewayOrigin?.absoluteString, "https://gateway.example:8443")
-        XCTAssertEqual(config.webRTC.iceServers.first?.urls, ["stun:ice.example:3478"])
         XCTAssertEqual(config.webRTC.dataChannel.label, "zoe")
         XCTAssertTrue(config.webRTC.receiveAudio)
         XCTAssertFalse(config.webRTC.receiveVideo)

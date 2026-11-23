@@ -203,6 +203,9 @@ func TestCallStartSettingsReplayAndConflicts(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"gateway_dial_origin":"https://gateway.example:8443"`) {
 		t.Fatal(w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), `"webrtc":{}`) || strings.Contains(w.Body.String(), `"ice_servers"`) {
+		t.Fatal(w.Body.String())
+	}
 	a, first := h.open(201)
 	if a.Instructions != cfg.InstructionText {
 		t.Fatal("instructions not returned")
@@ -226,6 +229,29 @@ func TestCallStartSettingsReplayAndConflicts(t *testing.T) {
 	none.request("GET", "/v1/voice/config", none.instance, "", "", 503, "voice_unavailable")
 	limit := newCallHarness(t, nil, callConfig())
 	limit.request("POST", callRoute, limit.runner, limit.instance, `{"request_id":"full","offer_sdp":"v`+strings.Repeat(`\u000a`, (1<<20)-1)+`"}`, 201, "")
+}
+
+func TestVoiceConfigGatewayFieldStrictness(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		code       string
+	}{
+		{"nested fields pass through", `{"version":"v1","webrtc":{"ice_servers":[]}}`, 200, ""},
+		{"unknown top-level field rejected", `{"version":"v1","webrtc":{},"extra":true}`, 502, "voice_config_invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := callConfig()
+			cfg.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return gatewayFixture(tc.body), nil
+			})}
+			h := newCallHarness(t, nil, cfg)
+			w := h.request("GET", "/v1/voice/config", h.instance, "", "", tc.status, tc.code)
+			if tc.status == 200 && !strings.Contains(w.Body.String(), `"ice_servers":[]`) {
+				t.Fatal(w.Body.String())
+			}
+		})
+	}
 }
 
 func gatewayFixture(body string) *http.Response {

@@ -86,7 +86,6 @@ public struct VoiceLanguage: Codable, Equatable, Identifiable, Sendable {
 
 public struct VoiceWebRTCConfig: Codable, Equatable, Sendable {
     public var dataChannel: VoiceDataChannelConfig
-    public var iceServers: [VoiceICEServer]
     public var receiveAudio: Bool
     public var receiveVideo: Bool
 }
@@ -95,10 +94,6 @@ public struct VoiceDataChannelConfig: Codable, Equatable, Sendable {
     public var label: String
     public var negotiated: Bool
     public var id: Int
-}
-
-public struct VoiceICEServer: Codable, Equatable, Sendable {
-    public var urls: [String]
 }
 
 public struct VoiceDialRequest: Encodable, Sendable {

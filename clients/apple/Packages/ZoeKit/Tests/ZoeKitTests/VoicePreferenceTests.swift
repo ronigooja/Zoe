@@ -15,7 +15,7 @@ final class VoicePreferenceTests: XCTestCase {
         {"version":"v1","gateway_dial_origin":"https://gateway.example","defaults":{"voice":"default","voice_mode":"","language_code":"auto"},
          "voices":[{"id":"chosen","name":"Chosen"}],"voice_modes":[],"languages":[],
          "webrtc":{"data_channel":{"label":"zoe","negotiated":true,"id":0},
-         "ice_servers":[],"receive_audio":true,"receive_video":false}}
+         "receive_audio":true,"receive_video":false}}
         """.utf8))
         let model = ZoeAppModel(defaults: defaults)
         model.installVoiceConfigForTesting(config)

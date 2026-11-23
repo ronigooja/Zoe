@@ -22,7 +22,7 @@ final class VoiceReadinessTests: XCTestCase {
         {"version":"\(version)","gateway_dial_origin":"https://gateway.example","defaults":{"voice":"default","voice_mode":"","language_code":"auto"},
          "voices":[],"voice_modes":[],"languages":[],
          "webrtc":{"data_channel":{"label":"zoe","negotiated":true,"id":0},
-         "ice_servers":[],"receive_audio":true,"receive_video":false}}
+         "receive_audio":true,"receive_video":false}}
         """.utf8))
         let pool = try decoder.decode(VoicePoolStatus.self, from: Data("""
         {"blocked":false,"reason_code":"","updated_at":"now","account_lease_identity":false,

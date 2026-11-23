@@ -109,7 +109,7 @@ final class ClientContractTests: XCTestCase {
         XCTAssertEqual(model.voiceStatus, .idle)
     }
 
-    private static let voiceConfigBody = #"{"version":"v1","gateway_dial_origin":"https://gateway.example:8443","defaults":{"voice":"cove","voice_mode":"wingman","language_code":"auto"},"voices":[{"id":"cove","name":"Cove"}],"voice_modes":[],"languages":[],"webrtc":{"data_channel":{"label":"zoe","negotiated":true,"id":0},"ice_servers":[],"receive_audio":true,"receive_video":false}}"#
+    private static let voiceConfigBody = #"{"version":"v1","gateway_dial_origin":"https://gateway.example:8443","defaults":{"voice":"cove","voice_mode":"wingman","language_code":"auto"},"voices":[{"id":"cove","name":"Cove"}],"voice_modes":[],"languages":[],"webrtc":{"data_channel":{"label":"zoe","negotiated":true,"id":0},"receive_audio":true,"receive_video":false}}"#
     private static let voicePoolBody = #"{"blocked":true,"reason_code":"voice_pool_quarantined","updated_at":"now","account_lease_identity":false,"account_scoped_termination":false,"trusted_termination_evidence":false}"#
     private static let dialAnswer = Data(#"{"voice_session_id":"zoe-call","gateway_session_id":"gateway-call","generation":4,"answer_sdp":"answer"}"#.utf8)
 

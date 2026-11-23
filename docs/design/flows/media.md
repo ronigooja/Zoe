@@ -23,8 +23,8 @@ branch on status and code, not message text.
 | Gateway `POST /client/v1/voice/calls` | Instance bearer; `request_id`, `offer_sdp`, optional top-level `voice`, `voice_mode`, `language_code` strings, as in Zoe's create payload. | `200`: `answer_sdp`, `gateway_session_id` (opaque hangup handle), `voice_session_id` (Zoe ID), `generation` (Zoe generation, for Zoe recovery). No lease fields or ICE server list. |
 | Gateway `POST /client/v1/voice/calls/{gateway_session_id}/hangup` | Instance bearer; no body. | `204`, empty: the exact call's gateway close attempt finished or already finished. Not termination evidence or confirmation of pool reuse. |
 
-Apple uses `webrtc.ice_servers` from config before creating the offer. Use
-the advertised settings IDs and defaults (omitted or empty settings select
+Apple creates its offer without ICE servers; the gateway supplies a public host
+candidate. Use the advertised settings IDs and defaults (omitted or empty settings select
 the defaults). Zoe returns `503 voice_unavailable` if a usable dial origin
 is not configured; Apple does not fall back to dialing Zoe. A dial requires
 a nonblank `request_id` and nonblank `offer_sdp` (at most 1 MiB UTF-8).

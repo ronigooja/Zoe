@@ -793,8 +793,7 @@ public final class ZoeAppModel: ObservableObject {
             }
         }
         try audio.activate()
-        let iceServers = config.webRTC.iceServers.map { RTCIceServer(urlStrings: $0.urls) }
-        let transport = try LibWebRTCTransport(iceServers: iceServers, dataChannelLabel: config.webRTC.dataChannel.label)
+        let transport = try LibWebRTCTransport(dataChannelLabel: config.webRTC.dataChannel.label)
         voiceTransport = transport
         wireVoiceTransport(transport, generation: generation, mediaEpoch: mediaEpoch)
         func recordGathering() {

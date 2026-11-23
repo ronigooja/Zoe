@@ -53,14 +53,14 @@ public final class LibWebRTCTransport: NSObject, WebRTCTransport, @unchecked Sen
     public var onConnectionState: (@Sendable (RTCPeerConnectionState) -> Void)?
     public var onDataChannelState: (@Sendable (RTCDataChannelState) -> Void)?
 
-    public init(iceServers: [RTCIceServer] = [], dataChannelLabel: String = "oai-events") throws {
+    public init(dataChannelLabel: String = "oai-events") throws {
         RTCInitializeSSL()
         let encoder = RTCDefaultVideoEncoderFactory()
         let decoder = RTCDefaultVideoDecoderFactory()
         factory = RTCPeerConnectionFactory(encoderFactory: encoder, decoderFactory: decoder)
 
         let configuration = RTCConfiguration()
-        configuration.iceServers = iceServers
+        configuration.iceServers = []
         configuration.sdpSemantics = .unifiedPlan
         configuration.bundlePolicy = .maxBundle
         configuration.rtcpMuxPolicy = .require
@@ -178,9 +178,9 @@ public final class LibWebRTCTransport: NSObject, WebRTCTransport, @unchecked Sen
                 gatheringTimedOut = true
                 gatheringFinishedAt = ContinuousClock.now
                 gatheringLock.unlock()
-                // Non-trickle signaling normally waits for `complete`, but a
-                // STUN server can remain in `gathering` indefinitely while
-                // host candidates are already usable. Continue with the
+                // Non-trickle signaling normally waits for `complete`, but
+                // gathering can remain incomplete while host candidates are
+                // already usable. Continue with the
                 // candidates that have been gathered instead of discarding a
                 // valid offer solely because the state never settled.
                 let hasCandidate = peerConnection.localDescription?.sdp.contains("a=candidate:") == true

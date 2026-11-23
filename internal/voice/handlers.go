@@ -355,8 +355,8 @@ func (s *Service) handlePoolStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleVoiceConfig proxies only Space's documented non-secret voice choices,
-// WebRTC DataChannel settings, and ICE server configuration. Gateway auth and
+// handleVoiceConfig proxies Space's documented non-secret voice choices and
+// WebRTC settings. Gateway auth and
 // account data are never returned to the client.
 func (s *Service) handleVoiceConfig(w http.ResponseWriter, r *http.Request) {
 	if _, ok := control.PrincipalFromContext(r.Context()); !ok {
