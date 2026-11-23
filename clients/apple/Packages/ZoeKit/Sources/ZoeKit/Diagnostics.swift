@@ -5,7 +5,7 @@ public enum DiagnosticLevel: String, Codable, CaseIterable, Sendable {
     case error, warn, info, debug
 
     public static func parse(_ value: String?) -> DiagnosticLevel {
-        guard let value, let level = DiagnosticLevel(rawValue: value.lowercased()) else { return .error }
+        guard let value, let level = DiagnosticLevel(rawValue: value.lowercased()) else { return .info }
         return level
     }
 

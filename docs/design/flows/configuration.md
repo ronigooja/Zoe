@@ -218,6 +218,11 @@ Set `ZOE_VOICE_GATEWAY_DIAL_ORIGIN` to the client-reachable HTTPS origin adverti
 
 Keep previous known configuration and applied version. Record effective per-consumer configuration identity. Retain immutable release identity, retained configuration/data inventory and explicit backup/rollback references.
 
+The client diagnostic policy defaults to `info` for a new policy row and for an
+Apple client without a valid stored level. An existing server policy remains
+stored until the operator changes it. `zoe client-policy set --level info --interval <seconds>`
+sets the level and poll interval together.
+
 ## Failure and recovery
 
 Probe/save/reload failure rolls back the whole change, not a partially selected route. A working consumer does not prove another is configured; report truthful failure. Health/startup success is not end-to-end success.

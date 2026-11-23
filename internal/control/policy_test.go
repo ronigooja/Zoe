@@ -5,7 +5,7 @@ import "testing"
 func TestClientPolicyLevelsAndRanks(t *testing.T) {
 	store, server, _ := instanceAuthFixture(t)
 	policy, err := server.ReadClientPolicy(t.Context())
-	if err != nil || policy.LogLevel != "error" {
+	if err != nil || policy.LogLevel != "info" {
 		t.Fatalf("default policy=%+v err=%v", policy, err)
 	}
 	for rank, level := range []string{"error", "warn", "info", "debug"} {
@@ -16,6 +16,13 @@ func TestClientPolicyLevelsAndRanks(t *testing.T) {
 		if err != nil || policy.LogLevel != level {
 			t.Fatalf("policy=%+v err=%v", policy, err)
 		}
+	}
+	if _, err := UpdateClientPolicy(t.Context(), store.DB(), "error", 60); err != nil {
+		t.Fatal(err)
+	}
+	policy, err = ReadClientPolicy(t.Context(), store.DB())
+	if err != nil || policy.LogLevel != "error" {
+		t.Fatalf("stored policy=%+v err=%v", policy, err)
 	}
 	if _, err := UpdateClientPolicy(t.Context(), store.DB(), "verbose", 60); err == nil {
 		t.Fatal("invalid level accepted")

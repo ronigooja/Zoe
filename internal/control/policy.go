@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const defaultClientLogLevel = "error"
+const defaultClientLogLevel = "info"
 
 type ClientPolicy struct {
 	LogLevel            string `json:"log_level"`
@@ -19,7 +19,7 @@ type ClientPolicy struct {
 func ensureClientPolicy(ctx context.Context, exec interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }) error {
-	_, err := exec.ExecContext(ctx, `INSERT OR IGNORE INTO client_policy(singleton,log_level,poll_interval_seconds,revision,updated_at) VALUES(1,'error',60,1,?)`, time.Now().UTC().Format(time.RFC3339Nano))
+	_, err := exec.ExecContext(ctx, `INSERT OR IGNORE INTO client_policy(singleton,log_level,poll_interval_seconds,revision,updated_at) VALUES(1,?,60,1,?)`, defaultClientLogLevel, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
 }
 

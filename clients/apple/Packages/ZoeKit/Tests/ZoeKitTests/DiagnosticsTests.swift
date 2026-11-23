@@ -61,7 +61,8 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(DiagnosticLevel.parse("warn"), .warn)
         XCTAssertEqual(DiagnosticLevel.parse("WARN"), .warn)
         XCTAssertEqual(DiagnosticLevel.parse("debug"), .debug)
-        XCTAssertEqual(DiagnosticLevel.parse("unknown"), .error)
+        XCTAssertEqual(DiagnosticLevel.parse("unknown"), .info)
+        XCTAssertEqual(DiagnosticLevel.parse(nil), .info)
         let event = DiagnosticEvent(clientRequestID: "r", phase: "p", requestPath: "/v1/p", installationID: "i", level: .info)
         let data = try JSONEncoder().encode(event)
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -72,7 +73,6 @@ final class DiagnosticsTests: XCTestCase {
         let server = URL(string: "https://lifecycle-\(UUID().uuidString).example")!
         let installation = UUID().uuidString
         let api = try APIClient(serverURL: server, credentials: nil, installationID: installation)
-        await api.applyDiagnosticLevel(.info)
         for phase in ["app_start", "voice_start", "voice_connected", "voice_end"] {
             await api.recordDiagnosticAndWait(phase: phase, requestPath: "client", level: .info)
         }
@@ -134,7 +134,7 @@ final class DiagnosticsTests: XCTestCase {
         let warning = try decoder.decode(ClientPolicy.self, from: Data(#"{"log_level":"warn","poll_interval_seconds":60,"revision":5}"#.utf8))
         XCTAssertEqual(warning.logLevel, .warn)
         let low = try decoder.decode(ClientPolicy.self, from: Data(#"{"log_level":"verbose","poll_interval_seconds":1,"revision":3}"#.utf8))
-        XCTAssertEqual(low.logLevel, .error)
+        XCTAssertEqual(low.logLevel, .info)
         XCTAssertEqual(low.pollIntervalSeconds, 30)
         let high = try decoder.decode(ClientPolicy.self, from: Data(#"{"log_level":"debug","poll_interval_seconds":999,"revision":4}"#.utf8))
         XCTAssertEqual(high.logLevel, .debug)
