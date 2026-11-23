@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      tests: ${{ steps.scope.outputs.tests }}
-      macos: ${{ steps.scope.outputs.macos }}
+      tests: ${{ github.event_name == 'workflow_dispatch' && steps.scope.outputs.tests || 'false' }}
+      macos: ${{ github.event_name == 'workflow_dispatch' && steps.scope.outputs.macos || 'false' }}
       go: ${{ steps.scope.outputs.go }}
       race: ${{ steps.scope.outputs.race }}
       scripts: ${{ steps.scope.outputs.scripts }}

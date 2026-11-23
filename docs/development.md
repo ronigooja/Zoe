@@ -17,6 +17,10 @@ are distinct. Design approval establishes no test, deployment, or acceptance.
 
 Each component lists its verification obligations.
 
+Apple tests and builds run locally or by manual workflow dispatch; pushes and
+pull requests do not trigger them. Linux and documentation checks remain scoped
+automatically on pushes and pull requests.
+
 ## Documentation checks
 
 Run the following small local checks from the repository root:
