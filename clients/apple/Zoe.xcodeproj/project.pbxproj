@@ -17,7 +17,6 @@
 		A20000000000000000000001 /* ZoeMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoeMacApp.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* Zoe.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Zoe.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000005 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
-		A20000000000000000000006 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
 		A20000000000000000000007 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A20000000000000000000008 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -39,7 +38,7 @@
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		A60000000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 1620; TargetAttributes = {A50000000000000000000001 = {CreatedOnToolsVersion = 16.2; }; }; }; buildConfigurationList = A90000000000000000000003; compatibilityVersion = "Xcode 16.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, "zh-Hans", Base,); mainGroup = A40000000000000000000001; packageReferences = (A80000000000000000000001 /* Local ZoeKit package */,); productRefGroup = A40000000000000000000003 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (A50000000000000000000001 /* ZoeMac */, ); };
+		A60000000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 1620; TargetAttributes = {A50000000000000000000001 = {CreatedOnToolsVersion = 16.2; }; }; }; buildConfigurationList = A90000000000000000000003; compatibilityVersion = "Xcode 16.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base,); mainGroup = A40000000000000000000001; packageReferences = (A80000000000000000000001 /* Local ZoeKit package */,); productRefGroup = A40000000000000000000003 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (A50000000000000000000001 /* ZoeMac */, ); };
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
@@ -51,7 +50,7 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXVariantGroup section */
-		AB0000000000000000000001 /* InfoPlist.strings */ = {isa = PBXVariantGroup; children = (A20000000000000000000005 /* en */, A20000000000000000000006 /* zh-Hans */,); name = InfoPlist.strings; sourceTree = "<group>"; };
+		AB0000000000000000000001 /* InfoPlist.strings */ = {isa = PBXVariantGroup; children = (A20000000000000000000005 /* en */,); name = InfoPlist.strings; sourceTree = "<group>"; };
 /* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
