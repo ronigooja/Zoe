@@ -54,24 +54,14 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         )
     }
 
-    private func recordedDiagnostics(for installationID: String) async throws -> [DiagnosticEvent] {
-        let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: try voiceAPI(installationID: installationID).serverURL, installationID: installationID))
-        for _ in 0..<100 {
-            let events = await queue.take(limit: 20)
-            if !events.isEmpty { return events }
-            await Task.yield()
-        }
-        return await queue.take(limit: 20)
-    }
-
     private func recordedMediaLossDiagnostics(for installationID: String) async throws -> [DiagnosticEvent] {
         let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: try voiceAPI(installationID: installationID).serverURL, installationID: installationID))
         for _ in 0..<100 {
-            let events = await queue.take(limit: 20)
-            if events.contains(where: { $0.phase == "voice_media_loss" }) { return events }
+            let events = await queue.take(limit: 20).filter { $0.phase == "voice_media_loss" }
+            if !events.isEmpty { return events }
             await Task.yield()
         }
-        return await queue.take(limit: 20)
+        return await queue.take(limit: 20).filter { $0.phase == "voice_media_loss" }
     }
 
     @MainActor
@@ -146,7 +136,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
             await Task.yield()
         }
         let events = try await recordedMediaLossDiagnostics(for: installationID)
-        XCTAssertEqual(events.filter { $0.phase == "voice_media_loss" }.count, 1)
+        XCTAssertEqual(events.count, 1)
         XCTAssertEqual(events.first?.errorType, "data_channel")
         XCTAssertEqual(events.first?.errorSummary, "closed")
         XCTAssertEqual(events.first?.voiceSessionID, "closed-session")
@@ -197,8 +187,8 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
             if case .interrupted = model.voiceStatus { break }
             await Task.yield()
         }
-        let events = try await recordedDiagnostics(for: installationID)
-        XCTAssertEqual(events.filter { $0.phase == "voice_media_loss" }.count, 1)
+        let events = try await recordedMediaLossDiagnostics(for: installationID)
+        XCTAssertEqual(events.count, 1)
         XCTAssertEqual(events.first?.errorType, "connection")
         XCTAssertEqual(events.first?.errorSummary, "failed")
     }
