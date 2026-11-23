@@ -29,14 +29,14 @@ func (s *Service) stopStateReplyTx(ctx context.Context, tx *sql.Tx, cmd control.
 	if err := tx.QueryRowContext(ctx, `SELECT status FROM tasks WHERE id=? AND owner_subject_id=?`, id, cmd.Principal.SubjectID).Scan(&status); err != nil {
 		return err
 	}
-	text := "已经请求停止，正在停下。"
+	text := "Stop requested; the task is stopping."
 	switch status {
 	case "canceled":
-		text = "任务已经停止。"
+		text = "The task has stopped."
 	case "complete":
-		text = "任务已经完成。"
+		text = "The task has already completed."
 	case "failed":
-		text = "任务已经失败。"
+		text = "The task has already failed."
 	}
 	return s.heldReplyTx(ctx, tx, cmd, p, text)
 }
