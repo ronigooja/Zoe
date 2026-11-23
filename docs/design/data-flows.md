@@ -20,6 +20,10 @@ authenticated instance identity, not server URL alone. Key rotation does not
 change instance identity; a fresh instance does not inherit the previous
 instance's pending commands or history.
 
+Memory uses immutable instance lineage plus owner to namespace external data.
+Capability Docker resources are also namespaced by lineage. Fenced restore
+retains lineage while changing the active instance identity and epoch.
+
 Runner execution directories and their filesystem permissions are separate
 from product identity and remain unchanged.
 

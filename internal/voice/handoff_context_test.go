@@ -16,7 +16,7 @@ func TestHandoffStableIdentityAndQuestionFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner"}
+	p := contracts.Principal{SubjectID: "owner"}
 	prior, _, err := readPriorTaskContext(context.Background(), tx, p, "first", "turn")
 	if err != nil || prior.TaskID != "first" || prior.Goal != "shared complete goal" {
 		t.Fatalf("prior=%+v err=%v", prior, err)

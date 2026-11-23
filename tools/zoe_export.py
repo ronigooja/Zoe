@@ -43,8 +43,8 @@ def export_archive(server: str, key_path: Path, key_format: str, output: Path, s
     escaped = parsed.path.lower()
     if "%2f" in escaped or "%5c" in escaped or any(segment in (".", "..") for segment in urllib.parse.unquote(parsed.path).split("/")):
         raise ValueError("server path has ambiguous separators or dot segments")
-    if scope not in ("personal", "workspace"):
-        raise ValueError("scope must be personal or workspace")
+    if scope not in ("personal", "instance"):
+        raise ValueError("scope must be personal or instance")
     key = read_instance_key(key_path, key_format)
     request = urllib.request.Request(server.rstrip("/") + "/v1/export?" + urllib.parse.urlencode({"scope": scope}), headers={"Authorization": "Bearer " + key, "Accept": "application/vnd.zoe.export+zip"})
     opener = opener or urllib.request.build_opener(NoRedirect())
@@ -79,7 +79,7 @@ def main() -> int:
     parser.add_argument("--key-file", type=Path, required=True)
     parser.add_argument("--key-format", choices=("json", "plain"), default="json", help="json is the zoe key init/rotate export format")
     parser.add_argument("--output", type=Path, required=True, help="new private archive file; never overwrite")
-    parser.add_argument("--scope", choices=("personal", "workspace"), default="workspace")
+    parser.add_argument("--scope", choices=("personal", "instance"), default="instance")
     args = parser.parse_args()
     export_archive(args.server, args.key_file, args.key_format, args.output, args.scope)
     print("Logical authority archive saved; external runtime volumes and deployment secrets are outside this export.")

@@ -542,8 +542,7 @@ func TestReconciliationLogsWithoutConfiguredGateway(t *testing.T) {
 	if _, err := h.store.DB().Exec(`UPDATE voice_sessions SET state='ending' WHERE id=?`, a.SessionID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_request_id,lifecycle_runner_id)
-VALUES('allocating-call','default','other','device','request',X'01',1,'allocating',?,?,'private-gateway-request','media')`,
+	if _, err := h.store.DB().Exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_request_id,lifecycle_runner_id) VALUES('allocating-call','other','device','request',X'01',1,'allocating',?,?,'private-gateway-request','media')`,
 		now.Add(-3*time.Minute).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}

@@ -31,8 +31,8 @@ final class SSELineSplitterTests: XCTestCase {
     }
 
     func testByteStreamDispatchesTwoEventsAndIgnoresHeartbeat() throws {
-        let first = #"{"schema_version":1,"event_id":"ev-1","cursor":"1","type":"task.created","occurred_at":"2026-10-20T12:00:00Z","workspace_id":"workspace","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":1,"payload":{"title":"你🌍"}}"#
-        let second = #"{"schema_version":1,"event_id":"ev-2","cursor":"2","type":"task.updated","occurred_at":"2026-10-20T12:00:00Z","workspace_id":"workspace","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":2,"payload":{"status":"active"}}"#
+        let first = #"{"schema_version":1,"event_id":"ev-1","cursor":"1","type":"task.created","occurred_at":"2026-10-20T12:00:00Z","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":1,"payload":{"title":"你🌍"}}"#
+        let second = #"{"schema_version":1,"event_id":"ev-2","cursor":"2","type":"task.updated","occurred_at":"2026-10-20T12:00:00Z","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":2,"payload":{"status":"active"}}"#
         for terminator in ["\n", "\r\n", "\r"] {
             let stream = ["id: 1", "event: task.created", "data: \(first)", "", ": heartbeat", "", "id: 2", "event: task.updated", "data: \(second)", "", ""].joined(separator: terminator)
             var splitter = SSELineSplitter()
@@ -53,7 +53,7 @@ final class SSELineSplitterTests: XCTestCase {
     }
 
     func testByteStreamDropsUnterminatedRecordAtEOF() throws {
-        let payload = #"{"schema_version":1,"event_id":"ev-1","cursor":"1","type":"task.created","occurred_at":"2026-10-20T12:00:00Z","workspace_id":"workspace","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":1,"payload":{}}"#
+        let payload = #"{"schema_version":1,"event_id":"ev-1","cursor":"1","type":"task.created","occurred_at":"2026-10-20T12:00:00Z","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":1,"payload":{}}"#
         for ending in ["", "\n"] {
             var splitter = SSELineSplitter()
             var parser = SSEParser()

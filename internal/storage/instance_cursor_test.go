@@ -18,7 +18,25 @@ func TestInstanceCursorAndOwnerIdempotencyBaseline(t *testing.T) {
 	if err = store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"actors", "runner_credentials", "command_receipts", "command_work", "event_counters"} {
+	rows, err := store.DB().Query(`SELECT name FROM sqlite_master WHERE type='table'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables []string
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			t.Fatal(err)
+		}
+		tables = append(tables, table)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range tables {
+		if table == "workspaces" {
+			t.Fatal("product tenancy table remains")
+		}
 		var tenancyColumns int
 		if err = store.DB().QueryRow(`SELECT count(*) FROM pragma_table_info(?) WHERE name IN ('workspace_id','workspace_ids')`, table).Scan(&tenancyColumns); err != nil {
 			t.Fatal(err)
@@ -38,16 +56,11 @@ func TestInstanceCursorAndOwnerIdempotencyBaseline(t *testing.T) {
 	if err = store.DB().QueryRow(`UPDATE event_counters SET current_cursor=current_cursor+1 WHERE singleton=1 RETURNING current_cursor`).Scan(&cursor); err != nil || cursor != 1 {
 		t.Fatalf("next cursor=%d err=%v", cursor, err)
 	}
-	// Until the remaining domain columns are removed, a second namespace is a
-	// negative fixture proving it cannot split cursors or owner idempotency.
-	if _, err = store.DB().Exec(`INSERT INTO workspaces(id,name,created_at) VALUES('other','Other','2026-01-01')`); err != nil {
+	insertEvent := `INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,1,1,'test','2026-01-01','task','task',1,'{}')`
+	if _, err = store.DB().Exec(insertEvent, "first"); err != nil {
 		t.Fatal(err)
 	}
-	insertEvent := `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,1,1,'test','2026-01-01','task','task',1,'{}')`
-	if _, err = store.DB().Exec(insertEvent, "first", "default"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = store.DB().Exec(insertEvent, "duplicate", "other"); err == nil {
+	if _, err = store.DB().Exec(insertEvent, "duplicate"); err == nil {
 		t.Fatal("duplicate instance cursor accepted")
 	}
 	insertReceipt := `INSERT INTO command_receipts(command_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES(?,?,'key',X'01','{}','2026-01-01')`

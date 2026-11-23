@@ -160,7 +160,7 @@ func TestDelegationIngestValidation(t *testing.T) {
 func TestLateDelegationUsesOriginalBindingAndRejectsDifferentRunner(t *testing.T) {
 	ts, store, key := transcriptHTTPServer(t)
 	now := time.Now().UTC()
-	if _, err := store.DB().Exec(`UPDATE voice_sessions SET state='ended',ended_at=? WHERE id='handoff-session'; INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_session_id,gateway_media_generation,lifecycle_runner_id) VALUES('replacement','default','owner','instance','next',X'01',7,'active',?,?, 'handoff-session',2,'voice-gateway')`, now.Add(-9*time.Minute).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := store.DB().Exec(`UPDATE voice_sessions SET state='ended',ended_at=? WHERE id='handoff-session'; INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_session_id,gateway_media_generation,lifecycle_runner_id) VALUES('replacement','owner','instance','next',X'01',7,'active',?,?, 'handoff-session',2,'voice-gateway')`, now.Add(-9*time.Minute).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	if status, _ := postTranscript(t, ts, key, "handoff-session", markedTranscript(1, "late", "original call")); status != 200 {
@@ -194,7 +194,7 @@ func TestTranscriptEndpointStoresBothRolesVerbatimInSeqOrder(t *testing.T) {
 	if status != 200 || result["accepted"] != 2 || result["duplicates"] != 0 {
 		t.Fatalf("store status=%d result=%v", status, result)
 	}
-	got, err := ReadTranscriptTurns(context.Background(), store.DB(), "default", "handoff-session", 0, math.MaxInt64)
+	got, err := ReadTranscriptTurns(context.Background(), store.DB(), "owner", "handoff-session", 0, math.MaxInt64)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("read=%v err=%v", got, err)
 	}
@@ -265,19 +265,19 @@ func TestTranscriptEndpointAcceptsOutOfOrderBatches(t *testing.T) {
 	}
 }
 
-func TestTranscriptEndpointRejectsUnknownSessionOtherWorkspaceAndBadRole(t *testing.T) {
+func TestTranscriptEndpointRejectsUnknownSessionWrongRunnerAndBadRole(t *testing.T) {
 	for _, tc := range []struct {
 		name, session, role string
 		status              int
 	}{
-		{"unknown", "missing", "user", 404}, {"other workspace", "other", "user", 403}, {"bad role", "handoff-session", "system", 400},
+		{"unknown", "missing", "user", 404}, {"wrong runner", "other", "user", 403}, {"bad role", "handoff-session", "system", 400},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ts, store, key := transcriptHTTPServer(t)
-			if _, err := store.DB().Exec(`INSERT INTO workspaces(id,name,created_at) VALUES('other','other',?); INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('other','other','owner','instance','other',X'01',1,'ended',?,?)`, transcriptAt, transcriptAt, transcriptAt); err != nil {
+			if _, err := store.DB().Exec(` INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('other','owner','instance','other',X'01',1,'ended',?,?)`, transcriptAt, transcriptAt); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := store.DB().Exec(`UPDATE voice_sessions SET gateway_session_id='other',gateway_media_generation=1 WHERE id='other'`); err != nil {
+			if _, err := store.DB().Exec(`UPDATE voice_sessions SET gateway_session_id='other',gateway_media_generation=1,lifecycle_runner_id='other-runner' WHERE id='other'`); err != nil {
 				t.Fatal(err)
 			}
 			if status, _ := postTranscript(t, ts, key, tc.session, transcriptTurn(1, tc.role, "text")); status != tc.status {
@@ -402,9 +402,9 @@ func TestIngestResolvesLocalSessionFromGatewaySessionID(t *testing.T) {
 	if status, _ := postTranscript(t, ts, key, "opaque-gateway", transcriptTurn(1, "assistant", "resolved")); status != 200 {
 		t.Fatalf("resolve status=%d", status)
 	}
-	var session, workspace string
-	if err := store.DB().QueryRow(`SELECT session_id,workspace_id FROM voice_transcript_turns`).Scan(&session, &workspace); err != nil || session != "handoff-session" || workspace != "default" {
-		t.Fatalf("session=%s workspace=%s err=%v", session, workspace, err)
+	var session string
+	if err := store.DB().QueryRow(`SELECT session_id FROM voice_transcript_turns`).Scan(&session); err != nil || session != "handoff-session" {
+		t.Fatalf("session=%s err=%v", session, err)
 	}
 }
 
@@ -441,11 +441,11 @@ func TestTranscriptRangeReadReturnsOnlyRequestedSeqs(t *testing.T) {
 	if status, _ := postTranscript(t, ts, key, "handoff-session", transcriptTurn(1, "user", "a"), transcriptTurn(3, "assistant", "b"), transcriptTurn(5, "user", "c")); status != 200 {
 		t.Fatalf("status=%d", status)
 	}
-	got, err := ReadTranscriptTurns(context.Background(), store.DB(), "default", "handoff-session", 2, 5)
+	got, err := ReadTranscriptTurns(context.Background(), store.DB(), "owner", "handoff-session", 2, 5)
 	if err != nil || len(got) != 2 || got[0].Seq != 3 || got[1].Seq != 5 {
 		t.Fatalf("range=%v err=%v", got, err)
 	}
-	for _, ids := range [][2]string{{"other", "handoff-session"}, {"default", "missing"}} {
+	for _, ids := range [][2]string{{"other", "handoff-session"}, {"owner", "missing"}} {
 		got, err = ReadTranscriptTurns(context.Background(), store.DB(), ids[0], ids[1], 0, 10)
 		if err != nil || len(got) != 0 {
 			t.Fatalf("scope leak=%v err=%v", got, err)

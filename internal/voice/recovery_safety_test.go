@@ -31,7 +31,7 @@ func awaitRecoveryTest[T any](t *testing.T, ch <-chan T) T {
 func seedRecoverySession(t *testing.T, store *storage.Store, id, state string) {
 	t.Helper()
 	at := time.Now().UTC().Add(-3 * time.Minute).Format(time.RFC3339Nano)
-	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,gateway_request_id,created_at,updated_at) VALUES(?,'default','owner','device',?,X'01',1,?,?,?,?)`, id, id, state, id+"-request", at, at); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,gateway_request_id,created_at,updated_at) VALUES(?,'owner','device',?,X'01',1,?,?,?,?)`, id, id, state, id+"-request", at, at); err != nil {
 		t.Fatal(err)
 	}
 }

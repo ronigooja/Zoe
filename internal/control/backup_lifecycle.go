@@ -30,7 +30,7 @@ func AppendBackupDeleteManifest(path string, record storage.DeletionRecord, trus
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.Contains(path, string(filepath.Separator)+".."+string(filepath.Separator)) {
 		return errors.New("backup deletion manifest path must be an explicit absolute path")
 	}
-	if record.Sequence < 1 || record.EntityID == "" || record.WorkspaceID == "" || record.EntityVersion < 1 || !containsString(record.CleanupTargets, "backup_delete_manifest") {
+	if record.Sequence < 1 || record.EntityID == "" || record.EntityVersion < 1 || !containsString(record.CleanupTargets, "backup_delete_manifest") {
 		return errors.New("backup deletion manifest record is incomplete")
 	}
 	parent := filepath.Dir(path)

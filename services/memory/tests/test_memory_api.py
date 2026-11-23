@@ -155,7 +155,7 @@ class MemoryAPITests(unittest.TestCase):
 
     def write(self, operations):
         self.memory.llm.generate_response.return_value = json.dumps({"operations": operations})
-        return self.request("/v1/memory/write", {"user": "workspace/owner", "request": "private-query", "op_id": str(time.monotonic_ns())})
+        return self.request("/v1/memory/write", {"user": "lineage/owner", "request": "private-query", "op_id": str(time.monotonic_ns())})
 
     def test_auth_required_even_health(self):
         for token in (None, "wrong-token"):
@@ -296,14 +296,14 @@ class MemoryAPITests(unittest.TestCase):
         for level in ("INFO", "DEBUG"):
             request_logged.clear()
             with self.assertLogs("zoe.memory.api", level=level) as logs, patch.object(LOG, "info", side_effect=log_request):
-                self.assertEqual(self.request("/v1/memory/ingest", {"user": "workspace/owner", "batch_id": "batch", "chunk_id": level, "text": "private-transcript"})[0], 200)
+                self.assertEqual(self.request("/v1/memory/ingest", {"user": "lineage/owner", "batch_id": "batch", "chunk_id": level, "text": "private-transcript"})[0], 200)
                 # The handler logs after sending the response body; keep capture
                 # active until that server thread has emitted the request log.
                 self.assertTrue(request_logged.wait(2), "request log was not emitted")
             output = "\n".join(logs.output)
             for content in ("private-transcript", "private-fact", PROMPTS.memory_ingest):
                 self.assertEqual(content in output, level.lower() == "debug")
-            for private in ("secret-marker", "workspace/owner"):
+            for private in ("secret-marker", "lineage/owner"):
                 self.assertNotIn(private, output)
             self.assertIn("memory_api request kind=ingest status=200 elapsed_ms=", output)
             self.assertIn("memory_api llm_call component=memory_ingest status=ok error_kind=none elapsed_ms=", output)
@@ -317,14 +317,14 @@ class MemoryAPITests(unittest.TestCase):
             time.sleep(.2)
 
     def test_search_no_llm_and_person_isolation(self):
-        self.memory.add("private-fact", user_id=person_user_id("workspace/owner"), infer=False)
-        status, result = self.request("/v1/memory/search", {"user": "workspace/owner", "request": "private-query"})
+        self.memory.add("private-fact", user_id=person_user_id("lineage/owner"), infer=False)
+        status, result = self.request("/v1/memory/search", {"user": "lineage/owner", "request": "private-query"})
         self.assertEqual(status, 200)
         self.assertEqual(result["items"], [{"id": "m1", "text": "private-fact", "score": .8}])
         self.assertEqual(self.memory.search_calls[-1][2:], (8, False))
-        self.assertEqual(self.request("/v1/memory/search", {"user": "workspace/other", "request": "q"})[1], {"items": []})
+        self.assertEqual(self.request("/v1/memory/search", {"user": "lineage/other", "request": "q"})[1], {"items": []})
         self.memory.llm.generate_response.assert_not_called()
-        self.assertNotEqual(person_user_id("workspace/owner"), person_user_id("other/owner"))
+        self.assertNotEqual(person_user_id("lineage/owner"), person_user_id("other/owner"))
 
     def test_write_add_replace_none_exact_text(self):
         status, added = self.write([{"op": "add", "text": "private-fact"}])
@@ -387,14 +387,14 @@ class MemoryAPITests(unittest.TestCase):
         self.assertEqual(client.calls, 3)
 
     def test_production_adapter_failure_logs_only_fixed_metadata(self):
-        client = _ResponsesClient(error=RuntimeError("private-error secret-marker workspace/owner"))
+        client = _ResponsesClient(error=RuntimeError("private-error secret-marker lineage/owner"))
         self.memory.llm = _adapter(client)
         with self.assertLogs("zoe.memory.api", level="INFO") as logs:
             self.assertEqual(self.request("/v1/memory/write", {"user": "u", "request": "r", "op_id": str(time.monotonic_ns())}),
                              (502, {"error_kind": "backend_unavailable"}))
         output = "\n".join(logs.output)
         self.assertIn("llm_call component=memory_write status=error error_kind=backend_unavailable elapsed_ms=", output)
-        for private in ("private-error", "secret-marker", "workspace/owner"):
+        for private in ("private-error", "secret-marker", "lineage/owner"):
             self.assertNotIn(private, output)
         self.assertEqual(client.calls, 1)
 
@@ -423,7 +423,7 @@ class MemoryAPITests(unittest.TestCase):
                 stream.truncate()
                 with patch.dict("os.environ", {"ZOE_LOG_LEVEL": level}):
                     configure_logging()
-                self.assertEqual(self.request("/v1/memory/write", {"user": "workspace/owner", "request": "private-query", "op_id": str(time.monotonic_ns())})[0], 200)
+                self.assertEqual(self.request("/v1/memory/write", {"user": "lineage/owner", "request": "private-query", "op_id": str(time.monotonic_ns())})[0], 200)
                 logging.getLogger("mem0.memory.main").info("private-mem0")
                 self.request("/healthz", token="wrong-token", method="GET")
                 output = stream.getvalue()
@@ -431,7 +431,7 @@ class MemoryAPITests(unittest.TestCase):
                     self.assertEqual(content in output, level.lower() == "debug")
                 self.assertNotIn("secret-marker", output)
                 self.assertNotIn("wrong-token", output)
-                self.assertNotIn("workspace/owner", output)
+                self.assertNotIn("lineage/owner", output)
                 self.assertEqual("model_input=" in output, level == "debug")
                 self.assertEqual("model_output=" in output, level == "debug")
                 self.assertEqual(PROMPTS.memory_write in output, level == "debug")

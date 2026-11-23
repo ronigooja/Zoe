@@ -108,7 +108,7 @@ type TaskAdmissionResult struct {
 // AppendEventsTx persists feature-produced events and their notifications in
 // the caller's transaction. It is intended to pair with AdmitTaskTx.
 func (s *Server) AppendEventsTx(ctx context.Context, tx *sql.Tx, p contracts.Principal, events []contracts.Event) error {
-	if tx == nil || p.WorkspaceID == "" || p.SubjectID == "" {
+	if tx == nil || p.SubjectID == "" {
 		return errors.New("transaction and trusted event principal are required")
 	}
 	for i := range events {
@@ -124,7 +124,6 @@ func (s *Server) AppendEventsTx(ctx context.Context, tx *sql.Tx, p contracts.Pri
 			e.EventID = id
 		}
 		e.SchemaVersion = 1
-		e.WorkspaceID = p.WorkspaceID
 		e.SubjectID = p.SubjectID
 		if e.OccurredAt.IsZero() {
 			e.OccurredAt = time.Now().UTC()
@@ -138,7 +137,7 @@ func (s *Server) AppendEventsTx(ctx context.Context, tx *sql.Tx, p contracts.Pri
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, e.EventID, p.WorkspaceID, cursor, e.SchemaVersion, e.Type, e.OccurredAt.Format(time.RFC3339Nano), p.SubjectID, e.AggregateType, e.AggregateID, e.AggregateVersion, payload); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,?,?,?,?,?,?,?,?)`, e.EventID, cursor, e.SchemaVersion, e.Type, e.OccurredAt.Format(time.RFC3339Nano), p.SubjectID, e.AggregateType, e.AggregateID, e.AggregateVersion, payload); err != nil {
 			return err
 		}
 		if err = enqueueEventNotification(ctx, tx, *e); err != nil {
@@ -154,31 +153,31 @@ type TaskSourceAdmissionHandler func(context.Context, *sql.Tx, contracts.Princip
 // authorized immediately before a runner creates a runtime. A non-empty
 // reason code denies dispatch. Implementations may update their source-owned
 // records inside tx so cancellation and the task transition commit together.
-type TaskDispatchGuard func(context.Context, *sql.Tx, string, string, time.Time) (reasonCode string, err error)
+type TaskDispatchGuard func(context.Context, *sql.Tx, string, time.Time) (reasonCode string, err error)
 
 // PrincipalCanAccessProject/Task are the authoritative row-level access checks
 // for feature modules running within a device transaction.
 func PrincipalCanAccessProject(ctx context.Context, tx *sql.Tx, p contracts.Principal, projectID string) (bool, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM projects p WHERE p.id=? AND p.workspace_id=? AND p.status='active' AND (p.owner_subject_id=?)`, projectID, p.WorkspaceID, p.SubjectID).Scan(&count)
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM projects p WHERE p.id=? AND p.status='active' AND (p.owner_subject_id=?)`, projectID, p.SubjectID).Scan(&count)
 	return count == 1, err
 }
 
 func PrincipalCanWriteProject(ctx context.Context, tx *sql.Tx, p contracts.Principal, projectID string) (bool, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM projects p WHERE p.id=? AND p.workspace_id=? AND p.status='active' AND (p.owner_subject_id=?)`, projectID, p.WorkspaceID, p.SubjectID).Scan(&count)
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM projects p WHERE p.id=? AND p.status='active' AND (p.owner_subject_id=?)`, projectID, p.SubjectID).Scan(&count)
 	return count == 1, err
 }
 
 func PrincipalCanAccessTask(ctx context.Context, tx *sql.Tx, p contracts.Principal, taskID string) (bool, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM tasks t WHERE t.id=? AND t.workspace_id=? AND (t.owner_subject_id=?)`, taskID, p.WorkspaceID, p.SubjectID).Scan(&count)
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM tasks t WHERE t.id=? AND (t.owner_subject_id=?)`, taskID, p.SubjectID).Scan(&count)
 	return count == 1, err
 }
 
 func PrincipalCanWriteTask(ctx context.Context, tx *sql.Tx, p contracts.Principal, taskID string) (bool, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM tasks t WHERE t.id=? AND t.workspace_id=? AND (t.owner_subject_id=?)`, taskID, p.WorkspaceID, p.SubjectID).Scan(&count)
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM tasks t WHERE t.id=? AND (t.owner_subject_id=?)`, taskID, p.SubjectID).Scan(&count)
 	return count == 1, err
 }
 

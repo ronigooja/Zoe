@@ -30,17 +30,17 @@ func TestRegisterRetainedCoverageAfterMemoryAdvanceAndFailure(t *testing.T) {
 
 func TestRegisterBackdatedUnconsumedSourceAndOwnerScope(t *testing.T) {
 	f := newRegisterFixture(t)
-	f.exec(`CREATE TABLE IF NOT EXISTS memory_ingest_batches(id TEXT PRIMARY KEY,workspace_id TEXT,principal_id TEXT,from_ns INTEGER,until_ns INTEGER)`)
-	f.exec(`CREATE TABLE IF NOT EXISTS memory_ingest_members(workspace_id TEXT,principal_id TEXT,source_id TEXT,batch_id TEXT,PRIMARY KEY(workspace_id,principal_id,source_id))`)
+	f.exec(`CREATE TABLE IF NOT EXISTS memory_ingest_batches(id TEXT PRIMARY KEY,principal_id TEXT,from_ns INTEGER,until_ns INTEGER)`)
+	f.exec(`CREATE TABLE IF NOT EXISTS memory_ingest_members(principal_id TEXT,source_id TEXT,batch_id TEXT,PRIMARY KEY(principal_id,source_id))`)
 	f.turn("handoff-session", 0, "user", "initial source", f.now.Add(-3*time.Hour))
 	f.rebuild(f.now)
 	before := f.layers(f.now)
 	f.boundary = f.now.Add(-30 * time.Minute)
-	f.exec(`INSERT INTO memory_ingest_batches(id,workspace_id,principal_id,from_ns,until_ns) VALUES('covered','default','owner',0,?)`, f.boundary.UnixNano())
-	f.exec(`INSERT INTO memory_ingest_members VALUES('default','owner',?,'covered')`, `turn:"handoff-session":0`)
+	f.exec(`INSERT INTO memory_ingest_batches(id,principal_id,from_ns,until_ns) VALUES('covered','owner',0,?)`, f.boundary.UnixNano())
+	f.exec(`INSERT INTO memory_ingest_members VALUES('owner',?,'covered')`, `turn:"handoff-session":0`)
 	f.turn("handoff-session", 1, "user", "BACKDATED_UNSEEN", f.now.Add(-2*time.Hour))
 	f.exec(`UPDATE voice_transcript_turns SET received_at=? WHERE session_id='handoff-session' AND seq=1`, f.now.Add(time.Minute).Format(time.RFC3339Nano))
-	f.session("foreign", "default", "other")
+	f.session("foreign", "other")
 	f.turn("foreign", 0, "user", "SECRET_FOREIGN", f.now.Add(-2*time.Hour))
 	after := f.layers(f.now.Add(2 * time.Minute))
 	if after.RawFrom != before.RawFrom || !strings.Contains(after.Raw, "BACKDATED_UNSEEN") || strings.Contains(after.Raw, "SECRET_FOREIGN") {

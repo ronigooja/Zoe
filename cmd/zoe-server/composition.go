@@ -31,7 +31,7 @@ func composeControlServer(store *storage.Store, controlConfig control.Config, vo
 	}
 	if voiceConfig.RegisterConfig != nil {
 		voiceConfig.RegisterConfig.MemoryBoundary = func(ctx context.Context, o voice.RegisterOwner) (time.Time, error) {
-			return voiceRepository.BoundaryAt(ctx, o.WorkspaceID, o.OwnerSubjectID)
+			return voiceRepository.BoundaryAt(ctx, o.OwnerSubjectID)
 		}
 	}
 	if err = voice.Register(server, store, voiceConfig); err != nil {

@@ -38,22 +38,22 @@ func TestUITargetResolvedRequestAndResult(t *testing.T) {
 	r.seedTask(t, "task", "owner")
 	r.seedEntry(t, "task", "decoy", "unrelated latest assistant message")
 	r.exec(t, `UPDATE tasks SET result='authoritative result',status='complete' WHERE id='task'`)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,request,created_at,updated_at) VALUES('request','default','owner','task','task','Show the complete resolved request.','now','now')`)
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,task_id,request,created_at,updated_at) VALUES('request','owner','task','task','Show the complete resolved request.','now','now')`)
 	r.seedEntry(t, "task", "authoritative", "authoritative result")
-	r.exec(t, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('result-run','default','task','attempt','stopped',1,'runner','device-1','cmd','goal','profile','runtime','model','worker','opencode','now')`)
+	r.exec(t, `INSERT INTO runs(id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('result-run','task','attempt','stopped',1,'runner','device-1','cmd','goal','profile','runtime','model','worker','opencode','now')`)
 	r.seedEvent(t, 1, "task", "result-run", "authoritative")
 	tx, err := r.store.DB().BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pinUIResultTx(context.Background(), tx, "default", "owner", "task", "request", "authoritative", 1); err != nil {
+	if err := pinUIResultTx(context.Background(), tx, "owner", "task", "request", "authoritative", 1); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	b, err := r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", request: "request", kind: "task_entry", key: "task_entry:decoy"})
+	b, err := r.svc.uiInput(context.Background(), uiJob{o: "owner", request: "request", kind: "task_entry", key: "task_entry:decoy"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestUITargetResolvedRequestAndResult(t *testing.T) {
 		t.Fatal(string(b))
 	}
 	r.exec(t, `UPDATE task_entries SET content='forged replacement' WHERE id='authoritative'`)
-	if _, err = r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", request: "request"}); err == nil {
+	if _, err = r.svc.uiInput(context.Background(), uiJob{o: "owner", request: "request"}); err == nil {
 		t.Fatal("missing result accepted")
 	}
 }
@@ -74,8 +74,8 @@ func TestUITargetResolvedRequestAndResult(t *testing.T) {
 func uiTargetPresentation(t *testing.T, r *deliveryRig, awaiting bool) {
 	t.Helper()
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,created_at,updated_at) VALUES('request','default','owner','task','task',?,?)`, at, at)
-	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('job','default','owner','task_entry','task_entry:result','request',1,?,?,?)`, at, at, at)
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,task_id,created_at,updated_at) VALUES('request','owner','task','task',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_jobs(id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('job','owner','task_entry','task_entry:result','request',1,?,?,?)`, at, at, at)
 	o, err := uictl.Parse(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, awaiting), nil, uiTestMode(awaiting))
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func uiTargetPresentation(t *testing.T, r *deliveryRig, awaiting bool) {
 	if !awaiting {
 		facts.QuestionID, facts.Question = "", ""
 	}
-	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "job", w: "default", o: "owner", request: "request", kind: "task_entry", attempts: 1}, o, facts); err != nil {
+	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "job", o: "owner", request: "request", kind: "task_entry", attempts: 1}, o, facts); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -101,7 +101,7 @@ func TestUITargetRenderACKBarrier(t *testing.T) {
 	if r.posts.Load() != 0 {
 		t.Fatal("feedback before ACK")
 	}
-	cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
+	cmd := control.CommandContext{Principal: contracts.Principal{SubjectID: "owner", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
 	for _, payload := range []string{
 		`{"request_id":"request","surface_id":"screen","surface_version":2,"success":true}`,
 	} {
@@ -138,8 +138,8 @@ func uiTargetQuestion(t *testing.T, r *deliveryRig) {
 	r.seedTask(t, "task", "owner")
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `UPDATE tasks SET status='waiting',interaction_state='awaiting_message',interaction_run_id='question-run',interaction_action_digest='digest',interaction_question='Which?' WHERE id='task'`)
-	r.exec(t, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('question-run','default','task','question-attempt','stopped','run',1,1,'runner','device-1','cmd-task','goal','zoe-steward','opencode','runtime','model','worker',?)`, at)
-	r.exec(t, `INSERT INTO pending_runtime_actions(id,workspace_id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES('question','default','task','question-run',1,'question-request','worker_question','Which?','digest',?,?)`, r.now().Add(time.Hour).Format(time.RFC3339Nano), at)
+	r.exec(t, `INSERT INTO runs(id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('question-run','task','question-attempt','stopped','run',1,1,'runner','device-1','cmd-task','goal','zoe-steward','opencode','runtime','model','worker',?)`, at)
+	r.exec(t, `INSERT INTO pending_runtime_actions(id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES('question','task','question-run',1,'question-request','worker_question','Which?','digest',?,?)`, r.now().Add(time.Hour).Format(time.RFC3339Nano), at)
 }
 
 func TestUITargetDirectQuestionInput(t *testing.T) {
@@ -149,7 +149,7 @@ func TestUITargetDirectQuestionInput(t *testing.T) {
 			uiFlowServer(t, r)
 			uiTargetQuestion(t, r)
 			uiTargetPresentation(t, r, true)
-			cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "device-1", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
+			cmd := control.CommandContext{Principal: contracts.Principal{SubjectID: "owner", DeviceID: "device-1", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
 			if mode == "owner" {
 				cmd.Principal.SubjectID = "other"
 			}
@@ -210,8 +210,8 @@ func TestUITargetFailureEvidenceSurvivesFeedback(t *testing.T) {
 	r.seedCall(t, "call", "owner", 1)
 	r.enableReceiptFixture(t)
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,status,created_at,updated_at) VALUES('failure','default','owner','register','failed',?,?)`, at, at)
-	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('failure','default','owner','Failed.',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,status,created_at,updated_at) VALUES('failure','owner','register','failed',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,owner_subject_id,text,created_at,updated_at) VALUES('failure','owner','Failed.',?,?)`, at, at)
 	r.svc.dispatchUIFeedback(context.Background())
 	var request, delivery string
 	_ = r.store.DB().QueryRow(`SELECT r.status,d.status FROM ui_requests r JOIN ui_feedback_deliveries d ON d.request_id=r.id`).Scan(&request, &delivery)
@@ -226,7 +226,7 @@ func TestUITargetFailedACK(t *testing.T) {
 	r.seedTask(t, "task", "owner")
 	uiTargetPresentation(t, r, false)
 	surfaceID := uiStoredID(t, r, "request")
-	cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
+	cmd := control.CommandContext{Principal: contracts.Principal{SubjectID: "owner", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
 	tx, _ := r.store.DB().BeginTx(context.Background(), nil)
 	_, _, err := r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: json.RawMessage(strings.ReplaceAll(`{"request_id":"request","surface_id":"screen","surface_version":1,"success":false}`, `"screen"`, `"`+surfaceID+`"`))})
 	if err != nil {

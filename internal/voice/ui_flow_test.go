@@ -24,7 +24,7 @@ const uiFlowRoot = `{"version":"v0.9.1","updateComponents":{"surfaceId":"screen"
 // uiFlowRun supplies the authoritative run required by task-result UI events.
 func uiFlowRun(t *testing.T, db *sql.DB, task, run string) {
 	t.Helper()
-	_, err := db.Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) SELECT ?,workspace_id,id,'ui-attempt','stopped',1,'runner',created_by_device_id,command_id,goal,profile_id,'runtime','model','worker','opencode',created_at FROM tasks WHERE id=?`, run, task)
+	_, err := db.Exec(`INSERT INTO runs(id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) SELECT ?,id,'ui-attempt','stopped',1,'runner',created_by_device_id,command_id,goal,profile_id,'runtime','model','worker','opencode',created_at FROM tasks WHERE id=?`, run, task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func uiFlowServer(t *testing.T, r *deliveryRig) {
 func uiFlowRegister(t *testing.T, r *deliveryRig) {
 	t.Helper()
 	r.seedCall(t, "call", "owner", 1)
-	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request,transcript_seq) VALUES('turn','default','call',1,'turn',1,'original sentence',X'01',?,'turn-command','ui','resolved request',0)`, r.now().Format(time.RFC3339Nano))
+	r.exec(t, `INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request,transcript_seq) VALUES('turn','call',1,'turn',1,'original sentence',X'01',?,'turn-command','ui','resolved request',0)`, r.now().Format(time.RFC3339Nano))
 	if err := r.svc.applyDelegation(context.Background(), "turn"); err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestUIInputRedisplayKey(t *testing.T) {
 	r.seedTask(t, "task", "owner")
 	r.seedEntry(t, "task", "entry", "existing result")
 	r.exec(t, `UPDATE tasks SET result='existing result' WHERE id='task'`)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,request,created_at,updated_at) VALUES('request','default','owner','task','task','Show the existing task result.',?,?)`, r.now().Format(time.RFC3339Nano), r.now().Format(time.RFC3339Nano))
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,task_id,request,created_at,updated_at) VALUES('request','owner','task','task','Show the existing task result.',?,?)`, r.now().Format(time.RFC3339Nano), r.now().Format(time.RFC3339Nano))
 	uiFlowRun(t, r.store.DB(), "task", "run")
 	r.seedEvent(t, 1, "task", "run", "entry")
 	tx, err := r.store.DB().BeginTx(context.Background(), nil)
@@ -256,7 +256,7 @@ func TestUIInputRedisplayKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err := pinUIResultTx(context.Background(), tx, "default", "owner", "task", "request", "entry", 1); err != nil {
+	if err := pinUIResultTx(context.Background(), tx, "owner", "task", "request", "entry", 1); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -264,7 +264,7 @@ func TestUIInputRedisplayKey(t *testing.T) {
 	}
 	r.exec(t, `UPDATE tasks SET result='mutable decoy' WHERE id='task'`)
 	for _, key := range []string{"task_entry:entry", "task_entry:entry#turn-one", "task_entry:entry#turn-two"} {
-		input, err := r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", kind: "task_entry", key: key, request: "request"})
+		input, err := r.svc.uiInput(context.Background(), uiJob{o: "owner", kind: "task_entry", key: key, request: "request"})
 		if err != nil || !strings.Contains(string(input), "existing result") || strings.Contains(string(input), "mutable decoy") {
 			t.Fatalf("key=%s input=%s err=%v", key, input, err)
 		}
@@ -305,8 +305,8 @@ func TestUIJobFailures(t *testing.T) {
 func TestUICommands(t *testing.T) {
 	r := uiTargetRig(t)
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,task_question,input_note,created_at,updated_at) VALUES('request','default','owner','register','screen',1,'Requested input',?,?)`, at, at)
-	cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}}
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,surface_id,task_question,input_note,created_at,updated_at) VALUES('request','owner','register','screen',1,'Requested input',?,?)`, at, at)
+	cmd := control.CommandContext{Principal: contracts.Principal{SubjectID: "owner", Scopes: []string{"client:command"}}}
 	ctx := context.Background()
 	tx, err := r.store.DB().BeginTx(ctx, nil)
 	if err != nil {
@@ -347,7 +347,7 @@ func TestUICommands(t *testing.T) {
 	if api, ok := err.(*control.APIError); !ok || api.Status != 409 {
 		t.Fatalf("double submit=%v", err)
 	}
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,task_question,input_note,created_at,updated_at) VALUES('compact','default','owner','register','screen',1,'Fields',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,surface_id,task_question,input_note,created_at,updated_at) VALUES('compact','owner','register','screen',1,'Fields',?,?)`, at, at)
 	request.Payload = json.RawMessage(`{"request_id":"compact","surface_id":"screen","surface_version":1,"name":"submit","source_component_id":"submit","context":{"a":"<raw>","b":2}}`)
 	tx, _ = r.store.DB().BeginTx(ctx, nil)
 	if _, _, err = r.svc.commandUIAction(ctx, tx, cmd, request); err == nil {
@@ -360,7 +360,7 @@ func TestUICommands(t *testing.T) {
 	if text != "" {
 		t.Fatalf("compact=%q", text)
 	}
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,task_question,created_at,updated_at) VALUES('not-awaiting','default','owner','register','screen',0,?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,surface_id,task_question,created_at,updated_at) VALUES('not-awaiting','owner','register','screen',0,?,?)`, at, at)
 	request.Payload = json.RawMessage(`{"request_id":"not-awaiting","surface_id":"screen","surface_version":1,"name":"submit","source_component_id":"submit","context":{}}`)
 	tx, _ = r.store.DB().BeginTx(ctx, nil)
 	_, _, err = r.svc.commandUIAction(ctx, tx, cmd, request)
@@ -373,9 +373,9 @@ func TestUICommands(t *testing.T) {
 func TestUIFeedbackContinuity(t *testing.T) {
 	r := uiTargetRig(t)
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES('request','default','owner','register',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,created_at,updated_at) VALUES('request','owner','register',?,?)`, at, at)
 	r.exec(t, `UPDATE ui_requests SET status='failed' WHERE id='request'`)
-	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('request','default','owner','Shown text',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,owner_subject_id,text,created_at,updated_at) VALUES('request','owner','Shown text',?,?)`, at, at)
 	r.svc.dispatchUIFeedback(context.Background())
 	var status string
 	var attempts int
@@ -401,9 +401,9 @@ func TestUIFeedbackGatewayRetries(t *testing.T) {
 	adapter := &uiFlowReceiptObserver{ResultReceiptAdapter: r.svc.resultReceiptAdapter}
 	r.svc.resultReceiptAdapter = adapter
 	r.code.Store(503)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES('request','default','owner','register',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,created_at,updated_at) VALUES('request','owner','register',?,?)`, at, at)
 	r.exec(t, `UPDATE ui_requests SET status='failed' WHERE id='request'`)
-	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('request','default','owner','Shown text',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,owner_subject_id,text,created_at,updated_at) VALUES('request','owner','Shown text',?,?)`, at, at)
 	for i := 0; i < 3; i++ {
 		r.svc.dispatchUIFeedback(context.Background())
 		r.advance(31 * time.Second)
@@ -467,8 +467,8 @@ func TestUIOpeningHasNoStandaloneFeedbackGroup(t *testing.T) {
 	r := newDeliveryRig(t)
 	for i, id := range []string{"old", "new"} {
 		at := r.now().Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)
-		r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES(?,'default','user-1','register',?,?)`, id, at, at)
-		r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,status,created_at,updated_at) VALUES(?,'default','user-1',?,'delivered',?,?)`, id, id, at, at)
+		r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,created_at,updated_at) VALUES(?,'user-1','register',?,?)`, id, at, at)
+		r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,owner_subject_id,text,status,created_at,updated_at) VALUES(?,'user-1',?,'delivered',?,?)`, id, id, at, at)
 	}
 	r.seedCall(t, "opening", "user-1", 1)
 	opening := reserveTestOpening(t, r, "opening")
@@ -485,8 +485,8 @@ func TestUINewSurfaceJobLease(t *testing.T) {
 	r.svc.uiController = uiFlowModel(t, &output, &mu)
 	uiFlowRegister(t, r)
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES('delete','default','owner','register',?,?)`, at, at)
-	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('delete-job','default','owner','register','register:delete','delete',1,?,?,?)`, r.now().Add(30*time.Second).Format(time.RFC3339Nano), at, at)
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,created_at,updated_at) VALUES('delete','owner','register',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_jobs(id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('delete-job','owner','register','register:delete','delete',1,?,?,?)`, r.now().Add(30*time.Second).Format(time.RFC3339Nano), at, at)
 	mu.Lock()
 	output = uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false)
 	mu.Unlock()

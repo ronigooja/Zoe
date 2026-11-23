@@ -55,7 +55,7 @@ func (s *Service) handleReadSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var result sessionResponse
-	err := s.db.QueryRowContext(r.Context(), `SELECT id,generation,state FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND id=?`, p.WorkspaceID, p.SubjectID, r.PathValue("session_id")).Scan(&result.SessionID, &result.Generation, &result.State)
+	err := s.db.QueryRowContext(r.Context(), `SELECT id,generation,state FROM voice_sessions WHERE owner_id=? AND id=?`, p.SubjectID, r.PathValue("session_id")).Scan(&result.SessionID, &result.Generation, &result.State)
 	if errors.Is(err, sql.ErrNoRows) {
 		control.WriteError(w, apiError(http.StatusNotFound, "not_found", "voice session not found", nil))
 		return
@@ -74,7 +74,7 @@ func (s *Service) handleTurns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var owner string
-	if err := s.db.QueryRowContext(r.Context(), `SELECT owner_id FROM voice_sessions WHERE workspace_id=? AND id=?`, p.WorkspaceID, r.PathValue("session_id")).Scan(&owner); errors.Is(err, sql.ErrNoRows) {
+	if err := s.db.QueryRowContext(r.Context(), `SELECT owner_id FROM voice_sessions WHERE id=?`, r.PathValue("session_id")).Scan(&owner); errors.Is(err, sql.ErrNoRows) {
 		control.WriteError(w, apiError(http.StatusNotFound, "not_found", "voice session not found", nil))
 		return
 	} else if err != nil {
@@ -122,7 +122,7 @@ func (s *Service) handleReceipts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var owner string
-	if err := s.db.QueryRowContext(r.Context(), `SELECT owner_id FROM voice_sessions WHERE workspace_id=? AND id=?`, p.WorkspaceID, r.PathValue("session_id")).Scan(&owner); errors.Is(err, sql.ErrNoRows) {
+	if err := s.db.QueryRowContext(r.Context(), `SELECT owner_id FROM voice_sessions WHERE id=?`, r.PathValue("session_id")).Scan(&owner); errors.Is(err, sql.ErrNoRows) {
 		control.WriteError(w, apiError(http.StatusNotFound, "not_found", "voice session not found", nil))
 		return
 	} else if err != nil {
@@ -142,7 +142,7 @@ func (s *Service) handleReceipts(w http.ResponseWriter, r *http.Request) {
 		OccurredAt  string          `json:"occurred_at"`
 		Payload     json.RawMessage `json:"payload"`
 	}
-	rows, err := s.db.QueryContext(r.Context(), `SELECT e.event_id,e.cursor,e.event_type,e.aggregate_id,e.aggregate_version,e.occurred_at,e.payload FROM voice_task_links l JOIN events e ON e.workspace_id=l.workspace_id AND e.aggregate_type='task' AND e.aggregate_id=l.task_id WHERE l.workspace_id=? AND l.session_id=? AND l.generation=(SELECT generation FROM voice_sessions WHERE id=l.session_id) ORDER BY e.cursor`, p.WorkspaceID, r.PathValue("session_id"))
+	rows, err := s.db.QueryContext(r.Context(), `SELECT e.event_id,e.cursor,e.event_type,e.aggregate_id,e.aggregate_version,e.occurred_at,e.payload FROM voice_task_links l JOIN events e ON e.aggregate_type='task' AND e.aggregate_id=l.task_id WHERE l.session_id=? AND l.generation=(SELECT generation FROM voice_sessions WHERE id=l.session_id) ORDER BY e.cursor`, r.PathValue("session_id"))
 	if err != nil {
 		control.WriteError(w, safeSessionError(err))
 		return
@@ -195,7 +195,7 @@ func (s *Service) admitVoiceTask(ctx context.Context, tx *sql.Tx, principal cont
 	}
 	var owner, deviceID, state string
 	var generation int64
-	err := tx.QueryRowContext(ctx, `SELECT owner_id,device_id,state,generation FROM voice_sessions WHERE workspace_id=? AND id=?`, principal.WorkspaceID, ref.SessionID).Scan(&owner, &deviceID, &state, &generation)
+	err := tx.QueryRowContext(ctx, `SELECT owner_id,device_id,state,generation FROM voice_sessions WHERE id=?`, ref.SessionID).Scan(&owner, &deviceID, &state, &generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, apiError(http.StatusNotFound, "voice_turn_not_found", "voice session was not found", nil)
 	}
@@ -213,7 +213,7 @@ func (s *Service) admitVoiceTask(ctx context.Context, tx *sql.Tx, principal cont
 	var storedExits sql.NullString
 	var transcriptSeq sql.NullInt64
 	var contentHash []byte
-	err = tx.QueryRowContext(ctx, `SELECT content,content_hash,exits,request,transcript_seq FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, principal.WorkspaceID, ref.SessionID, ref.Generation, ref.TurnID, ref.Revision).Scan(&content, &contentHash, &storedExits, &resolved, &transcriptSeq)
+	err = tx.QueryRowContext(ctx, `SELECT content,content_hash,exits,request,transcript_seq FROM voice_turns WHERE session_id=? AND generation=? AND turn_id=? AND revision=?`, ref.SessionID, ref.Generation, ref.TurnID, ref.Revision).Scan(&content, &contentHash, &storedExits, &resolved, &transcriptSeq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, apiError(http.StatusNotFound, "voice_turn_not_found", "confirmed voice turn revision was not found", nil)
 	}
@@ -248,13 +248,13 @@ func (s *Service) admitVoiceTask(ctx context.Context, tx *sql.Tx, principal cont
 		if err := s.recordTaskUITx(ctx, tx, principal, taskID, ref.SessionID, ref.Generation, ref.TurnID, ref.Revision, acceptedAt); err != nil {
 			return nil, err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET ui_display=1 WHERE workspace_id=? AND id=?`, principal.WorkspaceID, taskID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET ui_display=1 WHERE id=?`, taskID); err != nil {
 			return nil, err
 		}
 	}
 	eventPayload, _ := json.Marshal(map[string]any{"task_id": taskID, "voice_session_id": ref.SessionID, "generation": ref.Generation, "turn_id": ref.TurnID, "turn_revision": ref.Revision, "content_hash": hex.EncodeToString(contentHash), "status": "task_created"})
 	event := contracts.Event{Type: "voice.task.created", AggregateType: "voice_session", AggregateID: ref.SessionID, AggregateVersion: ref.Generation, Payload: eventPayload, OccurredAt: acceptedAt}
-	_, err = tx.ExecContext(ctx, `INSERT INTO voice_task_links(workspace_id,session_id,generation,turn_id,turn_revision,task_id,linked_by_device_id,command_id,linked_at) VALUES(?,?,?,?,?,?,?,?,?)`, principal.WorkspaceID, ref.SessionID, ref.Generation, ref.TurnID, ref.Revision, taskID, principal.DeviceID, taskID, acceptedAt.UTC().Format(time.RFC3339Nano))
+	_, err = tx.ExecContext(ctx, `INSERT INTO voice_task_links(session_id,generation,turn_id,turn_revision,task_id,linked_by_device_id,command_id,linked_at) VALUES(?,?,?,?,?,?,?,?)`, ref.SessionID, ref.Generation, ref.TurnID, ref.Revision, taskID, principal.DeviceID, taskID, acceptedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return nil, apiError(http.StatusConflict, "voice_turn_already_dispatched", "this stable voice turn is already bound to a task", nil)
@@ -277,7 +277,7 @@ func (s *Service) commandLinkTask(ctx context.Context, tx *sql.Tx, cmd control.C
 	}
 	var owner, sessionState string
 	var currentGeneration int64
-	if err := tx.QueryRowContext(ctx, `SELECT owner_id,state,generation FROM voice_sessions WHERE workspace_id=? AND id=?`, cmd.Principal.WorkspaceID, payload.SessionID).Scan(&owner, &sessionState, &currentGeneration); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT owner_id,state,generation FROM voice_sessions WHERE id=?`, payload.SessionID).Scan(&owner, &sessionState, &currentGeneration); errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(http.StatusNotFound, "not_found", "voice session not found", nil)
 	} else if err != nil {
 		return contracts.CommandResult{}, nil, err
@@ -289,7 +289,7 @@ func (s *Service) commandLinkTask(ctx context.Context, tx *sql.Tx, cmd control.C
 		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_generation_unresolved", "task cannot be linked while media generation is unresolved", nil)
 	}
 	var transcriptSeq sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT transcript_seq FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, payload.SessionID, payload.Generation, payload.TurnID, payload.TurnRevision).Scan(&transcriptSeq); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT transcript_seq FROM voice_turns WHERE session_id=? AND generation=? AND turn_id=? AND revision=?`, payload.SessionID, payload.Generation, payload.TurnID, payload.TurnRevision).Scan(&transcriptSeq); errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(http.StatusNotFound, "voice_turn_not_found", "confirmed voice turn revision not found", nil)
 	} else if err != nil {
 		return contracts.CommandResult{}, nil, err
@@ -299,7 +299,7 @@ func (s *Service) commandLinkTask(ctx context.Context, tx *sql.Tx, cmd control.C
 	}
 	var taskSource, createdBy string
 	var taskVersion int64
-	if err := tx.QueryRowContext(ctx, `SELECT source,created_by_device_id,version FROM tasks WHERE workspace_id=? AND id=?`, cmd.Principal.WorkspaceID, payload.TaskID).Scan(&taskSource, &createdBy, &taskVersion); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT source,created_by_device_id,version FROM tasks WHERE id=?`, payload.TaskID).Scan(&taskSource, &createdBy, &taskVersion); errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(http.StatusNotFound, "not_found", "task not found", nil)
 	} else if err != nil {
 		return contracts.CommandResult{}, nil, err
@@ -310,7 +310,7 @@ func (s *Service) commandLinkTask(ctx context.Context, tx *sql.Tx, cmd control.C
 	if req.ExpectedVersion == nil || *req.ExpectedVersion != taskVersion {
 		return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "version_conflict", "task version changed before voice linkage", map[string]any{"current_version": taskVersion})
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO voice_task_links(workspace_id,session_id,generation,turn_id,turn_revision,task_id,linked_by_device_id,command_id,linked_at) VALUES(?,?,?,?,?,?,?,?,?)`, cmd.Principal.WorkspaceID, payload.SessionID, payload.Generation, payload.TurnID, payload.TurnRevision, payload.TaskID, cmd.Principal.DeviceID, cmd.CommandID, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano))
+	_, err := tx.ExecContext(ctx, `INSERT INTO voice_task_links(session_id,generation,turn_id,turn_revision,task_id,linked_by_device_id,command_id,linked_at) VALUES(?,?,?,?,?,?,?,?)`, payload.SessionID, payload.Generation, payload.TurnID, payload.TurnRevision, payload.TaskID, cmd.Principal.DeviceID, cmd.CommandID, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return contracts.CommandResult{}, nil, apiError(http.StatusConflict, "voice_task_link_conflict", "task or turn is already linked to a different voice record", nil)

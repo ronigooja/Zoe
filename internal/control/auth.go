@@ -174,7 +174,7 @@ func (s *Server) authenticateInstanceKey(ctx context.Context, key string, detail
 	if err != nil || subtle.ConstantTimeCompare(expected, provided) != 1 {
 		return contracts.Principal{}, apiError(http.StatusUnauthorized, "unauthenticated", "instance credential is not recognized", details)
 	}
-	return contracts.Principal{Generation: generation, WorkspaceID: "default", SubjectID: "owner", DeviceID: "instance", Scopes: append([]string(nil), s.cfg.InstanceScopes...)}, nil
+	return contracts.Principal{Generation: generation, SubjectID: "owner", DeviceID: "instance", Scopes: append([]string(nil), s.cfg.InstanceScopes...)}, nil
 }
 
 // RequireForwardedInstanceKeyTx fences a call admission against key rotation.
@@ -191,7 +191,7 @@ func RequireForwardedInstanceKeyTx(ctx context.Context, tx *sql.Tx, p contracts.
 // atomically by replacing the digest, so no device/session revocation lookup is
 // needed here.
 func requireOwnerSessionTx(ctx context.Context, tx *sql.Tx, p contracts.Principal) error {
-	if p.WorkspaceID != "default" || p.SubjectID != "owner" || p.DeviceID != "instance" {
+	if p.SubjectID != "owner" || p.DeviceID != "instance" {
 		return apiError(401, "unauthenticated", "instance session is invalid", nil)
 	}
 	var present int

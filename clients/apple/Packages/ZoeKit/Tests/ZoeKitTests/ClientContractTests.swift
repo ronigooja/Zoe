@@ -451,7 +451,7 @@ final class ClientContractTests: XCTestCase {
             hangups += 1
         }
         func envelope(_ cursor: Int64, _ type: String, payload: String = "{}", version: Int64 = 1) -> String {
-            "{\"schema_version\":1,\"event_id\":\"e\(cursor)\",\"cursor\":\"\(cursor)\",\"type\":\"\(type)\",\"occurred_at\":\"\",\"workspace_id\":\"default\",\"aggregate_type\":\"\(type == "voice.end" ? "voice_session" : "ui_surface")\",\"aggregate_id\":\"\(type == "voice.end" ? "replayed-call" : "s1")\",\"aggregate_version\":\(version),\"payload\":\(payload)}"
+            "{\"schema_version\":1,\"event_id\":\"e\(cursor)\",\"cursor\":\"\(cursor)\",\"type\":\"\(type)\",\"occurred_at\":\"\",\"aggregate_type\":\"\(type == "voice.end" ? "voice_session" : "ui_surface")\",\"aggregate_id\":\"\(type == "voice.end" ? "replayed-call" : "s1")\",\"aggregate_version\":\(version),\"payload\":\(payload)}"
         }
         func frame(_ cursor: Int64, _ type: String, payload: String = "{}", version: Int64 = 1) -> String {
             "id: \(cursor)\nevent: \(type)\ndata: \(envelope(cursor, type, payload: payload, version: version))\n\n"
@@ -550,7 +550,7 @@ final class ClientContractTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Last-Event-ID"), "20")
             XCTAssertEqual(stops, 0, "Exact active recovery session must survive until post-checkpoint SSE")
             XCTAssertEqual(hangups, 0)
-            let event = #"{"schema_version":1,"event_id":"end","cursor":"21","type":"voice.end","occurred_at":"","workspace_id":"default","aggregate_type":"voice_session","aggregate_id":"old","aggregate_version":1,"payload":{}}"#
+            let event = #"{"schema_version":1,"event_id":"end","cursor":"21","type":"voice.end","occurred_at":"","aggregate_type":"voice_session","aggregate_id":"old","aggregate_version":1,"payload":{}}"#
             return (200, ["Content-Type": "text/event-stream"], Data("id: 21\nevent: voice.end\ndata: \(event)\n\n".utf8))
         }
         try await model.receiveEventConnectionForTesting(api: api)
@@ -857,7 +857,7 @@ final class ClientContractTests: XCTestCase {
             }
             ContractURLProtocol.responseHandler = { request in
                 XCTAssertEqual(request.httpMethod, "GET")
-                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: kind, workspaceID: "workspace-1", resourceID: "s1"))
+                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: kind, resourceID: "s1"))
             }
             do {
                 _ = try await coordinator.submit(kind: kind, payload: payload, instanceLineageID: "instance-1", idempotencyKey: key)
@@ -896,7 +896,7 @@ final class ClientContractTests: XCTestCase {
         ContractURLProtocol.failureHandler = nil
         ContractURLProtocol.responseHandler = { request in
             if request.httpMethod == "GET" { return (404, [:], Data(#"{"error":{"code":"not_found","message":"missing"}}"#.utf8)) }
-            return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: "voice.text_input", workspaceID: "workspace-1", resourceID: ""))
+            return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: "voice.text_input", resourceID: ""))
         }
         let outcomes = try await coordinator.recoverPending(currentInstanceLineageID: "instance-1", onOutcome: { _ in })
         XCTAssertEqual(outcomes.count, 1)
@@ -906,7 +906,7 @@ final class ClientContractTests: XCTestCase {
     }
 
     func testSSEParserCombinesDataLinesAndPreservesDecimalCursor() throws {
-        let payload = #"{"schema_version":1,"event_id":"ev-7","cursor":"9007199254740993","type":"task.updated","occurred_at":"2026-10-20T12:00:00Z","workspace_id":"workspace","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":5,"payload":{"status":"active"}}"#
+        let payload = #"{"schema_version":1,"event_id":"ev-7","cursor":"9007199254740993","type":"task.updated","occurred_at":"2026-10-20T12:00:00Z","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":5,"payload":{"status":"active"}}"#
         var parser = SSEParser()
         XCTAssertNil(try parser.consume(line: "id: 9007199254740993"))
         XCTAssertNil(try parser.consume(line: "event: task.updated"))
@@ -929,7 +929,7 @@ final class ClientContractTests: XCTestCase {
     }
 
     func testSSEParserDropsUnterminatedRecordAtEOF() throws {
-        let payload = #"{"schema_version":1,"event_id":"ev-8","cursor":"20","type":"task.updated","occurred_at":"2026-10-20T12:00:00Z","workspace_id":"workspace","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":6,"payload":{}}"#
+        let payload = #"{"schema_version":1,"event_id":"ev-8","cursor":"20","type":"task.updated","occurred_at":"2026-10-20T12:00:00Z","aggregate_type":"task","aggregate_id":"task-1","aggregate_version":6,"payload":{}}"#
         var parser = SSEParser()
         _ = try parser.consume(line: "id: 20")
         _ = try parser.consume(line: "event: task.updated")
@@ -938,7 +938,7 @@ final class ClientContractTests: XCTestCase {
     }
 
     func testCommandReceiptDecodesOmittedResourceMetadata() throws {
-        let data = Data(#"{"command_id":"cmd-1","idempotency_key":"key-1","workspace_id":"ws-1","kind":"voice.text_input","status":"accepted","accepted_at":"2026-10-20T12:00:00Z","event_cursor":"21"}"#.utf8)
+        let data = Data(#"{"command_id":"cmd-1","idempotency_key":"key-1","kind":"voice.text_input","status":"accepted","accepted_at":"2026-10-20T12:00:00Z","event_cursor":"21"}"#.utf8)
         let receipt = try ZoeJSON.decoder.decode(CommandReceipt.self, from: data)
         XCTAssertEqual(receipt.idempotencyKey, "key-1")
         XCTAssertNil(receipt.resourceType)
@@ -980,7 +980,7 @@ final class ClientContractTests: XCTestCase {
             guard request.url?.path == "/v1/commands", request.httpMethod == "POST" else { return nil }
             postCount += 1
             let submittedKey = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
-            acceptedReceipt = Self.commandReceipt(key: submittedKey, kind: "ui.action", workspaceID: "workspace-1", resourceID: "surface", resourceType: "ui_surface")
+            acceptedReceipt = Self.commandReceipt(key: submittedKey, kind: "ui.action", resourceID: "surface", resourceType: "ui_surface")
             return URLError(.timedOut)
         }
         ContractURLProtocol.responseHandler = { request in
@@ -1031,7 +1031,7 @@ final class ClientContractTests: XCTestCase {
                 postCount += 1
                 postKey = request.value(forHTTPHeaderField: "Idempotency-Key")
                 postBody = Self.requestBody(request)
-                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: "voice.text_input", workspaceID: "workspace-1", resourceID: "task-created"))
+                return (200, ["Content-Type": "application/json"], Self.commandReceipt(key: key, kind: "voice.text_input", resourceID: "task-created"))
             }
             return (503, ["Content-Type": "application/json"], Data())
         }
@@ -1049,7 +1049,7 @@ final class ClientContractTests: XCTestCase {
         XCTAssertTrue(remaining.isEmpty)
     }
 
-    func testPendingRetryRefusesIncompatibleWorkspaceWithoutNetworkRequest() async throws {
+    func testPendingRetryRefusesIncompatibleInstanceWithoutNetworkRequest() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1224,8 +1224,8 @@ final class ClientContractTests: XCTestCase {
         XCTAssertFalse(model.canEndVoiceSession)
     }
 
-    private static func commandReceipt(key: String, kind: String, workspaceID: String, resourceID: String, resourceType: String = "task") -> Data {
-        Data("{\"command_id\":\"command-1\",\"idempotency_key\":\"\(key)\",\"workspace_id\":\"\(workspaceID)\",\"kind\":\"\(kind)\",\"status\":\"accepted\",\"resource_type\":\"\(resourceType)\",\"resource_id\":\"\(resourceID)\",\"resource_version\":1,\"accepted_at\":\"2026-10-22T12:00:00Z\",\"event_cursor\":\"8\"}".utf8)
+    private static func commandReceipt(key: String, kind: String, resourceID: String, resourceType: String = "task") -> Data {
+        Data("{\"command_id\":\"command-1\",\"idempotency_key\":\"\(key)\",\"kind\":\"\(kind)\",\"status\":\"accepted\",\"resource_type\":\"\(resourceType)\",\"resource_id\":\"\(resourceID)\",\"resource_version\":1,\"accepted_at\":\"2026-10-22T12:00:00Z\",\"event_cursor\":\"8\"}".utf8)
     }
 
     private static func requestBody(_ request: URLRequest) -> Data? {

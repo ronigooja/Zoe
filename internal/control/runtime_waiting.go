@@ -16,15 +16,15 @@ func (s *Server) ExpireRuntimeActions(ctx context.Context, now time.Time) error 
 		return err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.workspace_id,a.task_id,a.run_id,a.kind,a.question FROM pending_runtime_actions a JOIN runs r ON r.id=a.run_id WHERE a.decision='' AND a.expires_at<=? AND r.status IN ('dispatching','active','uncertain')`, now.UTC().Format(time.RFC3339Nano))
+	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.task_id,a.run_id,a.kind,a.question FROM pending_runtime_actions a JOIN runs r ON r.id=a.run_id WHERE a.decision='' AND a.expires_at<=? AND r.status IN ('dispatching','active','uncertain')`, now.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return err
 	}
-	type expired struct{ id, workspace, task, run, kind, question string }
+	type expired struct{ id, task, run, kind, question string }
 	var actions []expired
 	for rows.Next() {
 		var a expired
-		if err := rows.Scan(&a.id, &a.workspace, &a.task, &a.run, &a.kind, &a.question); err != nil {
+		if err := rows.Scan(&a.id, &a.task, &a.run, &a.kind, &a.question); err != nil {
 			rows.Close()
 			return err
 		}
@@ -62,10 +62,10 @@ func (s *Server) ExpireRuntimeActions(ctx context.Context, now time.Time) error 
 		if _, err = tx.ExecContext(ctx, `UPDATE runs SET desired_control='stop',control_version=control_version+CASE WHEN desired_control='stop' THEN 0 ELSE 1 END WHERE id=? AND status IN ('dispatching','active','uncertain')`, a.run); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status='awaiting_user',interaction_state=?,interaction_expired_kind=?,interaction_run_id=?,interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=? AND status='active' AND interaction_run_id=?`, state, expiredKind, a.run, a.question, now.UTC().Format(time.RFC3339Nano), a.task, a.workspace, a.run); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status='awaiting_user',interaction_state=?,interaction_expired_kind=?,interaction_run_id=?,interaction_question=?,version=version+1,updated_at=? WHERE id=? AND status='active' AND interaction_run_id=?`, state, expiredKind, a.run, a.question, now.UTC().Format(time.RFC3339Nano), a.task, a.run); err != nil {
 			return err
 		}
-		if err = appendEventTx(ctx, tx, contracts.Event{Type: "run.runtime_action_expired", OccurredAt: now.UTC(), WorkspaceID: a.workspace, AggregateType: "run", AggregateID: a.run, Payload: raw(map[string]any{"run_id": a.run, "task_id": a.task, "kind": a.kind, "decision": decision, "question": a.question})}); err != nil {
+		if err = appendEventTx(ctx, tx, contracts.Event{Type: "run.runtime_action_expired", OccurredAt: now.UTC(), AggregateType: "run", AggregateID: a.run, Payload: raw(map[string]any{"run_id": a.run, "task_id": a.task, "kind": a.kind, "decision": decision, "question": a.question})}); err != nil {
 			return err
 		}
 	}

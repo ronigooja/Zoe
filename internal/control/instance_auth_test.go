@@ -86,7 +86,7 @@ func TestInstanceKeyProtectsEveryBusinessRouteAndRemovesOwnerEndpoints(t *testin
 		t.Fatalf("snapshot=%d %s", response.Code, response.Body.String())
 	}
 	var snapshot contracts.Snapshot
-	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil || snapshot.WorkspaceID != "default" || snapshot.SubjectID != "owner" {
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil || snapshot.SubjectID != "owner" {
 		t.Fatal("unstable authority")
 	}
 	var count int

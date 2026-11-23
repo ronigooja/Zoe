@@ -33,8 +33,8 @@ type pendingOpeningResult struct{ EntryID, Text string }
 
 func pendingResultsForContext(ctx context.Context, db interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, workspace, owner string, sets ...limits.Set) ([]pendingOpeningResult, error) {
-	rows, err := db.QueryContext(ctx, `SELECT d.entry_id,t.goal,t.status,coalesce(t.summary_result,e.content) FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.task_id=d.task_id AND e.workspace_id=d.workspace_id WHERE d.workspace_id=? AND d.subject_id=? AND d.status='pending' AND e.kind='assistant_message' AND `+authoritativeResultPredicate+` AND `+resultNotInOpening+` AND NOT EXISTS(SELECT 1 FROM voice_result_chunks x WHERE x.entry_id=d.entry_id AND x.state!='pending') ORDER BY d.created_at,d.entry_id LIMIT ?`, workspace, owner, limits.Resolve(sets).Int("opening_pending_results"))
+}, owner string, sets ...limits.Set) ([]pendingOpeningResult, error) {
+	rows, err := db.QueryContext(ctx, `SELECT d.entry_id,t.goal,t.status,coalesce(t.summary_result,e.content) FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.task_id=d.task_id WHERE d.subject_id=? AND d.status='pending' AND e.kind='assistant_message' AND `+authoritativeResultPredicate+` AND `+resultNotInOpening+` AND NOT EXISTS(SELECT 1 FROM voice_result_chunks x WHERE x.entry_id=d.entry_id AND x.state!='pending') ORDER BY d.created_at,d.entry_id LIMIT ?`, owner, limits.Resolve(sets).Int("opening_pending_results"))
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func (s *Service) openingRegisterText(ctx context.Context, p contracts.Principal
 	if s.register == nil {
 		return ""
 	}
-	text, err := s.register.AssembleContext(ctx, RegisterOwner{p.WorkspaceID, p.SubjectID}, s.now(), s.limits.Int("opening_context_runes"))
+	text, err := s.register.AssembleContext(ctx, RegisterOwner{p.SubjectID}, s.now(), s.limits.Int("opening_context_runes"))
 	if err != nil {
 		return ""
 	}
@@ -65,7 +65,7 @@ func (s *Service) openingRegisterText(ctx context.Context, p contracts.Principal
 // transaction as the allocating session and durable gateway request identity.
 func (s *Service) buildAVASOpeningContext(ctx context.Context, tx *sql.Tx, p contracts.Principal, session, registerText, now string) (*openingContext, error) {
 	c := &openingContext{Kind: "full", Items: []openingContextItem{}}
-	if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(opening_context_version),0)+1 FROM voice_sessions WHERE workspace_id=? AND owner_id=?`, p.WorkspaceID, p.SubjectID).Scan(&c.Version); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(opening_context_version),0)+1 FROM voice_sessions WHERE owner_id=?`, p.SubjectID).Scan(&c.Version); err != nil {
 		return nil, err
 	}
 	remaining := s.limits.Int("opening_context_runes")
@@ -81,7 +81,7 @@ func (s *Service) buildAVASOpeningContext(ctx context.Context, tx *sql.Tx, p con
 	if registerText != "" {
 		appendItem(registerText)
 	}
-	pending, err := pendingResultsForContext(ctx, tx, p.WorkspaceID, p.SubjectID, s.limits)
+	pending, err := pendingResultsForContext(ctx, tx, p.SubjectID, s.limits)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +113,7 @@ func (s *Service) acknowledgeOpeningResults(ctx context.Context, tx *sql.Tx, p c
 	}
 	if !strictOpeningReceipt(opening, receipt) {
 		now := s.now().UTC().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET last_error_code='',next_attempt_at=?,updated_at=? WHERE d.workspace_id=? AND d.subject_id=? AND d.status='pending' AND d.last_error_code IN ('awaiting_call','awaiting_context') AND d.entry_id IN (SELECT o.entry_id FROM voice_result_opening o JOIN voice_sessions v ON v.id=o.session_id WHERE o.session_id=? AND o.state='reserved' AND v.workspace_id=d.workspace_id AND v.owner_id=d.subject_id AND v.state='active') AND NOT EXISTS(SELECT 1 FROM voice_result_chunks ch WHERE ch.entry_id=d.entry_id AND ch.state!='pending')`, now, now, p.WorkspaceID, p.SubjectID, session); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET last_error_code='',next_attempt_at=?,updated_at=? WHERE d.subject_id=? AND d.status='pending' AND d.last_error_code IN ('awaiting_call','awaiting_context') AND d.entry_id IN (SELECT o.entry_id FROM voice_result_opening o JOIN voice_sessions v ON v.id=o.session_id WHERE o.session_id=? AND o.state='reserved' AND v.owner_id=d.subject_id AND v.state='active') AND NOT EXISTS(SELECT 1 FROM voice_result_chunks ch WHERE ch.entry_id=d.entry_id AND ch.state!='pending')`, now, now, p.SubjectID, session); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `DELETE FROM voice_result_opening WHERE session_id=? AND state='reserved'`, session)
@@ -138,7 +138,7 @@ func (s *Service) acknowledgeOpeningResults(ctx context.Context, tx *sql.Tx, p c
 	}
 	now := s.now().UTC()
 	for _, item := range reserved {
-		if err := recordContextEvent(ctx, tx, contextEvent{workspace: p.WorkspaceID, owner: p.SubjectID, session: session, kind: "task_result", id: item.EntryID, role: "background", text: item.Text, at: now}); err != nil {
+		if err := recordContextEvent(ctx, tx, contextEvent{owner: p.SubjectID, session: session, kind: "task_result", id: item.EntryID, role: "background", text: item.Text, at: now}); err != nil {
 			return err
 		}
 	}

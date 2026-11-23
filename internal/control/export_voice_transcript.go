@@ -16,7 +16,7 @@ func writeVoiceTranscriptExport(ctx context.Context, tx *sql.Tx, out io.Writer, 
 		query string
 		count *int64
 	}{
-		{"voice_transcript_turns", `SELECT json_object('workspace_id',v.workspace_id,'session_id',v.session_id,'seq',v.seq,'role',v.role,'text',v.text,'at',v.at,'received_at',v.received_at) FROM voice_transcript_turns v JOIN voice_sessions s ON s.id=v.session_id AND s.workspace_id=v.workspace_id WHERE v.workspace_id=? AND s.owner_id=? ORDER BY v.session_id,v.seq`, &counts.VoiceTranscripts},
+		{"voice_transcript_turns", `SELECT json_object('session_id',v.session_id,'seq',v.seq,'role',v.role,'text',v.text,'at',v.at,'received_at',v.received_at) FROM voice_transcript_turns v JOIN voice_sessions s ON s.id=v.session_id WHERE s.owner_id=? ORDER BY v.session_id,v.seq`, &counts.VoiceTranscripts},
 	} {
 		if _, err := io.WriteString(out, `,"`+item.table+`":`); err != nil {
 			return err
@@ -31,7 +31,7 @@ func writeVoiceTranscriptExport(ctx context.Context, tx *sql.Tx, out io.Writer, 
 			}
 			continue
 		}
-		if err := writeRows(ctx, tx, out, item.count, item.query, []any{p.WorkspaceID, p.SubjectID}); err != nil {
+		if err := writeRows(ctx, tx, out, item.count, item.query, []any{p.SubjectID}); err != nil {
 			return err
 		}
 	}
@@ -50,7 +50,7 @@ func validateVoiceTranscriptExportBounds(ctx context.Context, tx *sql.Tx, p cont
 			continue
 		}
 		var size int64
-		if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(`+item.field+`),0) FROM `+item.table+` v JOIN voice_sessions s ON s.id=v.session_id AND s.workspace_id=v.workspace_id WHERE v.workspace_id=? AND s.owner_id=?`, p.WorkspaceID, p.SubjectID).Scan(&size); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(`+item.field+`),0) FROM `+item.table+` v JOIN voice_sessions s ON s.id=v.session_id WHERE s.owner_id=?`, p.SubjectID).Scan(&size); err != nil {
 			return err
 		}
 		if size > maxScopedExportFieldBytes {

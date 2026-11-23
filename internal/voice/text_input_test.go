@@ -15,7 +15,7 @@ import (
 func TestTextInputValidationAndDedupe(t *testing.T) {
 	r := uiTargetRig(t)
 	ctx := context.Background()
-	cmd := control.CommandContext{CommandID: "text-1", AcceptedAt: r.now(), Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}}
+	cmd := control.CommandContext{CommandID: "text-1", AcceptedAt: r.now(), Principal: contracts.Principal{SubjectID: "owner", Scopes: []string{"client:command"}}}
 	run := func(c control.CommandContext, payload []byte) error {
 		tx, err := r.store.DB().BeginTx(ctx, nil)
 		if err != nil {
@@ -60,9 +60,9 @@ func TestVoiceInputActionDoesNotCreateTaskEntry(t *testing.T) {
 	r := uiTargetRig(t)
 	ctx := context.Background()
 	at := r.now().Format("2006-01-02T15:04:05.999999999Z07:00")
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,surface_version,chat_input,input_note,created_at,updated_at) VALUES('vr','default','owner','register','screen',1,1,'Type',?,?)`, at, at)
-	r.exec(t, `INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,request_id,created_at,updated_at) VALUES('default','owner','screen','window','[]',1,'vr',?,?)`, at, at)
-	cmd := control.CommandContext{CommandID: "answer", AcceptedAt: r.now(), Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}}
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,surface_id,surface_version,chat_input,input_note,created_at,updated_at) VALUES('vr','owner','register','screen',1,1,'Type',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_surfaces(owner_subject_id,surface_id,container,state_json,version,request_id,created_at,updated_at) VALUES('owner','screen','window','[]',1,'vr',?,?)`, at, at)
+	cmd := control.CommandContext{CommandID: "answer", AcceptedAt: r.now(), Principal: contracts.Principal{SubjectID: "owner", Scopes: []string{"client:command"}}}
 	payload, _ := json.Marshal(map[string]any{"request_id": "vr", "surface_id": "screen", "surface_version": 1, "name": "submit", "source_component_id": "button", "context": map[string]string{"value": "hello"}})
 	tx, _ := r.store.DB().BeginTx(ctx, nil)
 	_, _, err := r.svc.commandUIAction(ctx, tx, cmd, contracts.CommandRequest{Payload: payload})
@@ -98,9 +98,9 @@ func TestVoiceInputDeliveryFormatsAndChunks(t *testing.T) {
 	ctx := context.Background()
 	at := r.now().Format(time.RFC3339Nano)
 	long := strings.Repeat("界", 6000)
-	r.exec(t, `INSERT INTO voice_text_inputs(command_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES('text','default','owner',?,?,?,?)`, long, at, at, at)
+	r.exec(t, `INSERT INTO voice_text_inputs(command_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES('text','owner',?,?,?,?)`, long, at, at, at)
 	for _, d := range []struct{ kind, id, text string }{{"ui_input_request", "q", "Question?"}, {"ui_input_received", "answer", "Answer!"}} {
-		r.exec(t, `INSERT INTO voice_input_notices(kind,source_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES(?,?,'default','owner',?,?,?,?)`, d.kind, d.id, d.text, at, at, at)
+		r.exec(t, `INSERT INTO voice_input_notices(kind,source_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES(?,?,'owner',?,?,?,?)`, d.kind, d.id, d.text, at, at, at)
 	}
 	r.svc.dispatchVoiceInputs(ctx)
 	var attempts int
@@ -144,7 +144,7 @@ func TestQuestionNoticesFollowRenderAndAnswer(t *testing.T) {
 	uiTargetPresentation(t, r, true)
 	surfaceID := uiStoredID(t, r, "request")
 	ctx := context.Background()
-	cmd := control.CommandContext{CommandID: "answer-command", AcceptedAt: r.now(), Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "device-1", Scopes: []string{"client:command"}}}
+	cmd := control.CommandContext{CommandID: "answer-command", AcceptedAt: r.now(), Principal: contracts.Principal{SubjectID: "owner", DeviceID: "device-1", Scopes: []string{"client:command"}}}
 	var count int
 	_ = r.store.DB().QueryRow(`SELECT count(*) FROM voice_input_notices`).Scan(&count)
 	if count != 0 {
@@ -180,10 +180,10 @@ func TestVoiceInputCommitUIJob(t *testing.T) {
 	uiFlowServer(t, r)
 	uiTargetQuestion(t, r)
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,created_at,updated_at) VALUES('request','default','owner','task','task',?,?)`, at, at)
-	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('job','default','owner','task_entry','voice-job','request',1,?,?,?)`, at, at, at)
-	r.exec(t, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('input-session','default','owner','device-1','input',X'01',1,'ended',?,?)`, at, at)
-	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits) VALUES('input-turn','default','input-session',1,'input',1,'type',X'01',?,'input','chat_input')`, at)
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,task_id,created_at,updated_at) VALUES('request','owner','task','task',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_jobs(id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('job','owner','task_entry','voice-job','request',1,?,?,?)`, at, at, at)
+	r.exec(t, `INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('input-session','owner','device-1','input',X'01',1,'ended',?,?)`, at, at)
+	r.exec(t, `INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits) VALUES('input-turn','input-session',1,'input',1,'type',X'01',?,'input','chat_input')`, at)
 	r.exec(t, `UPDATE ui_requests SET task_id=NULL,source='register',voice_turn_id='input-turn' WHERE id='request'`)
 	output := uiFlowOutput(uiFlowCreate+","+uiFlowRoot, true)
 	output = strings.Replace(output, `"feedback":"Shown."`, `"feedback":""`, 1)
@@ -191,7 +191,7 @@ func TestVoiceInputCommitUIJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "job", w: "default", o: "owner", request: "request", kind: "task_entry", attempts: 1}, o, nil); err != nil {
+	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "job", o: "owner", request: "request", kind: "task_entry", attempts: 1}, o, nil); err != nil {
 		t.Fatal(err)
 	}
 	var voice, await bool
@@ -213,7 +213,7 @@ func TestVoiceInputCommitUIJob(t *testing.T) {
 		t.Fatalf("event=%s", payload)
 	}
 	uiACK(t, r, "request", true)
-	snapshot, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "owner"})
+	snapshot, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{SubjectID: "owner"})
 	if err != nil || len(snapshot.Surfaces) != 1 || !snapshot.Surfaces[0].ChatInput {
 		t.Fatalf("voice snapshot=%+v err=%v", snapshot, err)
 	}
@@ -223,7 +223,7 @@ func TestVoiceInputCommitUIJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	cmd := control.CommandContext{CommandID: "voice-answer", AcceptedAt: r.now(), Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}}
+	cmd := control.CommandContext{CommandID: "voice-answer", AcceptedAt: r.now(), Principal: contracts.Principal{SubjectID: "owner", Scopes: []string{"client:command"}}}
 	if _, _, err = r.svc.commandUIAction(context.Background(), tx, cmd, contracts.CommandRequest{Payload: b}); err != nil {
 		t.Fatal(err)
 	}
@@ -245,9 +245,9 @@ func TestVoiceInputStaleActions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := uiTargetRig(t)
 			at := r.now().Format(time.RFC3339Nano)
-			r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,surface_version,chat_input,input_note,status,created_at,updated_at) VALUES('vr','default','owner','register','screen',1,1,'Type',?,?,?)`, tc.status, at, at)
-			r.exec(t, `INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,request_id,created_at,updated_at) VALUES('default','owner','screen','window','[]',1,'vr',?,?)`, at, at)
-			cmd := control.CommandContext{CommandID: "answer", AcceptedAt: r.now(), Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}}
+			r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,surface_id,surface_version,chat_input,input_note,status,created_at,updated_at) VALUES('vr','owner','register','screen',1,1,'Type',?,?,?)`, tc.status, at, at)
+			r.exec(t, `INSERT INTO ui_surfaces(owner_subject_id,surface_id,container,state_json,version,request_id,created_at,updated_at) VALUES('owner','screen','window','[]',1,'vr',?,?)`, at, at)
+			cmd := control.CommandContext{CommandID: "answer", AcceptedAt: r.now(), Principal: contracts.Principal{SubjectID: "owner", Scopes: []string{"client:command"}}}
 			payload, _ := json.Marshal(map[string]any{"request_id": "vr", "surface_id": tc.surface, "surface_version": tc.version, "name": "submit", "source_component_id": "button", "context": map[string]string{"value": "hello"}})
 			tx, _ := r.store.DB().BeginTx(context.Background(), nil)
 			_, _, err := r.svc.commandUIAction(context.Background(), tx, cmd, contracts.CommandRequest{Payload: payload})

@@ -13,8 +13,8 @@ func pruneUISurfacesTx(ctx context.Context, tx *sql.Tx, now time.Time) error {
 SELECT 1 FROM ui_requests r WHERE r.id=ui_surfaces.request_id AND (
 r.status='input_received' OR
 (r.question_id IS NOT NULL AND NOT EXISTS (
-SELECT 1 FROM pending_runtime_actions a JOIN tasks t ON t.id=a.task_id AND t.workspace_id=a.workspace_id
-WHERE a.id=r.question_id AND t.id=r.task_id AND t.workspace_id=r.workspace_id AND t.owner_subject_id=r.owner_subject_id
+SELECT 1 FROM pending_runtime_actions a JOIN tasks t ON t.id=a.task_id
+WHERE a.id=r.question_id AND t.id=r.task_id AND t.owner_subject_id=r.owner_subject_id
 AND t.interaction_state='awaiting_message' AND t.interaction_run_id=a.run_id AND t.interaction_action_digest=a.action_digest
 AND a.decision='' AND a.authorization_used=0 AND julianday(a.expires_at)>julianday(?)
 AND NOT EXISTS(SELECT 1 FROM task_question_answers b WHERE b.question_id=a.id)))))`, now.UTC().Format(time.RFC3339Nano))

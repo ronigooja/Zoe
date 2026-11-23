@@ -17,7 +17,7 @@ func TestSnapshotExecutionCapacityRetainsUnknownSlotsAndExplainsQueue(t *testing
 	at := time.Now().UTC().Format(time.RFC3339Nano)
 	insertTask := func(id, owner string) {
 		t.Helper()
-		_, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,owner_subject_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES(?,'default',?,?,'goal','user','profile','queued',1,?,?,'instance','command')`, id, owner, id, at, at)
+		_, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,owner_subject_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES(?,?,?,'goal','user','profile','queued',1,?,?,'instance','command')`, id, owner, id, at, at)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -26,7 +26,7 @@ func TestSnapshotExecutionCapacityRetainsUnknownSlotsAndExplainsQueue(t *testing
 	insertTask("dependency", "owner")
 	insertTask("hidden", "another-owner")
 	for i, status := range []string{"active", "dispatching", "uncertain", "uncertain", "stopped", "verification_pending", "failed", "verified"} {
-		_, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,fence,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES(?,'default','hidden',?,?,?,'instance','command','goal','profile','runtime','model','worker','opencode',?)`, fmt.Sprint("run", i), fmt.Sprint("attempt", i), status, i+1, at)
+		_, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,task_id,attempt_id,status,fence,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES(?,'hidden',?,?,?,'instance','command','goal','profile','runtime','model','worker','opencode',?)`, fmt.Sprint("run", i), fmt.Sprint("attempt", i), status, i+1, at)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,7 +79,7 @@ func TestSnapshotExecutionCapacityRetainsUnknownSlotsAndExplainsQueue(t *testing
 		t.Fatalf("ordinary saturation=%q", got)
 	}
 
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO task_dependencies(task_id,dependency_task_id,workspace_id,status,created_at) VALUES('queued','dependency','default','waiting',?)`, at); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO task_dependencies(task_id,dependency_task_id,status,created_at) VALUES('queued','dependency','waiting',?)`, at); err != nil {
 		t.Fatal(err)
 	}
 	for _, task := range snapshot().Tasks {
@@ -99,11 +99,11 @@ func TestConfiguredCapacityLimitChangesAvailableSlots(t *testing.T) {
 	store, server, key := instanceAuthFixture(t)
 	server.cfg.Limits, _ = limits.Defaults().With("max_concurrent_runs", 3)
 	at := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,owner_subject_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('configured-task','default','owner','configured','goal','user','profile','active',1,?,?, 'instance','command')`, at, at); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO tasks(id,owner_subject_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('configured-task','owner','configured','goal','user','profile','active',1,?,?, 'instance','command')`, at, at); err != nil {
 		t.Fatal(err)
 	}
 	for i, status := range []string{"active", "uncertain"} {
-		if _, err := store.DB().Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,fence,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES(?,'default','configured-task',?,?,?,'instance','command','goal','profile','runtime','model','worker','opencode',?)`, fmt.Sprintf("configured-%d", i), fmt.Sprintf("configured-attempt-%d", i), status, i+1, at); err != nil {
+		if _, err := store.DB().Exec(`INSERT INTO runs(id,task_id,attempt_id,status,fence,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES(?,'configured-task',?,?,?,'instance','command','goal','profile','runtime','model','worker','opencode',?)`, fmt.Sprintf("configured-%d", i), fmt.Sprintf("configured-attempt-%d", i), status, i+1, at); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -129,10 +129,10 @@ func TestClaimCapacityUsesConfiguredLimit(t *testing.T) {
 func TestWaitingRunOccupiesCapacityUntilStopped(t *testing.T) {
 	store, server, key := instanceAuthFixture(t)
 	at := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,owner_subject_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('waiting-capacity','default','owner','waiting','goal','user','profile','active',1,?,?, 'instance','command')`, at, at); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO tasks(id,owner_subject_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('waiting-capacity','owner','waiting','goal','user','profile','active',1,?,?, 'instance','command')`, at, at); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('waiting-capacity-run','default','waiting-capacity','waiting-capacity-attempt','active','run',1,'runner','instance','command','goal','profile','runtime','model','worker','opencode',?)`, at); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO runs(id,task_id,attempt_id,status,desired_control,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('waiting-capacity-run','waiting-capacity','waiting-capacity-attempt','active','run',1,'runner','instance','command','goal','profile','runtime','model','worker','opencode',?)`, at); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := func() contracts.Snapshot {

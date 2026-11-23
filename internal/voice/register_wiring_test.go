@@ -45,14 +45,14 @@ func registerDisabledHTTPServer(t *testing.T, cfg Config) (*httptest.Server, *st
 	ts := httptest.NewServer(server.Handler())
 	t.Cleanup(func() { ts.Close(); server.Shutdown(); _ = store.Close() })
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('handoff-session','default','owner','instance','request',X'01',1,'active',?,?)`, now, now); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('handoff-session','owner','instance','request',X'01',1,'active',?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
 	return ts, store, key
 }
 
 func TestResolvedRequestHandoffFoundation(t *testing.T) {
-	const full = "Delete the lunar mission draft from the research workspace. Preserve all published reports."
+	const full = "Delete the lunar mission draft from the research directory. Preserve all published reports."
 	for _, action := range []string{"new", "append", "append_pending", "answer", "answer_stale", "continue", "clarify", "report", "cancel", "redisplay", "foreign", "chat", "none", "missing", "stale"} {
 		t.Run(action, func(t *testing.T) {
 			var selected string
@@ -226,8 +226,8 @@ func seedHandoffQuestion(t *testing.T, store *storage.Store, taskID, questionID 
 		query string
 		args  []any
 	}{
-		{`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('question-run','default',?,'question-attempt','active','run',1,1,'runner','instance','cmd','goal','profile','opencode','runtime','model','worker',?)`, []any{taskID, at}},
-		{`INSERT INTO pending_runtime_actions(id,workspace_id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES(?,'default',?,'question-run',1,'request','worker_question','Which year?','digest',?,?)`, []any{questionID, taskID, now.Add(time.Hour).Format(time.RFC3339Nano), at}},
+		{`INSERT INTO runs(id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('question-run',?,'question-attempt','active','run',1,1,'runner','instance','cmd','goal','profile','opencode','runtime','model','worker',?)`, []any{taskID, at}},
+		{`INSERT INTO pending_runtime_actions(id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES(?,?,'question-run',1,'request','worker_question','Which year?','digest',?,?)`, []any{questionID, taskID, now.Add(time.Hour).Format(time.RFC3339Nano), at}},
 		{`UPDATE tasks SET status='waiting',interaction_state='awaiting_message',interaction_run_id='question-run',interaction_action_digest='digest',interaction_question='Which year?',version=version+1 WHERE id=?`, []any{taskID}},
 	}
 	for _, statement := range statements {

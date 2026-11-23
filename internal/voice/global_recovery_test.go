@@ -49,7 +49,7 @@ func recoveryRig(t *testing.T) (*deliveryRig, contracts.Principal) {
 	if err := r.store.DB().QueryRow(`SELECT generation FROM instance_auth WHERE singleton=1`).Scan(&generation); err != nil {
 		t.Fatal(err)
 	}
-	return r, contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "instance", Generation: generation}
+	return r, contracts.Principal{SubjectID: "owner", DeviceID: "instance", Generation: generation}
 }
 
 func TestGlobalRecoveryContractOwnershipAndAuthentication(t *testing.T) {
@@ -58,8 +58,8 @@ func TestGlobalRecoveryContractOwnershipAndAuthentication(t *testing.T) {
 	uiTargetPresentation(t, r, true)
 	r.seedCall(t, "owner-call", "owner", 7)
 	r.seedCall(t, "foreign-call", "other", 9)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,surface_version,created_at,updated_at) VALUES('secret','default','other','register','secret',1,'now','now')`)
-	r.exec(t, `INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,request_id,created_at,updated_at) VALUES('default','other','secret','window','[]',1,'secret','now','now')`)
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,surface_id,surface_version,created_at,updated_at) VALUES('secret','other','register','secret',1,'now','now')`)
+	r.exec(t, `INSERT INTO ui_surfaces(owner_subject_id,surface_id,container,state_json,version,request_id,created_at,updated_at) VALUES('other','secret','window','[]',1,'secret','now','now')`)
 	if err := r.svc.uiEventServer.RegisterAuthenticatedRoutes(func(mux *http.ServeMux) { mux.HandleFunc("GET /v1/recovery", r.svc.handleRecovery) }); err != nil {
 		t.Fatal(err)
 	}

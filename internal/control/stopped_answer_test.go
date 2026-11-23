@@ -52,9 +52,9 @@ func TestStoppedAnswerNewClaimPromptReceipt(t *testing.T) {
 	}
 	for _, sql := range []string{
 		`UPDATE actors SET subject_id='owner' WHERE id='instance'`,
-		`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id,interaction_state,interaction_run_id,interaction_action_digest,interaction_question) VALUES('task','default','title','original goal','user','worker','waiting',1,'` + stamp + `','` + stamp + `','instance','cmd','owner','awaiting_message','old-run','digest','Which year?')`,
-		`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('old-run','default','task','old-attempt','stopped','run',1,1,'runner','instance','cmd','original goal','worker','opencode','runtime','model','worker','` + stamp + `')`,
-		`INSERT INTO pending_runtime_actions(id,workspace_id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES('question','default','task','old-run',1,'old-form','worker_question','Which year?','digest','` + now.Add(time.Hour).Format(time.RFC3339Nano) + `','` + stamp + `')`,
+		`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id,interaction_state,interaction_run_id,interaction_action_digest,interaction_question) VALUES('task','title','original goal','user','worker','waiting',1,'` + stamp + `','` + stamp + `','instance','cmd','owner','awaiting_message','old-run','digest','Which year?')`,
+		`INSERT INTO runs(id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('old-run','task','old-attempt','stopped','run',1,1,'runner','instance','cmd','original goal','worker','opencode','runtime','model','worker','` + stamp + `')`,
+		`INSERT INTO pending_runtime_actions(id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES('question','task','old-run',1,'old-form','worker_question','Which year?','digest','` + now.Add(time.Hour).Format(time.RFC3339Nano) + `','` + stamp + `')`,
 		`UPDATE tasks SET harness='opencode' WHERE id='task'`,
 	} {
 		if _, err := store.DB().Exec(sql); err != nil {
@@ -66,7 +66,7 @@ func TestStoppedAnswerNewClaimPromptReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := "question"
-	if _, _, err := server.AppendTaskInputTx(ctx, tx, CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "instance"}, AcceptedAt: now}, "task", TaskInput{Content: "Use 2026 and preserve the original scope.", QuestionID: &q}); err != nil {
+	if _, _, err := server.AppendTaskInputTx(ctx, tx, CommandContext{Principal: contracts.Principal{SubjectID: "owner", DeviceID: "instance"}, AcceptedAt: now}, "task", TaskInput{Content: "Use 2026 and preserve the original scope.", QuestionID: &q}); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}

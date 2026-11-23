@@ -12,16 +12,14 @@ func RegisterMigrations(store *storage.Store) error {
 		_, err := tx.ExecContext(ctx, `
 CREATE TABLE capability_releases (
   release_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   digest TEXT NOT NULL,
   manifest BLOB NOT NULL,
   submitted_by TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  UNIQUE(workspace_id,digest)
+  UNIQUE(digest)
 );
 CREATE TABLE capability_deployments (
   deployment_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   service_id TEXT NOT NULL,
   release_digest TEXT NOT NULL,
   requested_operation TEXT NOT NULL CHECK(requested_operation IN ('install','start','stop','pause','resume','update','uninstall')),
@@ -37,11 +35,10 @@ CREATE TABLE capability_deployments (
   latest_attempt_id TEXT NOT NULL DEFAULT '',
   latest_fence INTEGER NOT NULL DEFAULT 0,
   last_error_code TEXT NOT NULL DEFAULT '',
-  UNIQUE(workspace_id,service_id)
+  UNIQUE(service_id)
 );
 CREATE TABLE capability_grants (
   grant_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   deployment_id TEXT NOT NULL REFERENCES capability_deployments(deployment_id),
   release_digest TEXT NOT NULL,
   scope_kind TEXT NOT NULL,
@@ -55,7 +52,6 @@ CREATE TABLE capability_grants (
 );
 CREATE TABLE capability_deployment_jobs (
   attempt_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   deployment_id TEXT NOT NULL REFERENCES capability_deployments(deployment_id),
   fence INTEGER NOT NULL,
   operation TEXT NOT NULL,
@@ -70,7 +66,6 @@ CREATE TABLE capability_deployment_jobs (
 );
 CREATE TABLE capability_observations (
   observation_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   deployment_id TEXT NOT NULL REFERENCES capability_deployments(deployment_id),
   attempt_id TEXT NOT NULL REFERENCES capability_deployment_jobs(attempt_id),
   fence INTEGER NOT NULL,
@@ -79,7 +74,6 @@ CREATE TABLE capability_observations (
   UNIQUE(deployment_id,attempt_id,fence,observation_id)
 );
 CREATE INDEX capability_jobs_ready ON capability_deployment_jobs(status,created_at);
-CREATE INDEX capability_deployments_workspace ON capability_deployments(workspace_id,updated_at);
 
 `)
 		return err
@@ -90,7 +84,6 @@ CREATE INDEX capability_deployments_workspace ON capability_deployments(workspac
 		_, err := tx.ExecContext(ctx, `
 CREATE TABLE capability_trigger_definitions (
   trigger_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   deployment_id TEXT NOT NULL REFERENCES capability_deployments(deployment_id),
   release_digest TEXT NOT NULL,
   grant_id TEXT NOT NULL REFERENCES capability_grants(grant_id),
@@ -116,7 +109,6 @@ CREATE INDEX capability_triggers_due ON capability_trigger_definitions(enabled,k
 CREATE TABLE capability_trigger_runs (
   trigger_run_id TEXT PRIMARY KEY,
   trigger_id TEXT NOT NULL REFERENCES capability_trigger_definitions(trigger_id),
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   deployment_id TEXT NOT NULL REFERENCES capability_deployments(deployment_id),
   trigger_key TEXT NOT NULL,
   dedupe_key TEXT NOT NULL,
@@ -139,9 +131,9 @@ CREATE TABLE capability_trigger_runs (
   UNIQUE(trigger_id,dedupe_key)
 );
 CREATE INDEX capability_trigger_runs_claim ON capability_trigger_runs(state,created_at);
-CREATE INDEX capability_trigger_runs_history ON capability_trigger_runs(workspace_id,deployment_id,created_at);
+CREATE INDEX capability_trigger_runs_history ON capability_trigger_runs(deployment_id,created_at);
 CREATE TABLE capability_trigger_cursors (
-  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
   cursor INTEGER NOT NULL DEFAULT 0
 );
 `)

@@ -21,12 +21,12 @@ func (s *Service) classificationTimeout() time.Duration {
 func (s *Service) classifyDelegation(parent context.Context, id string) {
 	ctx, cancel := context.WithTimeout(parent, s.classificationTimeout())
 	defer cancel()
-	var content, workspace, owner string
+	var content, owner string
 	var acceptedRoutes sql.NullString
 	var acceptedRequest *string
 	var acceptedSnapshot, acceptedAction, session string
 	var seq sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, `SELECT v.content,v.workspace_id,s.owner_id,v.exits,v.request,v.steward_snapshot,v.steward_action,v.session_id,v.transcript_seq FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id AND s.workspace_id=v.workspace_id AND s.generation=v.generation WHERE v.id=? AND v.handoff_handled=0`, id).Scan(&content, &workspace, &owner, &acceptedRoutes, &acceptedRequest, &acceptedSnapshot, &acceptedAction, &session, &seq); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT v.content,s.owner_id,v.exits,v.request,v.steward_snapshot,v.steward_action,v.session_id,v.transcript_seq FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id AND s.generation=v.generation WHERE v.id=? AND v.handoff_handled=0`, id).Scan(&content, &owner, &acceptedRoutes, &acceptedRequest, &acceptedSnapshot, &acceptedAction, &session, &seq); err != nil {
 		return
 	}
 	// A completed selection is reused until transactional apply detects stale facts.
@@ -42,7 +42,7 @@ func (s *Service) classifyDelegation(parent context.Context, id string) {
 	} else {
 		err = s.interactiveModel(ctx, "register", func() error {
 			var callErr error
-			route, callErr = s.register.route(ctx, RegisterOwner{workspace, owner}, content, s.now(), currentTranscript{session, seq})
+			route, callErr = s.register.route(ctx, RegisterOwner{owner}, content, s.now(), currentTranscript{session, seq})
 			return callErr
 		})
 	}
@@ -79,11 +79,11 @@ func (s *Service) classifyDelegation(parent context.Context, id string) {
 				var callErr error
 				choice, callErr = s.steward.ChooseLatest(logging.WithUserHash(ctx, logging.UserHash(owner)), func(ctx context.Context) (steward.Input, error) {
 					var readErr error
-					snapshot, readErr = stewardSnapshot(ctx, s.db, workspace, owner)
+					snapshot, readErr = stewardSnapshot(ctx, s.db, owner)
 					if readErr != nil {
 						return steward.Input{}, readErr
 					}
-					candidates, readErr = s.taskCandidatesForSession(ctx, s.db, workspace, owner, session, *route.Request, s.now(), 0)
+					candidates, readErr = s.taskCandidatesForSession(ctx, s.db, owner, session, *route.Request, s.now(), 0)
 					if readErr != nil {
 						return steward.Input{}, readErr
 					}
@@ -110,7 +110,7 @@ func (s *Service) classifyDelegation(parent context.Context, id string) {
 			}
 		}
 		if err == nil {
-			current, readErr := stewardSnapshot(ctx, s.db, workspace, owner)
+			current, readErr := stewardSnapshot(ctx, s.db, owner)
 			if readErr != nil {
 				err = readErr
 			} else if current != snapshot {
@@ -139,7 +139,7 @@ func (s *Service) classifyDelegation(parent context.Context, id string) {
 		taskID = ""
 		if acceptedRoutes.Valid {
 			choice.Action = steward.Action("error")
-			snapshot, _ = stewardSnapshot(ctx, s.db, workspace, owner)
+			snapshot, _ = stewardSnapshot(ctx, s.db, owner)
 		} else {
 			snapshot = ""
 		}

@@ -29,7 +29,7 @@ func (s *Server) AppendTaskInputTx(ctx context.Context, tx *sql.Tx, c CommandCon
 	}
 	var runID string
 	if input.QuestionID != nil {
-		err = tx.QueryRowContext(ctx, `SELECT a.run_id FROM pending_runtime_actions a JOIN tasks t ON t.id=a.task_id AND t.workspace_id=a.workspace_id JOIN runs r ON r.id=a.run_id AND r.task_id=t.id AND r.workspace_id=t.workspace_id WHERE a.id=? AND a.task_id=? AND a.workspace_id=? AND t.owner_subject_id=? AND t.status IN ('waiting','awaiting_user') AND t.interaction_state='awaiting_message' AND t.interaction_run_id=a.run_id AND t.interaction_action_digest=a.action_digest AND a.decision='' AND a.authorization_used=0 AND julianday(a.expires_at)>julianday(?) AND r.fence=a.fence AND r.status IN ('dispatching','active','uncertain','stopped') AND NOT EXISTS(SELECT 1 FROM task_question_answers b WHERE b.question_id=a.id)`, *input.QuestionID, taskID, c.Principal.WorkspaceID, c.Principal.SubjectID, c.AcceptedAt.UTC().Format(time.RFC3339Nano)).Scan(&runID)
+		err = tx.QueryRowContext(ctx, `SELECT a.run_id FROM pending_runtime_actions a JOIN tasks t ON t.id=a.task_id JOIN runs r ON r.id=a.run_id AND r.task_id=t.id WHERE a.id=? AND a.task_id=? AND t.owner_subject_id=? AND t.status IN ('waiting','awaiting_user') AND t.interaction_state='awaiting_message' AND t.interaction_run_id=a.run_id AND t.interaction_action_digest=a.action_digest AND a.decision='' AND a.authorization_used=0 AND julianday(a.expires_at)>julianday(?) AND r.fence=a.fence AND r.status IN ('dispatching','active','uncertain','stopped') AND NOT EXISTS(SELECT 1 FROM task_question_answers b WHERE b.question_id=a.id)`, *input.QuestionID, taskID, c.Principal.SubjectID, c.AcceptedAt.UTC().Format(time.RFC3339Nano)).Scan(&runID)
 		if err == sql.ErrNoRows {
 			return contracts.CommandResult{}, nil, apiError(409, "question_stale", "pending question is unavailable", nil)
 		}
@@ -42,14 +42,14 @@ func (s *Server) AppendTaskInputTx(ctx context.Context, tx *sql.Tx, c CommandCon
 		return contracts.CommandResult{}, nil, err
 	}
 	at := c.AcceptedAt.UTC().Format(time.RFC3339Nano)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,?,?,'user_message',?,?,?)`, id, taskID, c.Principal.WorkspaceID, input.Content, c.Principal.DeviceID, at); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES(?,?,'user_message',?,?,?)`, id, taskID, input.Content, c.Principal.DeviceID, at); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	if input.QuestionID != nil {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO task_question_answers(entry_id,workspace_id,task_id,question_id) VALUES(?,?,?,?)`, id, c.Principal.WorkspaceID, taskID, *input.QuestionID); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO task_question_answers(entry_id,task_id,question_id) VALUES(?,?,?)`, id, taskID, *input.QuestionID); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='answer',message=? WHERE id=? AND task_id=? AND workspace_id=?`, input.Content, *input.QuestionID, taskID, c.Principal.WorkspaceID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE pending_runtime_actions SET decision='answer',message=? WHERE id=? AND task_id=?`, input.Content, *input.QuestionID, taskID); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 		var live bool
@@ -59,12 +59,12 @@ func (s *Server) AppendTaskInputTx(ctx context.Context, tx *sql.Tx, c CommandCon
 		if !live {
 			status = "queued"
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET interaction_state='none',interaction_question='' WHERE id=? AND workspace_id=?`, taskID, c.Principal.WorkspaceID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET interaction_state='none',interaction_question='' WHERE id=?`, taskID); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 	}
 	version++
-	if _, err = tx.ExecContext(ctx, `UPDATE tasks SET version=?,status=?,updated_at=? WHERE id=? AND workspace_id=?`, version, status, at, taskID, c.Principal.WorkspaceID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE tasks SET version=?,status=?,updated_at=? WHERE id=?`, version, status, at, taskID); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	entry := contracts.TaskEntry{ID: id, Kind: "user_message", Content: input.Content, AuthorDeviceID: c.Principal.DeviceID, CreatedAt: c.AcceptedAt}

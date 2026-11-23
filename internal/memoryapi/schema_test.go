@@ -28,14 +28,14 @@ func TestMigration222Fresh(t *testing.T) {
 		if err := store.DB().QueryRow(`SELECT count(*),max(version) FROM schema_migrations WHERE namespace='memory_ingest'`).Scan(&count, &version); err != nil || count != 1 || version != 222 {
 			t.Fatalf("migration=%d/%d err=%v", count, version, err)
 		}
-		if _, err := store.DB().Exec(`INSERT INTO memory_ingest_state(workspace_id,principal_id,boundary_ns) VALUES('workspace','owner',0)`); err != nil {
+		if _, err := store.DB().Exec(`INSERT INTO memory_ingest_state(principal_id,boundary_ns) VALUES('owner',0)`); err != nil {
 			t.Fatal(err)
 		}
 		var next int64
 		if err := store.DB().QueryRow(`SELECT next_attempt_ms FROM memory_ingest_state`).Scan(&next); err != nil || next != 0 {
 			t.Fatalf("default=%d err=%v", next, err)
 		}
-		if _, err := store.DB().Exec(`INSERT INTO memory_ingest_state(workspace_id,principal_id,boundary_ns) VALUES('workspace','owner',1)`); err == nil {
+		if _, err := store.DB().Exec(`INSERT INTO memory_ingest_state(principal_id,boundary_ns) VALUES('owner',1)`); err == nil {
 			t.Fatal("missing primary key")
 		}
 		if err := store.Migrate(ctx); err != nil {

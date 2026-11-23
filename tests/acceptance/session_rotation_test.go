@@ -93,7 +93,7 @@ func newRotationRecoveryFixture(t *testing.T, normal bool, firstOld string) *rot
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = journal.Close() })
-	spec := runner.RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: "1", Workspace: claim.WorkspaceID}
+	spec := runner.RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: "1"}
 	if _, err := journal.SaveClaim(t.Context(), *claim, spec, "no_effect_terminal"); err != nil {
 		t.Fatal(err)
 	}

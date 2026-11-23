@@ -10,7 +10,7 @@ import (
 func TestContextEventRecorder(t *testing.T) {
 	f := newRegisterFixture(t)
 	ctx := context.Background()
-	e := contextEvent{workspace: "default", owner: "owner", session: "handoff-session", kind: "task_result", id: "entry", role: "background", text: "full text", at: f.now}
+	e := contextEvent{owner: "owner", session: "handoff-session", kind: "task_result", id: "entry", role: "background", text: "full text", at: f.now}
 	tx, err := f.db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -59,8 +59,8 @@ func TestContextEventRecorder(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, query := range []string{
-		`INSERT INTO voice_context_events VALUES('default','owner','s','bad','x','user','text','at','at')`,
-		`INSERT INTO voice_context_events VALUES('default','owner','s','user_text','x','assistant','text','at','at')`,
+		`INSERT INTO voice_context_events VALUES('owner','s','bad','x','user','text','at','at')`,
+		`INSERT INTO voice_context_events VALUES('owner','s','user_text','x','assistant','text','at','at')`,
 	} {
 		if _, err = f.db.Exec(query); err == nil {
 			t.Fatal("schema accepted invalid event")
@@ -70,12 +70,12 @@ func TestContextEventRecorder(t *testing.T) {
 
 func (f *registerFixture) event(kind, id, text string, at time.Time) {
 	f.t.Helper()
-	f.exec(`INSERT INTO voice_context_events VALUES('default','owner','handoff-session',?,?,?,?,?,?)`, kind, id, contextEventRole(kind), text, at.UTC().Format(time.RFC3339Nano), f.now.UTC().Format(time.RFC3339Nano))
+	f.exec(`INSERT INTO voice_context_events VALUES('owner','handoff-session',?,?,?,?,?,?)`, kind, id, contextEventRole(kind), text, at.UTC().Format(time.RFC3339Nano), f.now.UTC().Format(time.RFC3339Nano))
 }
 
 func TestRegisterEventMergeCoverageWatermarkFingerprintAndFence(t *testing.T) {
 	f := newRegisterFixture(t)
-	f.exec(`CREATE TABLE IF NOT EXISTS memory_ingest_members(workspace_id TEXT,principal_id TEXT,source_id TEXT,batch_id TEXT); CREATE TABLE IF NOT EXISTS memory_ingest_batches(id TEXT,workspace_id TEXT,principal_id TEXT,until_ns INTEGER)`)
+	f.exec(`CREATE TABLE IF NOT EXISTS memory_ingest_members(principal_id TEXT,source_id TEXT,batch_id TEXT); CREATE TABLE IF NOT EXISTS memory_ingest_batches(id TEXT,principal_id TEXT,until_ns INTEGER)`)
 	at := f.now.Add(-2 * time.Hour)
 	f.turn("handoff-session", 1, "user", "turn", at)
 	f.event("task_result", "a", "same text", at)
@@ -161,9 +161,9 @@ func TestVoiceInputEventsAtomicUnwrappedAndIdempotent(t *testing.T) {
 			r.seedCall(t, "call", "owner", 1)
 			at := r.now().Format(time.RFC3339Nano)
 			if kind == "user_text" {
-				r.exec(t, `INSERT INTO voice_text_inputs(command_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES('source','default','owner','original',?,?,?)`, at, at, at)
+				r.exec(t, `INSERT INTO voice_text_inputs(command_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES('source','owner','original',?,?,?)`, at, at, at)
 			} else {
-				r.exec(t, `INSERT INTO voice_input_notices(kind,source_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES(?,'source','default','owner','original',?,?,?)`, kind, at, at, at)
+				r.exec(t, `INSERT INTO voice_input_notices(kind,source_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES(?,'source','owner','original',?,?,?)`, kind, at, at, at)
 			}
 			r.exec(t, `CREATE TRIGGER reject_event BEFORE INSERT ON voice_context_events BEGIN SELECT RAISE(ABORT,'fixture'); END`)
 			r.svc.dispatchVoiceInputs(context.Background())
@@ -231,17 +231,17 @@ func TestFastReplyEventsBothProducersRollbackAndRetry(t *testing.T) {
 			r.seedCall(t, "s1", "user-1", 1)
 			at := r.now().Format(time.RFC3339Nano)
 			text := strings.Repeat("answer", 3000)
-			r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('reply','default','s1',1,'turn',?,?,'pending',?,?,?)`, text, intent, at, at, at)
+			r.exec(t, `INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('reply','s1',1,'turn',?,?,'pending',?,?,?)`, text, intent, at, at, at)
 			r.exec(t, `CREATE TRIGGER reject_event BEFORE INSERT ON voice_context_events BEGIN SELECT RAISE(ABORT,'fixture'); END`)
-			r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, 0)
+			r.svc.deliverFastReply(context.Background(), "reply", "s1", 1, 0)
 			var status string
 			if err := r.store.DB().QueryRow(`SELECT status FROM voice_fast_replies`).Scan(&status); err != nil || status != "pending" {
 				t.Fatalf("rollback status=%s err=%v", status, err)
 			}
 			r.exec(t, `DROP TRIGGER reject_event`)
 			r.advance(31 * time.Second)
-			r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, 0)
-			r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, 0)
+			r.svc.deliverFastReply(context.Background(), "reply", "s1", 1, 0)
+			r.svc.deliverFastReply(context.Background(), "reply", "s1", 1, 0)
 			assertRecordedEvent(t, r, "fast_reply", text, 1)
 		})
 	}
@@ -250,9 +250,9 @@ func TestFastReplyEventsBothProducersRollbackAndRetry(t *testing.T) {
 func TestUIFeedbackEventRollbackAndRetry(t *testing.T) {
 	r := uiTargetRig(t)
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,status,created_at,updated_at) VALUES('request','default','owner','register','failed',?,?)`, at, at)
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,status,created_at,updated_at) VALUES('request','owner','register','failed',?,?)`, at, at)
 	text := strings.Repeat("feedback", 3000)
-	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('request','default','owner',?,?,?)`, text, at, at)
+	r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,owner_subject_id,text,created_at,updated_at) VALUES('request','owner',?,?,?)`, text, at, at)
 	r.seedCall(t, "call", "owner", 1)
 	r.enableReceiptFixture(t)
 	r.exec(t, `CREATE TRIGGER reject_event BEFORE INSERT ON voice_context_events BEGIN SELECT RAISE(ABORT,'fixture'); END`)
@@ -281,17 +281,17 @@ func TestGenericContextEventsWaitForAllChunks(t *testing.T) {
 			var dispatch func()
 			switch kind {
 			case "fast_reply":
-				r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('source','default','call',1,'turn',?,'pending',?,?,?)`, text, at, at, at)
+				r.exec(t, `INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('source','call',1,'turn',?,'pending',?,?,?)`, text, at, at, at)
 				dispatch = func() { r.svc.dispatchFastReplies(context.Background()) }
 			case "ui_feedback":
-				r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,status,created_at,updated_at) VALUES('source','default','owner','register','failed',?,?)`, at, at)
-				r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('source','default','owner',?,?,?)`, text, at, at)
+				r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,status,created_at,updated_at) VALUES('source','owner','register','failed',?,?)`, at, at)
+				r.exec(t, `INSERT INTO ui_feedback_deliveries(request_id,owner_subject_id,text,created_at,updated_at) VALUES('source','owner',?,?,?)`, text, at, at)
 				dispatch = func() { r.svc.dispatchUIFeedback(context.Background()) }
 			case "user_text":
-				r.exec(t, `INSERT INTO voice_text_inputs(command_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES('source','default','owner',?,?,?,?)`, text, at, at, at)
+				r.exec(t, `INSERT INTO voice_text_inputs(command_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES('source','owner',?,?,?,?)`, text, at, at, at)
 				dispatch = func() { r.svc.dispatchVoiceInputs(context.Background()) }
 			default:
-				r.exec(t, `INSERT INTO voice_input_notices(kind,source_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES(?,'source','default','owner',?,?,?,?)`, kind, text, at, at, at)
+				r.exec(t, `INSERT INTO voice_input_notices(kind,source_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES(?,'source','owner',?,?,?,?)`, kind, text, at, at, at)
 				dispatch = func() { r.svc.dispatchVoiceInputs(context.Background()) }
 			}
 			dispatch()

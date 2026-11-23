@@ -33,7 +33,7 @@ func TestNotificationInboxDurableAndSubjectScoped(t *testing.T) {
 		}
 	})
 	d := reviewInitializeInstance(t, h, code, token)
-	if _, err := s.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task1','default','Inbox task','Goal','user','unused','awaiting_user',1,'2026-10-21T00:00:00Z','2026-10-21T00:00:00Z',?,'cmd1')`, d.Device.ID); err != nil {
+	if _, err := s.DB().Exec(`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task1','Inbox task','Goal','user','unused','awaiting_user',1,'2026-10-21T00:00:00Z','2026-10-21T00:00:00Z',?,'cmd1')`, d.Device.ID); err != nil {
 		t.Fatal(err)
 	}
 	receipt := reviewRequest(h, http.MethodPost, "/v1/commands", token, "notify", contracts.CommandRequest{Kind: "review.notification", Payload: json.RawMessage(`{}`)})
@@ -77,7 +77,7 @@ func TestPushRegistrationCreatesSilentWakeupDelivery(t *testing.T) {
 		}
 	})
 	d := reviewInitializeInstance(t, h, code, token)
-	if _, err := s.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task-push','default','Private title','Private goal','user','unused','awaiting_user',1,'2026-10-21T00:00:00Z','2026-10-21T00:00:00Z',?,'cmd-push')`, d.Device.ID); err != nil {
+	if _, err := s.DB().Exec(`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task-push','Private title','Private goal','user','unused','awaiting_user',1,'2026-10-21T00:00:00Z','2026-10-21T00:00:00Z',?,'cmd-push')`, d.Device.ID); err != nil {
 		t.Fatal(err)
 	}
 	pushToken := "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
@@ -158,7 +158,7 @@ func TestPushRevocationStopsSelectedUnsentDeliveries(t *testing.T) {
 		}
 	})
 	d := reviewInitializeInstance(t, h, code, token)
-	if _, err := s.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task-push-revoke','default','Synthetic','Synthetic','user','unused','awaiting_user',1,'2026-10-21T00:00:00Z','2026-10-21T00:00:00Z',?,'cmd-push-revoke')`, d.Device.ID); err != nil {
+	if _, err := s.DB().Exec(`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task-push-revoke','Synthetic','Synthetic','user','unused','awaiting_user',1,'2026-10-21T00:00:00Z','2026-10-21T00:00:00Z',?,'cmd-push-revoke')`, d.Device.ID); err != nil {
 		t.Fatal(err)
 	}
 	register := reviewRequest(h, http.MethodPost, "/v1/commands", token, "register-revoke", contracts.CommandRequest{Kind: "device.push_token.register", Payload: json.RawMessage(`{"platform":"ios","token":"10112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"}`)})

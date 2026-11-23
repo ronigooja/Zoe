@@ -12,11 +12,11 @@ import (
 
 func TestRegisterOpeningReadsStoredContextWithoutModel(t *testing.T) {
 	f := newRegisterFixture(t)
-	f.session("opening-history", "default", "owner")
+	f.session("opening-history", "owner")
 	f.turn("opening-history", 1, "user", "the lunar mission", f.now)
 	svc := newService(f.db, Config{ContextRegister: f.r, Now: func() time.Time { return f.now }, Limits: mustLimits(t, "opening_context_runes", 200), UpstreamRoute: "avas"})
 	defer svc.Stop()
-	text := svc.openingRegisterText(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "owner"})
+	text := svc.openingRegisterText(context.Background(), contracts.Principal{SubjectID: "owner"})
 	if text != "user: the lunar mission\n" || f.calls != 0 {
 		t.Fatalf("opening=%q calls=%d", text, f.calls)
 	}
@@ -31,7 +31,7 @@ func TestRegisterFirstSharedRuneBudget(t *testing.T) {
 	r.svc.consumeResultEvents(context.Background())
 	r.seedCall(t, "opening", "user-1", 1)
 	f := newRegisterFixture(t)
-	f.session("history", "default", "user-1")
+	f.session("history", "user-1")
 	f.turn("history", 1, "user", "之前聊过月球", f.now)
 	r.svc.register = f.r
 	r.svc.now = func() time.Time { return f.now }
@@ -43,7 +43,7 @@ func TestRegisterFirstSharedRuneBudget(t *testing.T) {
 	if register == "" || len(opening.Items) != 2 || opening.Items[0].Text != register || opening.Items[1].Text != result || openingCharsFor(opening) != budget {
 		t.Fatalf("opening=%+v budget=%d register=%q", opening, budget, register)
 	}
-	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
+	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "user-1")
 	if err != nil || len(pending) != 1 || pending[0].EntryID != "entry-0" {
 		t.Fatalf("oversized must remain unreserved and pending: %+v, %v", pending, err)
 	}

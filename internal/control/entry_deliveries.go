@@ -14,7 +14,7 @@ import (
 
 // orderedRunEntries uses the same instant + id ordering as task entry pagination.
 func orderedRunEntries(ctx context.Context, tx *sql.Tx, runID string, undelivered bool) ([]contracts.RunEntry, error) {
-	query := `SELECT e.id,e.content,e.created_at,a.id,a.run_id,a.request_id,a.action_digest,a.question FROM task_entries e JOIN runs r ON r.task_id=e.task_id AND r.workspace_id=e.workspace_id LEFT JOIN task_question_answers b ON b.entry_id=e.id AND b.task_id=e.task_id AND b.workspace_id=e.workspace_id LEFT JOIN pending_runtime_actions a ON a.id=b.question_id AND a.task_id=b.task_id AND a.workspace_id=b.workspace_id WHERE r.id=? AND e.kind='user_message' AND NOT EXISTS (SELECT 1 FROM events v WHERE v.aggregate_id=e.task_id AND v.workspace_id=e.workspace_id AND v.event_type='task.entry_appended' AND v.aggregate_version=1 AND json_extract(v.payload,'$.payload.entry.id')=e.id)`
+	query := `SELECT e.id,e.content,e.created_at,a.id,a.run_id,a.request_id,a.action_digest,a.question FROM task_entries e JOIN runs r ON r.task_id=e.task_id LEFT JOIN task_question_answers b ON b.entry_id=e.id AND b.task_id=e.task_id LEFT JOIN pending_runtime_actions a ON a.id=b.question_id AND a.task_id=b.task_id WHERE r.id=? AND e.kind='user_message' AND NOT EXISTS (SELECT 1 FROM events v WHERE v.aggregate_id=e.task_id AND v.event_type='task.entry_appended' AND v.aggregate_version=1 AND json_extract(v.payload,'$.payload.entry.id')=e.id)`
 	if undelivered {
 		query += ` AND NOT EXISTS (SELECT 1 FROM run_entry_deliveries d WHERE d.run_id=r.id AND d.entry_id=e.id)`
 	}
@@ -105,8 +105,8 @@ func (s *Server) handleEntryDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	var workspace string
-	err = tx.QueryRowContext(r.Context(), `SELECT workspace_id FROM runs WHERE id=? AND runner_id=? AND attempt_id=? AND fence=? AND status='active' AND desired_control='run'`, r.PathValue("run_id"), p.RunnerID, in.AttemptID, in.Fence).Scan(&workspace)
+	var authorized bool
+	err = tx.QueryRowContext(r.Context(), `SELECT 1 FROM runs WHERE id=? AND runner_id=? AND attempt_id=? AND fence=? AND status='active' AND desired_control='run'`, r.PathValue("run_id"), p.RunnerID, in.AttemptID, in.Fence).Scan(&authorized)
 	if err != nil || !HasRunnerScope(p, "runner:control:read") {
 		writeError(w, apiError(409, "fence_conflict", "delivery does not match active run", nil))
 		return
@@ -126,9 +126,9 @@ func (s *Server) handleEntryDelivery(w http.ResponseWriter, r *http.Request) {
 				}
 				var bound bool
 				if contextReceipt {
-					err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM pending_runtime_actions a JOIN task_question_answers b ON b.question_id=a.id JOIN task_entries e ON e.id=b.entry_id JOIN runs old ON old.id=a.run_id AND old.task_id=a.task_id AND old.workspace_id=a.workspace_id JOIN runs current ON current.id=? AND current.task_id=a.task_id AND current.workspace_id=a.workspace_id JOIN run_entry_deliveries d ON d.run_id=current.id AND d.entry_id=e.id AND d.prompt_kind='initial' WHERE b.entry_id=? AND b.question_id=? AND b.workspace_id=? AND b.task_id=a.task_id AND a.workspace_id=b.workspace_id AND a.run_id=? AND old.status='stopped' AND old.fence=a.fence AND a.action_digest=? AND a.kind='worker_question' AND a.decision='answer' AND a.message=e.content)`, r.PathValue("run_id"), in.EntryID, in.QuestionID, workspace, e.Question.RunID, in.ActionDigest).Scan(&bound)
+					err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM pending_runtime_actions a JOIN task_question_answers b ON b.question_id=a.id JOIN task_entries e ON e.id=b.entry_id JOIN runs old ON old.id=a.run_id AND old.task_id=a.task_id JOIN runs current ON current.id=? AND current.task_id=a.task_id JOIN run_entry_deliveries d ON d.run_id=current.id AND d.entry_id=e.id AND d.prompt_kind='initial' WHERE b.entry_id=? AND b.question_id=? AND b.task_id=a.task_id AND a.run_id=? AND old.status='stopped' AND old.fence=a.fence AND a.action_digest=? AND a.kind='worker_question' AND a.decision='answer' AND a.message=e.content)`, r.PathValue("run_id"), in.EntryID, in.QuestionID, e.Question.RunID, in.ActionDigest).Scan(&bound)
 				} else {
-					err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM pending_runtime_actions a JOIN task_question_answers b ON b.question_id=a.id JOIN task_entries e ON e.id=b.entry_id WHERE b.entry_id=? AND b.question_id=? AND b.workspace_id=? AND b.task_id=a.task_id AND a.workspace_id=b.workspace_id AND a.run_id=? AND a.fence=? AND a.action_digest=? AND a.kind='worker_question' AND a.decision='answer' AND a.message=e.content)`, in.EntryID, in.QuestionID, workspace, r.PathValue("run_id"), in.Fence, in.ActionDigest).Scan(&bound)
+					err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM pending_runtime_actions a JOIN task_question_answers b ON b.question_id=a.id JOIN task_entries e ON e.id=b.entry_id WHERE b.entry_id=? AND b.question_id=? AND b.task_id=a.task_id AND a.run_id=? AND a.fence=? AND a.action_digest=? AND a.kind='worker_question' AND a.decision='answer' AND a.message=e.content)`, in.EntryID, in.QuestionID, r.PathValue("run_id"), in.Fence, in.ActionDigest).Scan(&bound)
 				}
 				if err != nil {
 					writeError(w, err)

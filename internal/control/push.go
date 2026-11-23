@@ -210,7 +210,7 @@ func (s *Server) commandPushTokenRegister(ctx context.Context, tx *sql.Tx, c Com
 		if _, err = tx.ExecContext(ctx, `UPDATE push_deliveries SET status='disabled',updated_at=? WHERE status='pending' AND push_token_id IN (SELECT id FROM device_push_tokens WHERE installation_id=? AND platform=? AND status='disabled')`, at, p.InstallationID, p.Platform); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE device_push_tokens SET workspace_id=?,subject_id=?,device_id=?,installation_id=?,platform=?,token_hex=?,status='active',created_at=?,updated_at=?,disabled_at=NULL WHERE id=?`, c.Principal.WorkspaceID, c.Principal.SubjectID, c.Principal.DeviceID, p.InstallationID, p.Platform, p.Token, at, at, tokenID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE device_push_tokens SET subject_id=?,device_id=?,installation_id=?,platform=?,token_hex=?,status='active',created_at=?,updated_at=?,disabled_at=NULL WHERE id=?`, c.Principal.SubjectID, c.Principal.DeviceID, p.InstallationID, p.Platform, p.Token, at, at, tokenID); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 	} else if errors.Is(err, sql.ErrNoRows) {
@@ -224,7 +224,7 @@ func (s *Server) commandPushTokenRegister(ctx context.Context, tx *sql.Tx, c Com
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO device_push_tokens(id,workspace_id,subject_id,device_id,installation_id,platform,token_hex,token_hash,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'active',?,?)`, tokenID, c.Principal.WorkspaceID, c.Principal.SubjectID, c.Principal.DeviceID, p.InstallationID, p.Platform, p.Token, hash[:], at, at); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO device_push_tokens(id,subject_id,device_id,installation_id,platform,token_hex,token_hash,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',?,?)`, tokenID, c.Principal.SubjectID, c.Principal.DeviceID, p.InstallationID, p.Platform, p.Token, hash[:], at, at); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 	} else {
@@ -252,7 +252,7 @@ func (s *Server) commandPushTokenRevoke(ctx context.Context, tx *sql.Tx, c Comma
 		return contracts.CommandResult{}, nil, apiError(400, "invalid_request", "installation_id UUID is required", nil)
 	}
 	at := c.AcceptedAt.Format(time.RFC3339Nano)
-	result, err := tx.ExecContext(ctx, `UPDATE device_push_tokens SET status='disabled',disabled_at=?,updated_at=? WHERE id=? AND workspace_id=? AND subject_id=? AND installation_id=? AND status='active'`, at, at, p.TokenID, c.Principal.WorkspaceID, c.Principal.SubjectID, p.InstallationID)
+	result, err := tx.ExecContext(ctx, `UPDATE device_push_tokens SET status='disabled',disabled_at=?,updated_at=? WHERE id=? AND subject_id=? AND installation_id=? AND status='active'`, at, at, p.TokenID, c.Principal.SubjectID, p.InstallationID)
 	if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
@@ -356,12 +356,12 @@ func safeAPNSReason(reason string) string {
 	return reason
 }
 
-func enqueuePushDeliveries(ctx context.Context, tx *sql.Tx, notificationID, workspace, subject, eventID string) error {
+func enqueuePushDeliveries(ctx context.Context, tx *sql.Tx, notificationID, subject, eventID string) error {
 	var cursor int64
 	if err := tx.QueryRowContext(ctx, `SELECT cursor FROM events WHERE event_id=?`, eventID).Scan(&cursor); err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM device_push_tokens WHERE workspace_id=? AND subject_id=? AND status='active'`, workspace, subject)
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM device_push_tokens WHERE subject_id=? AND status='active'`, subject)
 	if err != nil {
 		return err
 	}

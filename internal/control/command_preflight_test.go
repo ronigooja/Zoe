@@ -44,7 +44,7 @@ func TestCommandPreflightRunsBeforeTransactionAndRejectsWithoutReceipt(t *testin
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = server.ExecuteCommand(ctx, contracts.Principal{WorkspaceID: "default", SubjectID: "owner"}, "test-preflight", contracts.CommandRequest{Kind: "test.preflight"}, nil)
+	_, err = server.ExecuteCommand(ctx, contracts.Principal{SubjectID: "owner"}, "test-preflight", contracts.CommandRequest{Kind: "test.preflight"}, nil)
 	if !errors.Is(err, stop) || called {
 		t.Fatalf("err=%v handler_called=%t", err, called)
 	}

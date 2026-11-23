@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/ronigooja/Zoe/internal/limits"
+	"github.com/ronigooja/Zoe/internal/storage"
 	"io"
 	"net/http"
 	"net/url"
@@ -23,7 +24,7 @@ import (
 // Chunk state confirmed means gateway acceptance, never upstream consumption or speech.
 const ResultCheckpointSchema = `
 CREATE TABLE voice_result_checkpoints (
- entry_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, task_id TEXT NOT NULL,
+ entry_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
  run_id TEXT NOT NULL, subject_id TEXT NOT NULL, content_hash TEXT NOT NULL,
  session_id TEXT NOT NULL, generation INTEGER NOT NULL, gateway_session_id TEXT NOT NULL,
  media_generation INTEGER NOT NULL, claim INTEGER NOT NULL DEFAULT 0, lease_until TEXT NOT NULL DEFAULT ''
@@ -67,7 +68,7 @@ type ResultDeliveryConfig struct{ ReceiptAdapter ResultReceiptAdapter }
 // Main adds Config.ResultDelivery ResultDeliveryConfig and stores ReceiptAdapter on Service;
 // dispatch passes that adapter instead of nil to deliverCheckpointedResult.
 const ResultDeliveryBaselineColumns = `CREATE TABLE voice_result_deliveries (
- entry_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, task_id TEXT NOT NULL,
+ entry_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
  run_id TEXT NOT NULL, subject_id TEXT NOT NULL,
  status TEXT NOT NULL CHECK(status IN ('pending','delivered','failed','skipped_no_call','skipped_stale')),
  attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL,
@@ -77,7 +78,7 @@ const ResultDeliveryBaselineColumns = `CREATE TABLE voice_result_deliveries (
 CREATE INDEX voice_result_deliveries_due ON voice_result_deliveries(status,next_attempt_at,created_at);
 CREATE TABLE voice_result_cursor (id INTEGER PRIMARY KEY CHECK(id=1), last_cursor INTEGER NOT NULL);
 INSERT INTO voice_result_cursor(id,last_cursor) VALUES(1,0);
--- Existing voice_sessions dependencies: id,workspace_id,owner_id,state,gateway_session_id TEXT;
+-- Existing voice_sessions dependencies: id,owner_id,state,gateway_session_id TEXT;
 -- generation,gateway_media_generation INTEGER; created_at TEXT.
 -- Additional tables: ResultCheckpointSchema.`
 
@@ -88,7 +89,7 @@ func NewGatewayResultReceiptAdapter(s *Service) ResultReceiptAdapter {
 
 // authoritativeResultPredicate applies whenever a delivery source is read or selected.
 // Control commits these event identities with the assistant entry in the observation transaction.
-const authoritativeResultPredicate = ` EXISTS(SELECT 1 FROM events a WHERE a.event_type='task.assistant_message' AND a.workspace_id=d.workspace_id AND a.aggregate_type='task' AND a.aggregate_id=d.task_id AND json_extract(a.payload,'$.payload.entry_id')=d.entry_id AND json_extract(a.payload,'$.payload.task_id')=d.task_id AND json_extract(a.payload,'$.payload.run_id')=d.run_id) `
+const authoritativeResultPredicate = ` EXISTS(SELECT 1 FROM events a WHERE a.event_type='task.assistant_message' AND a.aggregate_type='task' AND a.aggregate_id=d.task_id AND json_extract(a.payload,'$.payload.entry_id')=d.entry_id AND json_extract(a.payload,'$.payload.task_id')=d.task_id AND json_extract(a.payload,'$.payload.run_id')=d.run_id) `
 
 func (a GatewayResultReceiptAdapter) request(ctx context.Context, gateway string, p ResultChunkRequest, lookup bool) (ResultChunkReceipt, error) {
 	path := "/v1/voice/sessions/" + url.PathEscape(gateway) + "/result-deliveries"
@@ -147,12 +148,12 @@ func receiptApplied(p ResultChunkRequest, r ResultChunkReceipt) bool {
 	return r.State == "applied" && r.DeliveryID == p.DeliveryID && r.ContentHash == p.ContentHash && r.MediaGeneration == p.MediaGeneration
 }
 
-func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, task, run, owner string, attempts int, adapter ResultReceiptAdapter) {
+func (s *Service) deliverCheckpointedResult(ctx context.Context, id, task, run, owner string, attempts int, adapter ResultReceiptAdapter) {
 	now := s.now().UTC()
 	// Owner/task/run identity is checked against the durable source row, not caller trust.
 	var text, session, gateway string
 	var generation, media int64
-	err := s.db.QueryRowContext(ctx, `SELECT e.content FROM voice_result_deliveries d JOIN task_entries e ON e.id=d.entry_id AND e.workspace_id=d.workspace_id AND e.task_id=d.task_id JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id WHERE d.entry_id=? AND d.workspace_id=? AND d.task_id=? AND d.run_id=? AND d.subject_id=? AND d.status='pending' AND e.kind='assistant_message' AND `+authoritativeResultPredicate+` AND `+resultNotInOpening, id, workspace, task, run, owner).Scan(&text)
+	err := s.db.QueryRowContext(ctx, `SELECT e.content FROM voice_result_deliveries d JOIN task_entries e ON e.id=d.entry_id AND e.task_id=d.task_id JOIN tasks t ON t.id=d.task_id AND t.owner_subject_id=d.subject_id WHERE d.entry_id=? AND d.task_id=? AND d.run_id=? AND d.subject_id=? AND d.status='pending' AND e.kind='assistant_message' AND `+authoritativeResultPredicate+` AND `+resultNotInOpening, id, task, run, owner).Scan(&text)
 	if err != nil {
 		return
 	}
@@ -164,7 +165,7 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 		s.finishResult(id, "failed", "empty_result")
 		return
 	}
-	err = s.db.QueryRowContext(ctx, `SELECT id,gateway_session_id,generation,gateway_media_generation FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND state='active' AND gateway_session_id!='' AND gateway_media_generation>0 AND (NOT EXISTS(SELECT 1 FROM voice_result_checkpoints WHERE entry_id=?) OR id=(SELECT session_id FROM voice_result_checkpoints WHERE entry_id=?)) ORDER BY created_at,id LIMIT 1`, workspace, owner, id, id).Scan(&session, &gateway, &generation, &media)
+	err = s.db.QueryRowContext(ctx, `SELECT id,gateway_session_id,generation,gateway_media_generation FROM voice_sessions WHERE owner_id=? AND state='active' AND gateway_session_id!='' AND gateway_media_generation>0 AND (NOT EXISTS(SELECT 1 FROM voice_result_checkpoints WHERE entry_id=?) OR id=(SELECT session_id FROM voice_result_checkpoints WHERE entry_id=?)) ORDER BY created_at,id LIMIT 1`, owner, id, id).Scan(&session, &gateway, &generation, &media)
 	if err == sql.ErrNoRows {
 		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET next_attempt_at=?,last_error_code='awaiting_call',updated_at=? WHERE entry_id=? AND status='pending' AND attempts=? AND last_error_code!='awaiting_context' AND `+resultNotInOpening, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), id, attempts)
 		return
@@ -180,11 +181,15 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 		return
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_result_checkpoints(entry_id,workspace_id,task_id,run_id,subject_id,content_hash,session_id,generation,gateway_session_id,media_generation) VALUES(?,?,?,?,?,?,?,?,?,?)`, id, workspace, task, run, owner, resultHash(text), session, generation, gateway, media)
+	lineage, err := storage.InstanceLineage(ctx, tx)
 	if err != nil {
 		return
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE voice_result_checkpoints SET claim=claim+1,lease_until=? WHERE entry_id=? AND workspace_id=? AND task_id=? AND run_id=? AND subject_id=? AND content_hash=? AND session_id=? AND generation=? AND gateway_session_id=? AND media_generation=? AND lease_until<=?`, now.Add(resultDeliveryLease).Format(time.RFC3339Nano), id, workspace, task, run, owner, resultHash(text), session, generation, gateway, media, now.Format(time.RFC3339Nano))
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_result_checkpoints(entry_id,task_id,run_id,subject_id,content_hash,session_id,generation,gateway_session_id,media_generation) VALUES(?,?,?,?,?,?,?,?,?)`, id, task, run, owner, resultHash(text), session, generation, gateway, media)
+	if err != nil {
+		return
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE voice_result_checkpoints SET claim=claim+1,lease_until=? WHERE entry_id=? AND task_id=? AND run_id=? AND subject_id=? AND content_hash=? AND session_id=? AND generation=? AND gateway_session_id=? AND media_generation=? AND lease_until<=?`, now.Add(resultDeliveryLease).Format(time.RFC3339Nano), id, task, run, owner, resultHash(text), session, generation, gateway, media, now.Format(time.RFC3339Nano))
 	if err != nil {
 		return
 	}
@@ -204,7 +209,7 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 		}
 		chunk := remaining[:n]
 		remaining = remaining[n:]
-		identity, _ := json.Marshal([]any{workspace, owner, task, run, id, session, generation, gateway, media, ordinal, resultHash(chunk)})
+		identity, _ := json.Marshal([]any{lineage, owner, task, run, id, session, generation, gateway, media, ordinal, resultHash(chunk)})
 		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_result_chunks(entry_id,ordinal,delivery_id,content_hash,text,state) VALUES(?,?,?,?,?,'pending')`, id, ordinal, resultHash(string(identity)), resultHash(chunk), chunk); err != nil {
 			return
 		}
@@ -240,7 +245,7 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 			if err != nil || n != 1 {
 				return
 			}
-			if recordContextEvent(ctx, tx, contextEvent{workspace: workspace, owner: owner, session: session, kind: "task_result", id: id, role: "background", text: text, at: completed}) != nil {
+			if recordContextEvent(ctx, tx, contextEvent{owner: owner, session: session, kind: "task_result", id: id, role: "background", text: text, at: completed}) != nil {
 				return
 			}
 			_ = tx.Commit()
@@ -253,7 +258,7 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 			continue
 		}
 		// Fenced persisted attempt precedes every external send. Expiry never authorizes replay.
-		res, err = s.db.ExecContext(ctx, `UPDATE voice_result_chunks AS d SET state='attempted' WHERE entry_id=? AND ordinal=? AND state=? AND `+resultNotInOpening+` AND EXISTS(SELECT 1 FROM voice_result_checkpoints c JOIN voice_sessions v ON v.id=c.session_id AND v.workspace_id=c.workspace_id AND v.owner_id=c.subject_id AND v.generation=c.generation AND v.gateway_session_id=c.gateway_session_id AND v.gateway_media_generation=c.media_generation AND v.state='active' WHERE c.entry_id=? AND c.claim=? AND c.lease_until>?)`, id, ordinal, state, id, claim, s.now().UTC().Format(time.RFC3339Nano))
+		res, err = s.db.ExecContext(ctx, `UPDATE voice_result_chunks AS d SET state='attempted' WHERE entry_id=? AND ordinal=? AND state=? AND `+resultNotInOpening+` AND EXISTS(SELECT 1 FROM voice_result_checkpoints c JOIN voice_sessions v ON v.id=c.session_id AND v.owner_id=c.subject_id AND v.generation=c.generation AND v.gateway_session_id=c.gateway_session_id AND v.gateway_media_generation=c.media_generation AND v.state='active' WHERE c.entry_id=? AND c.claim=? AND c.lease_until>?)`, id, ordinal, state, id, claim, s.now().UTC().Format(time.RFC3339Nano))
 		if err != nil {
 			return
 		}
@@ -296,13 +301,13 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, workspace, 
 // Rebinding requires every chunk pending and no unexpired claim; sent/ambiguous history is immutable.
 func (s *Service) selectPendingResultTx(ctx context.Context, tx *sql.Tx, principal contracts.Principal, entry, voiceSessionID string, generation int64) error {
 	var task, run, text, status string
-	err := tx.QueryRowContext(ctx, `SELECT d.task_id,d.run_id,e.content,d.status FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.workspace_id=d.workspace_id AND e.task_id=d.task_id AND e.kind='assistant_message' WHERE d.entry_id=? AND d.workspace_id=? AND d.subject_id=? AND `+authoritativeResultPredicate+` AND `+resultNotInOpening, entry, principal.WorkspaceID, principal.SubjectID).Scan(&task, &run, &text, &status)
+	err := tx.QueryRowContext(ctx, `SELECT d.task_id,d.run_id,e.content,d.status FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id AND t.owner_subject_id=d.subject_id JOIN task_entries e ON e.id=d.entry_id AND e.task_id=d.task_id AND e.kind='assistant_message' WHERE d.entry_id=? AND d.subject_id=? AND `+authoritativeResultPredicate+` AND `+resultNotInOpening, entry, principal.SubjectID).Scan(&task, &run, &text, &status)
 	if err != nil {
 		return err
 	}
 	var gateway string
 	var media int64
-	err = tx.QueryRowContext(ctx, `SELECT gateway_session_id,gateway_media_generation FROM voice_sessions WHERE id=? AND workspace_id=? AND owner_id=? AND generation=? AND state='active' AND gateway_session_id!=''`, voiceSessionID, principal.WorkspaceID, principal.SubjectID, generation).Scan(&gateway, &media)
+	err = tx.QueryRowContext(ctx, `SELECT gateway_session_id,gateway_media_generation FROM voice_sessions WHERE id=? AND owner_id=? AND generation=? AND state='active' AND gateway_session_id!=''`, voiceSessionID, principal.SubjectID, generation).Scan(&gateway, &media)
 	if err != nil {
 		return err
 	}
@@ -337,7 +342,7 @@ func (s *Service) selectPendingResultTx(ctx context.Context, tx *sql.Tx, princip
 		if status != "pending" {
 			return errors.New("result_not_pending")
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO voice_result_checkpoints(entry_id,workspace_id,task_id,run_id,subject_id,content_hash,session_id,generation,gateway_session_id,media_generation) VALUES(?,?,?,?,?,?,?,?,?,?)`, entry, principal.WorkspaceID, task, run, principal.SubjectID, resultHash(text), voiceSessionID, generation, gateway, media); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO voice_result_checkpoints(entry_id,task_id,run_id,subject_id,content_hash,session_id,generation,gateway_session_id,media_generation) VALUES(?,?,?,?,?,?,?,?,?)`, entry, task, run, principal.SubjectID, resultHash(text), voiceSessionID, generation, gateway, media); err != nil {
 			return err
 		}
 	}

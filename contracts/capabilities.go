@@ -86,22 +86,22 @@ type CapabilityGrant struct {
 }
 
 type DeploymentClaim struct {
-	WorkspaceID    string             `json:"workspace_id"`
-	DeploymentID   string             `json:"deployment_id"`
-	AttemptID      string             `json:"attempt_id"`
-	Fence          int64              `json:"fence"`
-	ServiceID      string             `json:"service_id"`
-	ReleaseDigest  string             `json:"release_digest"`
-	Manifest       CapabilityManifest `json:"manifest"`
-	DesiredOp      string             `json:"desired_operation"`
-	Grant          CapabilityGrant    `json:"grant"`
-	ConfigRef      string             `json:"config_ref,omitempty"`
-	ConfigSHA256   string             `json:"config_sha256,omitempty"`
-	VolumeIDs      []string           `json:"volume_ids,omitempty"`
-	RuntimeBackend string             `json:"runtime_backend"`
-	ClaimState     string             `json:"claim_state,omitempty"`
-	DesiredControl string             `json:"desired_control,omitempty"`
-	CleanupOnly    bool               `json:"cleanup_only,omitempty"`
+	InstanceLineageID string             `json:"instance_lineage_id"`
+	DeploymentID      string             `json:"deployment_id"`
+	AttemptID         string             `json:"attempt_id"`
+	Fence             int64              `json:"fence"`
+	ServiceID         string             `json:"service_id"`
+	ReleaseDigest     string             `json:"release_digest"`
+	Manifest          CapabilityManifest `json:"manifest"`
+	DesiredOp         string             `json:"desired_operation"`
+	Grant             CapabilityGrant    `json:"grant"`
+	ConfigRef         string             `json:"config_ref,omitempty"`
+	ConfigSHA256      string             `json:"config_sha256,omitempty"`
+	VolumeIDs         []string           `json:"volume_ids,omitempty"`
+	RuntimeBackend    string             `json:"runtime_backend"`
+	ClaimState        string             `json:"claim_state,omitempty"`
+	DesiredControl    string             `json:"desired_control,omitempty"`
+	CleanupOnly       bool               `json:"cleanup_only,omitempty"`
 }
 
 type DeploymentObservation struct {
@@ -121,7 +121,6 @@ type DeploymentObservation struct {
 // CapabilityTriggerClaim is an immutable, authorized program invocation.
 // Worker/Super admission is owned by the control-plane task source path.
 type CapabilityTriggerClaim struct {
-	WorkspaceID   string             `json:"workspace_id"`
 	DeploymentID  string             `json:"deployment_id"`
 	ServiceID     string             `json:"service_id"`
 	TriggerID     string             `json:"trigger_id"`

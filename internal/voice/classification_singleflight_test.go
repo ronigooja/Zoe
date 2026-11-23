@@ -62,7 +62,7 @@ func newClassificationRig(t *testing.T, routeHook func()) *classificationRig {
 
 func (r *classificationRig) seedTurn(t *testing.T, id string) {
 	t.Helper()
-	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES(?,'default','classification-session',1,?,1,'PRIVATE_SENTENCE',X'01',?,'cmd')`, id, id, r.now().Format(time.RFC3339Nano))
+	r.exec(t, `INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES(?,'classification-session',1,?,1,'PRIVATE_SENTENCE',X'01',?,'cmd')`, id, id, r.now().Format(time.RFC3339Nano))
 }
 
 func (r *classificationRig) assertResult(t *testing.T, id, route, action string) {

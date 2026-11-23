@@ -12,7 +12,7 @@ import (
 
 func TestRegisterSeparateModelsAndRawWindow(t *testing.T) {
 	f := newRegisterFixture(t)
-	f.session("separate", "default", "owner")
+	f.session("separate", "owner")
 	f.turn("separate", 0, "user", "eligible", f.now.Add(-45*time.Minute))
 	f.turn("separate", 1, "user", "raw", f.now.Add(-15*time.Minute))
 	routeCalls, compactCalls := 0, 0

@@ -40,7 +40,7 @@ func TestClientProtocolAndLogging(t *testing.T) {
 				_, _ = w.Write([]byte(`{"items":[{"id":"id","text":"PRIVATE_RESPONSE","score":0.8}]}`))
 			} else if r.URL.Path == "/v1/memory/ingest" {
 				var input map[string]string
-				if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input["user"] != User("workspace", "owner") || input["text"] != "PRIVATE_INGEST" {
+				if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input["user"] != User("lineage", "owner") || input["text"] != "PRIVATE_INGEST" {
 					t.Errorf("invalid ingest payload: %v", err)
 				}
 				_, _ = w.Write([]byte(`{"added":2,"updated":1}`))
@@ -63,7 +63,7 @@ func TestClientProtocolAndLogging(t *testing.T) {
 		if err := client.Write(context.Background(), "person", "operation", "PRIVATE_REQUEST"); err != nil {
 			t.Fatal(err)
 		}
-		if added, updated, err := client.IngestChunk(context.Background(), User("workspace", "owner"), "batch", "chunk", "PRIVATE_INGEST"); err != nil || added != 2 || updated != 1 {
+		if added, updated, err := client.IngestChunk(context.Background(), User("lineage", "owner"), "batch", "chunk", "PRIVATE_INGEST"); err != nil || added != 2 || updated != 1 {
 			t.Fatalf("ingest=%d/%d err=%v", added, updated, err)
 		}
 		server.Close()
@@ -145,7 +145,7 @@ func TestClientFailures(t *testing.T) {
 }
 
 func TestUserTuple(t *testing.T) {
-	if User("workspace", "owner") != `["workspace","owner"]` || User("a:b", "c") == User("a", "b:c") {
+	if User("lineage", "owner") != `["lineage","owner"]` || User("a:b", "c") == User("a", "b:c") || User("lineage", "owner") == User("other-lineage", "owner") {
 		t.Fatal("owner tuple changed or collided")
 	}
 }
@@ -160,7 +160,7 @@ func TestDeleteAllIsSynchronousAndDoesNotRetry(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls++
 			var input map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&input); err != nil || len(input) != 1 || input["user"] != User("workspace", "owner") || r.Method != http.MethodPost || r.URL.Path != "/v1/memory/"+"delete-all" || r.Header.Get("Authorization") != "Bearer fixture" {
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil || len(input) != 1 || input["user"] != User("lineage", "owner") || r.Method != http.MethodPost || r.URL.Path != "/v1/memory/"+"delete-all" || r.Header.Get("Authorization") != "Bearer fixture" {
 				t.Error("invalid owner deletion request")
 			}
 			if failed {
@@ -174,7 +174,7 @@ func TestDeleteAllIsSynchronousAndDoesNotRetry(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = client.DeleteAll(context.Background(), User("workspace", "owner"))
+		err = client.DeleteAll(context.Background(), User("lineage", "owner"))
 		server.Close()
 		if (err != nil) != failed || calls != 1 {
 			t.Fatalf("failed=%t calls=%d error=%v", failed, calls, err)

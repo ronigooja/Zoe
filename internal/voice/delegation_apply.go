@@ -66,7 +66,7 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 		if !resolved.Valid || strings.TrimSpace(resolved.String) == "" {
 			return contracts.CommandResult{}, nil, apiError(409, "request_unavailable", "a complete register request is required", nil)
 		}
-		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}, nil, s.createRegisterUIJobTx(ctx, tx, turnID, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, resolved.String, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano))
+		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}, nil, s.createRegisterUIJobTx(ctx, tx, turnID, cmd.Principal.SubjectID, resolved.String, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano))
 	}
 	if category != "task" && category != "memory_write" && category != "recall" && category != "chat" {
 		return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID, ResourceVersion: p.Revision}, nil, s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech)
@@ -90,11 +90,11 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 			// schema: a write holding receipt uses that voice_turns row's ID.
 			id = turnID
 		}
-		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'delivered',?,?,?)`, id, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, holding, intent, at, at, at)
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,'delivered',?,?,?)`, id, p.SessionID, p.Generation, p.TurnID, holding, intent, at, at, at)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_recall_jobs(id,workspace_id,owner_id,session_id,generation,turn_id,question,holding_id) VALUES(?,?,?,?,?,?,?,(SELECT id FROM voice_fast_replies WHERE session_id=? AND generation=? AND turn_id=?))`, uuid.NewString(), cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, p.SessionID, p.Generation, p.TurnID, content, p.SessionID, p.Generation, p.TurnID)
+		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_recall_jobs(id,owner_id,session_id,generation,turn_id,question,holding_id) VALUES(?,?,?,?,?,?,(SELECT id FROM voice_fast_replies WHERE session_id=? AND generation=? AND turn_id=?))`, uuid.NewString(), cmd.Principal.SubjectID, p.SessionID, p.Generation, p.TurnID, content, p.SessionID, p.Generation, p.TurnID)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
@@ -133,12 +133,12 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 			if stewardAction == string(steward.ActionReport) {
 				// Defer the original result until this report reply commits delivered;
 				// the summary itself never acknowledges the original result.
-				if _, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET last_error_code='awaiting_context' WHERE workspace_id=? AND subject_id=? AND task_id=? AND status='pending' AND `+resultNotInOpening+` AND NOT EXISTS(SELECT 1 FROM voice_result_chunks c WHERE c.entry_id=d.entry_id AND c.state!='pending')`, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, stewardTaskID); err != nil {
+				if _, err := tx.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET last_error_code='awaiting_context' WHERE subject_id=? AND task_id=? AND status='pending' AND `+resultNotInOpening+` AND NOT EXISTS(SELECT 1 FROM voice_result_chunks c WHERE c.entry_id=d.entry_id AND c.state!='pending')`, cmd.Principal.SubjectID, stewardTaskID); err != nil {
 					return contracts.CommandResult{}, nil, err
 				}
 			}
 			var reply string
-			if err := tx.QueryRowContext(ctx, `SELECT report_text FROM voice_turns WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&reply); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT report_text FROM voice_turns WHERE session_id=? AND generation=? AND turn_id=? AND revision=?`, p.SessionID, p.Generation, p.TurnID, p.Revision).Scan(&reply); err != nil {
 				return contracts.CommandResult{}, nil, err
 			}
 			reply = strings.TrimSpace(reply)
@@ -156,7 +156,7 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 				return contracts.CommandResult{}, nil, apiError(409, "invalid_selection", "cancel requires a selected task", nil)
 			}
 			var id string
-			err := tx.QueryRowContext(ctx, `SELECT id FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND id=?`, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, stewardTaskID).Scan(&id)
+			err := tx.QueryRowContext(ctx, `SELECT id FROM tasks WHERE owner_subject_id=? AND id=?`, cmd.Principal.SubjectID, stewardTaskID).Scan(&id)
 			if errors.Is(err, sql.ErrNoRows) {
 				return contracts.CommandResult{ResourceType: "voice_turn", ResourceID: p.TurnID}, nil, s.heldReplyTx(ctx, tx, cmd, p, stewardErrorSpeech)
 			}
@@ -197,17 +197,17 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 				if entryID == "" {
 					return contracts.CommandResult{}, nil, errors.New("append did not return entry identity")
 				}
-				_, err = tx.ExecContext(ctx, `INSERT INTO voice_task_inputs(session_id,generation,turn_id,workspace_id,turn_revision,task_id,entry_id,question_id,content_hash) VALUES(?,?,?,?,?,?,?,?,?)`, p.SessionID, p.Generation, p.TurnID, cmd.Principal.WorkspaceID, p.Revision, stewardTaskID, entryID, input.QuestionID, storedHash)
+				_, err = tx.ExecContext(ctx, `INSERT INTO voice_task_inputs(session_id,generation,turn_id,turn_revision,task_id,entry_id,question_id,content_hash) VALUES(?,?,?,?,?,?,?,?)`, p.SessionID, p.Generation, p.TurnID, p.Revision, stewardTaskID, entryID, input.QuestionID, storedHash)
 			}
 			if err == nil && exits.Has("ui") {
-				_, err = tx.ExecContext(ctx, `UPDATE tasks SET ui_display=1 WHERE workspace_id=? AND id=?`, cmd.Principal.WorkspaceID, stewardTaskID)
+				_, err = tx.ExecContext(ctx, `UPDATE tasks SET ui_display=1 WHERE id=?`, stewardTaskID)
 				if err != nil {
 					return contracts.CommandResult{}, nil, err
 				}
 				err = s.recordTaskUITx(ctx, tx, cmd.Principal, stewardTaskID, p.SessionID, p.Generation, p.TurnID, p.Revision, cmd.AcceptedAt)
 			}
 			if err == nil {
-				_, err = tx.ExecContext(ctx, `UPDATE voice_turns SET resumed_task_id=?,handoff_handled=1 WHERE workspace_id=? AND session_id=? AND generation=? AND turn_id=? AND revision=?`, stewardTaskID, cmd.Principal.WorkspaceID, p.SessionID, p.Generation, p.TurnID, p.Revision)
+				_, err = tx.ExecContext(ctx, `UPDATE voice_turns SET resumed_task_id=?,handoff_handled=1 WHERE session_id=? AND generation=? AND turn_id=? AND revision=?`, stewardTaskID, p.SessionID, p.Generation, p.TurnID, p.Revision)
 			}
 			return r, events, err
 		}
@@ -228,7 +228,7 @@ func (s *Service) applyDelegationOutcomeTx(ctx context.Context, tx *sql.Tx, cmd 
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO task_prior_contexts(task_id,workspace_id,prior_task_id,goal,status,result,additions_json,created_at) VALUES(?,?,?,?,?,?,?,?)`, admission.Task.ID, cmd.Principal.WorkspaceID, stewardTaskID, prior.Goal, prior.Status, prior.Result, additions, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO task_prior_contexts(task_id,prior_task_id,goal,status,result,additions_json,created_at) VALUES(?,?,?,?,?,?,?)`, admission.Task.ID, stewardTaskID, prior.Goal, prior.Status, prior.Result, additions, cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 	}

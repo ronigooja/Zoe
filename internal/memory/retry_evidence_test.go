@@ -54,7 +54,7 @@ func reopenEvidenceDB(t *testing.T, db *sql.DB) (*sql.DB, *Repository) {
 
 func TestIngestRetryGrowthAndRestart(t *testing.T) {
 	db, repo, now := ingestFixture(t)
-	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
@@ -85,7 +85,7 @@ func TestIngestRetryGrowthAndRestart(t *testing.T) {
 		}
 		var failures int
 		var nextText string
-		if err := db.QueryRow(`SELECT failures,next_attempt_at FROM model_retry_state WHERE consumer='memory_ingest' AND scope=?`, memoryapi.User("workspace", "owner")).Scan(&failures, &nextText); err != nil {
+		if err := db.QueryRow(`SELECT failures,next_attempt_at FROM model_retry_state WHERE consumer='memory_ingest' AND scope=?`, memoryapi.User("fixture-lineage", "owner")).Scan(&failures, &nextText); err != nil {
 			t.Fatal(err)
 		}
 		next, err := time.Parse(time.RFC3339Nano, nextText)
@@ -118,7 +118,7 @@ func TestIngestRetryGrowthAndRestart(t *testing.T) {
 
 func TestIngestAuthRestartAndCredentialAbsence(t *testing.T) {
 	db, repo, now := ingestFixture(t)
-	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	key := "synthetic-api-key-absence-check"
@@ -236,8 +236,7 @@ func TestMemoryConfigObservationClearsBothConsumerStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := backoff.Store{DB: db}
-	// voice.memoryUser is a direct wrapper of memoryapi.User, tested in voice.
-	scope := memoryapi.User("workspace", "owner")
+	scope := memoryapi.User("fixture-lineage", "owner")
 	for _, consumer := range []string{"memory_ingest", "memory_write"} {
 		if err := store.Record(ctx, consumer, scope, backoff.Auth, now, backoff.Background, nil); err != nil {
 			t.Fatal(err)

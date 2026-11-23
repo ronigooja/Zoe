@@ -33,10 +33,10 @@ func reopenUIFixture(t *testing.T, r *deliveryRig) {
 func addUIRetryJob(t *testing.T, db *sql.DB, now time.Time, id string) {
 	t.Helper()
 	at := now.UTC().Format(time.RFC3339Nano)
-	if _, err := db.Exec(`INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,request,created_at,updated_at) VALUES(?,'default','owner','register','request',?,?)`, id, at, at); err != nil {
+	if _, err := db.Exec(`INSERT INTO ui_requests(id,owner_subject_id,source,request,created_at,updated_at) VALUES(?,'owner','register','request',?,?)`, id, at, at); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,next_attempt_at,created_at,updated_at) VALUES(?,'default','owner','task_entry',?,?, ?,?,?)`, "job-"+id, id, id, at, at, at); err != nil {
+	if _, err := db.Exec(`INSERT INTO ui_jobs(id,owner_subject_id,kind,dedupe_key,ui_request_id,next_attempt_at,created_at,updated_at) VALUES(?,'owner','task_entry',?,?, ?,?,?)`, "job-"+id, id, id, at, at, at); err != nil {
 		t.Fatal(err)
 	}
 }

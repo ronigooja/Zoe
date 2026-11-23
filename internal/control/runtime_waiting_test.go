@@ -15,13 +15,13 @@ func TestExpireRuntimeActionsUpdatesOnlyLiveAwaitingTaskAndIsIdempotent(t *testi
 		{"done-question", "complete", "awaiting_message"},
 		{"canceled-question", "canceled", "awaiting_message"},
 	} {
-		if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id,interaction_state,interaction_run_id,interaction_question) VALUES(?,?,?,?,'user','profile',?,1,?,?,?,'cmd','owner',?,?,?)`, task.id, "default", task.id, "goal", task.status, at, at, "instance", task.interaction, "run-"+task.id, "What?"); err != nil {
+		if _, err := store.DB().Exec(`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id,interaction_state,interaction_run_id,interaction_question) VALUES(?,?,?,'user','profile',?,1,?,?,?,'cmd','owner',?,?,?)`, task.id, task.id, "goal", task.status, at, at, "instance", task.interaction, "run-"+task.id, "What?"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.DB().Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "run-"+task.id, "default", task.id, "attempt-"+task.id, map[bool]string{true: "active", false: "stopped"}[task.status == "active"], "run", 1, i+1, "runner", "instance", "cmd", "goal", "profile", "opencode", "runtime", "model", "worker", at); err != nil {
+		if _, err := store.DB().Exec(`INSERT INTO runs(id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "run-"+task.id, task.id, "attempt-"+task.id, map[bool]string{true: "active", false: "stopped"}[task.status == "active"], "run", 1, i+1, "runner", "instance", "cmd", "goal", "profile", "opencode", "runtime", "model", "worker", at); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.DB().Exec(`INSERT INTO pending_runtime_actions(id,workspace_id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES(?,?,?,?,1,?,?,?,?,?,?)`, "action-"+task.id, "default", task.id, "run-"+task.id, "request", map[bool]string{true: "worker_question", false: "worker_question"}[true], "What?", "digest-"+task.id, now.Add(-time.Minute).Format(time.RFC3339Nano), at); err != nil {
+		if _, err := store.DB().Exec(`INSERT INTO pending_runtime_actions(id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES(?,?,?,1,?,?,?,?,?,?)`, "action-"+task.id, task.id, "run-"+task.id, "request", map[bool]string{true: "worker_question", false: "worker_question"}[true], "What?", "digest-"+task.id, now.Add(-time.Minute).Format(time.RFC3339Nano), at); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -57,15 +57,15 @@ func TestExpireRuntimeActionsStopsRunAndBumpsControlVersion(t *testing.T) {
 	store, server, _ := instanceAuthFixture(t)
 	now := time.Date(2026, 10, 24, 14, 0, 0, 0, time.UTC)
 	at := now.Add(-time.Hour).Format(time.RFC3339Nano)
-	_, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id,interaction_state,interaction_run_id,interaction_question) VALUES('permission-task','default','title','goal','user','profile','active',4,?,?, 'instance','cmd','owner','explicit_confirmation','permission-run','Allow?')`, at, at)
+	_, err := store.DB().Exec(`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id,interaction_state,interaction_run_id,interaction_question) VALUES('permission-task','title','goal','user','profile','active',4,?,?, 'instance','cmd','owner','explicit_confirmation','permission-run','Allow?')`, at, at)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.DB().Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('permission-run','default','permission-task','attempt','active','run',7,1,'runner','instance','cmd','goal','profile','opencode','runtime','model','worker',?)`, at)
+	_, err = store.DB().Exec(`INSERT INTO runs(id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('permission-run','permission-task','attempt','active','run',7,1,'runner','instance','cmd','goal','profile','opencode','runtime','model','worker',?)`, at)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.DB().Exec(`INSERT INTO pending_runtime_actions(id,workspace_id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES('permission-action','default','permission-task','permission-run',1,'request','permission_requested','Allow?','digest',?,?)`, now.Add(-time.Minute).Format(time.RFC3339Nano), at)
+	_, err = store.DB().Exec(`INSERT INTO pending_runtime_actions(id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES('permission-action','permission-task','permission-run',1,'request','permission_requested','Allow?','digest',?,?)`, now.Add(-time.Minute).Format(time.RFC3339Nano), at)
 	if err != nil {
 		t.Fatal(err)
 	}

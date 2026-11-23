@@ -47,7 +47,7 @@ func (d *fakeDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte("volume"), nil
 	}
 	if args[0] == "volume" && args[1] == "inspect" {
-		raw, _ := json.Marshal(map[string]string{"io.zoe.workspace": labelValue(d.claim.WorkspaceID), "io.zoe.volume": labelValue(d.claim.Manifest.Mounts[0].VolumeID)})
+		raw, _ := json.Marshal(map[string]string{"io.zoe.instance_lineage": labelValue(d.claim.InstanceLineageID), "io.zoe.volume": labelValue(d.claim.Manifest.Mounts[0].VolumeID)})
 		return raw, nil
 	}
 	if args[0] == "run" {
@@ -117,10 +117,10 @@ func (d *fakeDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 func validDeploymentClaim() contracts.DeploymentClaim {
 	budget := contracts.CapabilityResourceBudget{CPUMillis: 500, MemoryBytes: 128 << 20, DiskBytes: 512 << 20, TimeoutSeconds: 30, Concurrency: 1}
 	return contracts.DeploymentClaim{
-		WorkspaceID: "workspace-one", DeploymentID: "deployment-one", AttemptID: "attempt-one", Fence: 2, ServiceID: "service-one",
+		InstanceLineageID: "lineage-one", DeploymentID: "deployment-one", AttemptID: "attempt-one", Fence: 2, ServiceID: "service-one",
 		ReleaseDigest: "sha256:" + strings.Repeat("a", 64), DesiredOp: "install", RuntimeBackend: "docker",
 		Manifest: contracts.CapabilityManifest{SchemaVersion: 1, ArtifactRef: "oci://registry.example/app@sha256:" + strings.Repeat("b", 64), ArtifactDigest: "sha256:" + strings.Repeat("b", 64), Entrypoint: "/app", Args: []string{"--serve"}, Capabilities: []string{"service"}, HealthCheck: &contracts.CapabilityHealthCheck{Kind: "exec", Target: "app-health", IntervalSeconds: 10, TimeoutSeconds: 2, FailureThreshold: 3}, Budget: budget, Network: contracts.CapabilityNetworkPolicy{Mode: "none"}},
-		Grant:    contracts.CapabilityGrant{GrantID: "grant-one", ScopeKind: "workspace", Actions: []string{"install", "start", "stop", "pause", "resume", "update", "uninstall"}, Budget: budget, ExpiresAt: time.Now().UTC().Add(time.Hour)},
+		Grant:    contracts.CapabilityGrant{GrantID: "grant-one", ScopeKind: "instance", Actions: []string{"install", "start", "stop", "pause", "resume", "update", "uninstall"}, Budget: budget, ExpiresAt: time.Now().UTC().Add(time.Hour)},
 	}
 }
 
@@ -476,7 +476,7 @@ func TestDeploymentExecutorRejectsForeignContainerWithoutSideEffect(t *testing.T
 	claim := validDeploymentClaim()
 	claim.DesiredOp = "stop"
 	labels := deploymentOwnershipLabels(claim)
-	labels["io.zoe.workspace"] = labelValue("another-workspace")
+	labels["io.zoe.instance_lineage"] = labelValue("another-lineage")
 	docker := &fakeDocker{claim: claim, containerRunning: true, containerID: "foreign-container", created: true, containerLabels: labels}
 	obs := (&DeploymentExecutor{Docker: docker, Fences: deploymentTestAuthority(t)}).Execute(context.Background(), claim)
 	if obs.State != "failed" {
@@ -498,7 +498,7 @@ func TestDeploymentExecutorVerifiesMountVolumeOwnership(t *testing.T) {
 	}
 	found := false
 	for _, args := range docker.commands {
-		if containsString(args, "type=volume,src="+deploymentVolumeName(claim.WorkspaceID, "vol-one")+",dst=/data,readonly") {
+		if containsString(args, "type=volume,src="+deploymentVolumeName(claim.InstanceLineageID, "vol-one")+",dst=/data,readonly") {
 			found = true
 		}
 	}

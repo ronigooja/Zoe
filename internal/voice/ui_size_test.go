@@ -55,7 +55,7 @@ func TestUIScreenScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	_, _, err = r.svc.commandUIScreen(context.Background(), tx, control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner"}}, contracts.CommandRequest{Payload: json.RawMessage(`{"width":1440,"height":900}`)})
+	_, _, err = r.svc.commandUIScreen(context.Background(), tx, control.CommandContext{Principal: contracts.Principal{SubjectID: "owner"}}, contracts.CommandRequest{Payload: json.RawMessage(`{"width":1440,"height":900}`)})
 	if api, ok := err.(*control.APIError); !ok || api.Status != http.StatusForbidden {
 		t.Fatalf("scope=%v", err)
 	}
@@ -95,17 +95,17 @@ func TestUIJobSize(t *testing.T) {
 	if err := r.store.DB().QueryRow(`SELECT id FROM ui_requests LIMIT 1`).Scan(&request); err != nil {
 		t.Fatal(err)
 	}
-	j := uiJob{w: "default", o: "owner", request: request}
+	j := uiJob{o: "owner", request: request}
 	input, err := r.svc.uiInput(context.Background(), j)
 	if err != nil || strings.Contains(string(input), `"screen":`) || strings.Contains(string(input), `"surfaces":`) {
 		t.Fatalf("input=%s err=%v", input, err)
 	}
-	r.exec(t, `INSERT INTO ui_screens(workspace_id,owner_subject_id,width,height,updated_at) VALUES('default','other',800,600,?)`, r.now().Format(time.RFC3339Nano))
+	r.exec(t, `INSERT INTO ui_screens(owner_subject_id,width,height,updated_at) VALUES('other',800,600,?)`, r.now().Format(time.RFC3339Nano))
 	input, err = r.svc.uiInput(context.Background(), j)
 	if err != nil || strings.Contains(string(input), `"screen":`) {
 		t.Fatalf("foreign screen input=%s err=%v", input, err)
 	}
-	r.exec(t, `INSERT INTO ui_screens(workspace_id,owner_subject_id,width,height,updated_at) VALUES('default','owner',1440,900,?)`, r.now().Format(time.RFC3339Nano))
+	r.exec(t, `INSERT INTO ui_screens(owner_subject_id,width,height,updated_at) VALUES('owner',1440,900,?)`, r.now().Format(time.RFC3339Nano))
 	input, err = r.svc.uiInput(context.Background(), j)
 	if err != nil || !strings.Contains(string(input), `"screen":{"width":1440,"height":900}`) {
 		t.Fatalf("input=%s err=%v", input, err)
@@ -115,7 +115,7 @@ func TestUIJobSize(t *testing.T) {
 func TestUIJobSizeExceedsScreen(t *testing.T) {
 	r := uiTargetRig(t)
 	uiFlowServer(t, r)
-	r.exec(t, `INSERT INTO ui_screens(workspace_id,owner_subject_id,width,height,updated_at) VALUES('default','owner',400,300,?)`, r.now().Format(time.RFC3339Nano))
+	r.exec(t, `INSERT INTO ui_screens(owner_subject_id,width,height,updated_at) VALUES('owner',400,300,?)`, r.now().Format(time.RFC3339Nano))
 	var mu sync.Mutex
 	output := strings.Replace(uiFlowOutput(uiFlowCreate+","+uiFlowRoot, false), `"size":{"height":300,"width":400}`, `"size":{"width":500,"height":400}`, 1)
 	r.svc.uiController = uiFlowModel(t, &output, &mu)

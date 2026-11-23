@@ -57,7 +57,7 @@ func TestKeyCommandMigrationsRecognizeIngestState(t *testing.T) {
 			if err := store.Migrate(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := store.DB().Exec(`INSERT INTO memory_ingest_state VALUES('workspace','owner',123,456)`); err != nil {
+			if _, err := store.DB().Exec(`INSERT INTO memory_ingest_state VALUES('owner',123,456)`); err != nil {
 				t.Fatal(err)
 			}
 			if err := store.Close(); err != nil {

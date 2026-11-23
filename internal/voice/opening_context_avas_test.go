@@ -10,7 +10,7 @@ import (
 	"github.com/ronigooja/Zoe/contracts"
 )
 
-var openingTestOwner = contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}
+var openingTestOwner = contracts.Principal{SubjectID: "user-1", DeviceID: "device-1"}
 
 func reserveTestOpening(t *testing.T, r *deliveryRig, session string) *openingContext {
 	t.Helper()

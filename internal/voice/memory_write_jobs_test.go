@@ -34,14 +34,14 @@ func memoryWriteJobFixture(t *testing.T) (*storage.Store, *Service, func()) {
 	}
 	svc.uiEventServer = server
 	at := svc.now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('handoff-session','default','owner','instance','request',X'01',1,'active',?,?)`, at, at); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('handoff-session','owner','instance','request',X'01',1,'active',?,?)`, at, at); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB().Exec(`CREATE TABLE memory_write_outcomes(op_id TEXT PRIMARY KEY,status TEXT NOT NULL,error_kind TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256([]byte(writeSentence))
-	_, err = store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request,transcript_seq) VALUES('write-turn','default','handoff-session',1,'write-turn',1,?,?,?,'write-command','memory_write',?,0)`, writeSentence, hash[:], svc.now().Format(time.RFC3339Nano), writeRestatement)
+	_, err = store.DB().Exec(`INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request,transcript_seq) VALUES('write-turn','handoff-session',1,'write-turn',1,?,?,?,'write-command','memory_write',?,0)`, writeSentence, hash[:], svc.now().Format(time.RFC3339Nano), writeRestatement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +68,11 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 	for _, mode := range []string{"success", "disabled", "blocked"} {
 		t.Run(mode, func(t *testing.T) {
 			store, svc, handoff := memoryWriteJobFixture(t)
+			lineage, err := storage.InstanceLineage(t.Context(), store.DB())
+			if err != nil {
+				t.Fatal(err)
+			}
+			user := memoryapi.User(lineage, "owner")
 			var calls atomic.Int32
 			if mode != "disabled" {
 				svc.recall.MemoryAPI = workerClient(t, func(w http.ResponseWriter, req *http.Request) {
@@ -76,7 +81,7 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 					if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 						t.Error(err)
 					}
-					if req.URL.Path != "/v1/memory/write" || len(body) != 3 || body["op_id"] == "" || body["request"] != writeRestatement || body["user"] != memoryUser("default", "owner") {
+					if req.URL.Path != "/v1/memory/write" || len(body) != 3 || body["op_id"] == "" || body["request"] != writeRestatement || body["user"] != user {
 						t.Errorf("path=%s body=%v", req.URL.Path, body)
 					}
 					// The store has one connection. This independent write would
@@ -123,7 +128,7 @@ func TestMemoryWriteDurableHandoffAndDispatch(t *testing.T) {
 			}
 			// Later handled transcript revisions must not replace the original
 			// sentence paired with the first durable job's restatement.
-			if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request,handoff_handled) SELECT 'later-revision',workspace_id,session_id,generation,turn_id,2,'different sentence',content_hash,confirmed_at,command_id,exits,'different restatement',1 FROM voice_turns WHERE id='write-turn'`); err != nil {
+			if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request,handoff_handled) SELECT 'later-revision',session_id,generation,turn_id,2,'different sentence',content_hash,confirmed_at,command_id,exits,'different restatement',1 FROM voice_turns WHERE id='write-turn'`); err != nil {
 				t.Fatal(err)
 			}
 			svc.dispatchRecall(context.Background())
@@ -302,14 +307,6 @@ func TestMemoryWriteAuthStopRetainsOperation(t *testing.T) {
 	svc.workers.Wait()
 	if calls.Load() != 2 || writeJobCount(t, store, `SELECT count(*) FROM voice_recall_jobs WHERE status='done'`) != 1 {
 		t.Fatal("write did not resume")
-	}
-}
-
-func TestMemoryWriteScopeIdentity(t *testing.T) {
-	for _, pair := range [][2]string{{"default", "owner"}, {"a/\"b", "c\\d"}, {"", ""}} {
-		if memoryUser(pair[0], pair[1]) != memoryapi.User(pair[0], pair[1]) {
-			t.Fatal("scope differs")
-		}
 	}
 }
 

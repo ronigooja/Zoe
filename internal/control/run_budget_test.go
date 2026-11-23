@@ -32,14 +32,14 @@ func budgetTestServer(t *testing.T, limits contracts.RunBudgetSnapshot) (*Server
 	if _, err = store.DB().Exec(`INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('budget-device','budget-owner','test','approved',?)`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id) VALUES('budget-task','default','budget','budget','user','worker','active',1,?,?,?,?,?)`, now, now, now, "budget-device", "budget-command"); err != nil {
+	if _, err = store.DB().Exec(`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id) VALUES('budget-task','budget','budget','user','worker','active',1,?,?,?,?,?)`, now, now, now, "budget-device", "budget-command"); err != nil {
 		t.Fatal(err)
 	}
 	budgetRaw, err := json.Marshal(limits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at,budget_snapshot_json) VALUES('budget-run','default','budget-task','budget-attempt','active',91,'budget-runner','budget-device','budget-command','budget','worker','runtime','model','worker','opencode',?,?)`, now, budgetRaw); err != nil {
+	if _, err = store.DB().Exec(`INSERT INTO runs(id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at,budget_snapshot_json) VALUES('budget-run','budget-task','budget-attempt','active',91,'budget-runner','budget-device','budget-command','budget','worker','runtime','model','worker','opencode',?,?)`, now, budgetRaw); err != nil {
 		t.Fatal(err)
 	}
 	server := &Server{store: store}

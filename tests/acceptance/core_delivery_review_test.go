@@ -92,7 +92,7 @@ func TestReviewAuthoritativeAccessRequiresActiveMembership(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	peer := contracts.Principal{WorkspaceID: "default", SubjectID: "review-peer"}
+	peer := contracts.Principal{SubjectID: "review-peer"}
 	assert := func(want bool) {
 		t.Helper()
 		got, err := control.PrincipalCanAccessProject(ctx, tx, peer, project.ResourceID)

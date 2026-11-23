@@ -28,7 +28,7 @@ func TestResultWiringOpeningFencesVoiceDispatch(t *testing.T) {
 		if err := r.svc.selectPendingResultForTest(ctx, openingTestOwner, "entry-1", "opening", 1); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("explicit selection = %v", err)
 		}
-		pending, err := pendingResultsForContext(ctx, r.store.DB(), "default", "user-1")
+		pending, err := pendingResultsForContext(ctx, r.store.DB(), "user-1")
 		if err != nil || len(pending) != 0 {
 			t.Fatalf("pending=%+v error=%v", pending, err)
 		}

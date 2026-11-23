@@ -34,19 +34,19 @@ func TestProductionControlClientReadsAcceptedAnswerWithoutConsumingOnRead(t *tes
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('device','owner','test','approved',?)`, stamp); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id) VALUES('answer-task','default','question','goal','user','profile','awaiting_user',2,?,?,?,?,?)`, stamp, stamp, "device", "command", "owner"); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id) VALUES('answer-task','question','goal','user','profile','awaiting_user',2,?,?,?,?,?)`, stamp, stamp, "device", "command", "owner"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('answer-run','default','answer-task','answer-attempt','active','run',1,8,'configured-runner','device','command','goal','profile','opencode','runtime','model','worker',?)`, stamp); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('answer-run','answer-task','answer-attempt','active','run',1,8,'configured-runner','device','command','goal','profile','opencode','runtime','model','worker',?)`, stamp); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO pending_runtime_actions(id,workspace_id,task_id,run_id,fence,request_id,kind,question,message,action_digest,decision,expires_at,created_at) VALUES('answer-action','default','answer-task','answer-run',8,'frm-real','worker_question','red or blue','blue','answer-digest','answer',?,?)`, now.Add(-time.Hour).Format(time.RFC3339Nano), stamp); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO pending_runtime_actions(id,task_id,run_id,fence,request_id,kind,question,message,action_digest,decision,expires_at,created_at) VALUES('answer-action','answer-task','answer-run',8,'frm-real','worker_question','red or blue','blue','answer-digest','answer',?,?)`, now.Add(-time.Hour).Format(time.RFC3339Nano), stamp); err != nil {
 		t.Fatal(err)
 	}
 	for _, query := range []string{
 		`UPDATE tasks SET interaction_run_id='answer-run',interaction_action_digest='answer-digest' WHERE id='answer-task'`,
-		`INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES('answer-entry','answer-task','default','user_message','blue','device','2026-11-16T00:00:00Z')`,
-		`INSERT INTO task_question_answers(entry_id,workspace_id,task_id,question_id) VALUES('answer-entry','default','answer-task','answer-action')`,
+		`INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES('answer-entry','answer-task','user_message','blue','device','2026-11-16T00:00:00Z')`,
+		`INSERT INTO task_question_answers(entry_id,task_id,question_id) VALUES('answer-entry','answer-task','answer-action')`,
 	} {
 		if _, err := store.DB().ExecContext(ctx, query); err != nil {
 			t.Fatal(err)

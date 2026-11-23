@@ -20,7 +20,7 @@ func appendTaskMessageForTest(t *testing.T, server *Server, taskID, content stri
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "entries-owner", DeviceID: "entries-device", Scopes: []string{"client:command"}}
+	p := contracts.Principal{SubjectID: "entries-owner", DeviceID: "entries-device", Scopes: []string{"client:command"}}
 	result, events, err := server.commandTaskAppend(context.Background(), tx, CommandContext{Principal: p, CommandID: "append-test", AcceptedAt: time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC)}, contracts.CommandRequest{ExpectedVersion: &expected, Payload: json.RawMessage(`{"task_id":"entries-task","content":"` + content + `"}`)})
 	if err != nil {
 		return result, events, err
@@ -49,7 +49,7 @@ func taskEntriesTestServer(t *testing.T) (*Server, func()) {
 		t.Fatal(err)
 	}
 	for _, task := range []struct{ id, owner string }{{"entries-task", "entries-owner"}, {"private-task", "private-owner"}} {
-		if _, err = store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id) VALUES(?,'default','title','goal','user','worker','active',1,?,?,?,?,?,?)`, task.id, now, now, now, "entries-device", "cmd-"+task.id, task.owner); err != nil {
+		if _, err = store.DB().Exec(`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id) VALUES(?,'title','goal','user','worker','active',1,?,?,?,?,?,?)`, task.id, now, now, now, "entries-device", "cmd-"+task.id, task.owner); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -60,7 +60,7 @@ func taskEntriesTestServer(t *testing.T) (*Server, func()) {
 func getTaskEntries(server *Server, taskID, query, subject string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest("GET", "/v1/tasks/"+taskID+"/entries"+query, nil)
 	r.SetPathValue("task_id", taskID)
-	r = r.WithContext(context.WithValue(r.Context(), devicePrincipalKey{}, contracts.Principal{WorkspaceID: "default", SubjectID: subject, Scopes: []string{"client:read"}}))
+	r = r.WithContext(context.WithValue(r.Context(), devicePrincipalKey{}, contracts.Principal{SubjectID: subject, Scopes: []string{"client:read"}}))
 	w := httptest.NewRecorder()
 	server.handleTaskEntries(w, r)
 	return w
@@ -74,7 +74,7 @@ func TestTaskEntriesPaginationUsesStableTaskScopedCursor(t *testing.T) {
 		{"entry-b", "2026-10-24T12:00:00Z"},
 		{"entry-c", "2026-10-24T12:00:00.1Z"},
 	} {
-		if _, err := server.store.DB().Exec(`INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,'entries-task','default','user_message',?,'entries-device',?)`, entry.id, entry.id, entry.stamp); err != nil {
+		if _, err := server.store.DB().Exec(`INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES(?,'entries-task','user_message',?,'entries-device',?)`, entry.id, entry.id, entry.stamp); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -90,7 +90,7 @@ func TestTaskEntriesPaginationUsesStableTaskScopedCursor(t *testing.T) {
 		t.Fatalf("unexpected first page: %+v", page)
 	}
 	// Entries that sort before the cursor must not shift the next page.
-	if _, err := server.store.DB().Exec(`INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES('entry-0','entries-task','default','user_message','earlier','entries-device','2026-10-23T12:00:00Z')`); err != nil {
+	if _, err := server.store.DB().Exec(`INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES('entry-0','entries-task','user_message','earlier','entries-device','2026-10-23T12:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	second := getTaskEntries(server, "entries-task", "?limit=2&cursor="+*page.NextCursor, "entries-owner")
@@ -135,7 +135,7 @@ func TestTaskEntriesOrdersInstantsAtNanosecondPrecision(t *testing.T) {
 		{"f-zero-fraction", "2026-10-24T12:00:00.000Z"},
 		{"g-zero", "2026-10-24T12:00:00Z"},
 	} {
-		if _, err := server.store.DB().Exec(`INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,'entries-task','default','user_message',?,'entries-device',?)`, entry.id, entry.id, entry.stamp); err != nil {
+		if _, err := server.store.DB().Exec(`INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES(?,'entries-task','user_message',?,'entries-device',?)`, entry.id, entry.id, entry.stamp); err != nil {
 			t.Fatal(err)
 		}
 	}

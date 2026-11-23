@@ -34,17 +34,17 @@ func TestUncertainTaskDispatchRemainsNonDispatchableWithoutMutation(t *testing.T
 		t.Fatal(err)
 	}
 	guardCalled := false
-	if err := server.RegisterTaskDispatchGuard("service", func(context.Context, *sql.Tx, string, string, time.Time) (string, error) {
+	if err := server.RegisterTaskDispatchGuard("service", func(context.Context, *sql.Tx, string, time.Time) (string, error) {
 		guardCalled = true
 		return "grant_revoked", nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	at := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task','default','test','test','service','profile','active',1,?,?, 'device','command')`, at, at); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task','test','test','service','profile','active',1,?,?, 'device','command')`, at, at); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('run','default','task','attempt','uncertain','run',1,'runner','device','command','test','profile','runtime','model','worker','opencode',?)`, at); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,task_id,attempt_id,status,desired_control,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('run','task','attempt','uncertain','run',1,'runner','device','command','test','profile','runtime','model','worker','opencode',?)`, at); err != nil {
 		t.Fatal(err)
 	}
 	tx, err := store.DB().BeginTx(ctx, nil)
@@ -92,10 +92,10 @@ func TestProductionControlClientRechecksLiveTaskAuthorizationOverHTTP(t *testing
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('device','owner','test','approved',?)`, at); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task','default','test','test','user','profile','active',1,?,?, 'device','command')`, at, at); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task','test','test','user','profile','active',1,?,?, 'device','command')`, at, at); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('run','default','task','attempt','active','run',1,'runner','device','command','test','profile','runtime','model','worker','opencode',?)`, at); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,task_id,attempt_id,status,desired_control,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('run','task','attempt','active','run',1,'runner','device','command','test','profile','runtime','model','worker','opencode',?)`, at); err != nil {
 		t.Fatal(err)
 	}
 	server, err := NewServer(store, Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerScopes: []string{"runner:claim"}})
@@ -103,7 +103,7 @@ func TestProductionControlClientRechecksLiveTaskAuthorizationOverHTTP(t *testing
 		t.Fatal(err)
 	}
 	guardCalled := false
-	if err := server.RegisterTaskDispatchGuard("service", func(context.Context, *sql.Tx, string, string, time.Time) (string, error) {
+	if err := server.RegisterTaskDispatchGuard("service", func(context.Context, *sql.Tx, string, time.Time) (string, error) {
 		guardCalled = true
 		return "grant_revoked", nil
 	}); err != nil {
@@ -167,10 +167,10 @@ func TestProductionHTTPRecoveryKeepsUncertainRunFenced(t *testing.T) {
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('device','owner','test','approved',?)`, at); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task','default','test','test','user','profile','active',1,?,?, 'device','command')`, at, at); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('task','test','test','user','profile','active',1,?,?, 'device','command')`, at, at); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('run','default','task','attempt','uncertain','run',1,'runner','device','command','test','profile','runtime','model','worker','opencode',?)`, at); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,task_id,attempt_id,status,desired_control,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES('run','task','attempt','uncertain','run',1,'runner','device','command','test','profile','runtime','model','worker','opencode',?)`, at); err != nil {
 		t.Fatal(err)
 	}
 	server, err := NewServer(store, Config{RunnerToken: runnerToken, RunnerID: "runner", RunnerScopes: []string{"runner:claim", "runner:observe", "runner:control:read"}})

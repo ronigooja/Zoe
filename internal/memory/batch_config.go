@@ -10,6 +10,7 @@ import (
 	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/memoryapi"
+	"github.com/ronigooja/Zoe/internal/storage"
 )
 
 // BatchInterval applies the deployment's hourly batch cadence; unset means 24h.
@@ -48,6 +49,10 @@ func (r *Repository) batchStep(ctx context.Context, client ingestClient, interva
 }
 
 func (r *Repository) batchStepWithJitter(ctx context.Context, client ingestClient, interval time.Duration, now time.Time, jitter func() float64) (stepErr error) {
+	lineage, err := storage.InstanceLineage(ctx, r.db)
+	if err != nil {
+		return err
+	}
 	store := backoff.Store{DB: r.db}
 	if config, ok := client.(interface {
 		ConfigDigest(context.Context) (string, error)
@@ -69,15 +74,14 @@ func (r *Repository) batchStepWithJitter(ctx context.Context, client ingestClien
 		}
 		logging.Infof("memory_batch status=%s owners=%d chunks=%d elapsed_ms=%d", status, owners, chunks, time.Since(started).Milliseconds())
 	}()
-	rows, err := r.db.QueryContext(ctx, `SELECT workspace_id,owner_id FROM voice_sessions WHERE owner_id<>'' UNION SELECT workspace_id,owner_id FROM voice_context_events WHERE owner_id<>''`)
+	rows, err := r.db.QueryContext(ctx, `SELECT owner_id FROM voice_sessions WHERE owner_id<>'' UNION SELECT owner_id FROM voice_context_events WHERE owner_id<>''`)
 	if err != nil {
 		return err
 	}
-	type owner struct{ workspace, principal string }
-	var all []owner
+	var all []string
 	for rows.Next() {
-		var o owner
-		if err = rows.Scan(&o.workspace, &o.principal); err != nil {
+		var o string
+		if err = rows.Scan(&o); err != nil {
 			break
 		}
 		all = append(all, o)
@@ -90,7 +94,7 @@ func (r *Repository) batchStepWithJitter(ctx context.Context, client ingestClien
 		return err
 	}
 	for _, o := range all {
-		scope := memoryapi.User(o.workspace, o.principal)
+		scope := memoryapi.User(lineage, o)
 		due, err := store.Due(ctx, "memory_ingest", scope, now)
 		if err != nil {
 			if stepErr == nil {
@@ -101,7 +105,7 @@ func (r *Repository) batchStepWithJitter(ctx context.Context, client ingestClien
 		if !due {
 			continue
 		}
-		n, err := r.runBatch(ctx, client, o.workspace, o.principal, now, interval)
+		n, err := r.runBatch(ctx, client, o, now, interval)
 		if err != nil {
 			kind := backoff.Classify(err)
 			if kind == backoff.Auth || kind == backoff.Transient {

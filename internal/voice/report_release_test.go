@@ -9,8 +9,8 @@ import (
 
 func seedReportReply(t *testing.T, r *deliveryRig, action string) {
 	t.Helper()
-	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,steward_action,steward_task_id,handoff_handled) VALUES('report-turn','default','s1',1,'report',1,'status',X'01','now','cmd-task-1',?,'task-1',1)`, action)
-	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at,report_turn_id) VALUES('reply','default','s1',1,'report',?,'task_report','pending',?,'now','now','report-turn')`, strings.Repeat("report ", 1500), r.now().Format(time.RFC3339Nano))
+	r.exec(t, `INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,steward_action,steward_task_id,handoff_handled) VALUES('report-turn','s1',1,'report',1,'status',X'01','now','cmd-task-1',?,'task-1',1)`, action)
+	r.exec(t, `INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at,report_turn_id) VALUES('reply','s1',1,'report',?,'task_report','pending',?,'now','now','report-turn')`, strings.Repeat("report ", 1500), r.now().Format(time.RFC3339Nano))
 }
 
 func deferredReportRig(t *testing.T, action string) *deliveryRig {
@@ -63,7 +63,7 @@ func TestReportReplyFailureAndCallEndKeepDeferred(t *testing.T) {
 			if status, code, _ := r.row(t, "entry-1"); status != "pending" || code != "awaiting_context" {
 				t.Fatalf("status=%s code=%s", status, code)
 			}
-			pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
+			pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "user-1")
 			if err != nil || len(pending) != 1 {
 				t.Fatalf("next opening candidates=%v err=%v", pending, err)
 			}
@@ -86,9 +86,9 @@ func TestReportReplyReleaseEligibility(t *testing.T) {
 			case "other_owner":
 				r.exec(t, `UPDATE tasks SET owner_subject_id='other'; UPDATE voice_result_deliveries SET subject_id='other'`)
 			case "wrong_revision":
-				r.exec(t, `UPDATE voice_turns SET steward_action='redisplay'; INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,steward_action,steward_task_id) VALUES('later','default','s1',1,'report',2,'status',X'01','now','cmd-task-1','report','task-1')`)
+				r.exec(t, `UPDATE voice_turns SET steward_action='redisplay'; INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,steward_action,steward_task_id) VALUES('later','s1',1,'report',2,'status',X'01','now','cmd-task-1','report','task-1')`)
 			default:
-				r.exec(t, `INSERT INTO voice_result_checkpoints(entry_id,workspace_id,task_id,run_id,subject_id,content_hash,session_id,generation,gateway_session_id,media_generation,lease_until) VALUES('entry-1','default','task-1','run-1','user-1',?,'old',1,'gw-old',1,?)`, resultHash("original result"), r.now().Add(time.Minute).Format(time.RFC3339Nano))
+				r.exec(t, `INSERT INTO voice_result_checkpoints(entry_id,task_id,run_id,subject_id,content_hash,session_id,generation,gateway_session_id,media_generation,lease_until) VALUES('entry-1','task-1','run-1','user-1',?,'old',1,'gw-old',1,?)`, resultHash("original result"), r.now().Add(time.Minute).Format(time.RFC3339Nano))
 				if mode == "source_changed" {
 					r.exec(t, `UPDATE task_entries SET content='changed'; UPDATE voice_result_checkpoints SET lease_until=''`)
 				} else if mode != "live_lease" {
@@ -150,7 +150,7 @@ func TestReportReplyReleaseScopedAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	err = r.svc.releaseReportResultsTx(context.Background(), tx, "reply", "default", fastReplyDestination{owner: "user-1", session: "s1", gateway: "gw-s1", generation: 1, media: 1}, r.now())
+	err = r.svc.releaseReportResultsTx(context.Background(), tx, "reply", fastReplyDestination{owner: "user-1", session: "s1", gateway: "gw-s1", generation: 1, media: 1}, r.now())
 	if err != nil {
 		t.Fatal(err)
 	}

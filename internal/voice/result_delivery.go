@@ -45,19 +45,19 @@ func (s *Service) consumeResultEvents(ctx context.Context) {
 	if err = tx.QueryRowContext(ctx, `SELECT last_cursor FROM voice_result_cursor WHERE id=1`).Scan(&last); err != nil {
 		return
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT cursor,event_id,workspace_id,aggregate_id,payload FROM events WHERE event_type='task.assistant_message' AND cursor>? ORDER BY cursor LIMIT ?`, last, s.limits.Int("voice_result_sweep_rows"))
+	rows, err := tx.QueryContext(ctx, `SELECT cursor,event_id,aggregate_id,payload FROM events WHERE event_type='task.assistant_message' AND cursor>? ORDER BY cursor LIMIT ?`, last, s.limits.Int("voice_result_sweep_rows"))
 	if err != nil {
 		return
 	}
 	type event struct {
-		cursor                               int64
-		eventID, workspace, task, entry, run string
+		cursor                    int64
+		eventID, task, entry, run string
 	}
 	var events []event
 	for rows.Next() {
 		var e event
 		var payload []byte
-		if rows.Scan(&e.cursor, &e.eventID, &e.workspace, &e.task, &payload) != nil {
+		if rows.Scan(&e.cursor, &e.eventID, &e.task, &payload) != nil {
 			rows.Close()
 			return
 		}
@@ -81,12 +81,12 @@ func (s *Service) consumeResultEvents(ctx context.Context) {
 	rows.Close()
 	for _, e := range events {
 		var subject string
-		err := tx.QueryRowContext(ctx, `SELECT owner_subject_id FROM tasks WHERE id=? AND workspace_id=?`, e.task, e.workspace).Scan(&subject)
+		err := tx.QueryRowContext(ctx, `SELECT owner_subject_id FROM tasks WHERE id=?`, e.task).Scan(&subject)
 		at := s.now().UTC().Format(time.RFC3339Nano)
 		if err == sql.ErrNoRows {
-			_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_result_deliveries(entry_id,workspace_id,task_id,run_id,subject_id,status,last_error_code,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,'','failed','task_unknown',?,?,?)`, e.entry, e.workspace, e.task, e.run, at, at, at)
+			_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_result_deliveries(entry_id,task_id,run_id,subject_id,status,last_error_code,next_attempt_at,created_at,updated_at) VALUES(?,?,?,'','failed','task_unknown',?,?,?)`, e.entry, e.task, e.run, at, at, at)
 		} else if err == nil {
-			_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_result_deliveries(entry_id,workspace_id,task_id,run_id,subject_id,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,?,?)`, e.entry, e.workspace, e.task, e.run, subject, at, at, at)
+			_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_result_deliveries(entry_id,task_id,run_id,subject_id,status,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,'pending',?,?,?)`, e.entry, e.task, e.run, subject, at, at, at)
 		}
 		if err != nil {
 			return
@@ -102,10 +102,10 @@ func (s *Service) consumeResultEvents(ctx context.Context) {
 
 func (s *Service) dispatchResults(ctx context.Context) {
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT entry_id,workspace_id,task_id,run_id,subject_id,attempts FROM voice_result_deliveries d
+	rows, err := s.db.QueryContext(ctx, `SELECT entry_id,task_id,run_id,subject_id,attempts FROM voice_result_deliveries d
 WHERE status='pending' AND last_error_code!='awaiting_context' AND next_attempt_at<=? AND `+resultNotInOpening+`
 AND (last_error_code!='awaiting_call' OR EXISTS (
-	SELECT 1 FROM voice_sessions v WHERE v.workspace_id=d.workspace_id AND v.owner_id=d.subject_id
+	SELECT 1 FROM voice_sessions v WHERE v.owner_id=d.subject_id
 	AND v.state='active' AND v.gateway_session_id!='' AND v.gateway_media_generation>0
 	AND NOT EXISTS (SELECT 1 FROM voice_result_checkpoints c WHERE c.entry_id=d.entry_id
 	AND (c.session_id!=v.id OR c.generation!=v.generation OR c.gateway_session_id!=v.gateway_session_id OR c.media_generation!=v.gateway_media_generation))
@@ -117,63 +117,63 @@ AND (last_error_code!='awaiting_call' OR EXISTS (
 	// writes through the same pool, and an open result set would hold the only
 	// SQLite connection and deadlock the dispatcher.
 	type due struct {
-		id, workspace, task, run, subject string
-		attempts                          int
-	}
-	var batch []due
-	for rows.Next() {
-		var d due
-		if rows.Scan(&d.id, &d.workspace, &d.task, &d.run, &d.subject, &d.attempts) == nil {
-			batch = append(batch, d)
-		}
-	}
-	rows.Close()
-	for _, d := range batch {
-		s.deliverResult(ctx, d.id, d.workspace, d.task, d.run, d.subject, d.attempts)
-	}
-}
-
-// A stranded lease from a closed conversation must not delay the new call.
-// This exception stops applying as soon as its checkpoint moves.
-const fastReplyOldBinding = ` EXISTS(SELECT 1 FROM voice_text_checkpoints c WHERE c.workspace_id=f.workspace_id AND c.owner_id=o.owner_id AND c.source_kind='fast_reply' AND c.source_id=f.id AND (c.session_id!=v.id OR c.generation!=v.generation)) `
-
-func (s *Service) dispatchFastReplies(ctx context.Context) {
-	now := s.now().UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT f.id,f.workspace_id,f.session_id,f.generation,f.attempts FROM voice_fast_replies f JOIN voice_sessions o ON o.id=f.session_id AND o.workspace_id=f.workspace_id AND o.generation=f.generation JOIN voice_sessions v ON v.workspace_id=o.workspace_id AND v.owner_id=o.owner_id AND v.state='active' AND v.gateway_session_id!='' AND v.gateway_media_generation>0 WHERE f.status='pending' AND (f.next_attempt_at<=? OR `+fastReplyOldBinding+`) AND f.intent_kind NOT IN ('recall_holding','memory_write_holding') AND trim(f.text,char(9,10,11,12,13,32))!='' ORDER BY f.created_at,f.id LIMIT ?`, now, s.limits.Int("voice_fast_reply_sweep_rows"))
-	if err != nil {
-		return
-	}
-	type due struct {
-		id, workspace, session string
-		generation             int64
+		id, task, run, subject string
 		attempts               int
 	}
 	var batch []due
 	for rows.Next() {
 		var d due
-		if rows.Scan(&d.id, &d.workspace, &d.session, &d.generation, &d.attempts) == nil {
+		if rows.Scan(&d.id, &d.task, &d.run, &d.subject, &d.attempts) == nil {
 			batch = append(batch, d)
 		}
 	}
 	rows.Close()
 	for _, d := range batch {
-		s.deliverFastReply(ctx, d.id, d.workspace, d.session, d.generation, d.attempts)
+		s.deliverResult(ctx, d.id, d.task, d.run, d.subject, d.attempts)
+	}
+}
+
+// A stranded lease from a closed conversation must not delay the new call.
+// This exception stops applying as soon as its checkpoint moves.
+const fastReplyOldBinding = ` EXISTS(SELECT 1 FROM voice_text_checkpoints c WHERE c.owner_id=o.owner_id AND c.source_kind='fast_reply' AND c.source_id=f.id AND (c.session_id!=v.id OR c.generation!=v.generation)) `
+
+func (s *Service) dispatchFastReplies(ctx context.Context) {
+	now := s.now().UTC().Format(time.RFC3339Nano)
+	rows, err := s.db.QueryContext(ctx, `SELECT f.id,f.session_id,f.generation,f.attempts FROM voice_fast_replies f JOIN voice_sessions o ON o.id=f.session_id AND o.generation=f.generation JOIN voice_sessions v ON v.owner_id=o.owner_id AND v.state='active' AND v.gateway_session_id!='' AND v.gateway_media_generation>0 WHERE f.status='pending' AND (f.next_attempt_at<=? OR `+fastReplyOldBinding+`) AND f.intent_kind NOT IN ('recall_holding','memory_write_holding') AND trim(f.text,char(9,10,11,12,13,32))!='' ORDER BY f.created_at,f.id LIMIT ?`, now, s.limits.Int("voice_fast_reply_sweep_rows"))
+	if err != nil {
+		return
+	}
+	type due struct {
+		id, session string
+		generation  int64
+		attempts    int
+	}
+	var batch []due
+	for rows.Next() {
+		var d due
+		if rows.Scan(&d.id, &d.session, &d.generation, &d.attempts) == nil {
+			batch = append(batch, d)
+		}
+	}
+	rows.Close()
+	for _, d := range batch {
+		s.deliverFastReply(ctx, d.id, d.session, d.generation, d.attempts)
 	}
 	s.dispatchRecall(ctx)
 }
 
-func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session string, generation int64, attempts int) {
+func (s *Service) deliverFastReply(ctx context.Context, id, session string, generation int64, attempts int) {
 	now := s.now().UTC()
 	// Reserve dispatch without spending a retry before a validated external attempt.
 	// The checkpoint claim fences network work; this token fences scheduler updates.
 	token := now.Add(fastReplyLease).Format(time.RFC3339Nano)
-	destination, text, code, err := s.claimFastReply(ctx, id, workspace, session, generation, attempts, now, token)
+	destination, text, code, err := s.claimFastReply(ctx, id, session, generation, attempts, now, token)
 	if err != nil {
 		return
 	}
 	ok := false
 	if destination.session != "" {
-		ok, code = s.deliverDurableText(ctx, workspace, destination.owner, "fast_reply", id, destination.session, destination.generation, text)
+		ok, code = s.deliverDurableText(ctx, destination.owner, "fast_reply", id, destination.session, destination.generation, text)
 	}
 	status := "pending"
 	if ok {
@@ -188,7 +188,7 @@ func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session s
 		return
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE voice_fast_replies AS f SET status=?,voice_session_id=CASE WHEN ? THEN ? ELSE voice_session_id END,voice_generation=CASE WHEN ? THEN ? ELSE voice_generation END,last_error_code=?,updated_at=? WHERE id=? AND workspace_id=? AND session_id=? AND generation=? AND status='pending' AND attempts=? AND next_attempt_at=? AND NOT EXISTS(SELECT 1 FROM voice_text_checkpoints c WHERE c.workspace_id=f.workspace_id AND c.owner_id=? AND c.source_kind='fast_reply' AND c.source_id=f.id AND (c.session_id!=? OR c.generation!=?))`, status, ok, destination.session, ok, destination.generation, code, completed.Format(time.RFC3339Nano), id, workspace, session, generation, attempts, token, destination.owner, destination.session, destination.generation)
+	res, err := tx.ExecContext(ctx, `UPDATE voice_fast_replies AS f SET status=?,voice_session_id=CASE WHEN ? THEN ? ELSE voice_session_id END,voice_generation=CASE WHEN ? THEN ? ELSE voice_generation END,last_error_code=?,updated_at=? WHERE id=? AND session_id=? AND generation=? AND status='pending' AND attempts=? AND next_attempt_at=? AND NOT EXISTS(SELECT 1 FROM voice_text_checkpoints c WHERE c.owner_id=? AND c.source_kind='fast_reply' AND c.source_id=f.id AND (c.session_id!=? OR c.generation!=?))`, status, ok, destination.session, ok, destination.generation, code, completed.Format(time.RFC3339Nano), id, session, generation, attempts, token, destination.owner, destination.session, destination.generation)
 	if err != nil {
 		return
 	}
@@ -196,10 +196,10 @@ func (s *Service) deliverFastReply(ctx context.Context, id, workspace, session s
 	if err != nil || n != 1 {
 		return
 	}
-	if ok && recordContextEvent(ctx, tx, contextEvent{workspace: workspace, owner: destination.owner, session: destination.session, kind: "fast_reply", id: id, role: "background", text: text, at: completed}) != nil {
+	if ok && recordContextEvent(ctx, tx, contextEvent{owner: destination.owner, session: destination.session, kind: "fast_reply", id: id, role: "background", text: text, at: completed}) != nil {
 		return
 	}
-	if ok && s.releaseReportResultsTx(ctx, tx, id, workspace, destination, completed) != nil {
+	if ok && s.releaseReportResultsTx(ctx, tx, id, destination, completed) != nil {
 		return
 	}
 	_ = tx.Commit()
@@ -212,7 +212,7 @@ type fastReplyDestination struct {
 
 // The text checkpoint is the destination binding; the reply row keeps its
 // immutable origin. Reserve dispatch and move an old checkpoint atomically.
-func (s *Service) claimFastReply(ctx context.Context, id, workspace, session string, generation int64, attempts int, now time.Time, token string) (fastReplyDestination, string, string, error) {
+func (s *Service) claimFastReply(ctx context.Context, id, session string, generation int64, attempts int, now time.Time, token string) (fastReplyDestination, string, string, error) {
 	var dest fastReplyDestination
 	var text string
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -221,21 +221,21 @@ func (s *Service) claimFastReply(ctx context.Context, id, workspace, session str
 	}
 	defer tx.Rollback()
 	stamp := now.Format(time.RFC3339Nano)
-	err = tx.QueryRowContext(ctx, `UPDATE voice_fast_replies AS f SET next_attempt_at=?,updated_at=? WHERE id=? AND workspace_id=? AND session_id=? AND generation=? AND status='pending' AND attempts=? AND intent_kind NOT IN ('recall_holding','memory_write_holding') AND (next_attempt_at<=? OR EXISTS(SELECT 1 FROM voice_sessions o JOIN voice_sessions v ON v.workspace_id=o.workspace_id AND v.owner_id=o.owner_id AND v.state='active' AND v.gateway_session_id!='' AND v.gateway_media_generation>0 WHERE o.id=f.session_id AND o.workspace_id=f.workspace_id AND o.generation=f.generation AND `+fastReplyOldBinding+`)) RETURNING text`, token, stamp, id, workspace, session, generation, attempts, stamp).Scan(&text)
+	err = tx.QueryRowContext(ctx, `UPDATE voice_fast_replies AS f SET next_attempt_at=?,updated_at=? WHERE id=? AND session_id=? AND generation=? AND status='pending' AND attempts=? AND intent_kind NOT IN ('recall_holding','memory_write_holding') AND (next_attempt_at<=? OR EXISTS(SELECT 1 FROM voice_sessions o JOIN voice_sessions v ON v.owner_id=o.owner_id AND v.state='active' AND v.gateway_session_id!='' AND v.gateway_media_generation>0 WHERE o.id=f.session_id AND o.generation=f.generation AND `+fastReplyOldBinding+`)) RETURNING text`, token, stamp, id, session, generation, attempts, stamp).Scan(&text)
 	if err != nil {
 		return dest, "", "", err
 	}
 	if !utf8.ValidString(text) || strings.TrimSpace(text) == "" {
 		return dest, "", "", sql.ErrNoRows
 	}
-	err = tx.QueryRowContext(ctx, `SELECT v.owner_id,v.id,v.generation,v.gateway_session_id,v.gateway_media_generation FROM voice_sessions o JOIN voice_sessions v ON v.workspace_id=o.workspace_id AND v.owner_id=o.owner_id WHERE o.id=? AND o.workspace_id=? AND o.generation=? AND v.state='active' AND v.gateway_session_id!='' AND v.gateway_media_generation>0 AND NOT EXISTS(SELECT 1 FROM voice_text_checkpoints c WHERE c.workspace_id=o.workspace_id AND c.source_kind='fast_reply' AND c.source_id=? AND c.owner_id!=o.owner_id) ORDER BY v.created_at,v.id LIMIT 1`, session, workspace, generation, id).Scan(&dest.owner, &dest.session, &dest.generation, &dest.gateway, &dest.media)
+	err = tx.QueryRowContext(ctx, `SELECT v.owner_id,v.id,v.generation,v.gateway_session_id,v.gateway_media_generation FROM voice_sessions o JOIN voice_sessions v ON v.owner_id=o.owner_id WHERE o.id=? AND o.generation=? AND v.state='active' AND v.gateway_session_id!='' AND v.gateway_media_generation>0 AND NOT EXISTS(SELECT 1 FROM voice_text_checkpoints c WHERE c.source_kind='fast_reply' AND c.source_id=? AND c.owner_id!=o.owner_id) ORDER BY v.created_at,v.id LIMIT 1`, session, generation, id).Scan(&dest.owner, &dest.session, &dest.generation, &dest.gateway, &dest.media)
 	if err == sql.ErrNoRows {
 		return dest, text, "awaiting_context", tx.Commit()
 	}
 	if err != nil {
 		return dest, "", "", err
 	}
-	if err := rebindFastReplyCheckpoint(ctx, tx, workspace, id, resultHash(text), dest); err != nil {
+	if err := rebindFastReplyCheckpoint(ctx, tx, id, resultHash(text), dest); err != nil {
 		return dest, "", "", err
 	}
 	return dest, text, "", tx.Commit()
@@ -253,13 +253,13 @@ func (s *Service) retryFastReply(id string, attempt int, code string) {
 	_, _ = s.db.Exec(`UPDATE voice_fast_replies SET next_attempt_at=?,last_error_code=?,updated_at=? WHERE id=? AND status='pending'`, s.now().Add(d).UTC().Format(time.RFC3339Nano), code, s.now().UTC().Format(time.RFC3339Nano), id)
 }
 
-func (s *Service) deliverResult(ctx context.Context, id, workspace, task, run, subject string, attempts int) {
+func (s *Service) deliverResult(ctx context.Context, id, task, run, subject string, attempts int) {
 	adapter := s.receiptAdapter(ctx)
 	if adapter == nil {
 		_, _ = s.db.ExecContext(ctx, `UPDATE voice_result_deliveries AS d SET last_error_code='receipt_capability_disabled',next_attempt_at=?,updated_at=? WHERE entry_id=? AND status='pending' AND last_error_code!='awaiting_context' AND `+resultNotInOpening, s.now().Add(resultDeliveryLease).UTC().Format(time.RFC3339Nano), s.now().UTC().Format(time.RFC3339Nano), id)
 		return
 	}
-	s.deliverCheckpointedResult(ctx, id, workspace, task, run, subject, attempts, adapter)
+	s.deliverCheckpointedResult(ctx, id, task, run, subject, attempts, adapter)
 }
 
 func (s *Service) finishResult(id, status, code string) {

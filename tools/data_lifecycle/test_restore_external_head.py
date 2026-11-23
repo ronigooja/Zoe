@@ -13,7 +13,6 @@ def record_line(sequence: int, generation: int, previous_hash: str) -> tuple[byt
         "sequence": sequence,
         "lineage_id": "lineage-fixture",
         "generation": generation,
-        "workspace_id": "default",
         "entity_kind": "test_record",
         "entity_id": f"claim-{sequence}",
         "entity_version": 2,
@@ -30,6 +29,15 @@ def record_line(sequence: int, generation: int, previous_hash: str) -> tuple[byt
 
 
 class LatestDeletionHeadTests(unittest.TestCase):
+    def test_record_hash_matches_go_fixture(self):
+        # Keep this body aligned with internal/storage/deletion_journal_test.go.
+        body = '{"sequence":1,"lineage_id":"lineage-fixture","generation":3,"entity_kind":"test_record","entity_id":"claim-1","entity_version":2,"actor_id":"owner","reason_code":"user_requested","deleted_at":"2026-10-22T00:00:00Z","cleanup_targets":["claim","qdrant"],"previous_hash":""}'
+        line, digest = record_line(1, 3, "")
+        record = json.loads(line)
+        self.assertEqual(digest, hashlib.sha256(body.encode()).hexdigest())
+        self.assertEqual(record.pop("hash"), digest)
+        self.assertEqual(json.dumps(record, ensure_ascii=False, separators=(",", ":")), body)
+
     def invoke(self, directory: Path, snapshot_bytes: bytes, latest_bytes: bytes, head: dict) -> dict:
         snapshot = directory / "snapshot.ledger"
         latest = directory / "latest.ledger"

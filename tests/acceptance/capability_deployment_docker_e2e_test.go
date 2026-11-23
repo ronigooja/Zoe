@@ -57,11 +57,15 @@ func TestDockerBackedCapabilityDeploymentHTTPRecoveryLifecycle(t *testing.T) {
 	if _, _, err := control.InitializeInstanceAuth(ctx, store, deviceToken); err != nil {
 		t.Fatal(err)
 	}
+	lineage, err := storage.InstanceLineage(ctx, store.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	manifestV1 := capabilityServiceManifest(image, "--directory", "/tmp")
 	releaseV1 := submitCapabilityRelease(t, httpServer.Client(), httpServer.URL, deviceToken, manifestV1, "release-v1")
 	deploymentID, version := requestCapabilityDeployment(t, httpServer.Client(), httpServer.URL, deviceToken, "local-service", releaseV1, "install", nil, "install-request")
-	containerName := "zoe-cap-" + capabilityShortHash(deploymentID)
+	containerName := "zoe-cap-" + capabilityShortHash(lineage+"\x00"+deploymentID)
 	assertDockerObjectAbsent(t, ctx, "inspect", containerName)
 	var containerID string
 	t.Cleanup(func() {
@@ -75,7 +79,7 @@ func TestDockerBackedCapabilityDeploymentHTTPRecoveryLifecycle(t *testing.T) {
 				Labels map[string]string `json:"Labels"`
 			} `json:"Config"`
 		}
-		if json.Unmarshal(raw, &inspected) == nil && inspected.ID != "" && (containerID == "" || inspected.ID == containerID) && inspected.Config.Labels["io.zoe.managed"] == "true" && inspected.Config.Labels["io.zoe.deployment"] == capabilityShortHash(deploymentID) && inspected.Config.Labels["io.zoe.workspace"] == capabilityShortHash("default") {
+		if json.Unmarshal(raw, &inspected) == nil && inspected.ID != "" && (containerID == "" || inspected.ID == containerID) && inspected.Config.Labels["io.zoe.managed"] == "true" && inspected.Config.Labels["io.zoe.deployment"] == capabilityShortHash(deploymentID) && inspected.Config.Labels["io.zoe.instance_lineage"] == capabilityShortHash(lineage) {
 			_ = exec.Command("docker", "rm", "--force", inspected.ID).Run()
 		}
 	})
@@ -273,7 +277,7 @@ func requestCapabilityDeployment(t *testing.T, client *http.Client, base, device
 
 func authorizeCapabilityDeployment(t *testing.T, client *http.Client, base, device, deployment string, version int64, operation string, budget contracts.CapabilityResourceBudget, key string) int64 {
 	t.Helper()
-	payload := map[string]any{"deployment_id": deployment, "scope_kind": "workspace", "actions": []string{"install", "start", "stop", "update", "uninstall"}, "budget": budget, "expires_at": time.Now().UTC().Add(30 * time.Minute)}
+	payload := map[string]any{"deployment_id": deployment, "scope_kind": "instance", "actions": []string{"install", "start", "stop", "update", "uninstall"}, "budget": budget, "expires_at": time.Now().UTC().Add(30 * time.Minute)}
 	var receipt contracts.CommandReceipt
 	capabilityHTTP(t, client, http.MethodPost, base+"/v1/commands", device, key, contracts.CommandRequest{Kind: "capability.deployment.authorize", ExpectedVersion: &version, Payload: jsonRaw(t, payload)}, http.StatusOK, &receipt)
 	return receipt.ResourceVersion

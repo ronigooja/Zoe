@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ronigooja/Zoe/internal/memoryapi"
+	"github.com/ronigooja/Zoe/internal/storage"
 )
 
 const ingestObservationTime = "2006-01-02T15:04Z"
@@ -38,9 +39,9 @@ type batchEntry struct {
 
 // BoundaryAt returns the last successful worker ingestion boundary, without
 // creating state. A missing or never-successful owner returns zero time.
-func (r *Repository) BoundaryAt(ctx context.Context, workspace, principal string) (time.Time, error) {
+func (r *Repository) BoundaryAt(ctx context.Context, principal string) (time.Time, error) {
 	var ns int64
-	err := r.db.QueryRowContext(ctx, `SELECT boundary_ns FROM memory_ingest_state WHERE workspace_id=? AND principal_id=?`, workspace, principal).Scan(&ns)
+	err := r.db.QueryRowContext(ctx, `SELECT boundary_ns FROM memory_ingest_state WHERE principal_id=?`, principal).Scan(&ns)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && ns == 0) {
 		return time.Time{}, nil
 	}
@@ -55,11 +56,11 @@ type batchQuerier interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-func batchSources(ctx context.Context, q batchQuerier, workspace, principal string, from, until time.Time, unseen bool) ([]batchEntry, error) {
+func batchSources(ctx context.Context, q batchQuerier, principal string, from, until time.Time, unseen bool) ([]batchEntry, error) {
 	var turns, events []batchEntry
 	seen := map[string]bool{}
 	if unseen {
-		rows, err := q.QueryContext(ctx, `SELECT source_id FROM memory_ingest_members WHERE workspace_id=? AND principal_id=?`, workspace, principal)
+		rows, err := q.QueryContext(ctx, `SELECT source_id FROM memory_ingest_members WHERE principal_id=?`, principal)
 		if err != nil {
 			return nil, err
 		}
@@ -76,7 +77,7 @@ func batchSources(ctx context.Context, q batchQuerier, workspace, principal stri
 		}
 		rows.Close()
 	}
-	rows, err := q.QueryContext(ctx, `SELECT t.at,t.session_id,t.seq,t.role,t.text FROM voice_transcript_turns t JOIN voice_sessions s ON s.id=t.session_id AND s.workspace_id=t.workspace_id WHERE s.workspace_id=? AND s.owner_id=?`, workspace, principal)
+	rows, err := q.QueryContext(ctx, `SELECT t.at,t.session_id,t.seq,t.role,t.text FROM voice_transcript_turns t JOIN voice_sessions s ON s.id=t.session_id WHERE s.owner_id=?`, principal)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +104,7 @@ func batchSources(ctx context.Context, q batchQuerier, workspace, principal stri
 	if err != nil {
 		return nil, err
 	}
-	rows, err = q.QueryContext(ctx, `SELECT source_kind,source_id,at,role,text FROM voice_context_events WHERE workspace_id=? AND owner_id=?`, workspace, principal)
+	rows, err = q.QueryContext(ctx, `SELECT source_kind,source_id,at,role,text FROM voice_context_events WHERE owner_id=?`, principal)
 	if err != nil {
 		return nil, err
 	}
@@ -154,8 +155,8 @@ func batchSources(ctx context.Context, q batchQuerier, workspace, principal stri
 	return entries, nil
 }
 
-func (r *Repository) batchInput(ctx context.Context, workspace, principal string, from, until time.Time) ([]string, error) {
-	entries, err := batchSources(ctx, r.db, workspace, principal, from, until, false)
+func (r *Repository) batchInput(ctx context.Context, principal string, from, until time.Time) ([]string, error) {
+	entries, err := batchSources(ctx, r.db, principal, from, until, false)
 	var blocks []string
 	for _, e := range entries {
 		blocks = append(blocks, e.text)
@@ -209,20 +210,24 @@ func ingestChunks(blocks []string, user string, sets ...limits.Set) []string {
 	return chunks
 }
 
-func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspace, principal string, now time.Time, interval time.Duration) (int, error) {
+func (r *Repository) runBatch(ctx context.Context, client ingestClient, principal string, now time.Time, interval time.Duration) (int, error) {
+	lineage, err := storage.InstanceLineage(ctx, r.db)
+	if err != nil {
+		return 0, err
+	}
 	// A new owner is due immediately, from the beginning. Only a successful,
 	// nonempty batch advances the boundary and schedules now + interval.
-	if _, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO memory_ingest_state(workspace_id,principal_id,boundary_ns) VALUES(?,?,0)`, workspace, principal); err != nil {
+	if _, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO memory_ingest_state(principal_id,boundary_ns) VALUES(?,0)`, principal); err != nil {
 		return 0, err
 	}
 	var boundary, next int64
-	if err := r.db.QueryRowContext(ctx, `SELECT boundary_ns,next_attempt_ms FROM memory_ingest_state WHERE workspace_id=? AND principal_id=?`, workspace, principal).Scan(&boundary, &next); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT boundary_ns,next_attempt_ms FROM memory_ingest_state WHERE principal_id=?`, principal).Scan(&boundary, &next); err != nil {
 		return 0, err
 	}
 	if now.UnixMilli() < next || now.UnixNano() <= boundary {
 		return 0, nil
 	}
-	user := memoryapi.User(workspace, principal)
+	user := memoryapi.User(lineage, principal)
 	if !batchBodyFits(user, "\u0000\u0000\u0000\u0000", r.limits) {
 		return 0, errors.New("memory ingest owner exceeds request limit")
 	}
@@ -236,12 +241,12 @@ func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspac
 		return 0, err
 	}
 	defer tx.Rollback()
-	err = tx.QueryRowContext(ctx, `SELECT id,until_ns,status,error_kind FROM memory_ingest_batches WHERE workspace_id=? AND principal_id=? AND from_ns=?`, workspace, principal, boundary).Scan(&batchID, &until, &batchStatus, &blockedReason)
+	err = tx.QueryRowContext(ctx, `SELECT id,until_ns,status,error_kind FROM memory_ingest_batches WHERE principal_id=? AND from_ns=?`, principal, boundary).Scan(&batchID, &until, &batchStatus, &blockedReason)
 	if err == nil && batchStatus == "blocked" {
 		return 0, &memoryapi.Error{Kind: blockedReason}
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		entries, e := batchSources(ctx, tx, workspace, principal, time.Time{}, now, true)
+		entries, e := batchSources(ctx, tx, principal, time.Time{}, now, true)
 		if e != nil {
 			return 0, e
 		}
@@ -255,11 +260,11 @@ func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspac
 		chunks := ingestChunks(blocks, user, r.limits)
 		until = now.UnixNano()
 		batchID = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%d", user, boundary, until))))
-		if _, e = tx.ExecContext(ctx, `INSERT INTO memory_ingest_batches(id,workspace_id,principal_id,from_ns,until_ns) VALUES(?,?,?,?,?)`, batchID, workspace, principal, boundary, until); e != nil {
+		if _, e = tx.ExecContext(ctx, `INSERT INTO memory_ingest_batches(id,principal_id,from_ns,until_ns) VALUES(?,?,?,?)`, batchID, principal, boundary, until); e != nil {
 			return 0, e
 		}
 		for _, entry := range entries {
-			if _, e = tx.ExecContext(ctx, `INSERT INTO memory_ingest_members VALUES(?,?,?,?)`, workspace, principal, entry.source, batchID); e != nil {
+			if _, e = tx.ExecContext(ctx, `INSERT INTO memory_ingest_members VALUES(?,?,?)`, principal, entry.source, batchID); e != nil {
 				return 0, e
 			}
 		}
@@ -312,7 +317,7 @@ func (r *Repository) runBatch(ctx context.Context, client ingestClient, workspac
 			return i, err
 		}
 	}
-	res, err := r.db.ExecContext(ctx, `UPDATE memory_ingest_state SET boundary_ns=?,next_attempt_ms=? WHERE workspace_id=? AND principal_id=? AND boundary_ns=? AND next_attempt_ms=?`, until, now.Add(interval).UnixMilli(), workspace, principal, boundary, next)
+	res, err := r.db.ExecContext(ctx, `UPDATE memory_ingest_state SET boundary_ns=?,next_attempt_ms=? WHERE principal_id=? AND boundary_ns=? AND next_attempt_ms=?`, until, now.Add(interval).UnixMilli(), principal, boundary, next)
 	if err != nil {
 		return len(pending), err
 	}

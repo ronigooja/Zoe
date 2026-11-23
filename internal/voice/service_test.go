@@ -37,6 +37,9 @@ func newVoiceTestService(t *testing.T, cfg Config) (*storage.Store, *Service) {
 	if err := storage.RegisterCoreMigrations(store); err != nil {
 		t.Fatal(err)
 	}
+	if err := control.RegisterInstanceMaintenanceMigration(store); err != nil {
+		t.Fatal(err)
+	}
 	if err := RegisterMigrations(store); err != nil {
 		t.Fatal(err)
 	}
@@ -55,10 +58,10 @@ func TestResultConsumerEnqueuesFromEventAndAdvancesCursor(t *testing.T) {
 	if _, err := store.DB().Exec(`INSERT INTO command_receipts(command_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES('cmd-1','subject-1','key',X'01','{}',?)`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,result,error,created_by_device_id,command_id,owner_subject_id) VALUES('task-1','default','title','goal','user','default','queued',1,?,?, '', '', 'device-1','cmd-1','subject-1')`, now, now); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,result,error,created_by_device_id,command_id,owner_subject_id) VALUES('task-1','title','goal','user','default','queued',1,?,?, '', '', 'device-1','cmd-1','subject-1')`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('event-1','default',1,1,'task.assistant_message',?,'task','task-1',1,?)`, now, `{"payload":{"task_id":"task-1","run_id":"run-1","entry_id":"entry-1"}}`); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('event-1',1,1,'task.assistant_message',?,'task','task-1',1,?)`, now, `{"payload":{"task_id":"task-1","run_id":"run-1","entry_id":"entry-1"}}`); err != nil {
 		t.Fatal(err)
 	}
 	svc.consumeResultEvents(context.Background())
@@ -82,19 +85,19 @@ func TestVoiceTaskAdmissionBindsStableTurnAcrossRevisions(t *testing.T) {
 	ctx := context.Background()
 	store, svc := newVoiceTestService(t, Config{})
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('session-atomic','default','user-1','device-1','request-atomic',X'01',1,'active',?,?)`, now, now); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('session-atomic','user-1','device-1','request-atomic',X'01',1,'active',?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('turn-1','default','session-atomic',1,'stable-turn',1,'authoritative transcript',X'01',?,'turn-command'),('turn-2','default','session-atomic',1,'stable-turn',2,'edited transcript',X'02',?,'turn-command-2')`, now, now); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('turn-1','session-atomic',1,'stable-turn',1,'authoritative transcript',X'01',?,'turn-command'),('turn-2','session-atomic',1,'stable-turn',2,'edited transcript',X'02',?,'turn-command-2')`, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,created_at) VALUES('device-1','user-1','test','approved',?)`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id) VALUES('task-1','default','client title','client goal','voice','default','queued',1,?,?,'device-1','create-1','user-1')`, now, now); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id) VALUES('task-1','client title','client goal','voice','default','queued',1,?,?,'device-1','create-1','user-1')`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	principal := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1"}
+	principal := contracts.Principal{SubjectID: "user-1", DeviceID: "device-1"}
 	ref, _ := json.Marshal(voiceTaskSourceReference{Kind: "voice_turn", SessionID: "session-atomic", Generation: 1, TurnID: "stable-turn", Revision: 1})
 	for _, unavailable := range []any{nil, "", "none", " NONE "} {
 		if _, err := store.DB().ExecContext(ctx, `UPDATE voice_turns SET request=? WHERE id='turn-1'`, unavailable); err != nil {
@@ -208,7 +211,7 @@ func handoffHTTPServerWithScopes(t *testing.T, voiceCfg Config, scopes []string)
 	ts := httptest.NewServer(server.Handler())
 	t.Cleanup(func() { ts.Close(); server.Shutdown(); _ = store.Close() })
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err = store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('handoff-session','default','owner','instance','request',X'01',1,'active',?,?)`, now, now); err != nil {
+	if _, err = store.DB().Exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('handoff-session','owner','instance','request',X'01',1,'active',?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
 	return ts, store, key
@@ -290,19 +293,19 @@ func TestVoiceTaskLinkRequiresSameDeviceVoiceTaskAndExposesTaskEvents(t *testing
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO actors(id,subject_id,name,status,version,created_at) VALUES('device-1','user-1','test','approved',1,?)`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('session-1','default','user-1','device-1','request-1',X'01',1,'ended',?,?)`, now, now); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('session-1','user-1','device-1','request-1',X'01',1,'ended',?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('turn-row','default','session-1',1,'turn-a',1,'confirmed text',X'01',?,'voice-turn-cmd')`, now); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('turn-row','session-1',1,'turn-a',1,'confirmed text',X'01',?,'voice-turn-cmd')`, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id) VALUES('task-1','default','title','goal','voice','default','queued',1,?,?,?,'device-1','task-create-cmd')`, now, now, now); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id) VALUES('task-1','title','goal','voice','default','queued',1,?,?,?,'device-1','task-create-cmd')`, now, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('task-event','default',1,1,'task.created',?,'user-1','task','task-1',1,'{}')`, now); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('task-event',1,1,'task.created',?,'user-1','task','task-1',1,'{}')`, now); err != nil {
 		t.Fatal(err)
 	}
-	principal := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1", DeviceID: "device-1", Scopes: []string{"voice:turn:commit"}}
+	principal := contracts.Principal{SubjectID: "user-1", DeviceID: "device-1", Scopes: []string{"voice:turn:commit"}}
 	tx, err := store.DB().BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -321,7 +324,7 @@ func TestVoiceTaskLinkRequiresSameDeviceVoiceTaskAndExposesTaskEvents(t *testing
 		t.Fatal(err)
 	}
 	var linkedEvents int
-	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM voice_task_links l JOIN events e ON e.workspace_id=l.workspace_id AND e.aggregate_type='task' AND e.aggregate_id=l.task_id WHERE l.session_id='session-1' AND e.event_id='task-event'`).Scan(&linkedEvents); err != nil {
+	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM voice_task_links l JOIN events e ON e.aggregate_type='task' AND e.aggregate_id=l.task_id WHERE l.session_id='session-1' AND e.event_id='task-event'`).Scan(&linkedEvents); err != nil {
 		t.Fatal(err)
 	}
 	if linkedEvents != 1 {
@@ -368,7 +371,7 @@ func TestQueryGatewayOutcomeLeavesNonNeverEstablishedUnresolved(t *testing.T) {
 				t.Fatalf("outcome=%q, want %q", got.Outcome, tc.want)
 			}
 			now := time.Now().UTC().Format(time.RFC3339Nano)
-			if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,last_error_code,gateway_request_id,created_at,updated_at) VALUES('query','default','owner','device','query',X'01',1,'quarantined','gateway_outcome_unknown','req',?,?)`, now, now); err != nil {
+			if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,last_error_code,gateway_request_id,created_at,updated_at) VALUES('query','owner','device','query',X'01',1,'quarantined','gateway_outcome_unknown','req',?,?)`, now, now); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,reason_code='gateway_outcome_unknown',source_session_id='query'`); err != nil {
@@ -398,7 +401,7 @@ func TestGatewayAttestationSweepResolvesOldAllocatingOnlyOnce(t *testing.T) {
 	old := now.Add(-3 * time.Minute).Format(time.RFC3339Nano)
 	young := now.Add(-time.Minute).Format(time.RFC3339Nano)
 	for _, row := range []struct{ id, owner, at string }{{"old", "old-owner", old}, {"young", "young-owner", young}} {
-		_, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_request_id) VALUES(?,?,?,'device',?,X'01',1,'allocating',?,?,?)`, row.id, "default", row.owner, row.id, row.at, row.at, "req-old")
+		_, err := store.DB().Exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_request_id) VALUES(?,?,'device',?,X'01',1,'allocating',?,?,?)`, row.id, row.owner, row.id, row.at, row.at, "req-old")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -431,7 +434,7 @@ func TestGatewayAttestationDoesNotOverwriteConcurrentStateChange(t *testing.T) {
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 	store, svc := newVoiceTestService(t, Config{Now: func() time.Time { return now }, GatewayURL: "https://gateway.test", GatewayAPIKey: "key"})
 	at := now.Add(-3 * time.Minute).Format(time.RFC3339Nano)
-	_, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_request_id) VALUES('race','default','race-owner','device','race-request',X'01',1,'allocating',?,?,?)`, at, at, "req-race")
+	_, err := store.DB().Exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_request_id) VALUES('race','race-owner','device','race-request',X'01',1,'allocating',?,?,?)`, at, at, "req-race")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +464,7 @@ func TestGatewayAttestationDoesNotOverwriteConcurrentStateChange(t *testing.T) {
 func TestGatewayAttestationRequiresMatchingPoolSource(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	store, svc := newVoiceTestService(t, Config{})
-	_, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('attested','default','owner','device','request',X'01',1,'quarantined',?,?)`, now, now)
+	_, err := store.DB().Exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('attested','owner','device','request',X'01',1,'quarantined',?,?)`, now, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +508,7 @@ func TestGatewayAttestationSweepLeavesNonNeverEstablishedOutcomesUntouched(t *te
 			now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 			store, svc := newVoiceTestService(t, Config{Now: func() time.Time { return now }, GatewayURL: "https://gateway.test", GatewayAPIKey: "key"})
 			at := now.Add(-3 * time.Minute).Format(time.RFC3339Nano)
-			if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_request_id) VALUES('sweep','default','owner','device','sweep-request',X'01',1,'allocating',?,?,?)`, at, at, "req-sweep"); err != nil {
+			if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at,gateway_request_id) VALUES('sweep','owner','device','sweep-request',X'01',1,'allocating',?,?,?)`, at, at, "req-sweep"); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,reason_code='negotiation_in_progress',source_session_id='sweep' WHERE id=1`); err != nil {

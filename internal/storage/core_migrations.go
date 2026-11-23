@@ -22,14 +22,8 @@ CREATE TABLE run_rotation_snapshots(run_id TEXT NOT NULL REFERENCES runs(id), sn
 	}}); err != nil {
 		return err
 	}
-	if err := s.RegisterMigration(Migration{Namespace: "core", Version: 1, Name: "core_authority", Up: func(ctx context.Context, tx *sql.Tx) error {
+	if err := s.RegisterMigration(Migration{Namespace: "core", Version: 1, Name: "instance_authority_baseline", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
-CREATE TABLE workspaces (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-INSERT INTO workspaces(id,name,created_at) VALUES('default','Default',strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 CREATE TABLE actors (
   id TEXT PRIMARY KEY,
   subject_id TEXT NOT NULL,
@@ -44,19 +38,16 @@ CREATE TABLE actors (
 CREATE INDEX devices_subject ON actors(subject_id,status);
 CREATE TABLE projects (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK(status IN ('active','archived')),
   version INTEGER NOT NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(workspace_id,id)
+  updated_at TEXT NOT NULL
 );
-CREATE INDEX projects_workspace ON projects(workspace_id,created_at,id);
+CREATE INDEX projects_created ON projects(created_at,id);
 CREATE TABLE tasks (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   project_id TEXT,
   title TEXT NOT NULL,
   goal TEXT NOT NULL,
@@ -73,33 +64,31 @@ CREATE TABLE tasks (
   error TEXT NOT NULL DEFAULT '',
   created_by_device_id TEXT NOT NULL REFERENCES actors(id),
   command_id TEXT NOT NULL,
-  FOREIGN KEY(workspace_id,project_id) REFERENCES projects(workspace_id,id)
+  FOREIGN KEY(project_id) REFERENCES projects(id)
 );
-CREATE INDEX tasks_workspace ON tasks(workspace_id,created_at,id);
+CREATE INDEX tasks_created ON tasks(created_at,id);
 CREATE TABLE task_entries (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id),
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   kind TEXT NOT NULL,
   content TEXT NOT NULL,
   author_device_id TEXT NOT NULL REFERENCES actors(id),
   created_at TEXT NOT NULL
 );
 CREATE TABLE task_prior_contexts (
- task_id TEXT PRIMARY KEY REFERENCES tasks(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+ task_id TEXT PRIMARY KEY REFERENCES tasks(id),
  prior_task_id TEXT NOT NULL REFERENCES tasks(id), goal TEXT NOT NULL, status TEXT NOT NULL,
  result TEXT, additions_json BLOB NOT NULL, created_at TEXT NOT NULL
 );
 CREATE TABLE task_question_answers (
- entry_id TEXT PRIMARY KEY REFERENCES task_entries(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+ entry_id TEXT PRIMARY KEY REFERENCES task_entries(id),
  task_id TEXT NOT NULL REFERENCES tasks(id), question_id TEXT NOT NULL REFERENCES pending_runtime_actions(id),
  delivery_state TEXT NOT NULL DEFAULT 'pending' CHECK(delivery_state IN ('pending','acknowledged')),
  acknowledged_at TEXT NULL,
- UNIQUE(workspace_id,task_id,question_id)
+ UNIQUE(task_id,question_id)
 );
 CREATE TABLE approvals (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   task_id TEXT NOT NULL REFERENCES tasks(id),
   status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired','canceled')),
   prompt TEXT NOT NULL,
@@ -112,7 +101,7 @@ CREATE TABLE approvals (
   decided_at TEXT,
   decided_by_device_id TEXT REFERENCES actors(id)
 );
-CREATE INDEX approvals_workspace_status ON approvals(workspace_id,status,created_at);
+CREATE INDEX approvals_status ON approvals(status,created_at);
 CREATE TABLE command_receipts (
   command_id TEXT PRIMARY KEY,
   subject_id TEXT NOT NULL,
@@ -131,7 +120,6 @@ CREATE TABLE command_work (
 );
 CREATE TABLE events (
   event_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   cursor INTEGER NOT NULL,
   schema_version INTEGER NOT NULL,
   event_type TEXT NOT NULL,
@@ -151,7 +139,6 @@ CREATE TABLE event_counters (
 INSERT INTO event_counters(singleton,current_cursor) VALUES(1,0);
 CREATE TABLE runs (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   task_id TEXT NOT NULL REFERENCES tasks(id),
   attempt_id TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL CHECK(status IN ('queued','dispatching','active','uncertain','stopped','verification_pending','verified','failed')),
@@ -174,7 +161,6 @@ CREATE TABLE runs (
 CREATE INDEX runs_capacity ON runs(status);
 CREATE TABLE evidence (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   task_id TEXT NOT NULL REFERENCES tasks(id),
   run_id TEXT REFERENCES runs(id),
   kind TEXT NOT NULL,
@@ -200,7 +186,6 @@ CREATE TABLE runner_observations (
 );
 CREATE TABLE external_effects (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   task_id TEXT NOT NULL REFERENCES tasks(id),
   run_id TEXT NOT NULL REFERENCES runs(id),
   kind TEXT NOT NULL,
@@ -227,7 +212,6 @@ ALTER TABLE runs ADD COLUMN task_version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE runs ADD COLUMN authorization_json BLOB NOT NULL DEFAULT '{}';
 CREATE TABLE notifications (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   subject_id TEXT NOT NULL,
   source_event_id TEXT NOT NULL REFERENCES events(event_id),
   aggregate_type TEXT NOT NULL,
@@ -237,9 +221,9 @@ CREATE TABLE notifications (
   body TEXT NOT NULL,
   created_at TEXT NOT NULL,
   read_at TEXT,
-  UNIQUE(workspace_id,subject_id,source_event_id)
+  UNIQUE(subject_id,source_event_id)
 );
-CREATE INDEX notifications_inbox ON notifications(workspace_id,subject_id,created_at,id);
+CREATE INDEX notifications_inbox ON notifications(subject_id,created_at,id);
 ALTER TABLE projects ADD COLUMN owner_subject_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN owner_subject_id TEXT NOT NULL DEFAULT '';
 UPDATE projects SET owner_subject_id=coalesce((SELECT e.subject_id FROM events e WHERE e.aggregate_type='project' AND e.aggregate_id=projects.id AND e.event_type='project.created' AND e.subject_id IS NOT NULL ORDER BY e.cursor LIMIT 1),'');
@@ -273,7 +257,6 @@ CREATE TABLE child_proposals (
   run_id TEXT NOT NULL REFERENCES runs(id),
   attempt_id TEXT NOT NULL,
   proposal_id TEXT NOT NULL,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   subject_id TEXT NOT NULL,
   parent_task_id TEXT NOT NULL REFERENCES tasks(id),
   root_task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -287,13 +270,12 @@ CREATE TABLE child_proposals (
   decided_at TEXT,
   decided_by_device_id TEXT REFERENCES actors(id),
   UNIQUE(run_id,attempt_id,proposal_id),
-  UNIQUE(workspace_id,subject_id,proposal_id)
+  UNIQUE(subject_id,proposal_id)
 );
-CREATE INDEX child_proposals_inbox ON child_proposals(workspace_id,subject_id,status,created_at);
+CREATE INDEX child_proposals_inbox ON child_proposals(subject_id,status,created_at);
 CREATE TABLE task_dependencies (
   task_id TEXT NOT NULL REFERENCES tasks(id),
   dependency_task_id TEXT NOT NULL REFERENCES tasks(id),
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   status TEXT NOT NULL CHECK(status IN ('waiting','satisfied','failed')),
   created_at TEXT NOT NULL,
   PRIMARY KEY(task_id,dependency_task_id),
@@ -315,7 +297,6 @@ CREATE TABLE child_budget_reservations (
 		_, err := tx.ExecContext(ctx, `
 CREATE TABLE device_push_tokens (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   subject_id TEXT NOT NULL,
   device_id TEXT NOT NULL REFERENCES actors(id),
   installation_id TEXT NOT NULL,
@@ -328,7 +309,7 @@ CREATE TABLE device_push_tokens (
   disabled_at TEXT
 );
 CREATE UNIQUE INDEX device_push_tokens_active_device_platform ON device_push_tokens(installation_id,platform) WHERE status='active';
-CREATE INDEX device_push_tokens_subject ON device_push_tokens(workspace_id,subject_id,status);
+CREATE INDEX device_push_tokens_subject ON device_push_tokens(subject_id,status);
 CREATE TABLE push_deliveries (
   id TEXT PRIMARY KEY,
   notification_id TEXT NOT NULL REFERENCES notifications(id),
@@ -371,7 +352,6 @@ ALTER TABLE runs ADD COLUMN harness TEXT NOT NULL DEFAULT 'codex';
 		_, err := tx.ExecContext(ctx, `
 CREATE TABLE client_diagnostic_events (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   subject_id TEXT NOT NULL,
   device_hash TEXT NOT NULL,
   client_request_id TEXT NOT NULL,
@@ -432,7 +412,6 @@ ALTER TABLE tasks ADD COLUMN interaction_expires_at TEXT;
 ALTER TABLE tasks ADD COLUMN interaction_expected_version INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE task_confirmations (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   task_id TEXT NOT NULL REFERENCES tasks(id),
   run_id TEXT NOT NULL,
   action_digest TEXT NOT NULL,
@@ -443,7 +422,7 @@ CREATE TABLE task_confirmations (
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
 );
-CREATE INDEX task_confirmations_task ON task_confirmations(workspace_id,task_id,created_at);
+CREATE INDEX task_confirmations_task ON task_confirmations(task_id,created_at);
 `)
 		return err
 	}}); err != nil {
@@ -455,7 +434,7 @@ ALTER TABLE tasks ADD COLUMN interaction_question TEXT NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN interaction_expired_kind TEXT NOT NULL DEFAULT '';
 ALTER TABLE runs ADD COLUMN waiting_since TEXT;
 CREATE TABLE pending_runtime_actions (
- id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), task_id TEXT NOT NULL REFERENCES tasks(id), run_id TEXT NOT NULL REFERENCES runs(id), fence INTEGER NOT NULL, request_id TEXT NOT NULL, kind TEXT NOT NULL, action TEXT NOT NULL DEFAULT '', resources_json BLOB NOT NULL DEFAULT '[]', question TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '', action_digest TEXT NOT NULL, expires_at TEXT NOT NULL, decision TEXT NOT NULL DEFAULT '', authorization_used INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+ id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), run_id TEXT NOT NULL REFERENCES runs(id), fence INTEGER NOT NULL, request_id TEXT NOT NULL, kind TEXT NOT NULL, action TEXT NOT NULL DEFAULT '', resources_json BLOB NOT NULL DEFAULT '[]', question TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '', action_digest TEXT NOT NULL, expires_at TEXT NOT NULL, decision TEXT NOT NULL DEFAULT '', authorization_used INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
  UNIQUE(run_id,request_id)
 );`)
 		return err

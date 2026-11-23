@@ -27,9 +27,6 @@ func exportTempTestStore(t *testing.T) *storage.Store {
 	if err = store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().Exec(`INSERT INTO workspaces(id,name,created_at) VALUES('other','Other',?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		t.Fatal(err)
-	}
 	return store
 }
 
@@ -64,10 +61,10 @@ func TestInMemoryExportTempRootExistsAndIsReused(t *testing.T) {
 	}
 }
 
-func addExportTempFixture(t *testing.T, store *storage.Store, id, workspace string, sequence int64) {
+func addExportTempFixture(t *testing.T, store *storage.Store, id, owner string, sequence int64) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().Exec(`INSERT INTO zoe_export_temp_registry(export_id,workspace_id,owner_id,export_scope,created_deletion_sequence,status,invalidation_sequence,created_at,updated_at) VALUES(?,?,?,'workspace',?,'active',0,?,?)`, id, workspace, "owner", sequence, now, now); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO zoe_export_temp_registry(export_id,owner_id,export_scope,created_deletion_sequence,status,invalidation_sequence,created_at,updated_at) VALUES(?,?,'instance',?,'active',0,?,?)`, id, owner, sequence, now, now); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -98,32 +95,38 @@ func createExportTempFixture(t *testing.T, store *storage.Store, id string) stri
 	return path
 }
 
-func TestExportTempCleanupIsIdempotentAndWorkspaceScoped(t *testing.T) {
+func TestExportTempCleanupIsIdempotentAndInstanceSequenceScoped(t *testing.T) {
 	store := exportTempTestStore(t)
 	server, err := NewServer(store, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	addExportTempFixture(t, store, "workspace-a-old", "default", 1)
-	addExportTempFixture(t, store, "workspace-b-old", "other", 1)
-	rootPath := createExportTempFixture(t, store, "workspace-a-old")
-	createExportTempFixture(t, store, "workspace-b-old")
-	done, code, err := server.cleanExportTemps(context.Background(), "default", 2)
+	addExportTempFixture(t, store, "owner-a-old", "owner-a", 1)
+	addExportTempFixture(t, store, "owner-b-old", "owner-b", 1)
+	addExportTempFixture(t, store, "current-export", "owner-b", 2)
+	rootPath := createExportTempFixture(t, store, "owner-a-old")
+	createExportTempFixture(t, store, "owner-b-old")
+	createExportTempFixture(t, store, "current-export")
+	done, code, err := server.cleanExportTemps(context.Background(), 2)
 	if err != nil || !done || code != "" {
 		t.Fatalf("first cleanup completed=%t code=%q err=%v", done, code, err)
 	}
-	if _, err = os.Stat(filepath.Join(rootPath, exportDataName("workspace-a-old"))); !os.IsNotExist(err) {
-		t.Fatalf("workspace A artifact remains or stat failed: %v", err)
+	for _, id := range []string{"owner-a-old", "owner-b-old"} {
+		for _, name := range []string{exportDataName(id), exportArchiveName(id)} {
+			if _, err = os.Stat(filepath.Join(rootPath, name)); !os.IsNotExist(err) {
+				t.Fatalf("stale artifact %s remains or stat failed: %v", name, err)
+			}
+		}
 	}
-	if _, err = os.Stat(filepath.Join(rootPath, exportDataName("workspace-b-old"))); err != nil {
-		t.Fatalf("workspace B artifact was touched: %v", err)
+	if _, err = os.Stat(filepath.Join(rootPath, exportDataName("current-export"))); err != nil {
+		t.Fatalf("current export artifact was touched: %v", err)
 	}
-	if done, code, err = server.cleanExportTemps(context.Background(), "default", 2); err != nil || !done || code != "" {
+	if done, code, err = server.cleanExportTemps(context.Background(), 2); err != nil || !done || code != "" {
 		t.Fatalf("idempotent cleanup completed=%t code=%q err=%v", done, code, err)
 	}
 	var otherStatus string
-	if err = store.DB().QueryRow(`SELECT status FROM zoe_export_temp_registry WHERE export_id='workspace-b-old'`).Scan(&otherStatus); err != nil || otherStatus != "active" {
-		t.Fatalf("other workspace registry status=%q err=%v", otherStatus, err)
+	if err = store.DB().QueryRow(`SELECT status FROM zoe_export_temp_registry WHERE export_id='current-export'`).Scan(&otherStatus); err != nil || otherStatus != "active" {
+		t.Fatalf("current export registry status=%q err=%v", otherStatus, err)
 	}
 	var checkpoint int64
 	if err = store.DB().QueryRow(`SELECT completed_sequence FROM zoe_deletion_reconciliation_checkpoints WHERE target='export_temp'`).Scan(&checkpoint); err != nil || checkpoint != 0 {
@@ -143,7 +146,7 @@ func TestExportTempCleanupReturnsPendingForActiveExporter(t *testing.T) {
 	if !ok {
 		t.Fatal("could not acquire test exporter lock")
 	}
-	done, code, err := server.cleanExportTemps(context.Background(), "default", 2)
+	done, code, err := server.cleanExportTemps(context.Background(), 2)
 	if err != nil || done || code != "export_active" {
 		t.Fatalf("active cleanup completed=%t code=%q err=%v", done, code, err)
 	}
@@ -151,7 +154,7 @@ func TestExportTempCleanupReturnsPendingForActiveExporter(t *testing.T) {
 	if _, err = os.Stat(filepath.Join(rootPath, exportDataName("active-export"))); err != nil {
 		t.Fatalf("pending cleanup removed an active artifact: %v", err)
 	}
-	if done, code, err = server.cleanExportTemps(context.Background(), "default", 2); err != nil || !done || code != "" {
+	if done, code, err = server.cleanExportTemps(context.Background(), 2); err != nil || !done || code != "" {
 		t.Fatalf("retry cleanup completed=%t code=%q err=%v", done, code, err)
 	}
 }
@@ -175,7 +178,7 @@ func TestExportTempCleanupFailsClosedForUnregisteredOrUnsafeArtifacts(t *testing
 		_ = file.Close()
 		_ = root.Close()
 		addExportTempFixture(t, store, "registered-export", "default", 1)
-		if done, code, err := server.cleanExportTemps(context.Background(), "default", 2); err == nil || done || code != "adapter_missing" {
+		if done, code, err := server.cleanExportTemps(context.Background(), 2); err == nil || done || code != "adapter_missing" {
 			t.Fatalf("unregistered cleanup completed=%t code=%q err=%v", done, code, err)
 		}
 		if _, err = os.Stat(filepath.Join(rootPath, "unregistered.bin")); err != nil {
@@ -197,7 +200,7 @@ func TestExportTempCleanupFailsClosedForUnregisteredOrUnsafeArtifacts(t *testing
 		if err = os.Symlink(t.TempDir(), rootPath); err != nil {
 			t.Fatal(err)
 		}
-		if done, code, err := server.cleanExportTemps(context.Background(), "default", 2); err == nil || done || code != "unsafe_private_root" {
+		if done, code, err := server.cleanExportTemps(context.Background(), 2); err == nil || done || code != "unsafe_private_root" {
 			t.Fatalf("symlink cleanup completed=%t code=%q err=%v", done, code, err)
 		}
 	})
@@ -220,7 +223,7 @@ func TestExportTempCleanupFailsClosedForUnregisteredOrUnsafeArtifacts(t *testing
 		if err = os.Symlink(outside, filepath.Join(rootPath, exportDataName("symlink-artifact"))); err != nil {
 			t.Fatal(err)
 		}
-		if done, code, err := server.cleanExportTemps(context.Background(), "default", 2); err == nil || done || code != "unsafe_or_unremovable_artifact" {
+		if done, code, err := server.cleanExportTemps(context.Background(), 2); err == nil || done || code != "unsafe_or_unremovable_artifact" {
 			t.Fatalf("symlink artifact cleanup completed=%t code=%q err=%v", done, code, err)
 		}
 		if payload, err := os.ReadFile(outside); err != nil || string(payload) != "keep" {

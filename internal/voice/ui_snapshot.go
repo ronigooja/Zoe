@@ -12,7 +12,7 @@ import (
 	"github.com/ronigooja/Zoe/internal/uictl"
 )
 
-// uiSnapshot repairs only still-retained documents at the workspace cursor.
+// uiSnapshot repairs only still-retained documents at the instance cursor.
 type uiSnapshot struct {
 	Cursor   int64               `json:"cursor"`
 	Surfaces []uiSnapshotSurface `json:"surfaces"`
@@ -38,7 +38,7 @@ func (s *Service) handleUISnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Like owner-scoped voice reads, this requires authenticated identity, not
-	// command scope. No owner/workspace selector is accepted from the client.
+	// command scope. No owner selector is accepted from the client.
 	result, err := s.readUISnapshot(r.Context(), p)
 	if err != nil {
 		control.WriteError(w, safeSessionError(err))
@@ -72,7 +72,7 @@ func (s *Service) readUISnapshot(ctx context.Context, p contracts.Principal) (ui
 
 func readUISnapshotSurfaces(ctx context.Context, tx *sql.Tx, p contracts.Principal) ([]uiSnapshotSurface, error) {
 	result := []uiSnapshotSurface{}
-	rows, err := tx.QueryContext(ctx, `SELECT s.surface_id,s.version,s.state_json,s.container,s.width,s.height,r.id,r.status,r.task_question,r.chat_input,coalesce(r.task_id,''),coalesce(r.question_id,'') FROM ui_surfaces s LEFT JOIN ui_requests r ON r.id=s.request_id AND r.workspace_id=s.workspace_id AND r.owner_subject_id=s.owner_subject_id AND r.surface_id=s.surface_id AND r.surface_version=s.version WHERE s.workspace_id=? AND s.owner_subject_id=? ORDER BY s.surface_id`, p.WorkspaceID, p.SubjectID)
+	rows, err := tx.QueryContext(ctx, `SELECT s.surface_id,s.version,s.state_json,s.container,s.width,s.height,r.id,r.status,r.task_question,r.chat_input,coalesce(r.task_id,''),coalesce(r.question_id,'') FROM ui_surfaces s LEFT JOIN ui_requests r ON r.id=s.request_id AND r.owner_subject_id=s.owner_subject_id AND r.surface_id=s.surface_id AND r.surface_version=s.version WHERE s.owner_subject_id=? ORDER BY s.surface_id`, p.SubjectID)
 	if err != nil {
 		return nil, err
 	}

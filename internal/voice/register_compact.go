@@ -27,7 +27,7 @@ func (r *ContextRegister) RebuildCompact(ctx context.Context, now time.Time) err
 			logging.Infof("register status=rebuild owners_built=%d owners_failed=%d elapsed_ms=%d", built, failed, time.Since(started).Milliseconds())
 		}
 	}()
-	rows, err := r.db.QueryContext(ctx, `SELECT workspace_id,owner_id FROM voice_sessions UNION SELECT workspace_id,owner_id FROM voice_context_events ORDER BY workspace_id,owner_id`)
+	rows, err := r.db.QueryContext(ctx, `SELECT owner_id FROM voice_sessions UNION SELECT owner_id FROM voice_context_events ORDER BY owner_id`)
 	if err != nil {
 		failed++
 		return err
@@ -35,7 +35,7 @@ func (r *ContextRegister) RebuildCompact(ctx context.Context, now time.Time) err
 	var owners []RegisterOwner
 	for rows.Next() {
 		var o RegisterOwner
-		if err = rows.Scan(&o.WorkspaceID, &o.OwnerSubjectID); err != nil {
+		if err = rows.Scan(&o.OwnerSubjectID); err != nil {
 			failed++
 			rows.Close()
 			return err
@@ -83,7 +83,7 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 		kind = "config"
 		return false, err
 	}
-	scope := o.WorkspaceID + "/" + o.OwnerSubjectID
+	scope := o.OwnerSubjectID
 	if r.retry != nil {
 		due, err := r.retry.Due(ctx, "compact", scope, now)
 		if err != nil {
@@ -92,11 +92,11 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 			return false, nil
 		}
 	}
-	if _, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO voice_context_registers(workspace_id,owner_subject_id) VALUES(?,?)`, o.WorkspaceID, o.OwnerSubjectID); err != nil {
+	if _, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO voice_context_registers(owner_subject_id) VALUES(?)`, o.OwnerSubjectID); err != nil {
 		return false, err
 	}
 	token := uuid.NewString()
-	claim, err := r.db.ExecContext(ctx, `UPDATE voice_context_registers SET claim_token=?,lease_until_ms=? WHERE workspace_id=? AND owner_subject_id=? AND lease_until_ms<=?`, token, now.Add(11*time.Minute).UnixMilli(), o.WorkspaceID, o.OwnerSubjectID, now.UnixMilli())
+	claim, err := r.db.ExecContext(ctx, `UPDATE voice_context_registers SET claim_token=?,lease_until_ms=? WHERE owner_subject_id=? AND lease_until_ms<=?`, token, now.Add(11*time.Minute).UnixMilli(), o.OwnerSubjectID, now.UnixMilli())
 	if err != nil {
 		return false, err
 	}
@@ -107,7 +107,7 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_, _ = r.db.ExecContext(cleanup, `UPDATE voice_context_registers SET claim_token='',lease_until_ms=0 WHERE workspace_id=? AND owner_subject_id=? AND claim_token=?`, o.WorkspaceID, o.OwnerSubjectID, token)
+		_, _ = r.db.ExecContext(cleanup, `UPDATE voice_context_registers SET claim_token='',lease_until_ms=0 WHERE owner_subject_id=? AND claim_token=?`, o.OwnerSubjectID, token)
 	}()
 	s, err := r.snapshot(ctx, o, now)
 	if err != nil {
@@ -183,7 +183,7 @@ func (r *ContextRegister) RebuildCompactForOwner(ctx context.Context, o Register
 	if !boundary.Equal(s.MemoryBoundary) {
 		return false, nil
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE voice_context_registers SET compact=?,compact_through=?,built_at=?,source_hash=?,source_memory_boundary=?,event_watermark=?,version=version+1,claim_token='',lease_until_ms=0 WHERE workspace_id=? AND owner_subject_id=? AND version=? AND claim_token=? AND lease_until_ms>? AND ((SELECT count(*) FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id AND v.workspace_id=t.workspace_id WHERE v.workspace_id=? AND v.owner_id=?) + (SELECT count(*) FROM voice_context_events WHERE workspace_id=? AND owner_id=?))=?`, output, edge.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), fingerprint, s.MemoryBoundary.UTC().Format(time.RFC3339Nano), s.currentEventWatermark, o.WorkspaceID, o.OwnerSubjectID, s.Version, token, now.UnixMilli(), o.WorkspaceID, o.OwnerSubjectID, o.WorkspaceID, o.OwnerSubjectID, s.sourceCount)
+	result, err := r.db.ExecContext(ctx, `UPDATE voice_context_registers SET compact=?,compact_through=?,built_at=?,source_hash=?,source_memory_boundary=?,event_watermark=?,version=version+1,claim_token='',lease_until_ms=0 WHERE owner_subject_id=? AND version=? AND claim_token=? AND lease_until_ms>? AND ((SELECT count(*) FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id WHERE v.owner_id=?) + (SELECT count(*) FROM voice_context_events WHERE owner_id=?))=?`, output, edge.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), fingerprint, s.MemoryBoundary.UTC().Format(time.RFC3339Nano), s.currentEventWatermark, o.OwnerSubjectID, s.Version, token, now.UnixMilli(), o.OwnerSubjectID, o.OwnerSubjectID, s.sourceCount)
 	if err != nil {
 		return false, err
 	}

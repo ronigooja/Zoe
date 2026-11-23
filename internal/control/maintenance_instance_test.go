@@ -46,6 +46,9 @@ func TestPersistentInstanceFenceAndVerifiedRestore(t *testing.T) {
 	if err != nil || prepared.DispatchEnabled || prepared.DerivedRetrievalEnabled || !prepared.RestoreDeletionReconciliationRequired || prepared.InstanceID != "target-instance" || prepared.Epoch != 3 {
 		t.Fatalf("prepared state=%#v err=%v", prepared, err)
 	}
+	if lineage, err := storage.InstanceLineage(ctx, store.DB()); err != nil || lineage != state.InstanceID {
+		t.Fatalf("restore changed external namespace: lineage=%q initial=%q err=%v", lineage, state.InstanceID, err)
+	}
 
 	key := []byte("0123456789abcdef0123456789abcdef")
 	proofDoc := signedProof(t, key, fenced.InstanceID, fenced.Epoch)

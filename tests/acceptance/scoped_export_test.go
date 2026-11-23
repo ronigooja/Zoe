@@ -122,15 +122,15 @@ func TestScopedExportSizeLimitAndTemporaryCleanup(t *testing.T) {
 	t.Setenv("TMPDIR", tempRoot)
 	store, handler, token, subject, device := scopedExportServer(t)
 	at := time.Now().UTC().Format(time.RFC3339Nano)
-	seedExportProjectTask(t, store.DB(), "large-project", "large-task", "default", subject, device, at)
+	seedExportProjectTask(t, store.DB(), "large-project", "large-task", subject, device, at)
 	largeField := strings.Repeat("x", 520<<10)
 	for i := 0; i < 130; i++ {
 		id := fmt.Sprintf("large-task-%03d", i)
-		if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,project_id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id,lineage_root_task_id,lineage_depth,child_policy_json,root_child_limit) VALUES(?,'default','large-project',?,?, 'user','profile','complete',1,?,?,?,?,?,?,?,0,'{}',0)`, id, id, largeField, at, at, at, device, "command-"+id, subject, id); err != nil {
+		if _, err := store.DB().Exec(`INSERT INTO tasks(id,project_id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id,lineage_root_task_id,lineage_depth,child_policy_json,root_child_limit) VALUES(?,'large-project',?,?, 'user','profile','complete',1,?,?,?,?,?,?,?,0,'{}',0)`, id, id, largeField, at, at, at, device, "command-"+id, subject, id); err != nil {
 			t.Fatal(err)
 		}
 	}
-	response := reviewRequest(handler, http.MethodGet, "/v1/export?scope=workspace", token, "", nil)
+	response := reviewRequest(handler, http.MethodGet, "/v1/export?scope=instance", token, "", nil)
 	if response.Code != http.StatusOK || response.Body.Len() <= 64<<20 {
 		t.Fatalf("streamed export=%d body length=%d body=%s", response.Code, response.Body.Len(), response.Body.String())
 	}
@@ -150,11 +150,11 @@ func TestScopedExportRejectsOversizedFieldBeforePreparingArchive(t *testing.T) {
 	t.Setenv("TMPDIR", tempRoot)
 	store, handler, token, subject, device := scopedExportServer(t)
 	at := time.Now().UTC().Format(time.RFC3339Nano)
-	seedExportProjectTask(t, store.DB(), "oversized-project", "oversized-task", "default", subject, device, at)
+	seedExportProjectTask(t, store.DB(), "oversized-project", "oversized-task", subject, device, at)
 	if _, err := store.DB().Exec(`UPDATE tasks SET goal=? WHERE id='oversized-task'`, strings.Repeat("x", (1<<20)+1)); err != nil {
 		t.Fatal(err)
 	}
-	response := reviewRequest(handler, http.MethodGet, "/v1/export?scope=workspace", token, "", nil)
+	response := reviewRequest(handler, http.MethodGet, "/v1/export?scope=instance", token, "", nil)
 	if response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), "export_field_too_large") {
 		t.Fatalf("oversized field export=%d %s", response.Code, response.Body.String())
 	}
@@ -173,14 +173,14 @@ func TestScopedExportClientCancelCleansTemporaryFile(t *testing.T) {
 	t.Setenv("TMPDIR", tempRoot)
 	store, handler, token, subject, device := scopedExportServer(t)
 	at := time.Now().UTC().Format(time.RFC3339Nano)
-	seedExportProjectTask(t, store.DB(), "cancel-project", "cancel-task", "default", subject, device, at)
+	seedExportProjectTask(t, store.DB(), "cancel-project", "cancel-task", subject, device, at)
 	if _, err := store.DB().Exec(`UPDATE tasks SET goal=? WHERE id='cancel-task'`, strings.Repeat("x", 32<<20)); err != nil {
 		t.Fatal(err)
 	}
 	live := httptest.NewServer(handler)
 	t.Cleanup(live.Close)
 	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, live.URL+"/v1/export?scope=workspace", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, live.URL+"/v1/export?scope=instance", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,13 +280,13 @@ func decodeExportPackage(t *testing.T, body []byte, headers http.Header) (map[st
 func TestScopedExportConcurrentWritesReturnOneSnapshotOrSafeRetry(t *testing.T) {
 	store, handler, token, subject, deviceID := scopedExportServer(t)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	seedExportProjectTask(t, store.DB(), "concurrent-project", "concurrent-task", "default", subject, deviceID, now)
+	seedExportProjectTask(t, store.DB(), "concurrent-project", "concurrent-task", subject, deviceID, now)
 	// Many bounded rows give the writer a repeatable window in which to race an
 	// authoritative update while the handler builds its on-disk file.
 	large := strings.Repeat("x", 512<<10)
 	for i := 0; i < 24; i++ {
 		id := fmt.Sprintf("concurrent-task-%02d", i)
-		if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,project_id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id,lineage_root_task_id,lineage_depth,child_policy_json,root_child_limit) VALUES(?,'default','concurrent-project',?,?, 'user','profile','complete',1,?,?,?,?,?,?,?,0,'{}',0)`, id, id, large, now, now, now, deviceID, "command-"+id, subject, id); err != nil {
+		if _, err := store.DB().Exec(`INSERT INTO tasks(id,project_id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id,lineage_root_task_id,lineage_depth,child_policy_json,root_child_limit) VALUES(?,'concurrent-project',?,?, 'user','profile','complete',1,?,?,?,?,?,?,?,0,'{}',0)`, id, id, large, now, now, now, deviceID, "command-"+id, subject, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -348,16 +348,16 @@ func TestScopedExportConcurrentWritesReturnOneSnapshotOrSafeRetry(t *testing.T) 
 	}
 }
 
-func seedExportProjectTask(t *testing.T, db *sql.DB, projectID, taskID, workspace, owner, deviceID, at string) {
+func seedExportProjectTask(t *testing.T, db *sql.DB, projectID, taskID, owner, deviceID, at string) {
 	t.Helper()
-	if _, err := db.Exec(`INSERT INTO projects(id,workspace_id,name,description,status,version,created_at,updated_at,owner_subject_id) VALUES(?,?,?,'','active',1,?,?,?)`, projectID, workspace, projectID, at, at, owner); err != nil {
+	if _, err := db.Exec(`INSERT INTO projects(id,name,description,status,version,created_at,updated_at,owner_subject_id) VALUES(?,?,'','active',1,?,?,?)`, projectID, projectID, at, at, owner); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO tasks(id,workspace_id,project_id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id,lineage_root_task_id,lineage_depth,child_policy_json,root_child_limit) VALUES(?,?,?,?,?,'user','profile','complete',1,?,?,?,?,?,?,?,0,'{}',0)`, taskID, workspace, projectID, taskID, "goal-"+taskID, at, at, at, deviceID, "command-"+taskID, owner, taskID); err != nil {
+	if _, err := db.Exec(`INSERT INTO tasks(id,project_id,title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id,lineage_root_task_id,lineage_depth,child_policy_json,root_child_limit) VALUES(?,?,?,?,'user','profile','complete',1,?,?,?,?,?,?,?,0,'{}',0)`, taskID, projectID, taskID, "goal-"+taskID, at, at, at, deviceID, "command-"+taskID, owner, taskID); err != nil {
 		t.Fatal(err)
 	}
 	entryID := "entry-" + taskID
-	if _, err := db.Exec(`INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,?,?,'user_message',?,?,?)`, entryID, taskID, workspace, "entry-"+taskID, deviceID, at); err != nil {
+	if _, err := db.Exec(`INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES(?,?,'user_message',?,?,?)`, entryID, taskID, "entry-"+taskID, deviceID, at); err != nil {
 		t.Fatal(err)
 	}
 }

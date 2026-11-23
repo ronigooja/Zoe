@@ -48,7 +48,7 @@ func TestRegisterRouteLogs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newRegisterFixture(t)
 			f.owner.OwnerSubjectID = "PRIVATE_OWNER_ID"
-			f.session("private-session", "default", f.owner.OwnerSubjectID)
+			f.session("private-session", f.owner.OwnerSubjectID)
 			f.turn("private-session", 0, "user", "PRIVATE_SENTENCE", f.now.Add(-2*time.Hour))
 			f.output = "PRIVATE_COMPACT"
 			f.rebuild(f.now)
@@ -71,7 +71,7 @@ func TestRegisterRebuildLogs(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			f := newRegisterFixture(t)
 			f.owner.OwnerSubjectID = "PRIVATE_OWNER_ID"
-			f.session("private-session", "default", f.owner.OwnerSubjectID)
+			f.session("private-session", f.owner.OwnerSubjectID)
 			f.turn("private-session", 0, "user", "PRIVATE_SENTENCE", f.now.Add(-2*time.Hour))
 			f.output = "PRIVATE_COMPACT"
 			stage, kind, httpStatus := "", "", ""
@@ -138,7 +138,7 @@ func TestRegisterStartLogs(t *testing.T) {
 func TestRegisterDebugFullModelCalls(t *testing.T) {
 	f := newRegisterFixture(t)
 	f.owner.OwnerSubjectID = "PRIVATE_OWNER_ID"
-	f.session("debug-session", "default", f.owner.OwnerSubjectID)
+	f.session("debug-session", f.owner.OwnerSubjectID)
 	f.turn("debug-session", 0, "user", "PRIVATE_TRANSCRIPT", f.now.Add(-2*time.Hour))
 	f.output = "PRIVATE_COMPACT"
 	logs := captureRegisterLogs(t)

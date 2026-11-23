@@ -86,7 +86,7 @@ func (s *Service) readRecoveryTx(ctx context.Context, tx *sql.Tx, p contracts.Pr
 	// Include the owner's newest session, including terminal state. No session,
 	// device, lease, or upstream identity belonging to another owner is exposed.
 	var session recoverySession
-	err = tx.QueryRowContext(ctx, `SELECT id,generation,state FROM voice_sessions WHERE workspace_id=? AND owner_id=? ORDER BY (state='active') DESC,created_at DESC,id DESC LIMIT 1`, p.WorkspaceID, p.SubjectID).Scan(&session.ID, &session.Generation, &session.State)
+	err = tx.QueryRowContext(ctx, `SELECT id,generation,state FROM voice_sessions WHERE owner_id=? ORDER BY (state='active') DESC,created_at DESC,id DESC LIMIT 1`, p.SubjectID).Scan(&session.ID, &session.Generation, &session.State)
 	if err == nil {
 		result.Voice.CurrentSession = &session
 	} else if !errors.Is(err, sql.ErrNoRows) {

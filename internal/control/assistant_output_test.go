@@ -100,7 +100,7 @@ func TestObservationAssistantOutputDeduplicatesRetriesAndSameRunText(t *testing.
 func TestObservationSameAssistantSentenceFromDifferentRunsStoresTwoEntries(t *testing.T) {
 	s, closeStore := budgetTestServer(t, contracts.RunBudgetSnapshot{})
 	defer closeStore()
-	if _, err := s.store.DB().Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at,budget_snapshot_json) SELECT 'budget-run-2',workspace_id,task_id,'budget-attempt-2','active',92,runner_id,authorized_device_id,'budget-command-2',goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at,budget_snapshot_json FROM runs WHERE id='budget-run'`); err != nil {
+	if _, err := s.store.DB().Exec(`INSERT INTO runs(id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at,budget_snapshot_json) SELECT 'budget-run-2',task_id,'budget-attempt-2','active',92,runner_id,authorized_device_id,'budget-command-2',goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at,budget_snapshot_json FROM runs WHERE id='budget-run'`); err != nil {
 		t.Fatal(err)
 	}
 	r := json.RawMessage(`{"assistant_output":"same"}`)
@@ -189,7 +189,7 @@ func TestEnqueueEventNotificationIgnoresAssistantMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	err = enqueueEventNotification(context.Background(), tx, contracts.Event{Type: "task.assistant_message", WorkspaceID: "default", Payload: json.RawMessage(`{"task_id":"budget-task"}`)})
+	err = enqueueEventNotification(context.Background(), tx, contracts.Event{Type: "task.assistant_message", Payload: json.RawMessage(`{"task_id":"budget-task"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}

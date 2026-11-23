@@ -14,7 +14,7 @@ The worker reads `ZOE_MEMORY_API_TOKEN_FILE`, `ZOE_MEMORY_API_ADDR`, `ZOE_MEMORY
 
 The standard-library HTTP listener uses `ZOE_MEMORY_API_ADDR` (default `0.0.0.0:8788`). All routes, including `GET /healthz`, require bearer authentication. POST JSON bodies are limited by the [Zoe limits snapshot](../../docs/design/flows/configuration.md#zoe-limits), including JSON framing; `ZOE_MEMORY_API_TIMEOUT_SECONDS` bounds responses (default 60, maximum 120). In-flight backend operations cannot be forcibly interrupted; mutation outcomes after timeouts can be uncertain. Callers retry only with the same scoped operation/chunk identity; receiver receipts fence uncertain external effects. Concurrency is bounded and new mutations check the deadline before dispatch.
 
-For person-scoped requests, `user` is the caller's opaque workspace/owner tuple, hashed into the `zoe-person-` namespace. These are fresh-baseline contracts: legacy sentence/restatement/query fields and identity-free mutation bodies are rejected. Every required string must be nonempty and non-whitespace.
+For person-scoped requests, `user` is the caller's opaque instance-lineage/owner tuple, hashed into the `zoe-person-` namespace. These are fresh-baseline contracts: legacy sentence/restatement/query fields and identity-free mutation bodies are rejected. Every required string must be nonempty and non-whitespace.
 
 | POST route | Exact body fields | Result / behavior |
 | --- | --- | --- |

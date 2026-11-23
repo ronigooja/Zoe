@@ -123,8 +123,8 @@ func (s *Server) handleScopedExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope := r.URL.Query().Get("scope")
-	if scope != "personal" && scope != "workspace" {
-		writeError(w, apiError(http.StatusBadRequest, "invalid_scope", "scope must be personal or workspace", nil))
+	if scope != "personal" && scope != "instance" {
+		writeError(w, apiError(http.StatusBadRequest, "invalid_scope", "scope must be personal or instance", nil))
 		return
 	}
 	if !HasScope(p, "export:read") || !HasScope(p, "client:read") {
@@ -302,7 +302,7 @@ func (s *Server) handleScopedExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, apiError(http.StatusConflict, "export_snapshot_stale", "export audit cursor did not follow the data snapshot", nil))
 		return
 	}
-	if err = auditTx.QueryRowContext(r.Context(), `SELECT event_id,event_type,aggregate_id FROM events WHERE workspace_id=? AND cursor=?`, p.WorkspaceID, validatedCursor).Scan(&eventID, &eventType, &aggregateID); err != nil || eventID != exportID || eventType != "data.export.prepared" || aggregateID != exportID {
+	if err = auditTx.QueryRowContext(r.Context(), `SELECT event_id,event_type,aggregate_id FROM events WHERE cursor=?`, validatedCursor).Scan(&eventID, &eventType, &aggregateID); err != nil || eventID != exportID || eventType != "data.export.prepared" || aggregateID != exportID {
 		writeError(w, apiError(http.StatusConflict, "export_snapshot_stale", "export audit event does not match the package authority cursor", nil))
 		return
 	}
@@ -396,7 +396,7 @@ func verifyDeletionJournalHead(databasePath, lineage string, generation, sequenc
 func buildExportManifest(id string, p contracts.Principal, scope string, cursor int64, lineage string, generation, deletionSequence int64, counts exportCounter, dataBytes int64, dataHash string) map[string]any {
 	return map[string]any{
 		"format": "zoe.authority-export", "schema_version": 2, "export_id": id,
-		"created_at": time.Now().UTC().Format(time.RFC3339Nano), "workspace_id": p.WorkspaceID, "subject_id": p.SubjectID, "scope": scope,
+		"created_at": time.Now().UTC().Format(time.RFC3339Nano), "subject_id": p.SubjectID, "scope": scope,
 		"authority": map[string]any{
 			"instance_lineage_id": lineage, "generation": generation, "deletion_sequence": strconv.FormatInt(deletionSequence, 10),
 			"snapshot_event_cursor": strconv.FormatInt(cursor, 10), "validated_through_cursor": strconv.FormatInt(cursor+1, 10),
@@ -428,11 +428,11 @@ func validateExportFieldBounds(ctx context.Context, tx *sql.Tx, p contracts.Prin
 		sql  string
 		args []any
 	}{
-		{`SELECT coalesce(max(max(length(CAST(p.name AS BLOB)),length(CAST(p.description AS BLOB)))),0) FROM projects p WHERE p.workspace_id=?1 AND p.status='active' AND ` + visible.project, []any{p.WorkspaceID, p.SubjectID}},
-		{`SELECT coalesce(max(max(length(CAST(t.title AS BLOB)),length(CAST(t.goal AS BLOB)),length(CAST(t.source AS BLOB)),length(CAST(t.result AS BLOB)),length(CAST(t.error AS BLOB)))),0) FROM tasks t WHERE t.workspace_id=?1 AND ` + visible.task, []any{p.WorkspaceID, p.SubjectID}},
-		{`SELECT coalesce(max(length(CAST(e.content AS BLOB))),0) FROM task_entries e JOIN tasks t ON t.id=e.task_id AND t.workspace_id=e.workspace_id WHERE e.workspace_id=?1 AND ` + visible.taskOnT, []any{p.WorkspaceID, p.SubjectID}},
-		{`SELECT coalesce(max(length(CAST(a.prompt AS BLOB))),0) FROM approvals a JOIN tasks t ON t.id=a.task_id AND t.workspace_id=a.workspace_id WHERE a.workspace_id=?1 AND ` + visible.taskOnT, []any{p.WorkspaceID, p.SubjectID}},
-		{`SELECT coalesce(max(max(length(CAST(e.summary AS BLOB)),length(CAST(e.source AS BLOB)))),0) FROM evidence e JOIN tasks t ON t.id=e.task_id AND t.workspace_id=e.workspace_id WHERE e.workspace_id=?1 AND ` + visible.taskOnT, []any{p.WorkspaceID, p.SubjectID}},
+		{`SELECT coalesce(max(max(length(CAST(p.name AS BLOB)),length(CAST(p.description AS BLOB)))),0) FROM projects p WHERE p.status='active' AND ` + visible.project, []any{p.SubjectID}},
+		{`SELECT coalesce(max(max(length(CAST(t.title AS BLOB)),length(CAST(t.goal AS BLOB)),length(CAST(t.source AS BLOB)),length(CAST(t.result AS BLOB)),length(CAST(t.error AS BLOB)))),0) FROM tasks t WHERE ` + visible.task, []any{p.SubjectID}},
+		{`SELECT coalesce(max(length(CAST(e.content AS BLOB))),0) FROM task_entries e JOIN tasks t ON t.id=e.task_id WHERE ` + visible.taskOnT, []any{p.SubjectID}},
+		{`SELECT coalesce(max(length(CAST(a.prompt AS BLOB))),0) FROM approvals a JOIN tasks t ON t.id=a.task_id WHERE ` + visible.taskOnT, []any{p.SubjectID}},
+		{`SELECT coalesce(max(max(length(CAST(e.summary AS BLOB)),length(CAST(e.source AS BLOB)))),0) FROM evidence e JOIN tasks t ON t.id=e.task_id WHERE ` + visible.taskOnT, []any{p.SubjectID}},
 	}
 	for _, query := range queries {
 		var size int64
@@ -454,10 +454,10 @@ func exportAuthorizationFingerprint(ctx context.Context, q *sql.Tx, p contracts.
 	h := sha256.New()
 	visible := exportVisibilityPredicate()
 	for _, statement := range []string{
-		`SELECT p.id FROM projects p WHERE p.workspace_id=?1 AND p.status='active' AND ` + visible.project + ` ORDER BY p.id`,
-		`SELECT t.id FROM tasks t WHERE t.workspace_id=?1 AND ` + visible.task + ` ORDER BY t.id`,
+		`SELECT p.id FROM projects p WHERE p.status='active' AND ` + visible.project + ` ORDER BY p.id`,
+		`SELECT t.id FROM tasks t WHERE ` + visible.task + ` ORDER BY t.id`,
 	} {
-		rows, err := q.QueryContext(ctx, statement, p.WorkspaceID, p.SubjectID)
+		rows, err := q.QueryContext(ctx, statement, p.SubjectID)
 		if err != nil {
 			return nil, err
 		}
@@ -487,50 +487,50 @@ func writeExportDocument(ctx context.Context, tx *sql.Tx, out io.Writer, p contr
 		return err
 	}
 	visible := exportVisibilityPredicate()
-	args := []any{p.WorkspaceID, p.SubjectID}
-	if err := writeRows(ctx, tx, out, &counts.Projects, `SELECT json_object('id',p.id,'name',p.name,'description',p.description,'status',p.status,'version',p.version,'created_at',p.created_at,'updated_at',p.updated_at) FROM projects p WHERE p.workspace_id=?1 AND p.status='active' AND `+visible.project+` ORDER BY p.created_at,p.id`, append([]any(nil), args...)); err != nil {
+	args := []any{p.SubjectID}
+	if err := writeRows(ctx, tx, out, &counts.Projects, `SELECT json_object('id',p.id,'name',p.name,'description',p.description,'status',p.status,'version',p.version,'created_at',p.created_at,'updated_at',p.updated_at) FROM projects p WHERE p.status='active' AND `+visible.project+` ORDER BY p.created_at,p.id`, append([]any(nil), args...)); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(out, `,"tasks":`); err != nil {
 		return err
 	}
-	if err := writeRows(ctx, tx, out, &counts.Tasks, `SELECT json_object('id',t.id,'project_id',CASE WHEN EXISTS(SELECT 1 FROM projects p WHERE p.workspace_id=t.workspace_id AND p.id=t.project_id AND p.status='active' AND (p.owner_subject_id=?2)) THEN t.project_id ELSE '' END,'title',t.title,'goal',t.goal,'source',t.source,'profile_id',t.profile_id,'status',t.status,'version',t.version,'created_at',t.created_at,'updated_at',t.updated_at,'accepted_at',t.accepted_at,'started_at',t.started_at,'finished_at',t.finished_at,'result',t.result,'error',t.error) FROM tasks t WHERE t.workspace_id=?1 AND `+visible.task+` ORDER BY t.created_at,t.id`, append([]any(nil), args...)); err != nil {
+	if err := writeRows(ctx, tx, out, &counts.Tasks, `SELECT json_object('id',t.id,'project_id',CASE WHEN EXISTS(SELECT 1 FROM projects p WHERE p.id=t.project_id AND p.status='active' AND (p.owner_subject_id=?1)) THEN t.project_id ELSE '' END,'title',t.title,'goal',t.goal,'source',t.source,'profile_id',t.profile_id,'status',t.status,'version',t.version,'created_at',t.created_at,'updated_at',t.updated_at,'accepted_at',t.accepted_at,'started_at',t.started_at,'finished_at',t.finished_at,'result',t.result,'error',t.error) FROM tasks t WHERE `+visible.task+` ORDER BY t.created_at,t.id`, append([]any(nil), args...)); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(out, `,"task_dependencies":`); err != nil {
 		return err
 	}
-	if err := writeRows(ctx, tx, out, &counts.Dependencies, `SELECT json_object('task_id',d.task_id,'dependency_task_id',d.dependency_task_id,'status',d.status,'created_at',d.created_at) FROM task_dependencies d JOIN tasks t ON t.id=d.task_id AND t.workspace_id=d.workspace_id JOIN tasks dep ON dep.id=d.dependency_task_id AND dep.workspace_id=d.workspace_id WHERE d.workspace_id=?1 AND `+visible.task+` AND `+visible.taskOther+` ORDER BY d.task_id,d.dependency_task_id`, append([]any(nil), args...)); err != nil {
+	if err := writeRows(ctx, tx, out, &counts.Dependencies, `SELECT json_object('task_id',d.task_id,'dependency_task_id',d.dependency_task_id,'status',d.status,'created_at',d.created_at) FROM task_dependencies d JOIN tasks t ON t.id=d.task_id JOIN tasks dep ON dep.id=d.dependency_task_id WHERE `+visible.task+` AND `+visible.taskOther+` ORDER BY d.task_id,d.dependency_task_id`, append([]any(nil), args...)); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(out, `,"task_entries":`); err != nil {
 		return err
 	}
-	if err := writeRows(ctx, tx, out, &counts.TaskEntries, `SELECT json_object('id',e.id,'task_id',e.task_id,'kind',e.kind,'content',e.content,'created_at',e.created_at) FROM task_entries e JOIN tasks t ON t.id=e.task_id AND t.workspace_id=e.workspace_id WHERE e.workspace_id=?1 AND `+visible.taskOnT+` ORDER BY e.created_at,e.id`, append([]any(nil), args...)); err != nil {
+	if err := writeRows(ctx, tx, out, &counts.TaskEntries, `SELECT json_object('id',e.id,'task_id',e.task_id,'kind',e.kind,'content',e.content,'created_at',e.created_at) FROM task_entries e JOIN tasks t ON t.id=e.task_id WHERE `+visible.taskOnT+` ORDER BY e.created_at,e.id`, append([]any(nil), args...)); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(out, `,"approvals":`); err != nil {
 		return err
 	}
-	if err := writeRows(ctx, tx, out, &counts.Approvals, `SELECT json_object('id',a.id,'task_id',a.task_id,'task_version',a.task_version,'status',a.status,'prompt',a.prompt,'version',a.version,'created_at',a.created_at,'expires_at',a.expires_at) FROM approvals a JOIN tasks t ON t.id=a.task_id AND t.workspace_id=a.workspace_id WHERE a.workspace_id=?1 AND `+visible.taskOnT+` ORDER BY a.created_at,a.id`, append([]any(nil), args...)); err != nil {
+	if err := writeRows(ctx, tx, out, &counts.Approvals, `SELECT json_object('id',a.id,'task_id',a.task_id,'task_version',a.task_version,'status',a.status,'prompt',a.prompt,'version',a.version,'created_at',a.created_at,'expires_at',a.expires_at) FROM approvals a JOIN tasks t ON t.id=a.task_id WHERE `+visible.taskOnT+` ORDER BY a.created_at,a.id`, append([]any(nil), args...)); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(out, `,"runs":`); err != nil {
 		return err
 	}
-	if err := writeRows(ctx, tx, out, &counts.Runs, `SELECT json_object('id',r.id,'task_id',r.task_id,'attempt_id',r.attempt_id,'status',r.status,'desired_control',r.desired_control,'control_version',r.control_version,'started_at',r.started_at,'stopped_at',r.stopped_at) FROM runs r JOIN tasks t ON t.id=r.task_id AND t.workspace_id=r.workspace_id WHERE r.workspace_id=?1 AND `+visible.taskOnT+` ORDER BY r.started_at,r.id`, append([]any(nil), args...)); err != nil {
+	if err := writeRows(ctx, tx, out, &counts.Runs, `SELECT json_object('id',r.id,'task_id',r.task_id,'attempt_id',r.attempt_id,'status',r.status,'desired_control',r.desired_control,'control_version',r.control_version,'started_at',r.started_at,'stopped_at',r.stopped_at) FROM runs r JOIN tasks t ON t.id=r.task_id WHERE `+visible.taskOnT+` ORDER BY r.started_at,r.id`, append([]any(nil), args...)); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(out, `,"evidence":`); err != nil {
 		return err
 	}
-	if err := writeRows(ctx, tx, out, &counts.Evidence, `SELECT json_object('id',e.id,'task_id',e.task_id,'run_id',CASE WHEN EXISTS(SELECT 1 FROM runs er WHERE er.workspace_id=e.workspace_id AND er.id=e.run_id AND er.task_id=e.task_id) THEN coalesce(e.run_id,'') ELSE '' END,'kind',e.kind,'summary',e.summary,'source',e.source,'created_at',e.created_at,'verified',e.verified) FROM evidence e JOIN tasks t ON t.id=e.task_id AND t.workspace_id=e.workspace_id WHERE e.workspace_id=?1 AND `+visible.taskOnT+` ORDER BY e.created_at,e.id`, append([]any(nil), args...)); err != nil {
+	if err := writeRows(ctx, tx, out, &counts.Evidence, `SELECT json_object('id',e.id,'task_id',e.task_id,'run_id',CASE WHEN EXISTS(SELECT 1 FROM runs er WHERE er.id=e.run_id AND er.task_id=e.task_id) THEN coalesce(e.run_id,'') ELSE '' END,'kind',e.kind,'summary',e.summary,'source',e.source,'created_at',e.created_at,'verified',e.verified) FROM evidence e JOIN tasks t ON t.id=e.task_id WHERE `+visible.taskOnT+` ORDER BY e.created_at,e.id`, append([]any(nil), args...)); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(out, `,"voice_associations":`); err != nil {
 		return err
 	}
-	if err := writeRows(ctx, tx, out, &counts.VoiceLinks, `SELECT json_object('session_id',l.session_id,'generation',l.generation,'turn_id',l.turn_id,'turn_revision',l.turn_revision,'task_id',l.task_id,'linked_at',l.linked_at) FROM voice_task_links l JOIN tasks t ON t.workspace_id=l.workspace_id AND t.id=l.task_id WHERE l.workspace_id=?1 AND `+visible.taskOnT+` ORDER BY l.linked_at,l.session_id,l.turn_id`, append([]any(nil), args...)); err != nil {
+	if err := writeRows(ctx, tx, out, &counts.VoiceLinks, `SELECT json_object('session_id',l.session_id,'generation',l.generation,'turn_id',l.turn_id,'turn_revision',l.turn_revision,'task_id',l.task_id,'linked_at',l.linked_at) FROM voice_task_links l JOIN tasks t ON t.id=l.task_id WHERE `+visible.taskOnT+` ORDER BY l.linked_at,l.session_id,l.turn_id`, append([]any(nil), args...)); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(out, `,"voice_result_deliveries":`); err != nil {
@@ -544,7 +544,7 @@ func writeExportDocument(ctx context.Context, tx *sql.Tx, out io.Writer, p contr
 		if _, err := io.WriteString(out, `[]`); err != nil {
 			return err
 		}
-	} else if err := writeRows(ctx, tx, out, &counts.VoiceResults, `SELECT json_object('entry_id',d.entry_id,'task_id',d.task_id,'run_id',d.run_id,'status',d.status,'attempts',d.attempts,'last_error_code',d.last_error_code,'voice_session_id',d.voice_session_id,'generation',d.generation,'created_at',d.created_at,'updated_at',d.updated_at) FROM voice_result_deliveries d JOIN tasks t ON t.workspace_id=d.workspace_id AND t.id=d.task_id WHERE d.workspace_id=?1 AND `+visible.taskOnT+` ORDER BY d.created_at,d.entry_id`, append([]any(nil), args...)); err != nil {
+	} else if err := writeRows(ctx, tx, out, &counts.VoiceResults, `SELECT json_object('entry_id',d.entry_id,'task_id',d.task_id,'run_id',d.run_id,'status',d.status,'attempts',d.attempts,'last_error_code',d.last_error_code,'voice_session_id',d.voice_session_id,'generation',d.generation,'created_at',d.created_at,'updated_at',d.updated_at) FROM voice_result_deliveries d JOIN tasks t ON t.id=d.task_id WHERE `+visible.taskOnT+` ORDER BY d.created_at,d.entry_id`, append([]any(nil), args...)); err != nil {
 		return err
 	}
 	if err := writeVoiceTranscriptExport(ctx, tx, out, p, counts); err != nil {
@@ -553,8 +553,8 @@ func writeExportDocument(ctx context.Context, tx *sql.Tx, out io.Writer, p contr
 	if _, err := io.WriteString(out, `,"capability_authorizations":`); err != nil {
 		return err
 	}
-	capabilityQuery := `SELECT json_object('grant_id',g.grant_id,'deployment_id',d.deployment_id,'release_digest',g.release_digest,'scope_kind',g.scope_kind,'scope_id',g.scope_id,'principal_id',g.principal_id,'actions',CAST(g.actions AS TEXT),'budget',CAST(g.budget AS TEXT),'expires_at',g.expires_at,'authorized_by',g.authorized_by,'created_at',g.created_at,'desired_state',d.desired_state,'observed_state',d.observed_state,'version',d.version,'revoked_at',coalesce(g.revoked_at,'')) FROM capability_grants g JOIN capability_deployments d ON d.workspace_id=g.workspace_id AND d.deployment_id=g.deployment_id WHERE g.workspace_id=?1 AND ((?3='personal' AND g.principal_id=?2) OR (?3='workspace' AND (g.scope_kind='workspace' OR g.principal_id=?2 OR (g.scope_kind='project' AND EXISTS(SELECT 1 FROM projects p WHERE p.workspace_id=g.workspace_id AND p.id=g.scope_id AND ` + visible.project + `)) OR (g.scope_kind='task' AND EXISTS(SELECT 1 FROM tasks t WHERE t.workspace_id=g.workspace_id AND t.id=g.scope_id AND ` + visible.task + `))))) ORDER BY g.created_at,g.grant_id`
-	if err := writeRows(ctx, tx, out, &counts.Capabilities, capabilityQuery, []any{p.WorkspaceID, p.SubjectID, scope}); err != nil {
+	capabilityQuery := `SELECT json_object('grant_id',g.grant_id,'deployment_id',d.deployment_id,'release_digest',g.release_digest,'scope_kind',g.scope_kind,'scope_id',g.scope_id,'principal_id',g.principal_id,'actions',CAST(g.actions AS TEXT),'budget',CAST(g.budget AS TEXT),'expires_at',g.expires_at,'authorized_by',g.authorized_by,'created_at',g.created_at,'desired_state',d.desired_state,'observed_state',d.observed_state,'version',d.version,'revoked_at',coalesce(g.revoked_at,'')) FROM capability_grants g JOIN capability_deployments d ON d.deployment_id=g.deployment_id WHERE ` + exportCapabilityVisibilityPredicate() + ` ORDER BY g.created_at,g.grant_id`
+	if err := writeRows(ctx, tx, out, &counts.Capabilities, capabilityQuery, []any{p.SubjectID, scope}); err != nil {
 		return err
 	}
 	_, err := io.WriteString(out, `}`)
@@ -563,12 +563,17 @@ func writeExportDocument(ctx context.Context, tx *sql.Tx, out io.Writer, p contr
 
 type visibility struct{ project, task, taskOther, taskOnT string }
 
+func exportCapabilityVisibilityPredicate() string {
+	visible := exportVisibilityPredicate()
+	return `((?2='personal' AND g.principal_id=?1) OR (?2='instance' AND ((g.scope_kind='instance' AND g.authorized_by=?1) OR g.principal_id=?1 OR (g.scope_kind='project' AND EXISTS(SELECT 1 FROM projects p WHERE p.id=g.scope_id AND ` + visible.project + `)) OR (g.scope_kind='task' AND EXISTS(SELECT 1 FROM tasks t WHERE t.id=g.scope_id AND ` + visible.task + `)))))`
+}
+
 func exportVisibilityPredicate() visibility {
 	return visibility{
-		project:   `(p.owner_subject_id=?2)`,
-		task:      `(t.owner_subject_id=?2)`,
-		taskOther: `(dep.owner_subject_id=?2)`,
-		taskOnT:   `(t.owner_subject_id=?2)`}
+		project:   `(p.owner_subject_id=?1)`,
+		task:      `(t.owner_subject_id=?1)`,
+		taskOther: `(dep.owner_subject_id=?1)`,
+		taskOnT:   `(t.owner_subject_id=?1)`}
 }
 
 func writeRows(ctx context.Context, tx *sql.Tx, out io.Writer, target *int64, query string, args []any) error {

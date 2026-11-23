@@ -20,41 +20,41 @@ import (
 
 var uiRetryJitter = rand.Float64
 
-func (s *Service) createRegisterUIJobTx(ctx context.Context, tx *sql.Tx, turn, workspace, owner, request, at string) error {
+func (s *Service) createRegisterUIJobTx(ctx context.Context, tx *sql.Tx, turn, owner, request, at string) error {
 	id, err := randomID()
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,voice_turn_id,request,created_at,updated_at) VALUES(?,?,?,'register',?,?,?,?)`, id, workspace, owner, turn, request, at, at); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO ui_requests(id,owner_subject_id,source,voice_turn_id,request,created_at,updated_at) VALUES(?,?,'register',?,?,?,?)`, id, owner, turn, request, at, at); err != nil {
 		return err
 	}
-	return s.insertUIJobTx(ctx, tx, workspace, owner, "register", turn, id, at)
+	return s.insertUIJobTx(ctx, tx, owner, "register", turn, id, at)
 }
-func (s *Service) insertUIJobTx(ctx context.Context, tx *sql.Tx, w, o, kind, key, request, at string) error {
+func (s *Service) insertUIJobTx(ctx context.Context, tx *sql.Tx, o, kind, key, request, at string) error {
 	id, err := randomID()
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, id, w, o, kind, kind+":"+key, request, at, at, at)
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO ui_jobs(id,owner_subject_id,kind,dedupe_key,ui_request_id,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, id, o, kind, kind+":"+key, request, at, at, at)
 	return err
 }
 
-// consumeUITaskEvents uses workspace-local cursors independently of result delivery.
+// consumeUITaskEvents uses an instance-local cursor independently of result delivery.
 func (s *Service) consumeUITaskEvents(ctx context.Context) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO ui_task_cursor(workspace_id) SELECT id FROM workspaces`); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO ui_task_cursor(singleton) VALUES(1)`); err != nil {
 		return
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT e.workspace_id,e.cursor,e.aggregate_id,e.payload,e.event_type FROM events e JOIN ui_task_cursor c ON c.workspace_id=e.workspace_id WHERE e.event_type IN ('task.assistant_message','run.worker_question') AND e.cursor>c.last_cursor ORDER BY e.workspace_id,e.cursor LIMIT ?`, s.limits.Int("ui_event_sweep_rows"))
+	rows, err := tx.QueryContext(ctx, `SELECT e.cursor,e.aggregate_id,e.payload,e.event_type FROM events e JOIN ui_task_cursor c ON c.singleton=1 WHERE e.event_type IN ('task.assistant_message','run.worker_question') AND e.cursor>c.last_cursor ORDER BY e.cursor LIMIT ?`, s.limits.Int("ui_event_sweep_rows"))
 	if err != nil {
 		return
 	}
 	type event struct {
-		w, task string
+		task    string
 		kind    string
 		cursor  int64
 		payload []byte
@@ -62,7 +62,7 @@ func (s *Service) consumeUITaskEvents(ctx context.Context) {
 	var events []event
 	for rows.Next() {
 		var e event
-		if rows.Scan(&e.w, &e.cursor, &e.task, &e.payload, &e.kind) != nil {
+		if rows.Scan(&e.cursor, &e.task, &e.payload, &e.kind) != nil {
 			rows.Close()
 			return
 		}
@@ -85,13 +85,13 @@ func (s *Service) consumeUITaskEvents(ctx context.Context) {
 			continue
 		}
 		var owner string
-		err = tx.QueryRowContext(ctx, `SELECT owner_subject_id FROM tasks WHERE workspace_id=? AND id=? AND ui_display=1`, e.w, e.task).Scan(&owner)
+		err = tx.QueryRowContext(ctx, `SELECT owner_subject_id FROM tasks WHERE id=? AND ui_display=1`, e.task).Scan(&owner)
 		if err != nil && err != sql.ErrNoRows {
 			return
 		}
 		var ready bool
 		if err == nil {
-			if err = tx.QueryRowContext(ctx, `SELECT trim(coalesce(result,''))<>'' OR interaction_state='awaiting_message' FROM tasks WHERE workspace_id=? AND id=?`, e.w, e.task).Scan(&ready); err != nil {
+			if err = tx.QueryRowContext(ctx, `SELECT trim(coalesce(result,''))<>'' OR interaction_state='awaiting_message' FROM tasks WHERE id=?`, e.task).Scan(&ready); err != nil {
 				return
 			}
 		}
@@ -104,7 +104,7 @@ func (s *Service) consumeUITaskEvents(ctx context.Context) {
 				return
 			}
 			if already {
-				if _, err = tx.ExecContext(ctx, `UPDATE ui_task_cursor SET last_cursor=? WHERE workspace_id=? AND last_cursor<?`, e.cursor, e.w, e.cursor); err != nil {
+				if _, err = tx.ExecContext(ctx, `UPDATE ui_task_cursor SET last_cursor=? WHERE singleton=1 AND last_cursor<?`, e.cursor, e.cursor); err != nil {
 					return
 				}
 				continue
@@ -114,22 +114,22 @@ func (s *Service) consumeUITaskEvents(ctx context.Context) {
 			if x != nil {
 				return
 			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,task_id,created_at,updated_at) VALUES(?,?,?,'task',?,?,?)`, id, e.w, owner, e.task, at, at); err != nil {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO ui_requests(id,owner_subject_id,source,task_id,created_at,updated_at) VALUES(?,?,'task',?,?,?)`, id, owner, e.task, at, at); err != nil {
 				return
 			}
 			if e.kind == "task.assistant_message" {
 				if p.Payload.Run == "" || p.Payload.Entry == "" {
 					return
 				}
-				if err := pinUIResultTx(ctx, tx, e.w, owner, e.task, id, p.Payload.Entry, e.cursor); err != nil {
+				if err := pinUIResultTx(ctx, tx, owner, e.task, id, p.Payload.Entry, e.cursor); err != nil {
 					return
 				}
 			}
-			if err = s.insertUIJobTx(ctx, tx, e.w, owner, "task_entry", p.Payload.Entry, id, at); err != nil {
+			if err = s.insertUIJobTx(ctx, tx, owner, "task_entry", p.Payload.Entry, id, at); err != nil {
 				return
 			}
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE ui_task_cursor SET last_cursor=? WHERE workspace_id=? AND last_cursor<?`, e.cursor, e.w, e.cursor); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE ui_task_cursor SET last_cursor=? WHERE singleton=1 AND last_cursor<?`, e.cursor, e.cursor); err != nil {
 			return
 		}
 	}
@@ -137,22 +137,22 @@ func (s *Service) consumeUITaskEvents(ctx context.Context) {
 }
 
 type uiJob struct {
-	id, w, o, kind, key, request string
-	attempts                     int
+	id, o, kind, key, request string
+	attempts                  int
 }
 
 func (s *Service) dispatchUIJobs(ctx context.Context) {
 	if err := s.pruneUISurfaces(ctx); err != nil {
 		return
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts FROM ui_jobs WHERE status='pending' AND julianday(next_attempt_at)<=julianday(?) ORDER BY created_at,rowid LIMIT ?`, s.now().UTC().Format(time.RFC3339Nano), s.limits.Int("ui_job_sweep_rows"))
+	rows, err := s.db.QueryContext(ctx, `SELECT id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts FROM ui_jobs WHERE status='pending' AND julianday(next_attempt_at)<=julianday(?) ORDER BY created_at,rowid LIMIT ?`, s.now().UTC().Format(time.RFC3339Nano), s.limits.Int("ui_job_sweep_rows"))
 	if err != nil {
 		return
 	}
 	var jobs []uiJob
 	for rows.Next() {
 		var j uiJob
-		if rows.Scan(&j.id, &j.w, &j.o, &j.kind, &j.key, &j.request, &j.attempts) == nil {
+		if rows.Scan(&j.id, &j.o, &j.kind, &j.key, &j.request, &j.attempts) == nil {
 			jobs = append(jobs, j)
 		}
 	}
@@ -163,10 +163,10 @@ func (s *Service) dispatchUIJobs(ctx context.Context) {
 }
 func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 	var task string
-	if err := s.db.QueryRowContext(ctx, `SELECT coalesce(task_id,'') FROM ui_requests WHERE id=? AND workspace_id=? AND owner_subject_id=?`, j.request, j.w, j.o).Scan(&task); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT coalesce(task_id,'') FROM ui_requests WHERE id=? AND owner_subject_id=?`, j.request, j.o).Scan(&task); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT request FROM ui_requests WHERE workspace_id=? AND owner_subject_id=? AND request IS NOT NULL AND ((?<>'' AND task_id=?) OR (task_id IS NULL AND id=?)) ORDER BY created_at,rowid`, j.w, j.o, task, task, j.request)
+	rows, err := s.db.QueryContext(ctx, `SELECT request FROM ui_requests WHERE owner_subject_id=? AND request IS NOT NULL AND ((?<>'' AND task_id=?) OR (task_id IS NULL AND id=?)) ORDER BY created_at,rowid`, j.o, task, task, j.request)
 	if err != nil {
 		return nil, err
 	}
@@ -183,10 +183,10 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 	var facts *uictl.Task
 	if task != "" {
 		facts = &uictl.Task{TaskID: task}
-		if err = s.db.QueryRowContext(ctx, `SELECT status,interaction_question FROM tasks WHERE workspace_id=? AND owner_subject_id=? AND id=?`, j.w, j.o, task).Scan(&facts.Status, &facts.Question); err != nil {
+		if err = s.db.QueryRowContext(ctx, `SELECT status,interaction_question FROM tasks WHERE owner_subject_id=? AND id=?`, j.o, task).Scan(&facts.Status, &facts.Question); err != nil {
 			return nil, err
 		}
-		facts.Result, err = s.uiPinnedResult(ctx, j.w, j.o, task, j.request)
+		facts.Result, err = s.uiPinnedResult(ctx, j.o, task, j.request)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, err
 		}
@@ -203,7 +203,7 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 			facts.Result = nil
 		}
 		if facts.Question != "" {
-			err = s.db.QueryRowContext(ctx, `SELECT a.id FROM pending_runtime_actions a JOIN tasks t ON t.id=a.task_id AND t.workspace_id=a.workspace_id WHERE t.id=? AND t.workspace_id=? AND t.owner_subject_id=? AND t.interaction_state='awaiting_message' AND t.interaction_run_id=a.run_id AND t.interaction_action_digest=a.action_digest AND a.decision='' AND a.authorization_used=0 AND julianday(a.expires_at)>julianday(?) AND NOT EXISTS(SELECT 1 FROM task_question_answers b WHERE b.question_id=a.id)`, task, j.w, j.o, s.now().UTC().Format(time.RFC3339Nano)).Scan(&facts.QuestionID)
+			err = s.db.QueryRowContext(ctx, `SELECT a.id FROM pending_runtime_actions a JOIN tasks t ON t.id=a.task_id WHERE t.id=? AND t.owner_subject_id=? AND t.interaction_state='awaiting_message' AND t.interaction_run_id=a.run_id AND t.interaction_action_digest=a.action_digest AND a.decision='' AND a.authorization_used=0 AND julianday(a.expires_at)>julianday(?) AND NOT EXISTS(SELECT 1 FROM task_question_answers b WHERE b.question_id=a.id)`, task, j.o, s.now().UTC().Format(time.RFC3339Nano)).Scan(&facts.QuestionID)
 			if err != nil {
 				return nil, err
 			}
@@ -213,7 +213,7 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 		}
 	}
 	var screen uictl.Size
-	err = s.db.QueryRowContext(ctx, `SELECT width,height FROM ui_screens WHERE workspace_id=? AND owner_subject_id=?`, j.w, j.o).Scan(&screen.Width, &screen.Height)
+	err = s.db.QueryRowContext(ctx, `SELECT width,height FROM ui_screens WHERE owner_subject_id=?`, j.o).Scan(&screen.Width, &screen.Height)
 	if err == sql.ErrNoRows {
 		return uictl.BuildInput(requests, facts, nil, s.limits)
 	}
@@ -225,7 +225,7 @@ func (s *Service) uiInput(ctx context.Context, j uiJob) ([]byte, error) {
 func (s *Service) runUIJob(ctx context.Context, j uiJob) {
 	now := s.now().UTC()
 	stamp := now.Format(time.RFC3339Nano)
-	res, err := s.db.ExecContext(ctx, `UPDATE ui_jobs SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=? AND julianday(next_attempt_at)<=julianday(?) AND NOT EXISTS(SELECT 1 FROM ui_jobs earlier WHERE earlier.workspace_id=ui_jobs.workspace_id AND earlier.owner_subject_id=ui_jobs.owner_subject_id AND earlier.status='pending' AND earlier.rowid<ui_jobs.rowid)`, now.Add(30*time.Second).Format(time.RFC3339Nano), stamp, j.id, j.attempts, stamp)
+	res, err := s.db.ExecContext(ctx, `UPDATE ui_jobs SET attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE id=? AND status='pending' AND attempts=? AND julianday(next_attempt_at)<=julianday(?) AND NOT EXISTS(SELECT 1 FROM ui_jobs earlier WHERE earlier.owner_subject_id=ui_jobs.owner_subject_id AND earlier.status='pending' AND earlier.rowid<ui_jobs.rowid)`, now.Add(30*time.Second).Format(time.RFC3339Nano), stamp, j.id, j.attempts, stamp)
 	if err != nil {
 		return
 	}
@@ -343,9 +343,9 @@ var errUIState = errors.New("ui_state_invalid")
 // No database transaction spans gateway HTTP; other processes are not fenced.
 var uiOwnerLocks [64]sync.Mutex
 
-func (s *Service) lockUIOwner(workspace, owner string) func() {
+func (s *Service) lockUIOwner(owner string) func() {
 	h := fnv.New64a()
-	_, _ = h.Write([]byte(workspace + "\x00" + owner))
+	_, _ = h.Write([]byte(owner))
 	mu := &uiOwnerLocks[h.Sum64()%uint64(len(uiOwnerLocks))]
 	mu.Lock()
 	return mu.Unlock
@@ -360,7 +360,7 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 	if mode != uictl.Show {
 		o.Feedback = ""
 	}
-	unlock := s.lockUIOwner(j.w, j.o)
+	unlock := s.lockUIOwner(j.o)
 	defer unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -377,7 +377,7 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 	}
 	if facts != nil {
 		var currentResult string
-		if err = tx.QueryRowContext(ctx, `SELECT result FROM tasks WHERE id=? AND workspace_id=? AND owner_subject_id=?`, facts.TaskID, j.w, j.o).Scan(&currentResult); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT result FROM tasks WHERE id=? AND owner_subject_id=?`, facts.TaskID, j.o).Scan(&currentResult); err != nil {
 			return err
 		}
 		expected := ""
@@ -394,7 +394,7 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 			return errUIState
 		}
 		var current bool
-		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pending_runtime_actions a JOIN tasks t ON t.id=a.task_id AND t.workspace_id=a.workspace_id WHERE a.id=? AND t.id=? AND t.workspace_id=? AND t.owner_subject_id=? AND t.interaction_state='awaiting_message' AND t.interaction_run_id=a.run_id AND t.interaction_action_digest=a.action_digest AND a.decision='' AND a.authorization_used=0 AND julianday(a.expires_at)>julianday(?) AND NOT EXISTS(SELECT 1 FROM task_question_answers b WHERE b.question_id=a.id))`, facts.QuestionID, facts.TaskID, j.w, j.o, s.now().UTC().Format(time.RFC3339Nano)).Scan(&current); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pending_runtime_actions a JOIN tasks t ON t.id=a.task_id WHERE a.id=? AND t.id=? AND t.owner_subject_id=? AND t.interaction_state='awaiting_message' AND t.interaction_run_id=a.run_id AND t.interaction_action_digest=a.action_digest AND a.decision='' AND a.authorization_used=0 AND julianday(a.expires_at)>julianday(?) AND NOT EXISTS(SELECT 1 FROM task_question_answers b WHERE b.question_id=a.id))`, facts.QuestionID, facts.TaskID, j.o, s.now().UTC().Format(time.RFC3339Nano)).Scan(&current); err != nil {
 			return err
 		}
 		if !current {
@@ -419,7 +419,7 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 		width, height = o.Size.Width, o.Size.Height
 	}
 	// Plain INSERT ensures even an ID collision can never replace another document.
-	_, err = tx.ExecContext(ctx, `INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,request_id,created_at,updated_at,width,height) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, j.w, j.o, o.SurfaceID, o.Container, string(data), version, j.request, at, at, width, height)
+	_, err = tx.ExecContext(ctx, `INSERT INTO ui_surfaces(owner_subject_id,surface_id,container,state_json,version,request_id,created_at,updated_at,width,height) VALUES(?,?,?,?,?,?,?,?,?,?)`, j.o, o.SurfaceID, o.Container, string(data), version, j.request, at, at, width, height)
 	if err != nil {
 		return err
 	}
@@ -438,7 +438,7 @@ func (s *Service) commitUIJob(ctx context.Context, j uiJob, o uictl.Output, fact
 	if s.uiEventServer == nil {
 		return errors.New("event_server_missing")
 	}
-	if err = s.uiEventServer.AppendEventsTx(ctx, tx, contracts.Principal{WorkspaceID: j.w, SubjectID: j.o}, []contracts.Event{{Type: "ui.surface", AggregateType: "ui_surface", AggregateID: o.SurfaceID, AggregateVersion: version, Payload: payload, OccurredAt: s.now()}}); err != nil {
+	if err = s.uiEventServer.AppendEventsTx(ctx, tx, contracts.Principal{SubjectID: j.o}, []contracts.Event{{Type: "ui.surface", AggregateType: "ui_surface", AggregateID: o.SurfaceID, AggregateVersion: version, Payload: payload, OccurredAt: s.now()}}); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE ui_jobs SET status='done',updated_at=? WHERE id=?`, at, j.id); err != nil {
@@ -457,7 +457,7 @@ func (s *Service) uiMode(ctx context.Context, j uiJob, facts *uictl.Task) (uictl
 		return uictl.TaskQuestion, nil
 	}
 	var route string
-	err := s.db.QueryRowContext(ctx, `SELECT coalesce(v.exits,'') FROM ui_requests r LEFT JOIN voice_turns v ON v.id=r.voice_turn_id WHERE r.id=? AND r.workspace_id=? AND r.owner_subject_id=?`, j.request, j.w, j.o).Scan(&route)
+	err := s.db.QueryRowContext(ctx, `SELECT coalesce(v.exits,'') FROM ui_requests r LEFT JOIN voice_turns v ON v.id=r.voice_turn_id WHERE r.id=? AND r.owner_subject_id=?`, j.request, j.o).Scan(&route)
 	if err != nil {
 		return "", err
 	}
@@ -492,7 +492,7 @@ func (s *Service) failUIJob(ctx context.Context, j uiJob, code string, retry boo
 	if _, err = tx.ExecContext(ctx, `UPDATE ui_requests SET status='failed',updated_at=? WHERE id=?`, at, j.request); err != nil {
 		return
 	}
-	if err = s.queueUIFeedbackTx(ctx, tx, j.request, j.w, j.o, stewardErrorSpeech, at); err != nil {
+	if err = s.queueUIFeedbackTx(ctx, tx, j.request, j.o, stewardErrorSpeech, at); err != nil {
 		return
 	}
 	if j.kind == "register" {

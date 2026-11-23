@@ -102,7 +102,7 @@ func TestCompatibilityAcceptExistingResult(t *testing.T) {
 	s, closeStore := budgetTestServer(t, contracts.RunBudgetSnapshot{})
 	defer closeStore()
 	ctx := context.Background()
-	if _, err := s.store.DB().Exec(`UPDATE tasks SET status='awaiting_user',owner_subject_id='budget-owner',interaction_state='awaiting_message'; UPDATE runs SET status='verification_pending'; INSERT INTO evidence(id,workspace_id,task_id,run_id,kind,summary,source,provenance,created_at,verified,verifier_id) VALUES('legacy','default','budget-task','budget-run','agent_result','done','runner','{}','2026-01-01T00:00:00Z',0,'')`); err != nil {
+	if _, err := s.store.DB().Exec(`UPDATE tasks SET status='awaiting_user',owner_subject_id='budget-owner',interaction_state='awaiting_message'; UPDATE runs SET status='verification_pending'; INSERT INTO evidence(id,task_id,run_id,kind,summary,source,provenance,created_at,verified,verifier_id) VALUES('legacy','budget-task','budget-run','agent_result','done','runner','{}','2026-01-01T00:00:00Z',0,'')`); err != nil {
 		t.Fatal(err)
 	}
 	tx, err := s.store.DB().BeginTx(ctx, nil)
@@ -112,7 +112,7 @@ func TestCompatibilityAcceptExistingResult(t *testing.T) {
 	defer tx.Rollback()
 	version := int64(1)
 	payload, _ := json.Marshal(acceptResultPayload{TaskID: "budget-task", RunID: "budget-run", Decision: "accept"})
-	result, events, err := s.commandTaskAcceptResult(ctx, tx, CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "budget-owner", DeviceID: "budget-device", Scopes: []string{"client:command"}}, AcceptedAt: time.Now().UTC()}, contracts.CommandRequest{ExpectedVersion: &version, Payload: payload})
+	result, events, err := s.commandTaskAcceptResult(ctx, tx, CommandContext{Principal: contracts.Principal{SubjectID: "budget-owner", DeviceID: "budget-device", Scopes: []string{"client:command"}}, AcceptedAt: time.Now().UTC()}, contracts.CommandRequest{ExpectedVersion: &version, Payload: payload})
 	if err != nil {
 		t.Fatal(err)
 	}

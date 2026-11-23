@@ -78,7 +78,7 @@ func TestCapabilityRevocationFencesClaimsAndRequiresProvenCleanup(t *testing.T) 
 	if _, err = store.DB().ExecContext(t.Context(), `UPDATE capability_deployments SET observed_state='stopped' WHERE deployment_id=?`, deploymentID); err != nil {
 		t.Fatal(err)
 	}
-	authorized := contracts.CommandRequest{Kind: "capability.deployment.authorize", ExpectedVersion: &version, Payload: mustJSON(t, map[string]any{"deployment_id": deploymentID, "scope_kind": "workspace", "actions": []string{"start"}, "budget": budget, "expires_at": time.Now().UTC().Add(time.Hour)})}
+	authorized := contracts.CommandRequest{Kind: "capability.deployment.authorize", ExpectedVersion: &version, Payload: mustJSON(t, map[string]any{"deployment_id": deploymentID, "scope_kind": "instance", "actions": []string{"start"}, "budget": budget, "expires_at": time.Now().UTC().Add(time.Hour)})}
 	authorizeResponse := reviewRequest(handler, http.MethodPost, "/v1/commands", deviceToken, "rev-authorize", authorized)
 	if authorizeResponse.Code != http.StatusOK || json.Unmarshal(authorizeResponse.Body.Bytes(), &receipt) != nil {
 		t.Fatalf("deployment authorize=%d %s", authorizeResponse.Code, authorizeResponse.Body.String())
@@ -93,15 +93,15 @@ func TestCapabilityRevocationFencesClaimsAndRequiresProvenCleanup(t *testing.T) 
 		t.Fatal(err)
 	}
 	triggerAt := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err = store.DB().ExecContext(t.Context(), `INSERT INTO capability_trigger_runs(trigger_run_id,trigger_id,workspace_id,deployment_id,trigger_key,dedupe_key,event_payload,mode,state,created_at,updated_at) VALUES('queued-before-revoke',?,?,?,?,'dedupe-before-revoke','{}','program','queued',?,?)`, triggerID, "default", deploymentID, triggerKey, triggerAt, triggerAt); err != nil {
+	if _, err = store.DB().ExecContext(t.Context(), `INSERT INTO capability_trigger_runs(trigger_run_id,trigger_id,deployment_id,trigger_key,dedupe_key,event_payload,mode,state,created_at,updated_at) VALUES('queued-before-revoke',?,?,?,'dedupe-before-revoke','{}','program','queued',?,?)`, triggerID, deploymentID, triggerKey, triggerAt, triggerAt); err != nil {
 		t.Fatal(err)
 	}
 	ownerRevoke := contracts.CommandRequest{Kind: "capability.deployment.revoke", ExpectedVersion: &version, Payload: mustJSON(t, map[string]any{"deployment_id": deploymentID})}
-	_, err = server.ExecuteCommand(t.Context(), contracts.Principal{WorkspaceID: "default", SubjectID: "different-owner", DeviceID: "other-device", Scopes: []string{"client:command", "capability:deployment:revoke"}}, "rev-not-owner", ownerRevoke, []byte("owner-negative"))
+	_, err = server.ExecuteCommand(t.Context(), contracts.Principal{SubjectID: "different-owner", DeviceID: "other-device", Scopes: []string{"client:command", "capability:deployment:revoke"}}, "rev-not-owner", ownerRevoke, []byte("owner-negative"))
 	if apiErr, ok := err.(*control.APIError); !ok || apiErr.Status != http.StatusUnauthorized {
 		t.Fatalf("non-owner revocation error=%v, want unauthenticated owner session", err)
 	}
-	_, err = server.ExecuteCommand(t.Context(), contracts.Principal{WorkspaceID: "default", SubjectID: "different-subject", DeviceID: "other-device", Scopes: []string{"client:command"}}, "rev-no-scope", ownerRevoke, []byte("scope-negative"))
+	_, err = server.ExecuteCommand(t.Context(), contracts.Principal{SubjectID: "different-subject", DeviceID: "other-device", Scopes: []string{"client:command"}}, "rev-no-scope", ownerRevoke, []byte("scope-negative"))
 	if apiErr, ok := err.(*control.APIError); !ok || apiErr.Status != http.StatusUnauthorized {
 		t.Fatalf("revocation without scope error=%v, want unauthenticated owner session", err)
 	}
@@ -241,7 +241,7 @@ func TestCapabilityRevocationFencesClaimsAndRequiresProvenCleanup(t *testing.T) 
 		t.Fatalf("exact cleanup receipt replay after fresh authorization=%d %s, want accepted", cleanupReceiptReplay.Code, cleanupReceiptReplay.Body.String())
 	}
 	version = receipt.ResourceVersion
-	newAuthorize := reviewRequest(handler, http.MethodPost, "/v1/commands", deviceToken, "rev-new-authorize", contracts.CommandRequest{Kind: "capability.deployment.authorize", ExpectedVersion: &version, Payload: mustJSON(t, map[string]any{"deployment_id": deploymentID, "scope_kind": "workspace", "actions": []string{"install"}, "budget": budget, "expires_at": time.Now().UTC().Add(time.Hour)})})
+	newAuthorize := reviewRequest(handler, http.MethodPost, "/v1/commands", deviceToken, "rev-new-authorize", contracts.CommandRequest{Kind: "capability.deployment.authorize", ExpectedVersion: &version, Payload: mustJSON(t, map[string]any{"deployment_id": deploymentID, "scope_kind": "instance", "actions": []string{"install"}, "budget": budget, "expires_at": time.Now().UTC().Add(time.Hour)})})
 	if newAuthorize.Code != http.StatusOK || json.Unmarshal(newAuthorize.Body.Bytes(), &receipt) != nil {
 		t.Fatalf("fresh grant authorization=%d %s", newAuthorize.Code, newAuthorize.Body.String())
 	}

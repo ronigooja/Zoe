@@ -28,8 +28,8 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = value
 	}
-	query := `SELECT id,kind,title,body,aggregate_type,aggregate_id,source_event_id,created_at,read_at FROM notifications WHERE workspace_id=? AND subject_id=?`
-	args := []any{p.WorkspaceID, p.SubjectID}
+	query := `SELECT id,kind,title,body,aggregate_type,aggregate_id,source_event_id,created_at,read_at FROM notifications WHERE subject_id=?`
+	args := []any{p.SubjectID}
 	if r.URL.Query().Get("unread") == "true" {
 		query += ` AND read_at IS NULL`
 	} else if value := r.URL.Query().Get("unread"); value != "" && value != "false" {
@@ -93,7 +93,7 @@ func enqueueEventNotification(ctx context.Context, tx *sql.Tx, e contracts.Event
 		return errors.New("notification event is missing task identity")
 	}
 	var subjectID string
-	err := tx.QueryRowContext(ctx, `SELECT d.subject_id FROM tasks t JOIN actors d ON d.id=t.created_by_device_id WHERE t.id=? AND t.workspace_id=?`, payload.TaskID, e.WorkspaceID).Scan(&subjectID)
+	err := tx.QueryRowContext(ctx, `SELECT d.subject_id FROM tasks t JOIN actors d ON d.id=t.created_by_device_id WHERE t.id=?`, payload.TaskID).Scan(&subjectID)
 	if err != nil {
 		return err
 	}
@@ -101,14 +101,14 @@ func enqueueEventNotification(ctx context.Context, tx *sql.Tx, e contracts.Event
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO notifications(id,workspace_id,subject_id,source_event_id,aggregate_type,aggregate_id,kind,title,body,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, id, e.WorkspaceID, subjectID, e.EventID, "task", payload.TaskID, kind, title, body, e.OccurredAt.UTC().Format(time.RFC3339Nano))
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO notifications(id,subject_id,source_event_id,aggregate_type,aggregate_id,kind,title,body,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, id, subjectID, e.EventID, "task", payload.TaskID, kind, title, body, e.OccurredAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return err
 	}
-	if err = tx.QueryRowContext(ctx, `SELECT id FROM notifications WHERE workspace_id=? AND subject_id=? AND source_event_id=?`, e.WorkspaceID, subjectID, e.EventID).Scan(&id); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM notifications WHERE subject_id=? AND source_event_id=?`, subjectID, e.EventID).Scan(&id); err != nil {
 		return err
 	}
-	return enqueuePushDeliveries(ctx, tx, id, e.WorkspaceID, subjectID, e.EventID)
+	return enqueuePushDeliveries(ctx, tx, id, subjectID, e.EventID)
 }
 
 type markNotificationReadPayload struct {
@@ -125,7 +125,7 @@ func (s *Server) commandNotificationMarkRead(ctx context.Context, tx *sql.Tx, c 
 		return contracts.CommandResult{}, nil, apiError(http.StatusBadRequest, "invalid_request", "notification_id is required", nil)
 	}
 	var readAt sql.NullString
-	err := tx.QueryRowContext(ctx, `SELECT read_at FROM notifications WHERE id=? AND workspace_id=? AND subject_id=?`, p.NotificationID, c.Principal.WorkspaceID, c.Principal.SubjectID).Scan(&readAt)
+	err := tx.QueryRowContext(ctx, `SELECT read_at FROM notifications WHERE id=? AND subject_id=?`, p.NotificationID, c.Principal.SubjectID).Scan(&readAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(http.StatusNotFound, "not_found", "notification not found", nil)
 	}
@@ -136,7 +136,7 @@ func (s *Server) commandNotificationMarkRead(ctx context.Context, tx *sql.Tx, c 
 		return contracts.CommandResult{ResourceType: "notification", ResourceID: p.NotificationID}, nil, nil
 	}
 	at := c.AcceptedAt.Format(time.RFC3339Nano)
-	if _, err = tx.ExecContext(ctx, `UPDATE notifications SET read_at=? WHERE id=? AND workspace_id=? AND subject_id=? AND read_at IS NULL`, at, p.NotificationID, c.Principal.WorkspaceID, c.Principal.SubjectID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE notifications SET read_at=? WHERE id=? AND subject_id=? AND read_at IS NULL`, at, p.NotificationID, c.Principal.SubjectID); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	return contracts.CommandResult{ResourceType: "notification", ResourceID: p.NotificationID}, []contracts.Event{event("notification.read", "notification", p.NotificationID, 1, map[string]string{"notification_id": p.NotificationID})}, nil

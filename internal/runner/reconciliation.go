@@ -307,7 +307,7 @@ func (e *Engine) reconciliationDockerSnapshot(ctx context.Context, docker Docker
 			}
 			// Persist only the public ownership labels, never arbitrary Docker labels.
 			proof.Labels = map[string]string{}
-			for _, key := range []string{"io.zoe.managed", "io.zoe.workspace", "io.zoe.deployment", "io.zoe.release", "io.zoe.fence", "io.zoe.attempt"} {
+			for _, key := range []string{"io.zoe.managed", "io.zoe.instance_lineage", "io.zoe.deployment", "io.zoe.release", "io.zoe.fence", "io.zoe.attempt"} {
 				proof.Labels[key] = labels[key]
 			}
 			preexistingIDs[id] = true
@@ -384,7 +384,7 @@ func (e *Engine) verifyUnrelatedCapabilityContainer(ctx context.Context, contain
 		return err
 	}
 	for _, claim := range claims {
-		if strings.TrimPrefix(container.Name, "/") != deploymentContainerName(claim.DeploymentID) {
+		if strings.TrimPrefix(container.Name, "/") != deploymentContainerName(claim.InstanceLineageID, claim.DeploymentID) {
 			continue
 		}
 		expected := deploymentLabels(claim)

@@ -33,7 +33,7 @@ class MemoryAPIError(Exception):
 
 
 def person_user_id(user: str) -> str:
-    """The caller's opaque person ID encodes workspace and owner, never a claim."""
+    """The caller's opaque person ID encodes instance lineage and owner, never a claim."""
     return "zoe-person-" + hashlib.sha256(user.encode("utf-8")).hexdigest()
 
 

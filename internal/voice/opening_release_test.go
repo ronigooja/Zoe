@@ -149,7 +149,7 @@ func TestOpeningReleaseDeferralFences(t *testing.T) {
 			case "not-pending":
 				r.exec(t, `UPDATE voice_result_deliveries SET status='delivered'`)
 			case "attempted":
-				r.exec(t, `INSERT INTO voice_result_checkpoints(entry_id,workspace_id,task_id,run_id,subject_id,content_hash,session_id,generation,gateway_session_id,media_generation) VALUES('entry-1','default','task-1','run-1','user-1',?,'opening',1,'gw-opening',1)`, resultHash("original result"))
+				r.exec(t, `INSERT INTO voice_result_checkpoints(entry_id,task_id,run_id,subject_id,content_hash,session_id,generation,gateway_session_id,media_generation) VALUES('entry-1','task-1','run-1','user-1',?,'opening',1,'gw-opening',1)`, resultHash("original result"))
 				r.exec(t, `INSERT INTO voice_result_chunks(entry_id,ordinal,delivery_id,content_hash,text,state) VALUES('entry-1',0,'chunk',?,'original result','attempted')`, resultHash("original result"))
 			case "inactive":
 				r.exec(t, `UPDATE voice_sessions SET state='allocating' WHERE id='opening'`)

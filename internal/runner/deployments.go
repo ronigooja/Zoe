@@ -118,7 +118,7 @@ func (e *DeploymentExecutor) Execute(ctx context.Context, claim contracts.Deploy
 		}
 		return e.reconcileOnly(opCtx, claim, obs)
 	}
-	container := deploymentContainerName(claim.DeploymentID)
+	container := deploymentContainerName(claim.InstanceLineageID, claim.DeploymentID)
 	labels := deploymentLabels(claim)
 	if claim.CleanupOnly {
 		return e.stopCleanupOnly(opCtx, claim, container, obs, now)
@@ -242,7 +242,7 @@ func deploymentClaimFingerprint(claim contracts.DeploymentClaim) (string, error)
 // was already started. It may inspect owned state, but never repeats a Docker
 // write such as start, stop, rm, pull, or run.
 func (e *DeploymentExecutor) reconcileOnly(ctx context.Context, claim contracts.DeploymentClaim, obs contracts.DeploymentObservation) contracts.DeploymentObservation {
-	name := deploymentContainerName(claim.DeploymentID)
+	name := deploymentContainerName(claim.InstanceLineageID, claim.DeploymentID)
 	body, err := e.Docker.Run(ctx, "inspect", "--format", "{{json .}}", name)
 	if errors.Is(err, ErrDockerObjectNotFound) {
 		if claim.DesiredOp == "uninstall" {
@@ -358,7 +358,7 @@ func (e *DeploymentExecutor) reconcileCleanupOnly(ctx context.Context, claim con
 }
 
 func (e *DeploymentExecutor) reconcileCleanupOnlyExpected(ctx context.Context, claim contracts.DeploymentClaim, obs contracts.DeploymentObservation, expectedID string) contracts.DeploymentObservation {
-	name := deploymentContainerName(claim.DeploymentID)
+	name := deploymentContainerName(claim.InstanceLineageID, claim.DeploymentID)
 	body, err := e.Docker.Run(ctx, "inspect", "--format", "{{json .}}", name)
 	if errors.Is(err, ErrDockerObjectNotFound) {
 		if expectedID != "" {
@@ -449,13 +449,13 @@ func (e *DeploymentExecutor) install(ctx context.Context, claim contracts.Deploy
 		return errors.New("could not establish whether an existing deployment container is present")
 	}
 	for _, mount := range claim.Manifest.Mounts {
-		volume := deploymentVolumeName(claim.WorkspaceID, mount.VolumeID)
-		if _, err := e.Docker.Run(ctx, "volume", "create", "--label", "io.zoe.workspace="+labelValue(claim.WorkspaceID), "--label", "io.zoe.volume="+labelValue(mount.VolumeID), volume); err != nil {
+		volume := deploymentVolumeName(claim.InstanceLineageID, mount.VolumeID)
+		if _, err := e.Docker.Run(ctx, "volume", "create", "--label", "io.zoe.instance_lineage="+labelValue(claim.InstanceLineageID), "--label", "io.zoe.volume="+labelValue(mount.VolumeID), volume); err != nil {
 			return fmt.Errorf("create managed volume: %w", err)
 		}
 		var got map[string]string
 		body, err := e.Docker.Run(ctx, "volume", "inspect", "--format", "{{json .Labels}}", volume)
-		if err != nil || json.Unmarshal(body, &got) != nil || got["io.zoe.workspace"] != labelValue(claim.WorkspaceID) || got["io.zoe.volume"] != labelValue(mount.VolumeID) {
+		if err != nil || json.Unmarshal(body, &got) != nil || got["io.zoe.instance_lineage"] != labelValue(claim.InstanceLineageID) || got["io.zoe.volume"] != labelValue(mount.VolumeID) {
 			return errors.New("volume ownership labels do not match authorized mount")
 		}
 	}
@@ -467,7 +467,7 @@ func (e *DeploymentExecutor) install(ctx context.Context, claim contracts.Deploy
 		args = append(args, "--label", key+"="+value)
 	}
 	for _, mount := range claim.Manifest.Mounts {
-		volume := deploymentVolumeName(claim.WorkspaceID, mount.VolumeID)
+		volume := deploymentVolumeName(claim.InstanceLineageID, mount.VolumeID)
 		arg := "type=volume,src=" + volume + ",dst=" + mount.Target
 		if mount.ReadOnly {
 			arg += ",readonly"
@@ -577,7 +577,7 @@ func (e *DeploymentExecutor) inspectPaused(ctx context.Context, name string, cla
 }
 
 func validateDeploymentClaim(c contracts.DeploymentClaim, now time.Time) error {
-	if c.WorkspaceID == "" || c.DeploymentID == "" || c.AttemptID == "" || c.Fence < 1 || c.ServiceID == "" || c.RuntimeBackend != "docker" {
+	if c.InstanceLineageID == "" || c.DeploymentID == "" || c.AttemptID == "" || c.Fence < 1 || c.ServiceID == "" || c.RuntimeBackend != "docker" {
 		return errors.New("invalid deployment identity or runtime backend")
 	}
 	if c.CleanupOnly {
@@ -606,7 +606,7 @@ func validateDeploymentClaim(c contracts.DeploymentClaim, now time.Time) error {
 	if c.Grant.GrantID == "" || (!c.Grant.ExpiresAt.After(now) && c.ClaimState != "claimed" && c.ClaimState != "uncertain") || !hasString(c.Grant.Actions, c.DesiredOp) {
 		return errors.New("authorization grant is expired or does not allow the requested operation")
 	}
-	if c.Grant.ScopeKind != "workspace" && c.Grant.ScopeKind != "personal" {
+	if c.Grant.ScopeKind != "instance" && c.Grant.ScopeKind != "personal" {
 		return errors.New("authorization scope cannot be resolved by this claim")
 	}
 	if c.Grant.ScopeID != "" || c.Grant.PrincipalID != "" {
@@ -724,18 +724,20 @@ func deploymentImage(ref, artifactDigest string) (string, error) {
 	return ref, nil
 }
 
-func deploymentContainerName(id string) string { return "zoe-cap-" + shortHash(id) }
-func deploymentVolumeName(workspace, id string) string {
-	return "zoe-vol-" + shortHash(workspace+"\x00"+id)
+func deploymentContainerName(lineage, id string) string {
+	return "zoe-cap-" + shortHash(lineage+"\x00"+id)
+}
+func deploymentVolumeName(lineage, id string) string {
+	return "zoe-vol-" + shortHash(lineage+"\x00"+id)
 }
 func labelValue(v string) string { return shortHash(v) }
 func shortHash(v string) string  { sum := sha256.Sum256([]byte(v)); return hex.EncodeToString(sum[:12]) }
 func deploymentLabels(c contracts.DeploymentClaim) map[string]string {
-	return map[string]string{"io.zoe.managed": "true", "io.zoe.workspace": labelValue(c.WorkspaceID), "io.zoe.deployment": labelValue(c.DeploymentID), "io.zoe.release": strings.TrimPrefix(c.ReleaseDigest, "sha256:"), "io.zoe.fence": strconv.FormatInt(c.Fence, 10), "io.zoe.attempt": labelValue(c.AttemptID)}
+	return map[string]string{"io.zoe.managed": "true", "io.zoe.instance_lineage": labelValue(c.InstanceLineageID), "io.zoe.deployment": labelValue(c.DeploymentID), "io.zoe.release": strings.TrimPrefix(c.ReleaseDigest, "sha256:"), "io.zoe.fence": strconv.FormatInt(c.Fence, 10), "io.zoe.attempt": labelValue(c.AttemptID)}
 }
 
 func deploymentOwnershipLabels(c contracts.DeploymentClaim) map[string]string {
-	return map[string]string{"io.zoe.managed": "true", "io.zoe.workspace": labelValue(c.WorkspaceID), "io.zoe.deployment": labelValue(c.DeploymentID)}
+	return map[string]string{"io.zoe.managed": "true", "io.zoe.instance_lineage": labelValue(c.InstanceLineageID), "io.zoe.deployment": labelValue(c.DeploymentID)}
 }
 func deploymentObservationID(c contracts.DeploymentClaim) string {
 	return fmt.Sprintf("deploy-%s-%d", shortHash(c.AttemptID), c.Fence)

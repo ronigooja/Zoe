@@ -127,7 +127,7 @@ func TestCompactRetryClearedOnlyAfterFencedWrite(t *testing.T) {
 	f.r.retry = &store
 	published := 0
 	f.r.requestPublish = func() { published++ }
-	scope := f.owner.WorkspaceID + "/" + f.owner.OwnerSubjectID
+	scope := f.owner.OwnerSubjectID
 	if err := store.Record(context.Background(), "compact", scope, backoff.Transient, f.now.Add(-time.Minute), backoff.Background, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestCompactRetryClearedOnlyAfterFencedWrite(t *testing.T) {
 		t.Fatalf("initial retry state=%v err=%v", before, err)
 	}
 	f.onCall = func() {
-		f.exec(`UPDATE voice_context_registers SET version=version+1 WHERE workspace_id=? AND owner_subject_id=?`, f.owner.WorkspaceID, f.owner.OwnerSubjectID)
+		f.exec(`UPDATE voice_context_registers SET version=version+1 WHERE owner_subject_id=?`, f.owner.OwnerSubjectID)
 	}
 	if f.rebuild(f.now) {
 		t.Fatal("rejected fence reported success")

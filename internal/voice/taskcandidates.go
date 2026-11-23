@@ -33,11 +33,11 @@ coalesce(t.result,''),coalesce(t.summary_result,nullif(t.result,'')),t.version`
 
 // taskCandidates retrieves bounded lexical candidates across calls. Ranking chooses
 // membership; the final facts are oldest first. It performs no writes or inference.
-func (s *Service) taskCandidates(ctx context.Context, q rosterQueryer, workspace, owner, text string, now time.Time, limit int) ([]taskCandidate, error) {
-	return s.taskCandidatesForSession(ctx, q, workspace, owner, "", text, now, limit)
+func (s *Service) taskCandidates(ctx context.Context, q rosterQueryer, owner, text string, now time.Time, limit int) ([]taskCandidate, error) {
+	return s.taskCandidatesForSession(ctx, q, owner, "", text, now, limit)
 }
 
-func (s *Service) taskCandidatesForSession(ctx context.Context, q rosterQueryer, workspace, owner, session, text string, now time.Time, limit int) ([]taskCandidate, error) {
+func (s *Service) taskCandidatesForSession(ctx context.Context, q rosterQueryer, owner, session, text string, now time.Time, limit int) ([]taskCandidate, error) {
 	if limit <= 0 {
 		limit = s.limits.Int("steward_candidate_default")
 	}
@@ -72,12 +72,12 @@ func (s *Service) taskCandidatesForSession(ctx context.Context, q rosterQueryer,
 		return out, rows.Err()
 	}
 	selected, err := read(`SELECT `+candidateColumns+`,0 FROM tasks t
-JOIN voice_task_links l ON l.task_id=t.id AND l.workspace_id=t.workspace_id
-WHERE t.workspace_id=? AND t.owner_subject_id=?
-AND l.session_id=coalesce(nullif(?,''),(SELECT id FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND julianday(created_at)<=julianday(?) ORDER BY julianday(created_at) DESC,id DESC LIMIT 1))
+JOIN voice_task_links l ON l.task_id=t.id
+WHERE t.owner_subject_id=?
+AND l.session_id=coalesce(nullif(?,''),(SELECT id FROM voice_sessions WHERE owner_id=? AND julianday(created_at)<=julianday(?) ORDER BY julianday(created_at) DESC,id DESC LIMIT 1))
 AND t.status IN ('queued','active','waiting','awaiting_user','paused')
 AND julianday(t.created_at) BETWEEN julianday(?) AND julianday(?)
-ORDER BY julianday(t.created_at) DESC,t.id DESC LIMIT ?`, workspace, owner, session, workspace, owner, stamp(now), stamp(now.Add(-time.Hour)), stamp(now), s.limits.Int("steward_recent_unresolved"))
+ORDER BY julianday(t.created_at) DESC,t.id DESC LIMIT ?`, owner, session, owner, stamp(now), stamp(now.Add(-time.Hour)), stamp(now), s.limits.Int("steward_recent_unresolved"))
 	if err != nil {
 		return nil, err
 	}
@@ -102,13 +102,13 @@ SELECT t.id,t.created_at,(SELECT sum(
 CASE WHEN lower(t.goal) LIKE p.value ESCAPE '\' THEN 2 ELSE 0 END +
 CASE WHEN lower(coalesce(t.result,'')) LIKE p.value ESCAPE '\' THEN 1 ELSE 0 END)
 FROM json_each(?) p) AS score
-FROM tasks t WHERE t.workspace_id=? AND t.owner_subject_id=?
+FROM tasks t WHERE t.owner_subject_id=?
 AND t.status IN ('queued','active','waiting','awaiting_user','paused','complete')
 AND julianday(t.created_at)<=julianday(?)), ranked AS (
 SELECT id,score FROM scored WHERE score>0
 ORDER BY score DESC,julianday(created_at) DESC,id DESC LIMIT ?)
 SELECT `+candidateColumns+`,r.score FROM ranked r JOIN tasks t ON t.id=r.id
-ORDER BY r.score DESC,julianday(t.created_at) DESC,t.id DESC`, string(encodedPatterns), workspace, owner, stamp(now), limit+len(selected))
+ORDER BY r.score DESC,julianday(t.created_at) DESC,t.id DESC`, string(encodedPatterns), owner, stamp(now), limit+len(selected))
 		if err != nil {
 			return nil, err
 		}
@@ -132,12 +132,12 @@ ORDER BY r.score DESC,julianday(t.created_at) DESC,t.id DESC`, string(encodedPat
 	var out []taskCandidate
 	for _, c := range selected {
 		c.TaskID = c.id
-		questions, err := q.QueryContext(ctx, `SELECT p.id,p.question FROM pending_runtime_actions p JOIN tasks t ON t.id=p.task_id AND t.workspace_id=p.workspace_id
-WHERE p.workspace_id=? AND p.task_id=? AND t.owner_subject_id=?
+		questions, err := q.QueryContext(ctx, `SELECT p.id,p.question FROM pending_runtime_actions p JOIN tasks t ON t.id=p.task_id
+WHERE p.task_id=? AND t.owner_subject_id=?
 AND t.status IN ('waiting','awaiting_user') AND t.interaction_state='awaiting_message'
 AND p.run_id=t.interaction_run_id AND p.action_digest=t.interaction_action_digest
 AND p.decision='' AND p.authorization_used=0 AND julianday(p.expires_at)>julianday(?)
-ORDER BY p.created_at,p.id`, workspace, c.id, owner, stamp(now))
+ORDER BY p.created_at,p.id`, c.id, owner, stamp(now))
 		if err != nil {
 			return nil, err
 		}
@@ -156,9 +156,9 @@ ORDER BY p.created_at,p.id`, workspace, c.id, owner, stamp(now))
 			return nil, err
 		}
 		rows, err := q.QueryContext(ctx, `SELECT coalesce(content,'') FROM task_entries
-WHERE workspace_id=? AND task_id=? AND kind='user_message'
+WHERE task_id=? AND kind='user_message'
 AND julianday(created_at)>julianday(?) AND julianday(created_at)<=julianday(?)
-ORDER BY julianday(created_at),id`, workspace, c.id, c.CreatedAt, stamp(now))
+ORDER BY julianday(created_at),id`, c.id, c.CreatedAt, stamp(now))
 		if err != nil {
 			return nil, err
 		}

@@ -35,7 +35,7 @@ func newRegisterFixture(t *testing.T) *registerFixture {
 	t.Helper()
 	fixtureModel := RegisterModelConfig{BaseURL: "https://unused.invalid", Model: "fixture", APIKey: "fixture"}
 	_, store, _ := handoffHTTPServerWithConfig(t, Config{IngestEnabled: true, RegisterConfig: &RegisterConfig{RegisterInstruction: testPrompts(t).Register(), CompactInstruction: testPrompts(t).Compact(), Model: fixtureModel, CompactModel: fixtureModel, CompactCharacters: 1000}})
-	f := &registerFixture{t: t, db: store.DB(), store: store, now: time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC), owner: RegisterOwner{"default", "owner"}, output: "compact record"}
+	f := &registerFixture{t: t, db: store.DB(), store: store, now: time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC), owner: RegisterOwner{"owner"}, output: "compact record"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct{ Instructions, Input string }
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -74,13 +74,13 @@ func (f *registerFixture) exec(q string, args ...any) {
 		f.t.Fatal(err)
 	}
 }
-func (f *registerFixture) session(id, workspace, owner string) {
+func (f *registerFixture) session(id, owner string) {
 	f.t.Helper()
-	f.exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES(?,?,?,'fixture',?,X'01',1,'ended',?,?)`, id, workspace, owner, id, f.now.Format(time.RFC3339Nano), f.now.Format(time.RFC3339Nano))
+	f.exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES(?,?,'fixture',?,X'01',1,'ended',?,?)`, id, owner, id, f.now.Format(time.RFC3339Nano), f.now.Format(time.RFC3339Nano))
 }
 func (f *registerFixture) turn(session string, seq int, role, text string, at time.Time) {
 	f.t.Helper()
-	f.exec(`INSERT INTO voice_transcript_turns(workspace_id,session_id,seq,role,text,at,received_at) SELECT workspace_id,id,?,?,?,?,? FROM voice_sessions WHERE id=?`, seq, role, text, at.Format(time.RFC3339Nano), f.now.Format(time.RFC3339Nano), session)
+	f.exec(`INSERT INTO voice_transcript_turns(session_id,seq,role,text,at,received_at) SELECT id,?,?,?,?,? FROM voice_sessions WHERE id=?`, seq, role, text, at.Format(time.RFC3339Nano), f.now.Format(time.RFC3339Nano), session)
 }
 func (f *registerFixture) layers(now time.Time) RegisterLayers {
 	f.t.Helper()
@@ -146,16 +146,13 @@ func TestCompactInstructionKeepsTopicOrder(t *testing.T) {
 func TestRegisterCrossCallStableOrderingAndOwnerIsolation(t *testing.T) {
 	f := newRegisterFixture(t)
 	at := f.now.Add(-2 * time.Hour)
-	f.session("a", "default", "owner")
-	f.session("z", "default", "owner")
-	f.session("foreign", "default", "other")
-	f.exec(`INSERT INTO workspaces(id,name,created_at) SELECT 'elsewhere',name,created_at FROM workspaces WHERE id='default'`)
-	f.session("foreign-workspace", "elsewhere", "owner")
+	f.session("a", "owner")
+	f.session("z", "owner")
+	f.session("foreign", "other")
 	f.turn("z", 0, "assistant", "third", at)
 	f.turn("a", 4, "assistant", "second", at)
 	f.turn("a", 2, "user", "first", at)
 	f.turn("foreign", 0, "user", "SECRET_OTHER_OWNER", at)
-	f.turn("foreign-workspace", 0, "user", "SECRET_OTHER_WORKSPACE", at)
 	f.rebuild(f.now)
 	input := f.inputs[0]
 	if strings.Index(input, "user: first") > strings.Index(input, "assistant: second") || strings.Index(input, "assistant: second") > strings.Index(input, "assistant: third") || strings.Contains(input, "SECRET_") {
@@ -340,7 +337,7 @@ func TestRegisterRequestTextValidation(t *testing.T) {
 func TestRegisterDurableClaimAndMemoryFence(t *testing.T) {
 	f := newRegisterFixture(t)
 	f.turn("handoff-session", 0, "user", "old", f.now.Add(-2*time.Hour))
-	f.exec(`INSERT INTO voice_context_registers(workspace_id,owner_subject_id,claim_token,lease_until_ms) VALUES('default','owner','another',?)`, f.now.Add(time.Minute).UnixMilli())
+	f.exec(`INSERT INTO voice_context_registers(owner_subject_id,claim_token,lease_until_ms) VALUES('owner','another',?)`, f.now.Add(time.Minute).UnixMilli())
 	if f.rebuild(f.now) || f.calls != 0 {
 		t.Fatal("live claim stolen")
 	}
@@ -382,7 +379,7 @@ func TestRegisterMemoryBoundaryProviderIsolationAndFailure(t *testing.T) {
 	f.rebuild(f.now)
 	before := f.layers(f.now)
 	f.boundary = f.now.Add(-90 * time.Minute)
-	other, err := f.r.Layers(context.Background(), RegisterOwner{"default", "other"}, f.now)
+	other, err := f.r.Layers(context.Background(), RegisterOwner{"other"}, f.now)
 	if err != nil || !other.MemoryBoundary.IsZero() || other.Compact != "" || other.Raw != "" {
 		t.Fatal("boundary owner leaked", err)
 	}
@@ -395,7 +392,7 @@ func TestRegisterMemoryBoundaryProviderIsolationAndFailure(t *testing.T) {
 		t.Fatal("rebuild provider error ignored", err)
 	}
 	var compact string
-	if err = f.db.QueryRow(`SELECT compact FROM voice_context_registers WHERE workspace_id='default' AND owner_subject_id='owner'`).Scan(&compact); err != nil || compact != before.Compact {
+	if err = f.db.QueryRow(`SELECT compact FROM voice_context_registers WHERE owner_subject_id='owner'`).Scan(&compact); err != nil || compact != before.Compact {
 		t.Fatal("failed provider lost compact", err)
 	}
 }

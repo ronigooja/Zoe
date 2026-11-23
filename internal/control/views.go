@@ -24,7 +24,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	snapshot, err := loadSnapshot(r.Context(), tx, p.WorkspaceID, p.SubjectID, s.cfg.Limits.Int("max_concurrent_runs"))
+	snapshot, err := loadSnapshot(r.Context(), tx, p.SubjectID, s.cfg.Limits.Int("max_concurrent_runs"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -42,11 +42,11 @@ func (s *Server) LoadSnapshotTx(ctx context.Context, tx *sql.Tx, p contracts.Pri
 	if err := requireOwnerSessionTx(ctx, tx, p); err != nil {
 		return contracts.Snapshot{}, err
 	}
-	return loadSnapshot(ctx, tx, p.WorkspaceID, p.SubjectID, s.cfg.Limits.Int("max_concurrent_runs"))
+	return loadSnapshot(ctx, tx, p.SubjectID, s.cfg.Limits.Int("max_concurrent_runs"))
 }
 
-func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, maxRuns int) (contracts.Snapshot, error) {
-	out := contracts.Snapshot{WorkspaceID: workspace, SubjectID: subject, ServerVersion: "1", Projects: []contracts.Project{}, Tasks: []contracts.Task{}, Approvals: []contracts.Approval{}, Runs: []contracts.Run{}}
+func loadSnapshot(ctx context.Context, tx *sql.Tx, subject string, maxRuns int) (contracts.Snapshot, error) {
+	out := contracts.Snapshot{SubjectID: subject, ServerVersion: "1", Projects: []contracts.Project{}, Tasks: []contracts.Task{}, Approvals: []contracts.Approval{}, Runs: []contracts.Run{}}
 	var cursor int64
 	if err := tx.QueryRowContext(ctx, `SELECT current_cursor FROM event_counters WHERE singleton=1`).Scan(&cursor); err != nil {
 		return out, err
@@ -60,7 +60,7 @@ func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, ma
 	if err := tx.QueryRowContext(ctx, `SELECT lineage_id,generation,deletion_sequence FROM zoe_instance_state WHERE singleton=1`).Scan(&out.Authority.InstanceLineageID, &out.Authority.Generation, &out.Authority.DeletionSequence); err != nil {
 		return out, err
 	}
-	projects, err := tx.QueryContext(ctx, `SELECT id,name,description,status,version,created_at,updated_at FROM projects p WHERE workspace_id=? AND (owner_subject_id=?) ORDER BY created_at,id`, workspace, subject)
+	projects, err := tx.QueryContext(ctx, `SELECT id,name,description,status,version,created_at,updated_at FROM projects p WHERE (owner_subject_id=?) ORDER BY created_at,id`, subject)
 	if err != nil {
 		return out, err
 	}
@@ -80,7 +80,7 @@ func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, ma
 		return out, err
 	}
 	projects.Close()
-	tasks, err := tx.QueryContext(ctx, `SELECT id,coalesce(project_id,''),title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,started_at,finished_at,result,error,interaction_state,interaction_scope,interaction_run_id,interaction_action_digest,interaction_expires_at,interaction_expected_version,interaction_question FROM tasks t WHERE workspace_id=? AND (owner_subject_id=?) ORDER BY created_at,id`, workspace, subject)
+	tasks, err := tx.QueryContext(ctx, `SELECT id,coalesce(project_id,''),title,goal,source,profile_id,status,version,created_at,updated_at,accepted_at,started_at,finished_at,result,error,interaction_state,interaction_scope,interaction_run_id,interaction_action_digest,interaction_expires_at,interaction_expected_version,interaction_question FROM tasks t WHERE (owner_subject_id=?) ORDER BY created_at,id`, subject)
 	if err != nil {
 		return out, err
 	}
@@ -110,20 +110,20 @@ func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, ma
 			v := parseTime(interactionExpires.String)
 			t.InteractionExpiresAt = &v
 		}
-		t.Messages, err = loadTaskMessages(ctx, tx, workspace, t.ID)
+		t.Messages, err = loadTaskMessages(ctx, tx, t.ID)
 		if err != nil {
 			tasks.Close()
 			return out, err
 		}
 		if t.Status == "awaiting_user" {
 			var canAccept int
-			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM runs r JOIN evidence e ON e.run_id=r.id WHERE r.workspace_id=? AND r.task_id=? AND r.status='verification_pending' AND e.kind='agent_result' AND e.source='runner' AND e.verified=0`, workspace, t.ID).Scan(&canAccept); err != nil {
+			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM runs r JOIN evidence e ON e.run_id=r.id WHERE r.task_id=? AND r.status='verification_pending' AND e.kind='agent_result' AND e.source='runner' AND e.verified=0`, t.ID).Scan(&canAccept); err != nil {
 				tasks.Close()
 				return out, err
 			}
 			t.CanAcceptResult = canAccept > 0
 		}
-		t.Evidence, err = loadEvidence(ctx, tx, workspace, t.ID)
+		t.Evidence, err = loadEvidence(ctx, tx, t.ID)
 		if err != nil {
 			tasks.Close()
 			return out, err
@@ -150,7 +150,7 @@ func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, ma
 		return out, err
 	}
 	tasks.Close()
-	approvals, err := tx.QueryContext(ctx, `SELECT a.id,a.task_id,a.task_version,a.status,a.prompt,a.version,a.created_at,a.expires_at,a.requested_action,a.requested_action_digest FROM approvals a JOIN tasks t ON t.id=a.task_id AND t.workspace_id=a.workspace_id WHERE a.workspace_id=? AND (t.owner_subject_id=?) ORDER BY a.created_at,a.id`, workspace, subject)
+	approvals, err := tx.QueryContext(ctx, `SELECT a.id,a.task_id,a.task_version,a.status,a.prompt,a.version,a.created_at,a.expires_at,a.requested_action,a.requested_action_digest FROM approvals a JOIN tasks t ON t.id=a.task_id WHERE (t.owner_subject_id=?) ORDER BY a.created_at,a.id`, subject)
 	if err != nil {
 		return out, err
 	}
@@ -178,7 +178,7 @@ func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, ma
 		return out, err
 	}
 	approvals.Close()
-	runs, err := tx.QueryContext(ctx, `SELECT r.id,r.task_id,r.attempt_id,r.status,r.desired_control,r.control_version,r.started_at,r.stopped_at FROM runs r JOIN tasks t ON t.id=r.task_id AND t.workspace_id=r.workspace_id WHERE r.workspace_id=? AND (t.owner_subject_id=?) ORDER BY r.started_at,r.id`, workspace, subject)
+	runs, err := tx.QueryContext(ctx, `SELECT r.id,r.task_id,r.attempt_id,r.status,r.desired_control,r.control_version,r.started_at,r.stopped_at FROM runs r JOIN tasks t ON t.id=r.task_id WHERE (t.owner_subject_id=?) ORDER BY r.started_at,r.id`, subject)
 	if err != nil {
 		return out, err
 	}
@@ -196,7 +196,7 @@ func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, ma
 			t := parseTime(stopped.String)
 			v.StoppedAt = &t
 		}
-		v.Evidence, err = loadRunEvidence(ctx, tx, workspace, v.ID)
+		v.Evidence, err = loadRunEvidence(ctx, tx, v.ID)
 		if err != nil {
 			runs.Close()
 			return out, err
@@ -211,8 +211,8 @@ func loadSnapshot(ctx context.Context, tx *sql.Tx, workspace, subject string, ma
 	return out, nil
 }
 
-func loadTaskMessages(ctx context.Context, tx *sql.Tx, workspace, taskID string) ([]contracts.TaskMessage, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id,task_id,kind,content,created_at FROM task_entries WHERE workspace_id=? AND task_id=? ORDER BY created_at,id`, workspace, taskID)
+func loadTaskMessages(ctx context.Context, tx *sql.Tx, taskID string) ([]contracts.TaskMessage, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id,task_id,kind,content,created_at FROM task_entries WHERE task_id=? ORDER BY created_at,id`, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -230,11 +230,11 @@ func loadTaskMessages(ctx context.Context, tx *sql.Tx, workspace, taskID string)
 	return messages, rows.Err()
 }
 
-func loadEvidence(ctx context.Context, tx *sql.Tx, workspace, task string) ([]contracts.Evidence, error) {
-	return queryEvidence(ctx, tx, `SELECT id,kind,summary,source,created_at,verified FROM evidence WHERE workspace_id=? AND task_id=? ORDER BY created_at,id`, workspace, task)
+func loadEvidence(ctx context.Context, tx *sql.Tx, task string) ([]contracts.Evidence, error) {
+	return queryEvidence(ctx, tx, `SELECT id,kind,summary,source,created_at,verified FROM evidence WHERE task_id=? ORDER BY created_at,id`, task)
 }
-func loadRunEvidence(ctx context.Context, tx *sql.Tx, workspace, run string) ([]contracts.Evidence, error) {
-	return queryEvidence(ctx, tx, `SELECT id,kind,summary,source,created_at,verified FROM evidence WHERE workspace_id=? AND run_id=? ORDER BY created_at,id`, workspace, run)
+func loadRunEvidence(ctx context.Context, tx *sql.Tx, run string) ([]contracts.Evidence, error) {
+	return queryEvidence(ctx, tx, `SELECT id,kind,summary,source,created_at,verified FROM evidence WHERE run_id=? ORDER BY created_at,id`, run)
 }
 func queryEvidence(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]contracts.Evidence, error) {
 	out := []contracts.Evidence{}
@@ -289,7 +289,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	oldest := high + 1
 	var earliest sql.NullInt64
-	_ = s.store.DB().QueryRowContext(r.Context(), `SELECT min(cursor) FROM events WHERE workspace_id=?`, p.WorkspaceID).Scan(&earliest)
+	_ = s.store.DB().QueryRowContext(r.Context(), `SELECT min(cursor) FROM events`).Scan(&earliest)
 	if earliest.Valid {
 		oldest = earliest.Int64
 	}
@@ -318,7 +318,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		rows, err := tx.QueryContext(r.Context(), `SELECT e.cursor,e.event_type,e.payload,(e.subject_id=? OR ?=1 OR e.aggregate_type='workspace' OR (e.aggregate_type='project' AND EXISTS(SELECT 1 FROM projects p WHERE p.workspace_id=e.workspace_id AND p.id=e.aggregate_id AND (p.owner_subject_id=?))) OR (e.aggregate_type='task' AND EXISTS(SELECT 1 FROM tasks t WHERE t.workspace_id=e.workspace_id AND t.id=e.aggregate_id AND (t.owner_subject_id=?))) OR (e.aggregate_type='run' AND EXISTS(SELECT 1 FROM runs r JOIN tasks t ON t.id=r.task_id AND t.workspace_id=r.workspace_id WHERE r.workspace_id=e.workspace_id AND r.id=e.aggregate_id AND (t.owner_subject_id=?)))) AS visible FROM events e WHERE e.workspace_id=? AND e.cursor>? ORDER BY e.cursor LIMIT ?`, p.SubjectID, true, p.SubjectID, p.SubjectID, p.SubjectID, p.WorkspaceID, cursor, s.cfg.Limits.Int("event_page_rows"))
+		rows, err := tx.QueryContext(r.Context(), `SELECT e.cursor,e.event_type,e.payload,(e.subject_id=? OR ?=1 OR (e.aggregate_type='project' AND EXISTS(SELECT 1 FROM projects p WHERE p.id=e.aggregate_id AND (p.owner_subject_id=?))) OR (e.aggregate_type='task' AND EXISTS(SELECT 1 FROM tasks t WHERE t.id=e.aggregate_id AND (t.owner_subject_id=?))) OR (e.aggregate_type='run' AND EXISTS(SELECT 1 FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id=e.aggregate_id AND (t.owner_subject_id=?)))) AS visible FROM events e WHERE e.cursor>? ORDER BY e.cursor LIMIT ?`, p.SubjectID, true, p.SubjectID, p.SubjectID, p.SubjectID, cursor, s.cfg.Limits.Int("event_page_rows"))
 		if err != nil {
 			_ = tx.Rollback()
 			return

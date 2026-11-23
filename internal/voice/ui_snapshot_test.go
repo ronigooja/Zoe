@@ -28,7 +28,7 @@ func uiACK(t *testing.T, r *deliveryRig, request string, success bool) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	cmd := control.CommandContext{Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
+	cmd := control.CommandContext{Principal: contracts.Principal{SubjectID: "owner", Scopes: []string{"client:command"}}, AcceptedAt: r.now()}
 	if _, _, err = r.svc.commandUIRendered(context.Background(), tx, cmd, contracts.CommandRequest{Payload: b}); err != nil {
 		t.Fatal(err)
 	}
@@ -43,12 +43,12 @@ func TestUIServerAssignedIDsAndNoRoster(t *testing.T) {
 	// More than 64 retained documents no longer prevents another presentation.
 	for i := 0; i < 65; i++ {
 		id := fmt.Sprintf("stored-%d", i)
-		r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,surface_id,surface_version,created_at,updated_at) VALUES(?,'default','owner','register',?,1,'now','now')`, id, id)
-		r.exec(t, `INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,request_id,created_at,updated_at) VALUES('default','owner',?,'window','[]',1,?,'now','now')`, id, id)
+		r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,surface_id,surface_version,created_at,updated_at) VALUES(?,'owner','register',?,1,'now','now')`, id, id)
+		r.exec(t, `INSERT INTO ui_surfaces(owner_subject_id,surface_id,container,state_json,version,request_id,created_at,updated_at) VALUES('owner',?,'window','[]',1,?,'now','now')`, id, id)
 	}
-	r.exec(t, `INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,request,created_at,updated_at) VALUES('new','default','owner','register','Show this.','now','now')`)
-	r.exec(t, `INSERT INTO ui_jobs(id,workspace_id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('new-job','default','owner','register','new','new',1,'now','now','now')`)
-	input, err := r.svc.uiInput(context.Background(), uiJob{w: "default", o: "owner", request: "new"})
+	r.exec(t, `INSERT INTO ui_requests(id,owner_subject_id,source,request,created_at,updated_at) VALUES('new','owner','register','Show this.','now','now')`)
+	r.exec(t, `INSERT INTO ui_jobs(id,owner_subject_id,kind,dedupe_key,ui_request_id,attempts,next_attempt_at,created_at,updated_at) VALUES('new-job','owner','register','new','new',1,'now','now','now')`)
+	input, err := r.svc.uiInput(context.Background(), uiJob{o: "owner", request: "new"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestUIServerAssignedIDsAndNoRoster(t *testing.T) {
 		t.Fatal(err)
 	}
 	o = uictl.AssignSurfaceID(o, "stored-0")
-	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "new-job", w: "default", o: "owner", request: "new", attempts: 1}, o, nil); err != nil {
+	if err = r.svc.commitUIJob(context.Background(), uiJob{id: "new-job", o: "owner", request: "new", attempts: 1}, o, nil); err != nil {
 		t.Fatal(err)
 	}
 	id := uiStoredID(t, r, "new")
@@ -95,7 +95,7 @@ func TestUIServerAssignedIDsAndNoRoster(t *testing.T) {
 			}
 		}
 	}
-	snapshot, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "owner"})
+	snapshot, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{SubjectID: "owner"})
 	if err != nil || len(snapshot.Surfaces) != 66 {
 		t.Fatalf("snapshot=%d err=%v", len(snapshot.Surfaces), err)
 	}
@@ -113,7 +113,7 @@ func TestUISurfaceRetentionAfterACK(t *testing.T) {
 			if err := r.store.DB().QueryRow(`SELECT count(*) FROM ui_surfaces`).Scan(&count); err != nil || count != 0 {
 				t.Fatalf("retained=%d err=%v", count, err)
 			}
-			snapshot, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "owner"})
+			snapshot, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{SubjectID: "owner"})
 			if err != nil || len(snapshot.Surfaces) != 0 {
 				t.Fatalf("snapshot=%+v err=%v", snapshot, err)
 			}
@@ -129,7 +129,7 @@ func TestUIUnacknowledgedSurfaceRemainsRecoverable(t *testing.T) {
 	if err := r.svc.pruneUISurfaces(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "owner"})
+	snapshot, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{SubjectID: "owner"})
 	if err != nil || len(snapshot.Surfaces) != 1 || snapshot.Surfaces[0].RenderStatus != "generated" {
 		t.Fatalf("pending snapshot=%+v err=%v", snapshot, err)
 	}
@@ -144,7 +144,7 @@ func TestUIUnacknowledgedSurfaceRemainsRecoverable(t *testing.T) {
 	if _, exists := fields["deleted"]; exists {
 		t.Fatal("removed field in snapshot")
 	}
-	foreign, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{WorkspaceID: "default", SubjectID: "other"})
+	foreign, err := r.svc.readUISnapshot(context.Background(), contracts.Principal{SubjectID: "other"})
 	if err != nil || len(foreign.Surfaces) != 0 {
 		t.Fatalf("foreign snapshot=%+v err=%v", foreign, err)
 	}
@@ -158,7 +158,7 @@ func TestUIQuestionRetention(t *testing.T) {
 			uiTargetQuestion(t, r)
 			uiTargetPresentation(t, r, true)
 			uiACK(t, r, "request", true)
-			p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner"}
+			p := contracts.Principal{SubjectID: "owner"}
 			snapshot, err := r.svc.readUISnapshot(context.Background(), p)
 			if err != nil || len(snapshot.Surfaces) != 1 || !snapshot.Surfaces[0].TaskQuestion {
 				t.Fatalf("snapshot=%+v err=%v", snapshot, err)

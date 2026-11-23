@@ -36,7 +36,7 @@ func TestResultCheckpointExplicitSelectionDelivers(t *testing.T) {
 	r.setup(t, "original result")
 	r.run(t)
 	r.seedCall(t, "next", "user-1", 2)
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
+	p := contracts.Principal{SubjectID: "user-1"}
 	for i := 0; i < 2; i++ {
 		if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "next", 2); err != nil {
 			t.Fatal(err)
@@ -47,7 +47,7 @@ func TestResultCheckpointExplicitSelectionDelivers(t *testing.T) {
 	if status != "delivered" || attempts != 1 || r.posts.Load() != 1 {
 		t.Fatalf("status=%s attempts=%d posts=%d", status, attempts, r.posts.Load())
 	}
-	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
+	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "user-1")
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("sent history=%v err=%v", pending, err)
 	}
@@ -61,7 +61,7 @@ func TestResultCheckpointSelectionUnknownCannotRebind(t *testing.T) {
 	r.run(t)
 	r.exec(t, `UPDATE voice_sessions SET state='ended' WHERE id='old'`)
 	r.seedCall(t, "next", "user-1", 2)
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
+	p := contracts.Principal{SubjectID: "user-1"}
 	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "next", 2); err == nil {
 		t.Fatal("unknown destination rebound")
 	}
@@ -73,7 +73,7 @@ func TestResultCheckpointSelectionUnknownCannotRebind(t *testing.T) {
 	if session != "old" {
 		t.Fatal(session)
 	}
-	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
+	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "user-1")
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("ambiguous history=%v err=%v", pending, err)
 	}
@@ -84,7 +84,7 @@ func TestResultCheckpointSelectionUnsentCanRebind(t *testing.T) {
 	r.setup(t, "original result")
 	r.svc.consumeResultEvents(context.Background())
 	r.seedCall(t, "old", "user-1", 1)
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
+	p := contracts.Principal{SubjectID: "user-1"}
 	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "old", 1); err != nil {
 		t.Fatal(err)
 	}
@@ -121,15 +121,15 @@ func TestResultCheckpointForgedDeliveryRejectedByEvent(t *testing.T) {
 				r.exec(t, `UPDATE task_entries SET task_id='forged'`)
 				r.exec(t, `UPDATE voice_result_deliveries SET task_id='forged'`)
 			}
-			r.svc.deliverCheckpointedResult(context.Background(), id, "default", task, run, "user-1", 0, nil)
+			r.svc.deliverCheckpointedResult(context.Background(), id, task, run, "user-1", 0, nil)
 			if r.posts.Load() != 0 {
 				t.Fatal("forged source sent")
 			}
-			p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
+			p := contracts.Principal{SubjectID: "user-1"}
 			if err := r.svc.selectPendingResultForTest(context.Background(), p, id, "s1", 1); err == nil {
 				t.Fatal("forged source selected")
 			}
-			pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
+			pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "user-1")
 			if err != nil || len(pending) != 0 {
 				t.Fatalf("forged context=%v err=%v", pending, err)
 			}
@@ -161,7 +161,7 @@ func (a *checkpointAdapter) Lookup(_ context.Context, _ string, p ResultChunkReq
 }
 func (r *deliveryRig) checkpointSend(a ResultReceiptAdapter) {
 	_, _, attempts := r.rowForCheckpoint()
-	r.svc.deliverCheckpointedResult(context.Background(), "entry-1", "default", "task-1", "run-1", "user-1", attempts, a)
+	r.svc.deliverCheckpointedResult(context.Background(), "entry-1", "task-1", "run-1", "user-1", attempts, a)
 }
 func (r *deliveryRig) rowForCheckpoint() (string, string, int) {
 	var status, code string
@@ -181,11 +181,11 @@ func TestResultCheckpointNoCallPreservesOpeningCandidate(t *testing.T) {
 	if status != "pending" || code != "awaiting_call" || attempts != 0 || r.posts.Load() != 0 {
 		t.Fatalf("status=%s code=%s attempts=%d posts=%d", status, code, attempts, r.posts.Load())
 	}
-	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
+	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "user-1")
 	if err != nil || len(pending) != 1 || pending[0].EntryID != "entry-1" || !strings.HasSuffix(pending[0].Text, "Result:  original\nresult ") {
 		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
-	other, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "other")
+	other, err := pendingResultsForContext(context.Background(), r.store.DB(), "other")
 	if err != nil || len(other) != 0 {
 		t.Fatalf("other=%v err=%v", other, err)
 	}
@@ -296,7 +296,7 @@ func TestResultCheckpointConcurrentClaims(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.svc.deliverCheckpointedResult(context.Background(), "entry-1", "default", "task-1", "run-1", "user-1", 0, r.svc.resultReceiptAdapter)
+			r.svc.deliverCheckpointedResult(context.Background(), "entry-1", "task-1", "run-1", "user-1", 0, r.svc.resultReceiptAdapter)
 		}()
 	}
 	wg.Wait()
@@ -362,11 +362,11 @@ func TestResultCheckpointMissingAuthoritativeEventCannotDeliver(t *testing.T) {
 	if status, _, attempts := r.row(t, "entry-1"); status != "pending" || attempts != 0 || r.posts.Load() != 0 {
 		t.Fatalf("unauthoritative source status=%s attempts=%d posts=%d", status, attempts, r.posts.Load())
 	}
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
+	p := contracts.Principal{SubjectID: "user-1"}
 	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "s1", 1); err == nil {
 		t.Fatal("source without authoritative event selected")
 	}
-	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "default", "user-1")
+	pending, err := pendingResultsForContext(context.Background(), r.store.DB(), "user-1")
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("unauthoritative context=%v err=%v", pending, err)
 	}
@@ -414,7 +414,7 @@ func TestResultCheckpointSelectionLiveLeaseRebindRejected(t *testing.T) {
 	r.setup(t, "original")
 	r.svc.consumeResultEvents(context.Background())
 	r.seedCall(t, "old", "user-1", 1)
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
+	p := contracts.Principal{SubjectID: "user-1"}
 	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "old", 1); err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +434,7 @@ func TestResultCheckpointSelectionConfirmedRebindRejected(t *testing.T) {
 	r.advance(time.Minute)
 	r.exec(t, `UPDATE voice_sessions SET state='ended' WHERE id='old'`)
 	r.seedCall(t, "next", "user-1", 2)
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
+	p := contracts.Principal{SubjectID: "user-1"}
 	if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "next", 2); err == nil {
 		t.Fatal("confirmed destination rebound")
 	}
@@ -462,7 +462,7 @@ func TestResultCheckpointPartialProgressSelectionPreserved(t *testing.T) {
 	if err := r.store.DB().QueryRow(`SELECT claim,lease_until FROM voice_result_checkpoints`).Scan(&claim, &lease); err != nil {
 		t.Fatal(err)
 	}
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "user-1"}
+	p := contracts.Principal{SubjectID: "user-1"}
 	for i := 0; i < 2; i++ {
 		if err := r.svc.selectPendingResultForTest(context.Background(), p, "entry-1", "s1", 1); err != nil {
 			t.Fatal(err)

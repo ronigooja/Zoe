@@ -10,7 +10,7 @@ import (
 
 func TestIngestRequestsRetryPublicationOnStateChange(t *testing.T) {
 	db, repo, now := ingestFixture(t)
-	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	fail := true

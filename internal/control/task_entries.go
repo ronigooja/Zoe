@@ -128,9 +128,9 @@ func loadTaskEntriesPage(ctx context.Context, db *sql.DB, p contracts.Principal,
 		CASE WHEN substr(e.created_at,20,1)='.' THEN
 			CAST(substr(substr(e.created_at,21,length(e.created_at)-20-CASE WHEN substr(e.created_at,-1)='Z' THEN 1 ELSE 6 END) || '000000000',1,9) AS INTEGER)
 			ELSE 0 END AS created_nanos
-		FROM task_entries e WHERE e.workspace_id=? AND e.task_id=?
+		FROM task_entries e WHERE e.task_id=?
 	) SELECT id,task_id,kind,content,created_at FROM entries`
-	args := []any{p.WorkspaceID, taskID}
+	args := []any{taskID}
 	if cursor != nil {
 		at, err := time.Parse(time.RFC3339Nano, cursor.CreatedAt)
 		if err != nil {

@@ -523,8 +523,8 @@ func (s *Service) resolveGatewayCreateOutcome(ctx context.Context, sessionID str
 	if err != nil || changed == 0 {
 		return err
 	}
-	var workspace, owner string
-	if err := tx.QueryRowContext(ctx, `SELECT workspace_id,owner_id FROM voice_sessions WHERE id=?`, sessionID).Scan(&workspace, &owner); err != nil {
+	var owner string
+	if err := tx.QueryRowContext(ctx, `SELECT owner_id FROM voice_sessions WHERE id=?`, sessionID).Scan(&owner); err != nil {
 		return err
 	}
 	var source string
@@ -545,9 +545,9 @@ func (s *Service) resolveGatewayCreateOutcome(ctx context.Context, sessionID str
 			return err
 		}
 		eventID := uuid.NewString()
-		event := contracts.Event{EventID: eventID, WorkspaceID: workspace, SubjectID: owner, Cursor: fmt.Sprint(cursor), SchemaVersion: 1, Type: "voice.pool.reconciled", AggregateType: "voice_pool", AggregateID: "default", AggregateVersion: 1, OccurredAt: s.now().UTC(), Payload: payload}
+		event := contracts.Event{EventID: eventID, SubjectID: owner, Cursor: fmt.Sprint(cursor), SchemaVersion: 1, Type: "voice.pool.reconciled", AggregateType: "voice_pool", AggregateID: "default", AggregateVersion: 1, OccurredAt: s.now().UTC(), Payload: payload}
 		eventPayload, _ := json.Marshal(event)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, eventID, workspace, cursor, 1, event.Type, now, owner, event.AggregateType, event.AggregateID, event.AggregateVersion, eventPayload); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,?,?,?,?,?,?,?,?)`, eventID, cursor, 1, event.Type, now, owner, event.AggregateType, event.AggregateID, event.AggregateVersion, eventPayload); err != nil {
 			return err
 		}
 	}

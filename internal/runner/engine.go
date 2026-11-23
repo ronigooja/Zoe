@@ -187,7 +187,7 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err err
 		prompt = buildResumePrompt(claim.Goal, claim.ResumeQuestion, claim.ResumeAnswer, claim.Instructions)
 		prompt += structuredContext(claim.Entries, claim.PriorContexts)
 	}
-	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: fmt.Sprint(claim.Fence), Model: route.Model, ModelRouteID: claim.ModelRouteID, Agent: claim.Agent, Permissions: claim.PermissionRules, Prompt: prompt, Workspace: claim.WorkspaceID}
+	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: fmt.Sprint(claim.Fence), Model: route.Model, ModelRouteID: claim.ModelRouteID, Agent: claim.Agent, Permissions: claim.PermissionRules, Prompt: prompt}
 	entry, err = e.Journal.SaveClaim(ctx, claim, spec, "claimed")
 	if err != nil {
 		return err
@@ -1215,7 +1215,7 @@ func (e *Engine) interval() time.Duration {
 	return time.Second
 }
 func validateClaim(c contracts.JobClaim, sets ...limits.Set) error {
-	if c.RunID == "" || c.TaskID == "" || c.AttemptID == "" || c.WorkspaceID == "" || c.Fence == 0 || c.ProfileID == "" || c.RuntimeRouteID == "" || c.ModelRouteID == "" || c.IsolationPolicy == "" {
+	if c.RunID == "" || c.TaskID == "" || c.AttemptID == "" || c.Fence == 0 || c.ProfileID == "" || c.RuntimeRouteID == "" || c.ModelRouteID == "" || c.IsolationPolicy == "" {
 		return errors.New("runner claim is missing required identity")
 	}
 	if c.Harness != "opencode" {

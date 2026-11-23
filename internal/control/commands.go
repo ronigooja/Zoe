@@ -180,7 +180,6 @@ func (s *Server) ExecuteCommand(ctx context.Context, p contracts.Principal, key 
 		event := &events[i]
 		event.EventID, _ = randomID()
 		event.SchemaVersion = 1
-		event.WorkspaceID = p.WorkspaceID
 		event.SubjectID = p.SubjectID
 		if event.OccurredAt.IsZero() {
 			event.OccurredAt = accepted
@@ -201,7 +200,7 @@ func (s *Server) ExecuteCommand(ctx context.Context, p contracts.Principal, key 
 		if e != nil {
 			return contracts.CommandReceipt{}, e
 		}
-		_, e = tx.ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, event.EventID, p.WorkspaceID, cursor, event.SchemaVersion, event.Type, event.OccurredAt.Format(time.RFC3339Nano), p.SubjectID, event.AggregateType, event.AggregateID, event.AggregateVersion, payload)
+		_, e = tx.ExecContext(ctx, `INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,?,?,?,?,?,?,?,?)`, event.EventID, cursor, event.SchemaVersion, event.Type, event.OccurredAt.Format(time.RFC3339Nano), p.SubjectID, event.AggregateType, event.AggregateID, event.AggregateVersion, payload)
 		if e != nil {
 			return contracts.CommandReceipt{}, e
 		}

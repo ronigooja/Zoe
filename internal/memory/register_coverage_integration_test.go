@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ronigooja/Zoe/internal/control"
 	"github.com/ronigooja/Zoe/internal/memoryapi"
 	"github.com/ronigooja/Zoe/internal/prompts"
 	"github.com/ronigooja/Zoe/internal/storage"
@@ -29,7 +30,7 @@ func TestRealMemoryBatchBoundaryRetainsRegisterCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	for _, register := range []func(*storage.Store) error{storage.RegisterCoreMigrations, voice.RegisterMigrations, memoryapi.RegisterMigrations} {
+	for _, register := range []func(*storage.Store) error{storage.RegisterCoreMigrations, control.RegisterInstanceMaintenanceMigration, voice.RegisterMigrations, memoryapi.RegisterMigrations} {
 		if err := register(store); err != nil {
 			t.Fatal(err)
 		}
@@ -45,9 +46,9 @@ func TestRealMemoryBatchBoundaryRetainsRegisterCoverage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('coverage','default','owner','instance','request',X'01',1,'ended',?,?)`, stamp, stamp)
+	exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('coverage','owner','instance','request',X'01',1,'ended',?,?)`, stamp, stamp)
 	turn := func(seq int, text string, at, received time.Time) {
-		exec(`INSERT INTO voice_transcript_turns(workspace_id,session_id,seq,role,text,at,received_at) VALUES('default','coverage',?,'user',?,?,?)`, seq, text, at.Format(time.RFC3339Nano), received.Format(time.RFC3339Nano))
+		exec(`INSERT INTO voice_transcript_turns(session_id,seq,role,text,at,received_at) VALUES('coverage',?,'user',?,?,?)`, seq, text, at.Format(time.RFC3339Nano), received.Format(time.RFC3339Nano))
 	}
 	turn(0, "old compact source", now.Add(-3*time.Hour), now.Add(-2*time.Hour))
 	turn(1, "retained raw interval", now.Add(-45*time.Minute), now.Add(-40*time.Minute))
@@ -71,12 +72,12 @@ func TestRealMemoryBatchBoundaryRetainsRegisterCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	register, err := voice.NewRegister(store.DB(), voice.RegisterConfig{RegisterInstruction: promptSet.Register(), CompactInstruction: promptSet.Compact(), Model: cfg, CompactModel: cfg, CompactCharacters: 1000, MemoryBoundary: func(ctx context.Context, o voice.RegisterOwner) (time.Time, error) {
-		return repo.BoundaryAt(ctx, o.WorkspaceID, o.OwnerSubjectID)
+		return repo.BoundaryAt(ctx, o.OwnerSubjectID)
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := voice.RegisterOwner{WorkspaceID: "default", OwnerSubjectID: "owner"}
+	owner := voice.RegisterOwner{OwnerSubjectID: "owner"}
 	if built, err := register.RebuildCompactForOwner(ctx, owner, now); err != nil || !built {
 		t.Fatalf("initial build=%v err=%v", built, err)
 	}
@@ -85,10 +86,10 @@ func TestRealMemoryBatchBoundaryRetainsRegisterCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	ingest := &coverageIngest{}
-	if _, err := repo.runBatch(ctx, ingest, "default", "owner", now, time.Hour); err != nil {
+	if _, err := repo.runBatch(ctx, ingest, "owner", now, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	boundary, err := repo.BoundaryAt(ctx, "default", "owner")
+	boundary, err := repo.BoundaryAt(ctx, "owner")
 	if err != nil || !boundary.Equal(now) || ingest.calls == 0 {
 		t.Fatalf("boundary=%v calls=%d err=%v", boundary, ingest.calls, err)
 	}

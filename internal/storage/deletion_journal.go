@@ -19,7 +19,6 @@ type DeletionRecord struct {
 	Sequence       int64    `json:"sequence"`
 	LineageID      string   `json:"lineage_id"`
 	Generation     int64    `json:"generation"`
-	WorkspaceID    string   `json:"workspace_id"`
 	EntityKind     string   `json:"entity_kind"`
 	EntityID       string   `json:"entity_id"`
 	EntityVersion  int64    `json:"entity_version"`
@@ -35,7 +34,6 @@ type deletionRecordBody struct {
 	Sequence       int64    `json:"sequence"`
 	LineageID      string   `json:"lineage_id"`
 	Generation     int64    `json:"generation"`
-	WorkspaceID    string   `json:"workspace_id"`
 	EntityKind     string   `json:"entity_kind"`
 	EntityID       string   `json:"entity_id"`
 	EntityVersion  int64    `json:"entity_version"`
@@ -63,7 +61,7 @@ func (j *DeletionJournal) Append(record DeletionRecord) (DeletionRecord, error) 
 	if j == nil {
 		return record, errors.New("independent deletion journal is unavailable")
 	}
-	if record.Sequence < 1 || strings.TrimSpace(record.LineageID) == "" || record.Generation < 1 || record.WorkspaceID == "" || record.EntityKind == "" || record.EntityID == "" || record.EntityVersion < 1 {
+	if record.Sequence < 1 || strings.TrimSpace(record.LineageID) == "" || record.Generation < 1 || record.EntityKind == "" || record.EntityID == "" || record.EntityVersion < 1 {
 		return record, errors.New("deletion journal record is incomplete")
 	}
 	if err := os.MkdirAll(filepath.Dir(j.path), 0o700); err != nil {
@@ -101,7 +99,7 @@ func (j *DeletionJournal) Append(record DeletionRecord) (DeletionRecord, error) 
 	}
 	if record.Sequence <= int64(len(records)) {
 		prior := records[record.Sequence-1]
-		if prior.LineageID == record.LineageID && prior.Generation == record.Generation && prior.WorkspaceID == record.WorkspaceID && prior.EntityKind == record.EntityKind && prior.EntityID == record.EntityID && prior.EntityVersion == record.EntityVersion {
+		if prior.LineageID == record.LineageID && prior.Generation == record.Generation && prior.EntityKind == record.EntityKind && prior.EntityID == record.EntityID && prior.EntityVersion == record.EntityVersion {
 			return prior, nil
 		}
 		return record, errors.New("deletion journal sequence is already bound to a different target")
@@ -116,7 +114,7 @@ func (j *DeletionJournal) Append(record DeletionRecord) (DeletionRecord, error) 
 		}
 		record.PreviousHash = last.Hash
 	}
-	body := deletionRecordBody{record.Sequence, record.LineageID, record.Generation, record.WorkspaceID, record.EntityKind, record.EntityID, record.EntityVersion, record.ActorID, record.ReasonCode, record.DeletedAt, append([]string(nil), record.CleanupTargets...), record.PreviousHash}
+	body := deletionRecordBody{record.Sequence, record.LineageID, record.Generation, record.EntityKind, record.EntityID, record.EntityVersion, record.ActorID, record.ReasonCode, record.DeletedAt, append([]string(nil), record.CleanupTargets...), record.PreviousHash}
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return record, err
@@ -193,7 +191,7 @@ func readDeletionRecords(f *os.File) ([]DeletionRecord, error) {
 		if strings.TrimSpace(record.LineageID) == "" || record.Generation < 1 || (lineage != "" && (record.LineageID != lineage || record.Generation < previousGeneration)) {
 			return nil, fmt.Errorf("deletion journal lineage or generation gap at record %d", len(records)+1)
 		}
-		body := deletionRecordBody{record.Sequence, record.LineageID, record.Generation, record.WorkspaceID, record.EntityKind, record.EntityID, record.EntityVersion, record.ActorID, record.ReasonCode, record.DeletedAt, append([]string(nil), record.CleanupTargets...), record.PreviousHash}
+		body := deletionRecordBody{record.Sequence, record.LineageID, record.Generation, record.EntityKind, record.EntityID, record.EntityVersion, record.ActorID, record.ReasonCode, record.DeletedAt, append([]string(nil), record.CleanupTargets...), record.PreviousHash}
 		encoded, err := json.Marshal(body)
 		if err != nil {
 			return nil, err

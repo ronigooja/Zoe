@@ -34,6 +34,9 @@ func capabilityRecoveryFixture(t *testing.T) (*storage.Store, http.Handler, stri
 	if e = storage.RegisterCoreMigrations(store); e != nil {
 		t.Fatal(e)
 	}
+	if e = control.RegisterInstanceMaintenanceMigration(store); e != nil {
+		t.Fatal(e)
+	}
 	server, e := control.NewServer(store, control.Config{RunnerToken: token, RunnerID: "review", RunnerScopes: []string{"capability:deploy"}})
 	if e != nil {
 		t.Fatal(e)
@@ -50,7 +53,7 @@ func capabilityRecoveryFixture(t *testing.T) (*storage.Store, http.Handler, stri
 	insertCapabilityTestDevice(t, store, "device", "owner")
 	svc := &Service{db: store.DB(), server: server, availableCapabilityIDs: map[string]struct{}{"mail.read": {}}, runtimeBackend: runtimeBackendDocker}
 	manifest := contracts.CapabilityManifest{SchemaVersion: 1, ArtifactRef: "oci://registry.example/app@sha256:" + strings.Repeat("a", 64), ArtifactDigest: "sha256:" + strings.Repeat("a", 64), Entrypoint: "/app/run", Capabilities: []string{"mail.read"}, Budget: contracts.CapabilityResourceBudget{CPUMillis: 50, MemoryBytes: 100, DiskBytes: 100, TimeoutSeconds: 10, Concurrency: 1}, Network: contracts.CapabilityNetworkPolicy{Mode: "none"}, HealthCheck: &contracts.CapabilityHealthCheck{Kind: "http", Target: "/health", Port: 8080, IntervalSeconds: 10, TimeoutSeconds: 2, FailureThreshold: 2}}
-	cmd := control.CommandContext{CommandID: "fixture", Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "device", Scopes: []string{"capability:release:submit", "capability:deployment:request", "capability:deployment:authorize"}}, AcceptedAt: time.Now().UTC()}
+	cmd := control.CommandContext{CommandID: "fixture", Principal: contracts.Principal{SubjectID: "owner", DeviceID: "device", Scopes: []string{"capability:release:submit", "capability:deployment:request", "capability:deployment:authorize"}}, AcceptedAt: time.Now().UTC()}
 	tx := begin(t, store.DB())
 	release, _, e := svc.submitRelease(ctx, tx, cmd, contracts.CommandRequest{Payload: marshal(submitReleasePayload{Manifest: manifest})})
 	if e != nil {
@@ -73,7 +76,7 @@ func capabilityRecoveryFixture(t *testing.T) (*storage.Store, http.Handler, stri
 	}
 	tx = begin(t, store.DB())
 	version := int64(1)
-	_, _, e = svc.authorizeDeployment(ctx, tx, cmd, contracts.CommandRequest{ExpectedVersion: &version, Payload: marshal(authorizePayload{DeploymentID: dep.ResourceID, ScopeKind: "workspace", Actions: []string{"install", "stop"}, Budget: manifest.Budget, ExpiresAt: time.Now().Add(time.Hour)})})
+	_, _, e = svc.authorizeDeployment(ctx, tx, cmd, contracts.CommandRequest{ExpectedVersion: &version, Payload: marshal(authorizePayload{DeploymentID: dep.ResourceID, ScopeKind: "instance", Actions: []string{"install", "stop"}, Budget: manifest.Budget, ExpiresAt: time.Now().Add(time.Hour)})})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -164,7 +167,7 @@ func TestReviewUncertainDeploymentsDoNotBlockIndependentClaimsOrCurrentRecovery(
 	}
 	postUncertain(first, "uncertain-first")
 
-	cmd := control.CommandContext{CommandID: "second-deployment", Principal: contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "device", Scopes: []string{"capability:deployment:request", "capability:deployment:authorize"}}, AcceptedAt: time.Now().UTC()}
+	cmd := control.CommandContext{CommandID: "second-deployment", Principal: contracts.Principal{SubjectID: "owner", DeviceID: "device", Scopes: []string{"capability:deployment:request", "capability:deployment:authorize"}}, AcceptedAt: time.Now().UTC()}
 	tx := begin(t, store.DB())
 	requested, _, err := (&Service{db: store.DB()}).requestDeployment(ctx, tx, cmd, contracts.CommandRequest{Payload: marshal(deploymentRequestPayload{ServiceID: "independent", ReleaseDigest: first.ReleaseDigest, Operation: "install"})})
 	if err != nil {
@@ -175,7 +178,7 @@ func TestReviewUncertainDeploymentsDoNotBlockIndependentClaimsOrCurrentRecovery(
 	}
 	version := requested.ResourceVersion
 	tx = begin(t, store.DB())
-	_, _, err = (&Service{db: store.DB()}).authorizeDeployment(ctx, tx, cmd, contracts.CommandRequest{ExpectedVersion: &version, Payload: marshal(authorizePayload{DeploymentID: requested.ResourceID, ScopeKind: "workspace", Actions: []string{"install"}, Budget: first.Manifest.Budget, ExpiresAt: time.Now().UTC().Add(time.Hour)})})
+	_, _, err = (&Service{db: store.DB()}).authorizeDeployment(ctx, tx, cmd, contracts.CommandRequest{ExpectedVersion: &version, Payload: marshal(authorizePayload{DeploymentID: requested.ResourceID, ScopeKind: "instance", Actions: []string{"install"}, Budget: first.Manifest.Budget, ExpiresAt: time.Now().UTC().Add(time.Hour)})})
 	if err != nil {
 		t.Fatal(err)
 	}

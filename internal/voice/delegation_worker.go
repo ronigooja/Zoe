@@ -114,9 +114,9 @@ func (s *Service) applyDelegation(ctx context.Context, id string) error {
 	cmd := control.CommandContext{AcceptedAt: s.now().UTC()}
 	// Read the actor from the original bound session in the applying transaction.
 	// Do not look up a current call, and don't require the original to remain active.
-	err = tx.QueryRowContext(ctx, `SELECT v.workspace_id,s.owner_id,s.device_id,v.session_id,v.generation,v.turn_id,v.revision
- FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id AND s.workspace_id=v.workspace_id AND s.generation=v.generation
- WHERE v.id=? AND v.handoff_handled=0 AND v.transcript_seq IS NOT NULL`, id).Scan(&cmd.Principal.WorkspaceID, &cmd.Principal.SubjectID, &cmd.Principal.DeviceID, &p.SessionID, &p.Generation, &p.TurnID, &p.Revision)
+	err = tx.QueryRowContext(ctx, `SELECT s.owner_id,s.device_id,v.session_id,v.generation,v.turn_id,v.revision
+ FROM voice_turns v JOIN voice_sessions s ON s.id=v.session_id AND s.generation=v.generation
+ WHERE v.id=? AND v.handoff_handled=0 AND v.transcript_seq IS NOT NULL`, id).Scan(&cmd.Principal.SubjectID, &cmd.Principal.DeviceID, &p.SessionID, &p.Generation, &p.TurnID, &p.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}

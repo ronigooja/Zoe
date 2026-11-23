@@ -63,7 +63,7 @@ func TestResultCapabilityActivation(t *testing.T) {
 	if status != "delivered" || code != "gateway_accepted" || attempts != 1 || posts.Load() != 3 {
 		t.Fatalf("%s %s attempts=%d posts=%d", status, code, attempts, posts.Load())
 	}
-	ok, code := r.svc.deliverDurableText(context.Background(), "default", "user-1", "fast_reply", "fast-1", "s1", 1, "generic durable text")
+	ok, code := r.svc.deliverDurableText(context.Background(), "user-1", "fast_reply", "fast-1", "s1", 1, "generic durable text")
 	if !ok || code != "gateway_accepted" || posts.Load() != 4 || probes.Load() != 1 {
 		t.Fatalf("generic=%v %s posts=%d probes=%d", ok, code, posts.Load(), probes.Load())
 	}
@@ -85,7 +85,7 @@ func TestResultCapabilityUnsupportedRetainsPending(t *testing.T) {
 			if status != "pending" || code != "receipt_capability_disabled" || attempts != 0 || posts.Load() != 0 {
 				t.Fatalf("%s %s attempts=%d posts=%d", status, code, attempts, posts.Load())
 			}
-			ok, code := r.svc.deliverDurableText(context.Background(), "default", "user-1", "fast_reply", "fast-1", "s1", 1, "generic")
+			ok, code := r.svc.deliverDurableText(context.Background(), "user-1", "fast_reply", "fast-1", "s1", 1, "generic")
 			if ok || code != "receipt_capability_disabled" || probes.Load() != 1 {
 				t.Fatalf("%v %s probes=%d", ok, code, probes.Load())
 			}

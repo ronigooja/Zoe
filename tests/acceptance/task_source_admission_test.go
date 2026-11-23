@@ -122,7 +122,7 @@ func TestTaskSourceAdmissionSharesCommandTransaction(t *testing.T) {
 	if err := store.DB().QueryRow(`SELECT subject_id FROM actors WHERE id=?`, device.Device.ID).Scan(&subject); err != nil {
 		t.Fatal(err)
 	}
-	principal := contracts.Principal{WorkspaceID: device.Device.WorkspaceID, SubjectID: subject, DeviceID: device.Device.ID}
+	principal := contracts.Principal{SubjectID: subject, DeviceID: device.Device.ID}
 	grantSnapshot := json.RawMessage(`{"grant_id":"stored-grant"}`)
 	ctx := context.Background()
 	tx, err := store.DB().BeginTx(ctx, nil)

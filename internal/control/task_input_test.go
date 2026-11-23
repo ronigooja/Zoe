@@ -14,16 +14,16 @@ func TestTypedTaskInputQuestionBinding(t *testing.T) {
 			store, server, _ := instanceAuthFixture(t)
 			now := time.Now().UTC()
 			at := now.Format(time.RFC3339Nano)
-			if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id,interaction_state,interaction_run_id,interaction_action_digest,interaction_question) VALUES('input-task','default','title','goal','user','profile','waiting',1,?,?,'instance','cmd','owner','awaiting_message','input-run','digest','Which?')`, at, at); err != nil {
+			if _, err := store.DB().Exec(`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id,interaction_state,interaction_run_id,interaction_action_digest,interaction_question) VALUES('input-task','title','goal','user','profile','waiting',1,?,?,'instance','cmd','owner','awaiting_message','input-run','digest','Which?')`, at, at); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := store.DB().Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('input-run','default','input-task','attempt','active','run',1,1,'runner','instance','cmd','goal','profile','opencode','runtime','model','worker',?)`, at); err != nil {
+			if _, err := store.DB().Exec(`INSERT INTO runs(id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('input-run','input-task','attempt','active','run',1,1,'runner','instance','cmd','goal','profile','opencode','runtime','model','worker',?)`, at); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := store.DB().Exec(`INSERT INTO pending_runtime_actions(id,workspace_id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES('input-question','default','input-task','input-run',1,'request','worker_question','Which?','digest',?,?)`, now.Add(time.Hour).Format(time.RFC3339Nano), at); err != nil {
+			if _, err := store.DB().Exec(`INSERT INTO pending_runtime_actions(id,task_id,run_id,fence,request_id,kind,question,action_digest,expires_at,created_at) VALUES('input-question','input-task','input-run',1,'request','worker_question','Which?','digest',?,?)`, now.Add(time.Hour).Format(time.RFC3339Nano), at); err != nil {
 				t.Fatal(err)
 			}
-			principal := contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "instance"}
+			principal := contracts.Principal{SubjectID: "owner", DeviceID: "instance"}
 			switch mode {
 			case "foreign":
 				principal.SubjectID = "other"

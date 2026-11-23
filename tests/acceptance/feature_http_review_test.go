@@ -81,13 +81,13 @@ func TestReviewVoiceAtomicTaskSourceOverHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('review-atomic','default',?,?,'atomic-request',X'01',1,'active',?,?)`, subject, device, now, now); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,generation,state,created_at,updated_at) VALUES('review-atomic',?,?,'atomic-request',X'01',1,'active',?,?)`, subject, device, now, now); err != nil {
 		t.Fatal(err)
 	}
 	create := func(revision int, key string) int {
 		content := fmt.Sprintf("confirmed transcript %d", revision)
 		hash := sha256.Sum256([]byte(content))
-		if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES(?,'default','review-atomic',1,'stable',?,?,?,?,?)`, fmt.Sprintf("review-turn-%d", revision), revision, content, hash[:], now, fmt.Sprintf("review-commit-%d", revision)); err != nil {
+		if _, err := store.DB().Exec(`INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES(?,'review-atomic',1,'stable',?,?,?,?,?)`, fmt.Sprintf("review-turn-%d", revision), revision, content, hash[:], now, fmt.Sprintf("review-commit-%d", revision)); err != nil {
 			t.Fatal(err)
 		}
 		// This source-admission fixture supplies the already accepted register

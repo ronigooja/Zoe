@@ -146,7 +146,7 @@ def independent_deletion_journal_metadata(path: Path, instance_state: dict[str, 
             fail(f"independent deletion journal identity is invalid at record {number}")
         if lineage and (record["lineage_id"] != lineage or record["generation"] < generation):
             fail(f"independent deletion journal generation is discontinuous at record {number}")
-        body_keys = ("sequence", "lineage_id", "generation", "workspace_id", "entity_kind", "entity_id", "entity_version", "actor_id", "reason_code", "deleted_at", "cleanup_targets", "previous_hash")
+        body_keys = ("sequence", "lineage_id", "generation", "entity_kind", "entity_id", "entity_version", "actor_id", "reason_code", "deleted_at", "cleanup_targets", "previous_hash")
         if set(record) != set(body_keys) | {"hash"} or not isinstance(record.get("cleanup_targets"), list):
             fail(f"independent deletion journal record {number} has an unsupported schema")
         body = {key: record[key] for key in body_keys}

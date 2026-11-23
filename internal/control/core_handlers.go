@@ -93,7 +93,7 @@ func (s *Server) commandProjectCreate(ctx context.Context, tx *sql.Tx, c Command
 		return contracts.CommandResult{}, nil, err
 	}
 	at := c.AcceptedAt.Format(time.RFC3339Nano)
-	_, err = tx.ExecContext(ctx, `INSERT INTO projects(id,workspace_id,name,description,status,version,created_at,updated_at,owner_subject_id) VALUES(?,?,?,?,'active',1,?,?,?)`, id, c.Principal.WorkspaceID, p.Name, p.Description, at, at, c.Principal.SubjectID)
+	_, err = tx.ExecContext(ctx, `INSERT INTO projects(id,name,description,status,version,created_at,updated_at,owner_subject_id) VALUES(?,?,?,'active',1,?,?,?)`, id, p.Name, p.Description, at, at, c.Principal.SubjectID)
 	if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
@@ -117,7 +117,7 @@ func (s *Server) commandTaskCreate(ctx context.Context, tx *sql.Tx, c CommandCon
 // lineage snapshot, and initial-entry rules as the user command path. The
 // caller owns tx and must append result.Events before committing it.
 func (s *Server) AdmitTaskTx(ctx context.Context, tx *sql.Tx, in AdmissionContext) (TaskAdmissionResult, error) {
-	if tx == nil || in.IdempotencyKey == "" || in.Principal.WorkspaceID == "" || in.Principal.SubjectID == "" || in.Principal.DeviceID == "" {
+	if tx == nil || in.IdempotencyKey == "" || in.Principal.SubjectID == "" || in.Principal.DeviceID == "" {
 		return TaskAdmissionResult{}, apiError(400, "invalid_admission", "transaction, stable idempotency key, and trusted principal are required", nil)
 	}
 	dispatchEnabled, err := DispatchEnabledTx(ctx, tx)
@@ -190,7 +190,7 @@ func (s *Server) AdmitTaskTx(ctx context.Context, tx *sql.Tx, in AdmissionContex
 		childLimit = profile.ChildPolicy.MaxChildRuns
 	}
 	stamp := at.Format(time.RFC3339Nano)
-	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,project_id,title,goal,source,profile_id,harness,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id,lineage_root_task_id,lineage_depth,child_policy_json,root_child_limit) VALUES(?,?,?,?,?,?,?,?, 'queued',1,?,?,?,?,?,?,?,0,?,?)`, id, in.Principal.WorkspaceID, nullString(in.ProjectID), in.Title, in.Goal, in.Source, profileID, profile.Harness, stamp, stamp, stamp, in.Principal.DeviceID, in.IdempotencyKey, in.Principal.SubjectID, id, policyJSON, childLimit)
+	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(id,project_id,title,goal,source,profile_id,harness,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id,lineage_root_task_id,lineage_depth,child_policy_json,root_child_limit) VALUES(?,?,?,?,?,?,?, 'queued',1,?,?,?,?,?,?,?,0,?,?)`, id, nullString(in.ProjectID), in.Title, in.Goal, in.Source, profileID, profile.Harness, stamp, stamp, stamp, in.Principal.DeviceID, in.IdempotencyKey, in.Principal.SubjectID, id, policyJSON, childLimit)
 	if err != nil {
 		return TaskAdmissionResult{}, err
 	}
@@ -211,7 +211,7 @@ func (s *Server) AdmitTaskTx(ctx context.Context, tx *sql.Tx, in AdmissionContex
 			return TaskAdmissionResult{}, apiError(400, "invalid_source", "validated task source returned invalid task content", nil)
 		}
 		in.Title, in.Goal, in.InitialMessage = sourceRequest.Title, sourceRequest.Goal, sourceRequest.InitialMessage
-		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET title=?,goal=? WHERE id=? AND workspace_id=?`, in.Title, in.Goal, id, in.Principal.WorkspaceID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET title=?,goal=? WHERE id=?`, in.Title, in.Goal, id); err != nil {
 			return TaskAdmissionResult{}, err
 		}
 		sourceEvents = events
@@ -223,7 +223,7 @@ func (s *Server) AdmitTaskTx(ctx context.Context, tx *sql.Tx, in AdmissionContex
 		if err != nil {
 			return TaskAdmissionResult{}, err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,?,?,'user_message',?,?,?)`, entryID, id, in.Principal.WorkspaceID, in.InitialMessage, in.Principal.DeviceID, stamp); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES(?,?,'user_message',?,?,?)`, entryID, id, in.InitialMessage, in.Principal.DeviceID, stamp); err != nil {
 			return TaskAdmissionResult{}, err
 		}
 		entry := contracts.TaskEntry{ID: entryID, Kind: "user_message", Content: in.InitialMessage, AuthorDeviceID: in.Principal.DeviceID, CreatedAt: at}
@@ -265,12 +265,12 @@ func (s *Server) commandTaskStop(ctx context.Context, tx *sql.Tx, c CommandConte
 	}
 	at := c.AcceptedAt.Format(time.RFC3339Nano)
 	var liveRuns int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE task_id=? AND workspace_id=? AND status IN ('dispatching','active','uncertain')`, p.TaskID, c.Principal.WorkspaceID).Scan(&liveRuns); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE task_id=? AND status IN ('dispatching','active','uncertain')`, p.TaskID).Scan(&liveRuns); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	if status == "queued" || liveRuns == 0 {
 		version++
-		_, err = tx.ExecContext(ctx, `UPDATE tasks SET status='canceled',version=?,updated_at=?,finished_at=? WHERE id=? AND workspace_id=?`, version, at, at, p.TaskID, c.Principal.WorkspaceID)
+		_, err = tx.ExecContext(ctx, `UPDATE tasks SET status='canceled',version=?,updated_at=?,finished_at=? WHERE id=?`, version, at, at, p.TaskID)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
@@ -280,20 +280,20 @@ func (s *Server) commandTaskStop(ctx context.Context, tx *sql.Tx, c CommandConte
 		if err = cancelPendingChildProposals(ctx, tx, p.TaskID, c.AcceptedAt); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE approvals SET status='canceled',version=version+1 WHERE task_id=? AND workspace_id=? AND status='pending'`, p.TaskID, c.Principal.WorkspaceID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE approvals SET status='canceled',version=version+1 WHERE task_id=? AND status='pending'`, p.TaskID); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 	} else {
-		if _, err = tx.ExecContext(ctx, `UPDATE runs SET desired_control='stop',control_version=control_version+1 WHERE task_id=? AND workspace_id=? AND status IN ('dispatching','active','uncertain')`, p.TaskID, c.Principal.WorkspaceID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE runs SET desired_control='stop',control_version=control_version+1 WHERE task_id=? AND status IN ('dispatching','active','uncertain')`, p.TaskID); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 		version++
-		_, err = tx.ExecContext(ctx, `UPDATE tasks SET version=?,updated_at=? WHERE id=? AND workspace_id=?`, version, at, p.TaskID, c.Principal.WorkspaceID)
+		_, err = tx.ExecContext(ctx, `UPDATE tasks SET version=?,updated_at=? WHERE id=?`, version, at, p.TaskID)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE approvals SET status='canceled',version=version+1 WHERE task_id=? AND workspace_id=? AND status='pending'`, p.TaskID, c.Principal.WorkspaceID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE approvals SET status='canceled',version=version+1 WHERE task_id=? AND status='pending'`, p.TaskID); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	return contracts.CommandResult{ResourceType: "task", ResourceID: p.TaskID, ResourceVersion: version}, []contracts.Event{event("task.stop_requested", "task", p.TaskID, version, map[string]any{"task_id": p.TaskID, "reason": p.Reason, "status": status})}, nil
@@ -310,7 +310,7 @@ func (s *Server) commandTaskApprove(ctx context.Context, tx *sql.Tx, c CommandCo
 	var taskID, status, boundStatus string
 	var version, boundTaskVersion, currentTaskVersion int64
 	var expires sql.NullString
-	err := tx.QueryRowContext(ctx, `SELECT task_id,status,version,task_version,expires_at FROM approvals WHERE id=? AND workspace_id=?`, p.ApprovalID, c.Principal.WorkspaceID).Scan(&taskID, &status, &version, &boundTaskVersion, &expires)
+	err := tx.QueryRowContext(ctx, `SELECT task_id,status,version,task_version,expires_at FROM approvals WHERE id=?`, p.ApprovalID).Scan(&taskID, &status, &version, &boundTaskVersion, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(404, "not_found", "approval not found", nil)
 	}
@@ -387,7 +387,7 @@ func (s *Server) commandTaskAcceptResult(ctx context.Context, tx *sql.Tx, c Comm
 		return contracts.CommandResult{}, nil, apiError(409, "state_conflict", "task has no result awaiting user acceptance", map[string]any{"status": status})
 	}
 	var runStatus string
-	err = tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE id=? AND task_id=? AND workspace_id=?`, p.RunID, p.TaskID, c.Principal.WorkspaceID).Scan(&runStatus)
+	err = tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE id=? AND task_id=?`, p.RunID, p.TaskID).Scan(&runStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(404, "not_found", "task run not found", nil)
 	}
@@ -398,7 +398,7 @@ func (s *Server) commandTaskAcceptResult(ctx context.Context, tx *sql.Tx, c Comm
 		return contracts.CommandResult{}, nil, apiError(409, "state_conflict", "run termination is not confirmed", map[string]any{"run_status": runStatus})
 	}
 	var evidenceCount int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM evidence WHERE workspace_id=? AND task_id=? AND run_id=? AND kind='agent_result' AND source='runner' AND verified=0`, c.Principal.WorkspaceID, p.TaskID, p.RunID).Scan(&evidenceCount); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM evidence WHERE task_id=? AND run_id=? AND kind='agent_result' AND source='runner' AND verified=0`, p.TaskID, p.RunID).Scan(&evidenceCount); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	if evidenceCount == 0 {
@@ -408,15 +408,15 @@ func (s *Server) commandTaskAcceptResult(ctx context.Context, tx *sql.Tx, c Comm
 	if p.Decision == "reject" {
 		next = "waiting"
 	}
-	return finalizeTaskResultTx(ctx, tx, c.Principal.WorkspaceID, p.TaskID, p.RunID, version, next, p.Decision, p.Comment, c.AcceptedAt)
+	return finalizeTaskResultTx(ctx, tx, p.TaskID, p.RunID, version, next, p.Decision, p.Comment, c.AcceptedAt)
 }
 
 // finalizeTaskResultTx applies both ordinary completion and compatibility result
 // acceptance. Its event is also the capability concurrency-release contract.
 // Runner evidence remains runner evidence; verified denotes run finalization.
-func finalizeTaskResultTx(ctx context.Context, tx *sql.Tx, workspace, taskID, runID string, version int64, next, decision, comment string, at time.Time) (contracts.CommandResult, []contracts.Event, error) {
+func finalizeTaskResultTx(ctx context.Context, tx *sql.Tx, taskID, runID string, version int64, next, decision, comment string, at time.Time) (contracts.CommandResult, []contracts.Event, error) {
 	version++
-	_, err := tx.ExecContext(ctx, `UPDATE tasks SET status=?,version=?,updated_at=?,finished_at=CASE WHEN ?='complete' THEN ? ELSE NULL END,interaction_state='none',interaction_expired_kind='',interaction_scope='',interaction_run_id='',interaction_action_digest='',interaction_expires_at=NULL,interaction_expected_version=0,interaction_question='' WHERE id=? AND workspace_id=?`, next, version, at.Format(time.RFC3339Nano), next, at.Format(time.RFC3339Nano), taskID, workspace)
+	_, err := tx.ExecContext(ctx, `UPDATE tasks SET status=?,version=?,updated_at=?,finished_at=CASE WHEN ?='complete' THEN ? ELSE NULL END,interaction_state='none',interaction_expired_kind='',interaction_scope='',interaction_run_id='',interaction_action_digest='',interaction_expires_at=NULL,interaction_expected_version=0,interaction_question='' WHERE id=?`, next, version, at.Format(time.RFC3339Nano), next, at.Format(time.RFC3339Nano), taskID)
 	if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
@@ -432,7 +432,7 @@ func finalizeTaskResultTx(ctx context.Context, tx *sql.Tx, workspace, taskID, ru
 			return contracts.CommandResult{}, nil, err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE approvals SET status='canceled',version=version+1 WHERE task_id=? AND workspace_id=? AND status='pending'`, taskID, workspace)
+	_, err = tx.ExecContext(ctx, `UPDATE approvals SET status='canceled',version=version+1 WHERE task_id=? AND status='pending'`, taskID)
 	if err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
@@ -458,7 +458,7 @@ func validTaskTransition(from, to string) bool {
 func taskVersionStatus(ctx context.Context, tx *sql.Tx, principal contracts.Principal, id string) (int64, string, error) {
 	var v int64
 	var status string
-	err := tx.QueryRowContext(ctx, `SELECT version,status FROM tasks WHERE id=? AND workspace_id=?`, id, principal.WorkspaceID).Scan(&v, &status)
+	err := tx.QueryRowContext(ctx, `SELECT version,status FROM tasks WHERE id=?`, id).Scan(&v, &status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, "", apiError(404, "not_found", "task not found", nil)
 	}

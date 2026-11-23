@@ -185,9 +185,8 @@ SELECT target,0,strftime('%Y-%m-%dT%H:%M:%fZ','now'),'adapter_missing' FROM (
 	return store.RegisterMigration(storage.Migration{Namespace: "instance", Version: 1004, Name: "private_export_temp_registry", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE zoe_export_temp_registry (
   export_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   owner_id TEXT NOT NULL,
-  export_scope TEXT NOT NULL CHECK(export_scope IN ('personal','workspace')),
+  export_scope TEXT NOT NULL CHECK(export_scope IN ('personal','instance')),
   created_deletion_sequence INTEGER NOT NULL CHECK(created_deletion_sequence>=0),
   status TEXT NOT NULL CHECK(status IN ('active','invalidated','cleaned')),
   invalidation_sequence INTEGER NOT NULL DEFAULT 0 CHECK(invalidation_sequence>=0),
@@ -195,7 +194,7 @@ SELECT target,0,strftime('%Y-%m-%dT%H:%M:%fZ','now'),'adapter_missing' FROM (
   updated_at TEXT NOT NULL,
   last_error TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX zoe_export_temp_scope ON zoe_export_temp_registry(workspace_id,status,created_deletion_sequence);`)
+CREATE INDEX zoe_export_temp_scope ON zoe_export_temp_registry(status,created_deletion_sequence);`)
 		return err
 	}})
 }

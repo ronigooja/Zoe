@@ -18,10 +18,10 @@ func TestTranscriptTableIsIncludedInExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	_, err = store.DB().Exec(`CREATE TABLE voice_sessions(id TEXT,workspace_id TEXT,owner_id TEXT);
-CREATE TABLE voice_transcript_turns(workspace_id TEXT,session_id TEXT,seq INTEGER,role TEXT,text TEXT,at TEXT,received_at TEXT);
-INSERT INTO voice_sessions VALUES('mine','default','owner'),('other','default','other'),('foreign','foreign','owner');
-INSERT INTO voice_transcript_turns VALUES('default','mine',1,'user','  exact text  ','at','received'),('default','other',1,'assistant','private other','at','received'),('foreign','foreign',1,'user','foreign private','at','received');`)
+	_, err = store.DB().Exec(`CREATE TABLE voice_sessions(id TEXT,owner_id TEXT);
+CREATE TABLE voice_transcript_turns(session_id TEXT,seq INTEGER,role TEXT,text TEXT,at TEXT,received_at TEXT);
+INSERT INTO voice_sessions VALUES('mine','owner'),('other','other');
+INSERT INTO voice_transcript_turns VALUES('mine',1,'user','  exact text  ','at','received'),('other',1,'assistant','private other','at','received'),('missing',1,'user','unowned private','at','received');`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ INSERT INTO voice_transcript_turns VALUES('default','mine',1,'user','  exact tex
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	p := contracts.Principal{WorkspaceID: "default", SubjectID: "owner"}
+	p := contracts.Principal{SubjectID: "owner"}
 	var out bytes.Buffer
 	counts := exportCounter{}
 	out.WriteString(`{"existing":[]`)
@@ -48,7 +48,7 @@ INSERT INTO voice_transcript_turns VALUES('default','mine',1,'user','  exact tex
 	if _, exists := data["voice_call_summaries"]; exists {
 		t.Fatal("retired summaries still exported")
 	}
-	manifest := buildExportManifest("export", p, "workspace", 0, "lineage", 1, 0, counts, 0, "")
+	manifest := buildExportManifest("export", p, "instance", 0, "lineage", 1, 0, counts, 0, "")
 	inventory := manifest["content"].(map[string]any)["inventory"].([]string)
 	for _, name := range inventory {
 		if name == "voice_call_summaries" || name == "voice_summary_jobs" {

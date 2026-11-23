@@ -28,6 +28,8 @@ type Profile struct {
 	PermissionTier                  string
 }
 
+// workspace.read/write and the workspace scope below describe the physical
+// runner execution directory, not a product identity or authorization tenant.
 var Definitions = map[string]Profile{
 	"zoe-worker":  {ID: "zoe-worker", SystemPrompt: "Act as Zoe's Worker. Complete the assigned task using tools and subagents as needed and report evidence.", ModelRouteKey: "default", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, ScopeDefaults: []string{"workspace"}, PermissionTier: TierExternalPaths},
 	"zoe-steward": {ID: "zoe-steward", SystemPrompt: "Act as Zoe's Worker. Execute the assigned task using tools and subagents as needed; report evidence.", ModelRouteKey: "default", CapabilityIDs: []string{"workspace.read", "workspace.write", "external.read"}, ScopeDefaults: []string{"workspace"}, PermissionTier: TierFull},

@@ -121,16 +121,28 @@ class LifecycleCLI(unittest.TestCase):
             source.chmod(0o600)
             output = self.root / (key_format + ".zip")
             opener = Opener()
-            zoe_export.export_archive("https://instance.example/base", source, key_format, output, "workspace", opener)
+            zoe_export.export_archive("https://instance.example/base", source, key_format, output, "instance", opener)
+            self.assertEqual(opener.request.full_url, "https://instance.example/base/v1/export?scope=instance")
             self.assertEqual(output.read_bytes(), b"PK-fixture")
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
             self.assertNotIn(key, opener.request.full_url)
             self.assertEqual(opener.request.get_header("Authorization"), "Bearer " + key)
             with self.assertRaises(FileExistsError):
-                zoe_export.export_archive("https://instance.example/base", source, key_format, output, "workspace", opener)
+                zoe_export.export_archive("https://instance.example/base", source, key_format, output, "instance", opener)
         source.chmod(0o644)
         with self.assertRaises(ValueError):
             zoe_export.read_instance_key(source, "plain")
+
+    def test_export_rejects_retired_scope_before_transport(self):
+        opener = mock.Mock()
+        output = self.root / "unsupported.zip"
+        with self.assertRaisesRegex(ValueError, "personal or instance"):
+            zoe_export.export_archive(
+                "https://instance.example", self.root / "unused-key", "plain",
+                output, "workspace", opener,
+            )
+        opener.open.assert_not_called()
+        self.assertFalse(output.exists())
 
     def test_failed_export_removes_partial_file_and_refuses_redirects(self):
         source = self.root / "key"

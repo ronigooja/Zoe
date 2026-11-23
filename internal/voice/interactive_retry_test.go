@@ -112,7 +112,7 @@ func TestInteractiveClassificationHTTPFailures(t *testing.T) {
 				}
 				for i := 0; i < 2; i++ {
 					id := fmt.Sprintf("retry-%d", i)
-					_, err := db.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request) VALUES(?,'default','handoff-session',1,?,1,'test',X'01',? ,?,?,?)`, id, id, time.Now().UTC().Format(time.RFC3339Nano), id, func() any {
+					_, err := db.DB().Exec(`INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,exits,request) VALUES(?,'handoff-session',1,?,1,'test',X'01',? ,?,?,?)`, id, id, time.Now().UTC().Format(time.RFC3339Nano), id, func() any {
 						if consumer == "steward" {
 							return "task"
 						}
@@ -199,7 +199,7 @@ func TestInteractiveRegisterClassificationDeadline(t *testing.T) {
 			return nil
 		}
 	}
-	_, err = db.DB().Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('deadline','default','handoff-session',1,'deadline',1,'test',X'01',?,'deadline')`, time.Now().UTC().Format(time.RFC3339Nano))
+	_, err = db.DB().Exec(`INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('deadline','handoff-session',1,'deadline',1,'test',X'01',?,'deadline')`, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatal(err)
 	}

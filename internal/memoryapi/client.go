@@ -143,8 +143,8 @@ func (c *Client) DeleteAll(ctx context.Context, user string) error {
 	return c.call(ctx, "delete-all", map[string]string{"user": user}, &out)
 }
 
-// User uses a JSON tuple so workspace/owner separators cannot collide.
-func User(workspace, owner string) string {
-	data, _ := json.Marshal([]string{workspace, owner})
+// User namespaces the owner by immutable instance lineage.
+func User(lineage, owner string) string {
+	data, _ := json.Marshal([]string{lineage, owner})
 	return string(data)
 }

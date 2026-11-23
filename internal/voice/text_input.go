@@ -20,7 +20,7 @@ func (s *Service) insertTextInput(ctx context.Context, tx *sql.Tx, cmd control.C
 		return apiError(400, "invalid_request", "Text input is invalid", nil)
 	}
 	at := cmd.AcceptedAt.UTC().Format(time.RFC3339Nano)
-	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_text_inputs(command_id,workspace_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, cmd.CommandID, cmd.Principal.WorkspaceID, cmd.Principal.SubjectID, text, at, at, at)
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_text_inputs(command_id,owner_subject_id,text,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?)`, cmd.CommandID, cmd.Principal.SubjectID, text, at, at, at)
 	return err
 }
 func (s *Service) commandVoiceTextInput(ctx context.Context, tx *sql.Tx, cmd control.CommandContext, req contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
@@ -41,20 +41,20 @@ func (s *Service) commandVoiceTextInput(ctx context.Context, tx *sql.Tx, cmd con
 }
 
 type voiceInputDelivery struct {
-	kind, id, workspace, owner, text string
-	attempts                         int
+	kind, id, owner, text string
+	attempts              int
 }
 
 func (s *Service) dispatchVoiceInputs(ctx context.Context) {
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT 'user_text',command_id,workspace_id,owner_subject_id,text,attempts FROM voice_text_inputs WHERE status='pending' AND coalesce(next_attempt_at,'')<=? UNION ALL SELECT kind,source_id,workspace_id,owner_subject_id,text,attempts FROM voice_input_notices WHERE status='pending' AND coalesce(next_attempt_at,'')<=? LIMIT ?`, now, now, s.limits.Int("voice_text_sweep_rows"))
+	rows, err := s.db.QueryContext(ctx, `SELECT 'user_text',command_id,owner_subject_id,text,attempts FROM voice_text_inputs WHERE status='pending' AND coalesce(next_attempt_at,'')<=? UNION ALL SELECT kind,source_id,owner_subject_id,text,attempts FROM voice_input_notices WHERE status='pending' AND coalesce(next_attempt_at,'')<=? LIMIT ?`, now, now, s.limits.Int("voice_text_sweep_rows"))
 	if err != nil {
 		return
 	}
 	var batch []voiceInputDelivery
 	for rows.Next() {
 		var d voiceInputDelivery
-		if rows.Scan(&d.kind, &d.id, &d.workspace, &d.owner, &d.text, &d.attempts) == nil {
+		if rows.Scan(&d.kind, &d.id, &d.owner, &d.text, &d.attempts) == nil {
 			batch = append(batch, d)
 		}
 	}
@@ -64,7 +64,7 @@ func (s *Service) dispatchVoiceInputs(ctx context.Context) {
 	}
 }
 func (s *Service) deliverVoiceInput(ctx context.Context, d voiceInputDelivery) {
-	unlock := s.lockUIOwner(d.workspace, d.owner)
+	unlock := s.lockUIOwner(d.owner)
 	defer unlock()
 	table, where, args := "voice_input_notices", "kind=? AND source_id=?", []any{d.kind, d.id}
 	if d.kind == "user_text" {
@@ -95,7 +95,7 @@ func (s *Service) deliverVoiceInput(ctx context.Context, d voiceInputDelivery) {
 	}
 	var session, gateway string
 	var generation int64
-	err = s.db.QueryRowContext(ctx, `SELECT id,gateway_session_id,generation FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND state='active' LIMIT 1`, d.workspace, d.owner).Scan(&session, &gateway, &generation)
+	err = s.db.QueryRowContext(ctx, `SELECT id,gateway_session_id,generation FROM voice_sessions WHERE owner_id=? AND state='active' LIMIT 1`, d.owner).Scan(&session, &gateway, &generation)
 	if err == sql.ErrNoRows || (err == nil && gateway == "") {
 		update("pending", "no_active_call", false, 30*time.Second)
 		return
@@ -109,7 +109,7 @@ func (s *Service) deliverVoiceInput(ctx context.Context, d voiceInputDelivery) {
 		return
 	}
 	prefix := map[string]string{"user_text": "[User text input] ", "ui_input_request": "The background tool has asked the user for input. Request: ", "ui_input_received": "The background tool received the user's input. Content: "}[d.kind]
-	ok, code := s.deliverDurableText(ctx, d.workspace, d.owner, d.kind, d.id, session, generation, prefix+d.text)
+	ok, code := s.deliverDurableText(ctx, d.owner, d.kind, d.id, session, generation, prefix+d.text)
 	if !ok {
 		update("pending", code, false, 30*time.Second)
 		return
@@ -130,7 +130,7 @@ func (s *Service) deliverVoiceInput(ctx context.Context, d voiceInputDelivery) {
 	if err != nil || n != 1 {
 		return
 	}
-	if recordContextEvent(ctx, tx, contextEvent{workspace: d.workspace, owner: d.owner, session: session, kind: d.kind, id: d.id, role: contextEventRole(d.kind), text: d.text, at: completed}) != nil {
+	if recordContextEvent(ctx, tx, contextEvent{owner: d.owner, session: session, kind: d.kind, id: d.id, role: contextEventRole(d.kind), text: d.text, at: completed}) != nil {
 		return
 	}
 	_ = tx.Commit()

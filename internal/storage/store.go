@@ -337,6 +337,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 		if record.name != migration.Name {
 			rows.Close()
+			if migration.Name == "instance_authority_baseline" && record.name == "core_authority" {
+				return errors.New("previous Zoe authority baseline is unsupported; deploy a fresh Zoe instance")
+			}
 			return fmt.Errorf("migration %d name mismatch: database=%q binary=%q", record.version, record.name, migration.Name)
 		}
 		if record.namespace != "" && record.namespace != migration.Namespace {

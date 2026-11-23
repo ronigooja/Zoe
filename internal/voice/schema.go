@@ -22,7 +22,6 @@ func RegisterMigrations(store *storage.Store) error {
 		_, err := tx.ExecContext(ctx, `
 CREATE TABLE voice_sessions (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   owner_id TEXT NOT NULL,
   device_id TEXT NOT NULL,
   request_id TEXT NOT NULL,
@@ -36,14 +35,13 @@ CREATE TABLE voice_sessions (
   heartbeat_at TEXT,
   ended_at TEXT,
   last_error_code TEXT NOT NULL DEFAULT '', account_lease_id TEXT NOT NULL DEFAULT '', account_lease_generation INTEGER NOT NULL DEFAULT 0, account_id_hash BLOB NOT NULL DEFAULT '', gateway_unbound INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbound IN (0,1)), gateway_unbind_unknown INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbind_unknown IN (0,1)), gateway_media_generation INTEGER NOT NULL DEFAULT 0, opening_context_delivery TEXT NOT NULL DEFAULT 'unsupported' CHECK(opening_context_delivery IN ('delivered','unverified','unsupported')), opening_context_version INTEGER NOT NULL DEFAULT 0, opening_context_chars INTEGER NOT NULL DEFAULT 0, opening_context_manifest BLOB NOT NULL DEFAULT '', gateway_context_chars INTEGER NOT NULL DEFAULT 0, gateway_request_id TEXT NOT NULL DEFAULT '',
-  UNIQUE(workspace_id,owner_id,request_id)
+  UNIQUE(owner_id,request_id)
 );
-CREATE UNIQUE INDEX voice_sessions_owner_lease ON voice_sessions(workspace_id,owner_id)
+CREATE UNIQUE INDEX voice_sessions_owner_lease ON voice_sessions(owner_id)
   WHERE state IN ('allocating','active','ending');
-CREATE INDEX voice_sessions_device ON voice_sessions(workspace_id,device_id,state);
+CREATE INDEX voice_sessions_device ON voice_sessions(device_id,state);
 CREATE TABLE voice_turns (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL,
   session_id TEXT NOT NULL REFERENCES voice_sessions(id),
   generation INTEGER NOT NULL,
   turn_id TEXT NOT NULL,
@@ -57,14 +55,13 @@ CREATE TABLE voice_turns (
 );
 CREATE TABLE voice_task_inputs (
  session_id TEXT NOT NULL REFERENCES voice_sessions(id), generation INTEGER NOT NULL, turn_id TEXT NOT NULL,
- workspace_id TEXT NOT NULL REFERENCES workspaces(id), turn_revision INTEGER NOT NULL,
+ turn_revision INTEGER NOT NULL,
  task_id TEXT NOT NULL REFERENCES tasks(id), entry_id TEXT NOT NULL REFERENCES task_entries(id),
  question_id TEXT REFERENCES pending_runtime_actions(id), content_hash BLOB NOT NULL,
  PRIMARY KEY(session_id,generation,turn_id)
 );
 CREATE INDEX voice_turns_session ON voice_turns(session_id,generation,confirmed_at);
 CREATE TABLE voice_task_links (
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   session_id TEXT NOT NULL REFERENCES voice_sessions(id),
   generation INTEGER NOT NULL,
   turn_id TEXT NOT NULL,
@@ -74,9 +71,9 @@ CREATE TABLE voice_task_links (
   command_id TEXT NOT NULL,
   linked_at TEXT NOT NULL,
   PRIMARY KEY(session_id,generation,turn_id,turn_revision),
-  UNIQUE(workspace_id,task_id)
+  UNIQUE(task_id)
 );
-CREATE INDEX voice_task_links_task ON voice_task_links(workspace_id,task_id);
+CREATE INDEX voice_task_links_task ON voice_task_links(task_id);
 CREATE UNIQUE INDEX voice_task_links_stable_turn ON voice_task_links(session_id,generation,turn_id);
 CREATE TABLE voice_pool_state (
   id INTEGER PRIMARY KEY CHECK(id=1),
@@ -108,7 +105,6 @@ CREATE TABLE voice_account_terminations (
 );
 CREATE TABLE voice_result_deliveries (
   entry_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL,
   task_id TEXT NOT NULL,
   run_id TEXT NOT NULL,
   subject_id TEXT NOT NULL,
@@ -126,7 +122,6 @@ CREATE TABLE voice_result_cursor (id INTEGER PRIMARY KEY CHECK(id=1), last_curso
 INSERT INTO voice_result_cursor(id,last_cursor) VALUES(1,0);
 CREATE TABLE voice_fast_replies (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL,
   session_id TEXT NOT NULL,
   generation INTEGER NOT NULL,
   turn_id TEXT NOT NULL,
@@ -143,7 +138,6 @@ CREATE TABLE voice_fast_replies (
 );
 CREATE INDEX voice_fast_replies_due ON voice_fast_replies(status,next_attempt_at,created_at);
 CREATE TABLE voice_transcript_turns (
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   session_id TEXT NOT NULL REFERENCES voice_sessions(id),
   seq INTEGER NOT NULL CHECK(seq >= 0),
   role TEXT NOT NULL CHECK(role IN ('user','assistant')),
@@ -152,33 +146,32 @@ CREATE TABLE voice_transcript_turns (
   received_at TEXT NOT NULL,
   PRIMARY KEY(session_id,seq)
 );
-CREATE INDEX voice_transcript_turns_workspace ON voice_transcript_turns(workspace_id,session_id,seq);
 CREATE TABLE voice_recall_jobs (
-id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
 session_id TEXT NOT NULL, generation INTEGER NOT NULL, turn_id TEXT NOT NULL,
 question TEXT NOT NULL, holding_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
 UNIQUE(session_id,generation,turn_id));
 CREATE TABLE voice_context_registers (
-workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
+owner_subject_id TEXT NOT NULL,
 compact TEXT NOT NULL DEFAULT '', compact_through TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',
 built_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', version INTEGER NOT NULL DEFAULT 0,
 source_hash TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, source_memory_boundary TEXT NOT NULL DEFAULT '',
-PRIMARY KEY(workspace_id,owner_subject_id));
+PRIMARY KEY(owner_subject_id));
 CREATE TABLE ui_screens (
-workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
+owner_subject_id TEXT NOT NULL,
 width INTEGER NOT NULL, height INTEGER NOT NULL, updated_at TEXT NOT NULL,
-PRIMARY KEY(workspace_id,owner_subject_id));
+PRIMARY KEY(owner_subject_id));
 CREATE TABLE ui_surfaces (
-workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
+owner_subject_id TEXT NOT NULL,
 surface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('popover','window')),
 state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),
 width INTEGER, height INTEGER,
 version INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
 request_id TEXT REFERENCES ui_requests(id), deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
-PRIMARY KEY(workspace_id,owner_subject_id,surface_id),
+PRIMARY KEY(owner_subject_id,surface_id),
 CHECK((width IS NULL AND height IS NULL) OR (width IS NOT NULL AND height IS NOT NULL)));
 CREATE TABLE ui_requests (
-id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
+id TEXT PRIMARY KEY, owner_subject_id TEXT NOT NULL,
 source TEXT NOT NULL CHECK(source IN ('register','task')), voice_turn_id TEXT REFERENCES voice_turns(id),
 task_id TEXT REFERENCES tasks(id), surface_id TEXT,
 awaiting_input INTEGER NOT NULL DEFAULT 0 CHECK(awaiting_input IN (0,1)), input_note TEXT,
@@ -186,27 +179,27 @@ status TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','rendered'
 created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
 request TEXT CHECK(request IS NULL OR (length(trim(request))>0 AND trim(request)<>'none')),
 question_id TEXT REFERENCES pending_runtime_actions(id), surface_version INTEGER CHECK(surface_version IS NULL OR surface_version>=1), feedback TEXT);
-CREATE UNIQUE INDEX ui_requests_voice_turn ON ui_requests(workspace_id,voice_turn_id) WHERE voice_turn_id IS NOT NULL;
+CREATE UNIQUE INDEX ui_requests_voice_turn ON ui_requests(voice_turn_id) WHERE voice_turn_id IS NOT NULL;
 CREATE TABLE ui_result_sources (
- request_id TEXT PRIMARY KEY REFERENCES ui_requests(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+ request_id TEXT PRIMARY KEY REFERENCES ui_requests(id),
  task_id TEXT NOT NULL REFERENCES tasks(id), run_id TEXT NOT NULL REFERENCES runs(id),
  entry_id TEXT NOT NULL REFERENCES task_entries(id), event_cursor INTEGER NOT NULL CHECK(event_cursor>0),
  content_hash TEXT NOT NULL
 );
 CREATE TABLE ui_feedback_deliveries (
-request_id TEXT PRIMARY KEY REFERENCES ui_requests(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+request_id TEXT PRIMARY KEY REFERENCES ui_requests(id),
 owner_subject_id TEXT NOT NULL, text TEXT NOT NULL,
 status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')),
 attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), next_attempt_at TEXT, last_error TEXT,
 created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE ui_jobs (
-id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,
+id TEXT PRIMARY KEY, owner_subject_id TEXT NOT NULL,
 kind TEXT NOT NULL CHECK(kind IN ('register','task_entry')), dedupe_key TEXT NOT NULL UNIQUE,
 ui_request_id TEXT NOT NULL REFERENCES ui_requests(id), status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','failed')),
 attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0), next_attempt_at TEXT NOT NULL, last_error TEXT,
 created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX ui_jobs_due ON ui_jobs(status,next_attempt_at);
-CREATE TABLE ui_task_cursor(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),last_cursor INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE ui_task_cursor(singleton INTEGER PRIMARY KEY CHECK(singleton=1),last_cursor INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX ui_feedback_due ON ui_feedback_deliveries(status,next_attempt_at);
 `+ResultCheckpointSchema+TextCheckpointSchema)
 		return err
@@ -216,9 +209,9 @@ CREATE INDEX ui_feedback_due ON ui_feedback_deliveries(status,next_attempt_at);
 	if err := store.RegisterMigration(storage.Migration{Namespace: "voice", Version: 201, Name: "conversation_text_input", Up: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 ALTER TABLE ui_requests ADD COLUMN voice_input INTEGER NOT NULL DEFAULT 0 CHECK(voice_input IN (0,1));
-CREATE TABLE voice_text_inputs (command_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, owner_subject_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')), attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0), next_attempt_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE voice_text_inputs (command_id TEXT PRIMARY KEY, owner_subject_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')), attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0), next_attempt_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX voice_text_inputs_due ON voice_text_inputs(status,next_attempt_at);
-CREATE TABLE voice_input_notices (kind TEXT NOT NULL CHECK(kind IN ('ui_input_request','ui_input_received')), source_id TEXT NOT NULL, workspace_id TEXT NOT NULL, owner_subject_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')), attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0), next_attempt_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(kind,source_id));
+CREATE TABLE voice_input_notices (kind TEXT NOT NULL CHECK(kind IN ('ui_input_request','ui_input_received')), source_id TEXT NOT NULL, owner_subject_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')), attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0), next_attempt_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(kind,source_id));
 CREATE INDEX voice_input_notices_due ON voice_input_notices(status,next_attempt_at);`)
 		return err
 	}}); err != nil {

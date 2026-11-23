@@ -11,6 +11,7 @@ import (
 	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/memoryapi"
+	"github.com/ronigooja/Zoe/internal/storage"
 )
 
 // memoryWriteHolding identifies receiver-reconciled writes in the durable queue.
@@ -86,7 +87,7 @@ func (s *Service) persistRecallStatus(ctx context.Context, id, text, terminal st
 		}
 		return tx.Commit()
 	}
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) SELECT id,workspace_id,session_id,generation,'recall-answer:'||turn_id,?,'recall_answer','pending',?,?,? FROM voice_recall_jobs WHERE id=? AND status='running'`, text, at, at, at, id)
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO voice_fast_replies(id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) SELECT id,session_id,generation,'recall-answer:'||turn_id,?,'recall_answer','pending',?,?,? FROM voice_recall_jobs WHERE id=? AND status='running'`, text, at, at, at, id)
 	if err != nil {
 		return err
 	}
@@ -125,16 +126,20 @@ func (s *Service) persistRecallRetryStatus(ctx context.Context, id, text, termin
 // dispatchRecall uses a silent delivered receipt for new jobs. The durable
 // compare-and-set prevents retried handoffs/dispatchers starting twice.
 func (s *Service) dispatchRecall(ctx context.Context) {
-	s.recoverRecall(ctx, false)
-	rows, err := s.db.QueryContext(ctx, `SELECT j.id,j.workspace_id,j.owner_id,h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.status='pending' AND h.status='delivered' LIMIT ?`, s.limits.Int("voice_recall_sweep_rows"))
+	lineage, err := storage.InstanceLineage(ctx, s.db)
 	if err != nil {
 		return
 	}
-	type job struct{ id, workspace, owner, kind string }
+	s.recoverRecall(ctx, false)
+	rows, err := s.db.QueryContext(ctx, `SELECT j.id,j.owner_id,h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.status='pending' AND h.status='delivered' LIMIT ?`, s.limits.Int("voice_recall_sweep_rows"))
+	if err != nil {
+		return
+	}
+	type job struct{ id, owner, kind string }
 	var ids []job
 	for rows.Next() {
 		var j job
-		if rows.Scan(&j.id, &j.workspace, &j.owner, &j.kind) == nil {
+		if rows.Scan(&j.id, &j.owner, &j.kind) == nil {
 			ids = append(ids, j)
 		}
 	}
@@ -142,7 +147,7 @@ func (s *Service) dispatchRecall(ctx context.Context) {
 	for _, j := range ids {
 		id := j.id
 		if j.kind == memoryWriteHolding {
-			due, err := (backoff.Store{DB: s.db}).Due(ctx, "memory_write", memoryUser(j.workspace, j.owner), s.now())
+			due, err := (backoff.Store{DB: s.db}).Due(ctx, "memory_write", memoryapi.User(lineage, j.owner), s.now())
 			if err != nil || !due {
 				continue
 			}
@@ -187,11 +192,16 @@ func (s *Service) dispatchRecall(ctx context.Context) {
 func (s *Service) runRecall(id string) {
 	ctx, cancel := context.WithTimeout(s.recallCtx, s.recallTimeout())
 	defer cancel()
-	var workspace, owner, session, turn, question, kind string
+	var owner, session, turn, question, kind string
 	var generation int64
-	if err := s.db.QueryRowContext(ctx, `SELECT j.workspace_id,j.owner_id,j.session_id,j.generation,j.turn_id,j.question,h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.id=? AND j.status='running'`, id).Scan(&workspace, &owner, &session, &generation, &turn, &question, &kind); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT j.owner_id,j.session_id,j.generation,j.turn_id,j.question,h.intent_kind FROM voice_recall_jobs j JOIN voice_fast_replies h ON h.id=j.holding_id WHERE j.id=? AND j.status='running'`, id).Scan(&owner, &session, &generation, &turn, &question, &kind); err != nil {
 		return
 	}
+	lineage, err := storage.InstanceLineage(ctx, s.db)
+	if err != nil {
+		return
+	}
+	user := memoryapi.User(lineage, owner)
 	started := time.Now()
 	var text, status string
 	var count int
@@ -222,7 +232,7 @@ func (s *Service) runRecall(id string) {
 		if _, err := s.db.ExecContext(ctx, `INSERT INTO memory_write_outcomes(op_id,status) VALUES(?,'running') ON CONFLICT(op_id) DO UPDATE SET status='running'`, id); err != nil {
 			return
 		}
-		err = s.recall.MemoryAPI.Write(ctx, memoryUser(workspace, owner), id, question)
+		err = s.recall.MemoryAPI.Write(ctx, user, id, question)
 		status = "write_ok"
 		if err != nil {
 			text, status = stewardErrorSpeech, "write_error"
@@ -254,7 +264,7 @@ func (s *Service) runRecall(id string) {
 			if status == "write_auth_stopped" {
 				kind = backoff.Auth
 			}
-			if e := (backoff.Store{DB: s.db}).Record(outcomeCtx, "memory_write", memoryUser(workspace, owner), kind, s.now(), backoff.Background, rand.Float64); e != nil {
+			if e := (backoff.Store{DB: s.db}).Record(outcomeCtx, "memory_write", user, kind, s.now(), backoff.Background, rand.Float64); e != nil {
 				return
 			}
 			// No failure feedback for a recoverable unknown. Preserve the job ID
@@ -263,10 +273,10 @@ func (s *Service) runRecall(id string) {
 			return
 		}
 		if err == nil {
-			_ = (backoff.Store{DB: s.db}).Clear(outcomeCtx, "memory_write", memoryUser(workspace, owner))
+			_ = (backoff.Store{DB: s.db}).Clear(outcomeCtx, "memory_write", user)
 		}
 	} else {
-		text, count, status = s.recallAnswer(ctx, workspace, owner, question)
+		text, count, status = s.recallAnswer(ctx, user, question)
 	}
 	elapsedMS := time.Since(started).Milliseconds()
 	// Model deadlines get a fallback, but shutdown leaves the lease for recovery.
@@ -289,8 +299,8 @@ func (s *Service) runRecall(id string) {
 	s.dispatchFastReplies(persist)
 }
 
-func (s *Service) recallAnswer(ctx context.Context, workspace, owner, question string) (string, int, string) {
-	items, err := s.recall.MemoryAPI.Search(ctx, memoryUser(workspace, owner), question)
+func (s *Service) recallAnswer(ctx context.Context, user, question string) (string, int, string) {
+	items, err := s.recall.MemoryAPI.Search(ctx, user, question)
 	if err != nil {
 		return stewardErrorSpeech, 0, "worker_error"
 	}
@@ -299,9 +309,4 @@ func (s *Service) recallAnswer(ctx context.Context, workspace, owner, question s
 		texts = append(texts, item.Text)
 	}
 	return strings.Join(texts, "\n"), len(items), "ok"
-}
-
-// memoryUser uses a JSON tuple so workspace/subject separators cannot collide.
-func memoryUser(workspace, owner string) string {
-	return memoryapi.User(workspace, owner)
 }

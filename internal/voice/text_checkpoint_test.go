@@ -33,7 +33,7 @@ func TestDurableTextLookupNamespaceAndMissingCapability(t *testing.T) {
 	r.exec(t, `UPDATE voice_sessions SET gateway_media_generation=7 WHERE id='text-call'`)
 	ctx := context.Background()
 	send := func(kind, id, text string) (bool, string) {
-		return r.svc.deliverDurableText(ctx, "default", "user-1", kind, id, "text-call", 1, text)
+		return r.svc.deliverDurableText(ctx, "user-1", kind, id, "text-call", 1, text)
 	}
 	if ok, code := send("fast_reply", "same", "full text"); ok || code != "receipt_capability_disabled" {
 		t.Fatalf("nil=%v %s", ok, code)
@@ -87,7 +87,7 @@ func textTestRig(t *testing.T) (*deliveryRig, func(string) (bool, string)) {
 	r.seedCall(t, "text-call", "user-1", 1)
 	r.exec(t, `UPDATE voice_sessions SET gateway_media_generation=7 WHERE id='text-call'`)
 	return r, func(text string) (bool, string) {
-		return r.svc.deliverDurableText(context.Background(), "default", "user-1", "fast_reply", "source", "text-call", 1, text)
+		return r.svc.deliverDurableText(context.Background(), "user-1", "fast_reply", "source", "text-call", 1, text)
 	}
 }
 
@@ -176,8 +176,8 @@ func TestFastReplyOwnerMismatchDoesNotSpendRetries(t *testing.T) {
 	}
 	r.exec(t, `UPDATE voice_sessions SET owner_id='replacement' WHERE id='text-call'`)
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('source','default','text-call',1,'turn','hello','pending',?,?,?)`, at, at, at)
-	r.svc.deliverFastReply(context.Background(), "source", "default", "text-call", 1, 0)
+	r.exec(t, `INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('source','text-call',1,'turn','hello','pending',?,?,?)`, at, at, at)
+	r.svc.deliverFastReply(context.Background(), "source", "text-call", 1, 0)
 	var attempts int
 	var status, code string
 	if err := r.store.DB().QueryRow(`SELECT attempts,status,last_error_code FROM voice_fast_replies WHERE id='source'`).Scan(&attempts, &status, &code); err != nil {
@@ -267,8 +267,8 @@ func TestDurableTextReceiptStages(t *testing.T) {
 func TestFastReplyGenerationMismatchDoesNotSpendRetries(t *testing.T) {
 	r, _ := textTestRig(t)
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('reply','default','text-call',99,'turn','hello','pending',?,?,?)`, at, at, at)
-	r.svc.deliverFastReply(context.Background(), "reply", "default", "text-call", 99, 0)
+	r.exec(t, `INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('reply','text-call',99,'turn','hello','pending',?,?,?)`, at, at, at)
+	r.svc.deliverFastReply(context.Background(), "reply", "text-call", 99, 0)
 	var attempts int
 	var status, code string
 	if err := r.store.DB().QueryRow(`SELECT attempts,status,last_error_code FROM voice_fast_replies WHERE id='reply'`).Scan(&attempts, &status, &code); err != nil {
@@ -292,7 +292,7 @@ func TestFastReplyRebindReplaysWholeAnswerOnce(t *testing.T) {
 		{"holding", "recall_holding", "not an answer"},
 		{"empty", "recall_answer", " \t\n"},
 	} {
-		r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,'default','origin',1,?,?,?,'pending',?,?,?)`, item.id, item.id, item.text, item.kind, at, at, at)
+		r.exec(t, `INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,'origin',1,?,?,?,'pending',?,?,?)`, item.id, item.id, item.text, item.kind, at, at, at)
 	}
 	r.svc.dispatchFastReplies(ctx)
 	if adapter.submits != 2 || adapter.lookups != 0 {

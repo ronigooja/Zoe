@@ -164,9 +164,9 @@ func TestUIDisplaySchema(t *testing.T) {
 		t.Fatalf("legacy column=%d err=%v", legacy, err)
 	}
 	for _, query := range []string{
-		`INSERT INTO ui_surfaces(workspace_id,owner_subject_id,surface_id,container,state_json,version,created_at,updated_at) VALUES('default','owner','main','window','[]',1,'now','now')`,
-		`INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES('request','default','owner','register','now','now')`,
-		`INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('request','default','owner','input','now','now')`,
+		`INSERT INTO ui_surfaces(owner_subject_id,surface_id,container,state_json,version,created_at,updated_at) VALUES('owner','main','window','[]',1,'now','now')`,
+		`INSERT INTO ui_requests(id,owner_subject_id,source,created_at,updated_at) VALUES('request','owner','register','now','now')`,
+		`INSERT INTO ui_feedback_deliveries(request_id,owner_subject_id,text,created_at,updated_at) VALUES('request','owner','input','now','now')`,
 	} {
 		if _, err := db.Exec(query); err != nil {
 			t.Fatal(err)
@@ -177,7 +177,7 @@ func TestUIDisplaySchema(t *testing.T) {
 		`UPDATE ui_surfaces SET width=400`, `UPDATE ui_surfaces SET height=300`,
 		`UPDATE ui_requests SET source='unknown'`, `UPDATE ui_requests SET status='pending'`, `UPDATE ui_requests SET task_question=2`,
 		`UPDATE ui_feedback_deliveries SET status='generated'`, `UPDATE ui_feedback_deliveries SET attempts=-1`,
-		`INSERT INTO ui_feedback_deliveries(request_id,workspace_id,owner_subject_id,text,created_at,updated_at) VALUES('missing','default','owner','input','now','now')`,
+		`INSERT INTO ui_feedback_deliveries(request_id,owner_subject_id,text,created_at,updated_at) VALUES('missing','owner','input','now','now')`,
 	} {
 		if _, err := db.Exec(query); err == nil {
 			t.Fatalf("accepted invalid schema value: %s", query)
@@ -188,13 +188,13 @@ func TestUIDisplaySchema(t *testing.T) {
 	if err := db.QueryRow(`SELECT status,attempts FROM ui_feedback_deliveries WHERE request_id='request'`).Scan(&status, &attempts); err != nil || status != "pending" || attempts != 0 {
 		t.Fatalf("feedback defaults=%s/%d err=%v", status, attempts, err)
 	}
-	if _, err := db.Exec(`INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('ui-schema-turn','default','handoff-session',1,'ui-schema-turn',1,'screen',X'01','now','schema');
-INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,voice_turn_id,created_at,updated_at) VALUES('first','default','owner','register','ui-schema-turn','now','now');
-INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES('null-turn','default','owner','task','now','now');`); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('ui-schema-turn','handoff-session',1,'ui-schema-turn',1,'screen',X'01','now','schema');
+INSERT INTO ui_requests(id,owner_subject_id,source,voice_turn_id,created_at,updated_at) VALUES('first','owner','register','ui-schema-turn','now','now');
+INSERT INTO ui_requests(id,owner_subject_id,source,created_at,updated_at) VALUES('null-turn','owner','task','now','now');`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,voice_turn_id,created_at,updated_at) VALUES('duplicate','default','owner','register','ui-schema-turn','now','now')`); err == nil {
-		t.Fatal("duplicate workspace/voice turn request accepted")
+	if _, err := db.Exec(`INSERT INTO ui_requests(id,owner_subject_id,source,voice_turn_id,created_at,updated_at) VALUES('duplicate','owner','register','ui-schema-turn','now','now')`); err == nil {
+		t.Fatal("duplicate voice turn request accepted")
 	}
 }
 
@@ -231,20 +231,20 @@ func TestStewardRedisplayCompletedTask(t *testing.T) {
 			}
 			if mode != "no_entry" {
 				for _, entry := range []struct{ id, at, content string }{{"older", "2026-01-01T00:00:00Z", "old result"}, {"latest", "2026-01-02T00:00:00Z", "latest result"}} {
-					if _, err := store.DB().Exec(`INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) SELECT ?,id,workspace_id,'assistant_message',?,(SELECT author_device_id FROM task_entries WHERE task_id=tasks.id LIMIT 1),? FROM tasks WHERE id=?`, entry.id, entry.content, entry.at, target); err != nil {
+					if _, err := store.DB().Exec(`INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) SELECT ?,id,'assistant_message',?,(SELECT author_device_id FROM task_entries WHERE task_id=tasks.id LIMIT 1),? FROM tasks WHERE id=?`, entry.id, entry.content, entry.at, target); err != nil {
 						t.Fatal(err)
 					}
 				}
 				uiFlowRun(t, store.DB(), target, "redisplay-run")
 				payload, _ := json.Marshal(map[string]any{"payload": map[string]string{"task_id": target, "run_id": "redisplay-run", "entry_id": "older"}})
-				if _, err := store.DB().Exec(`INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) SELECT 'redisplay-result','default',current_cursor+1,1,'task.assistant_message','2026-01-01T00:00:00Z','task',?,1,? FROM event_counters WHERE singleton=1`, target, payload); err != nil {
+				if _, err := store.DB().Exec(`INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) SELECT 'redisplay-result',current_cursor+1,1,'task.assistant_message','2026-01-01T00:00:00Z','task',?,1,? FROM event_counters WHERE singleton=1`, target, payload); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := store.DB().Exec(`UPDATE event_counters SET current_cursor=current_cursor+1 WHERE singleton=1`); err != nil {
 					t.Fatal(err)
 				}
 				if mode == "show" || mode == "report" {
-					if _, err := store.DB().Exec(`INSERT INTO voice_result_deliveries(entry_id,workspace_id,task_id,run_id,subject_id,status,next_attempt_at,created_at,updated_at) SELECT 'older',workspace_id,id,'redisplay-run',owner_subject_id,'pending','9999','now','now' FROM tasks WHERE id=?`, target); err != nil {
+					if _, err := store.DB().Exec(`INSERT INTO voice_result_deliveries(entry_id,task_id,run_id,subject_id,status,next_attempt_at,created_at,updated_at) SELECT 'older',id,'redisplay-run',owner_subject_id,'pending','9999','now','now' FROM tasks WHERE id=?`, target); err != nil {
 						t.Fatal(err)
 					}
 					openingState := "consumed"

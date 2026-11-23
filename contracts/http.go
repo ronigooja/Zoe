@@ -12,7 +12,6 @@ import (
 type Principal struct {
 	Generation     int64    `json:"-"`
 	InstallationID string   `json:"-"`
-	WorkspaceID    string   `json:"-"`
 	SubjectID      string   `json:"-"`
 	DeviceID       string   `json:"-"`
 	Scopes         []string `json:"-"`
@@ -63,7 +62,6 @@ type Event struct {
 	SchemaVersion    int             `json:"schema_version"`
 	Type             string          `json:"type"`
 	OccurredAt       time.Time       `json:"occurred_at"`
-	WorkspaceID      string          `json:"workspace_id"`
 	SubjectID        string          `json:"subject_id,omitempty"`
 	AggregateType    string          `json:"aggregate_type"`
 	AggregateID      string          `json:"aggregate_id"`
@@ -165,7 +163,6 @@ type ConversationalConfirmation struct {
 
 type Snapshot struct {
 	ExecutionCapacity ExecutionCapacity `json:"execution_capacity"`
-	WorkspaceID       string            `json:"workspace_id"`
 	SubjectID         string            `json:"subject_id"`
 	ServerVersion     string            `json:"server_version"`
 	EventCursor       string            `json:"event_cursor"`
@@ -232,7 +229,6 @@ type JobClaim struct {
 	RunID                 string             `json:"run_id"`
 	TaskID                string             `json:"task_id"`
 	AttemptID             string             `json:"attempt_id"`
-	WorkspaceID           string             `json:"workspace_id"`
 	TaskVersion           int64              `json:"task_version"`
 	Goal                  string             `json:"goal"`
 	ProfileID             string             `json:"profile_id"`
@@ -534,7 +530,7 @@ func (p PreexistingCapabilityContainer) Valid(runStartedAt, runtimeStartedAt, ve
 			return false
 		}
 	}
-	for _, key := range []string{"io.zoe.workspace", "io.zoe.deployment", "io.zoe.attempt"} {
+	for _, key := range []string{"io.zoe.instance", "io.zoe.deployment", "io.zoe.attempt"} {
 		value := p.Labels[key]
 		decoded, err := hex.DecodeString(value)
 		if err != nil || len(decoded) != 12 || hex.EncodeToString(decoded) != value {

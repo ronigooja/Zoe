@@ -14,7 +14,7 @@ func TestUIFreshBaselineConstraintsAndProductionRoute(t *testing.T) {
 		}
 	}
 	for _, assignment := range []string{"request=''", "request='none'", "surface_version=0", "status='feedback_delivered'"} {
-		if _, err := store.DB().Exec(`INSERT INTO ui_requests(id,workspace_id,owner_subject_id,source,created_at,updated_at) VALUES('invalid','default','owner','register','now','now')`); err != nil {
+		if _, err := store.DB().Exec(`INSERT INTO ui_requests(id,owner_subject_id,source,created_at,updated_at) VALUES('invalid','owner','register','now','now')`); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := store.DB().Exec(`UPDATE ui_requests SET ` + assignment + ` WHERE id='invalid'`); err == nil {

@@ -225,7 +225,7 @@ func TestOversizedDelegationIsHandledWithOneErrorLog(t *testing.T) {
 				r.seedTask(t, target, "user-1")
 			}
 			ctx := context.Background()
-			snapshot, err := stewardSnapshot(ctx, r.store.DB(), "default", "user-1")
+			snapshot, err := stewardSnapshot(ctx, r.store.DB(), "user-1")
 			if err != nil {
 				t.Fatal(err)
 			}

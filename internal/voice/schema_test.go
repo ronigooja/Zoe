@@ -177,16 +177,16 @@ func TestUISurfaceRetentionMigrationPreservesDocuments(t *testing.T) {
 	// Exercise the actual legacy constraints and primary key without unrelated
 	// ownership tables; the production migration runner supplies the transaction.
 	_, err = store.DB().Exec(`CREATE TABLE ui_surfaces (
-workspace_id TEXT NOT NULL, owner_subject_id TEXT NOT NULL,
+owner_subject_id TEXT NOT NULL,
 surface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('popover','window')),
 state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),
 width INTEGER, height INTEGER,
 version INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
 request_id TEXT, deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
-PRIMARY KEY(workspace_id,owner_subject_id,surface_id),
+PRIMARY KEY(owner_subject_id,surface_id),
 CHECK((width IS NULL AND height IS NULL) OR (width IS NOT NULL AND height IS NOT NULL)));
-INSERT INTO ui_surfaces VALUES('w','o','keep','window','[]',400,300,1,'now','now','request',0);
-INSERT INTO ui_surfaces VALUES('w','o','remove','window','[]',NULL,NULL,2,'now','now','old',1);`)
+INSERT INTO ui_surfaces VALUES('o','keep','window','[]',400,300,1,'now','now','request',0);
+INSERT INTO ui_surfaces VALUES('o','remove','window','[]',NULL,NULL,2,'now','now','old',1);`)
 	if err != nil {
 		t.Fatal(err)
 	}

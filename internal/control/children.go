@@ -62,13 +62,13 @@ func (s *Server) handleChildProposal(w http.ResponseWriter, r *http.Request) {
 	// Authenticate the durable run identity before looking up an idempotent
 	// receipt. Otherwise a runner with proposal scope could replay another
 	// runner's (run, attempt, proposal) tuple and learn its private task ID.
-	var workspace, taskID, attemptID, status, desired, parentStatus, parentWorkspace, rootID string
+	var taskID, attemptID, status, desired, parentStatus, rootID string
 	var subjectID, deviceID, projectID sql.NullString
 	var fence uint64
 	var depth, rootLimit int
 	var policyJSON []byte
-	err = tx.QueryRowContext(r.Context(), `SELECT r.workspace_id,r.task_id,r.attempt_id,r.fence,r.status,r.desired_control,t.status,t.workspace_id,t.owner_subject_id,t.created_by_device_id,t.project_id,coalesce(t.lineage_root_task_id,t.id),t.lineage_depth,t.root_child_limit,r.child_policy_json FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id=? AND r.runner_id=?`, r.PathValue("run_id"), runner.RunnerID).Scan(&workspace, &taskID, &attemptID, &fence, &status, &desired, &parentStatus, &parentWorkspace, &subjectID, &deviceID, &projectID, &rootID, &depth, &rootLimit, &policyJSON)
-	if errors.Is(err, sql.ErrNoRows) || err == nil && (attemptID != req.Attempt || fence != req.Fence || parentWorkspace != workspace || !HasRunnerScope(runner, "runner:claim") || !HasRunnerScope(runner, "runner:propose")) {
+	err = tx.QueryRowContext(r.Context(), `SELECT r.task_id,r.attempt_id,r.fence,r.status,r.desired_control,t.status,t.owner_subject_id,t.created_by_device_id,t.project_id,coalesce(t.lineage_root_task_id,t.id),t.lineage_depth,t.root_child_limit,r.child_policy_json FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id=? AND r.runner_id=?`, r.PathValue("run_id"), runner.RunnerID).Scan(&taskID, &attemptID, &fence, &status, &desired, &parentStatus, &subjectID, &deviceID, &projectID, &rootID, &depth, &rootLimit, &policyJSON)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && (attemptID != req.Attempt || fence != req.Fence || !HasRunnerScope(runner, "runner:claim") || !HasRunnerScope(runner, "runner:propose")) {
 		writeError(w, apiError(http.StatusNotFound, "not_found", "active run not found", nil))
 		return
 	}
@@ -108,7 +108,7 @@ func (s *Server) handleChildProposal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var collision int
-	if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FROM child_proposals WHERE workspace_id=? AND subject_id=? AND proposal_id=?`, workspace, subjectID.String, req.ProposalID).Scan(&collision); err != nil {
+	if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FROM child_proposals WHERE subject_id=? AND proposal_id=?`, subjectID.String, req.ProposalID).Scan(&collision); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -139,15 +139,15 @@ func (s *Server) handleChildProposal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, apiError(http.StatusConflict, "profile_unavailable", "requested child profile is not configured for worker execution", nil))
 		return
 	}
-	parentGrant := contracts.Principal{WorkspaceID: workspace, SubjectID: subjectID.String, DeviceID: deviceID.String}
+	parentGrant := contracts.Principal{SubjectID: subjectID.String, DeviceID: deviceID.String}
 	for _, dependencyID := range req.DependencyTaskIDs {
 		if dependencyID == taskID || dependencyID == rootID {
 			writeError(w, apiError(http.StatusBadRequest, "invalid_dependency", "child dependency cannot reference itself or its lineage root", nil))
 			return
 		}
-		var depWorkspace, depOwner string
-		depErr := tx.QueryRowContext(r.Context(), `SELECT workspace_id,owner_subject_id FROM tasks WHERE id=?`, dependencyID).Scan(&depWorkspace, &depOwner)
-		if errors.Is(depErr, sql.ErrNoRows) || depErr == nil && (depWorkspace != workspace || depOwner != subjectID.String) {
+		var depOwner string
+		depErr := tx.QueryRowContext(r.Context(), `SELECT owner_subject_id FROM tasks WHERE id=?`, dependencyID).Scan(&depOwner)
+		if errors.Is(depErr, sql.ErrNoRows) || depErr == nil && depOwner != subjectID.String {
 			writeError(w, apiError(http.StatusBadRequest, "invalid_dependency", "dependency is inaccessible or cross-subject", nil))
 			return
 		}
@@ -199,14 +199,14 @@ func (s *Server) handleChildProposal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	_, err = tx.ExecContext(r.Context(), `INSERT INTO child_proposals(id,run_id,attempt_id,proposal_id,workspace_id,subject_id,parent_task_id,root_task_id,status,version,request_hash,request_json,response_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?)`, proposalRowID, r.PathValue("run_id"), req.Attempt, req.ProposalID, workspace, subjectID.String, taskID, rootID, receipt.Status, hash[:], requestJSON, response, now.Format(time.RFC3339Nano))
+	_, err = tx.ExecContext(r.Context(), `INSERT INTO child_proposals(id,run_id,attempt_id,proposal_id,subject_id,parent_task_id,root_task_id,status,version,request_hash,request_json,response_json,created_at) VALUES(?,?,?,?,?,?,?,?,1,?,?,?,?)`, proposalRowID, r.PathValue("run_id"), req.Attempt, req.ProposalID, subjectID.String, taskID, rootID, receipt.Status, hash[:], requestJSON, response, now.Format(time.RFC3339Nano))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	var childTaskID string
 	if !outOfPolicy {
-		childTaskID, err = s.admitChildTaskTx(r.Context(), tx, req, proposalRowID, workspace, subjectID.String, deviceID.String, projectID, taskID, rootID, depth+1, rootLimit, policy)
+		childTaskID, err = s.admitChildTaskTx(r.Context(), tx, req, proposalRowID, subjectID.String, deviceID.String, projectID, taskID, rootID, depth+1, rootLimit, policy)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -218,7 +218,7 @@ func (s *Server) handleChildProposal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err = appendEventTx(r.Context(), tx, contracts.Event{Type: "child.proposal." + receipt.Status, OccurredAt: now, WorkspaceID: workspace, SubjectID: subjectID.String, AggregateType: "child_proposal", AggregateID: proposalRowID, AggregateVersion: 1, Payload: raw(map[string]any{"proposal_id": req.ProposalID, "parent_task_id": taskID, "task_id": childTaskID, "status": receipt.Status})}); err != nil {
+	if err = appendEventTx(r.Context(), tx, contracts.Event{Type: "child.proposal." + receipt.Status, OccurredAt: now, SubjectID: subjectID.String, AggregateType: "child_proposal", AggregateID: proposalRowID, AggregateVersion: 1, Payload: raw(map[string]any{"proposal_id": req.ProposalID, "parent_task_id": taskID, "task_id": childTaskID, "status": receipt.Status})}); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -229,18 +229,18 @@ func (s *Server) handleChildProposal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, receipt)
 }
 
-func (s *Server) admitChildTaskTx(ctx context.Context, tx *sql.Tx, req contracts.ChildTaskProposalRequest, proposalRowID, workspace, subject, device string, project sql.NullString, parentTaskID, rootID string, depth, rootLimit int, inherited ChildPolicy) (string, error) {
-	principal := contracts.Principal{WorkspaceID: workspace, SubjectID: subject, DeviceID: device}
+func (s *Server) admitChildTaskTx(ctx context.Context, tx *sql.Tx, req contracts.ChildTaskProposalRequest, proposalRowID, subject, device string, project sql.NullString, parentTaskID, rootID string, depth, rootLimit int, inherited ChildPolicy) (string, error) {
+	principal := contracts.Principal{SubjectID: subject, DeviceID: device}
 	for _, dependencyID := range req.DependencyTaskIDs {
-		var depWorkspace, depOwner string
-		if err := tx.QueryRowContext(ctx, `SELECT workspace_id,owner_subject_id FROM tasks WHERE id=?`, dependencyID).Scan(&depWorkspace, &depOwner); err != nil {
+		var depOwner string
+		if err := tx.QueryRowContext(ctx, `SELECT owner_subject_id FROM tasks WHERE id=?`, dependencyID).Scan(&depOwner); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return "", apiError(400, "invalid_dependency", "dependency is no longer available", nil)
 			}
 			return "", err
 		}
-		if depWorkspace != workspace || depOwner != subject {
-			return "", apiError(400, "invalid_dependency", "dependency is cross-workspace or cross-subject", nil)
+		if depOwner != subject {
+			return "", apiError(400, "invalid_dependency", "dependency is cross-subject", nil)
 		}
 		allowed, err := PrincipalCanAccessTask(ctx, tx, principal, dependencyID)
 		if err != nil {
@@ -288,7 +288,7 @@ func (s *Server) admitChildTaskTx(ctx context.Context, tx *sql.Tx, req contracts
 	depState := "satisfied"
 	for _, dependencyID := range req.DependencyTaskIDs {
 		var depStatus string
-		if err = tx.QueryRowContext(ctx, `SELECT status FROM tasks WHERE id=? AND workspace_id=?`, dependencyID, workspace).Scan(&depStatus); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT status FROM tasks WHERE id=?`, dependencyID).Scan(&depStatus); err != nil {
 			return "", err
 		}
 		if depStatus != "complete" {
@@ -303,13 +303,13 @@ func (s *Server) admitChildTaskTx(ctx context.Context, tx *sql.Tx, req contracts
 		taskStatus = "waiting"
 	}
 	command := "child:" + proposalRowID
-	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,project_id,title,goal,source,profile_id,harness,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id,lineage_root_task_id,lineage_parent_task_id,lineage_depth,child_policy_json,root_child_limit,pregrant_capabilities_json) VALUES(?,?,?,?,?,'child',?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?)`, childID, workspace, nullableValue(project), req.Title, req.Goal, req.ProfileID, profile.Harness, taskStatus, now, now, now, device, command, subject, rootID, parentTaskID, depth, policyJSON, rootLimit, pregrantJSON)
+	_, err = tx.ExecContext(ctx, `INSERT INTO tasks(id,project_id,title,goal,source,profile_id,harness,status,version,created_at,updated_at,accepted_at,created_by_device_id,command_id,owner_subject_id,lineage_root_task_id,lineage_parent_task_id,lineage_depth,child_policy_json,root_child_limit,pregrant_capabilities_json) VALUES(?,?,?,?,'child',?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?)`, childID, nullableValue(project), req.Title, req.Goal, req.ProfileID, profile.Harness, taskStatus, now, now, now, device, command, subject, rootID, parentTaskID, depth, policyJSON, rootLimit, pregrantJSON)
 	if err != nil {
 		return "", err
 	}
 	for _, dependencyID := range req.DependencyTaskIDs {
 		var depStatus string
-		if err = tx.QueryRowContext(ctx, `SELECT status FROM tasks WHERE id=? AND workspace_id=?`, dependencyID, workspace).Scan(&depStatus); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT status FROM tasks WHERE id=?`, dependencyID).Scan(&depStatus); err != nil {
 			return "", err
 		}
 		state := "waiting"
@@ -318,7 +318,7 @@ func (s *Server) admitChildTaskTx(ctx context.Context, tx *sql.Tx, req contracts
 		} else if depStatus == "failed" || depStatus == "canceled" {
 			state = "failed"
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO task_dependencies(task_id,dependency_task_id,workspace_id,status,created_at) VALUES(?,?,?,?,?)`, childID, dependencyID, workspace, state, now); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO task_dependencies(task_id,dependency_task_id,status,created_at) VALUES(?,?,?,?)`, childID, dependencyID, state, now); err != nil {
 			return "", err
 		}
 	}
@@ -352,7 +352,7 @@ func (s *Server) admitChildTaskTx(ctx context.Context, tx *sql.Tx, req contracts
 		projectID = project.String
 	}
 	childTask := contracts.Task{ID: childID, ProjectID: projectID, Title: req.Title, Goal: req.Goal, Source: "child", ProfileID: req.ProfileID, Status: taskStatus, Version: 1, CreatedAt: createdAt, UpdatedAt: createdAt, AcceptedAt: &createdAt, Evidence: []contracts.Evidence{}}
-	if err = appendEventTx(ctx, tx, contracts.Event{Type: "task.created", OccurredAt: createdAt, WorkspaceID: workspace, SubjectID: subject, AggregateType: "task", AggregateID: childID, AggregateVersion: 1, Payload: raw(map[string]any{"task": childTask, "parent_task_id": parentTaskID, "lineage_root_task_id": rootID, "lineage_depth": depth})}); err != nil {
+	if err = appendEventTx(ctx, tx, contracts.Event{Type: "task.created", OccurredAt: createdAt, SubjectID: subject, AggregateType: "task", AggregateID: childID, AggregateVersion: 1, Payload: raw(map[string]any{"task": childTask, "parent_task_id": parentTaskID, "lineage_root_task_id": rootID, "lineage_depth": depth})}); err != nil {
 		return "", err
 	}
 	return childID, nil
@@ -377,10 +377,10 @@ func (s *Server) commandChildDecision(ctx context.Context, tx *sql.Tx, c Command
 	if req.Kind == "child.reject" {
 		decision = "rejected"
 	}
-	var rowID, status, workspace, parentID, rootID, subject, device string
+	var rowID, status, parentID, rootID, subject, device string
 	var version, depth, rootLimit int64
 	var requestJSON, policyJSON []byte
-	err := tx.QueryRowContext(ctx, `SELECT id,status,workspace_id,parent_task_id,root_task_id,subject_id,version,request_json FROM child_proposals WHERE proposal_id=? AND workspace_id=? AND subject_id=? ORDER BY created_at DESC LIMIT 1`, p.ProposalID, c.Principal.WorkspaceID, c.Principal.SubjectID).Scan(&rowID, &status, &workspace, &parentID, &rootID, &subject, &version, &requestJSON)
+	err := tx.QueryRowContext(ctx, `SELECT id,status,parent_task_id,root_task_id,subject_id,version,request_json FROM child_proposals WHERE proposal_id=? AND subject_id=? ORDER BY created_at DESC LIMIT 1`, p.ProposalID, c.Principal.SubjectID).Scan(&rowID, &status, &parentID, &rootID, &subject, &version, &requestJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(404, "not_found", "child proposal not found", nil)
 	}
@@ -401,7 +401,7 @@ func (s *Server) commandChildDecision(ctx context.Context, tx *sql.Tx, c Command
 		return contracts.CommandResult{}, nil, apiError(404, "not_found", "child proposal not found", nil)
 	}
 	var parentStatus string
-	err = tx.QueryRowContext(ctx, `SELECT status,created_by_device_id,coalesce(child_policy_json,''),lineage_depth,root_child_limit FROM tasks WHERE id=? AND workspace_id=? AND owner_subject_id=?`, parentID, workspace, subject).Scan(&parentStatus, &device, &policyJSON, &depth, &rootLimit)
+	err = tx.QueryRowContext(ctx, `SELECT status,created_by_device_id,coalesce(child_policy_json,''),lineage_depth,root_child_limit FROM tasks WHERE id=? AND owner_subject_id=?`, parentID, subject).Scan(&parentStatus, &device, &policyJSON, &depth, &rootLimit)
 	if errors.Is(err, sql.ErrNoRows) {
 		return contracts.CommandResult{}, nil, apiError(404, "not_found", "parent task not found", nil)
 	}
@@ -432,12 +432,11 @@ func (s *Server) commandChildDecision(ctx context.Context, tx *sql.Tx, c Command
 		if int64(reserved) >= rootLimit {
 			return contracts.CommandResult{}, nil, apiError(409, "child_budget_exhausted", "root lineage child-run budget is exhausted", nil)
 		}
-		var parentWorkspace string
 		var project sql.NullString
-		if err = tx.QueryRowContext(ctx, `SELECT workspace_id,project_id FROM tasks WHERE id=?`, parentID).Scan(&parentWorkspace, &project); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT project_id FROM tasks WHERE id=?`, parentID).Scan(&project); err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
-		childID, err = s.admitChildTaskTx(ctx, tx, reqBody, rowID, parentWorkspace, subject, device, project, parentID, rootID, int(depth)+1, int(rootLimit), policy)
+		childID, err = s.admitChildTaskTx(ctx, tx, reqBody, rowID, subject, device, project, parentID, rootID, int(depth)+1, int(rootLimit), policy)
 		if err != nil {
 			return contracts.CommandResult{}, nil, err
 		}
@@ -447,7 +446,7 @@ func (s *Server) commandChildDecision(ctx context.Context, tx *sql.Tx, c Command
 	if _, err = tx.ExecContext(ctx, `UPDATE child_proposals SET status=?,version=?,child_task_id=coalesce(?,child_task_id),decided_at=?,decided_by_device_id=? WHERE id=? AND status='pending'`, decision, newVersion, nullableString(childID), at, c.Principal.DeviceID, rowID); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
-	if err = appendEventTx(ctx, tx, contracts.Event{Type: "child.proposal." + decision, OccurredAt: c.AcceptedAt, WorkspaceID: workspace, SubjectID: subject, AggregateType: "child_proposal", AggregateID: rowID, AggregateVersion: newVersion, Payload: raw(map[string]any{"proposal_id": p.ProposalID, "parent_task_id": parentID, "task_id": childID, "status": decision})}); err != nil {
+	if err = appendEventTx(ctx, tx, contracts.Event{Type: "child.proposal." + decision, OccurredAt: c.AcceptedAt, SubjectID: subject, AggregateType: "child_proposal", AggregateID: rowID, AggregateVersion: newVersion, Payload: raw(map[string]any{"proposal_id": p.ProposalID, "parent_task_id": parentID, "task_id": childID, "status": decision})}); err != nil {
 		return contracts.CommandResult{}, nil, err
 	}
 	return contracts.CommandResult{ResourceType: "child_proposal", ResourceID: p.ProposalID, ResourceVersion: newVersion}, []contracts.Event{}, nil
@@ -491,18 +490,18 @@ func settleDependentChildren(ctx context.Context, tx *sql.Tx, dependencyTaskID, 
 	if _, err := tx.ExecContext(ctx, `UPDATE task_dependencies SET status=? WHERE dependency_task_id=?`, dependencyState, dependencyTaskID); err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT t.id,t.workspace_id,t.version,t.owner_subject_id FROM tasks t JOIN task_dependencies d ON d.task_id=t.id WHERE d.dependency_task_id=? AND t.status='waiting'`, dependencyTaskID)
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT t.id,t.version,t.owner_subject_id FROM tasks t JOIN task_dependencies d ON d.task_id=t.id WHERE d.dependency_task_id=? AND t.status='waiting'`, dependencyTaskID)
 	if err != nil {
 		return err
 	}
 	type candidate struct {
-		id, workspace, owner string
-		version              int64
+		id, owner string
+		version   int64
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err = rows.Scan(&c.id, &c.workspace, &c.version, &c.owner); err != nil {
+		if err = rows.Scan(&c.id, &c.version, &c.owner); err != nil {
 			rows.Close()
 			return err
 		}
@@ -527,7 +526,7 @@ func settleDependentChildren(ctx context.Context, tx *sql.Tx, dependencyTaskID, 
 		if _, err = tx.ExecContext(ctx, `UPDATE tasks SET status='queued',version=?,updated_at=? WHERE id=? AND status='waiting'`, version, at.UTC().Format(time.RFC3339Nano), c.id); err != nil {
 			return err
 		}
-		if err = appendEventTx(ctx, tx, contracts.Event{Type: "task.dependencies_satisfied", OccurredAt: at, WorkspaceID: c.workspace, SubjectID: c.owner, AggregateType: "task", AggregateID: c.id, AggregateVersion: version, Payload: raw(map[string]any{"task_id": c.id, "status": "queued"})}); err != nil {
+		if err = appendEventTx(ctx, tx, contracts.Event{Type: "task.dependencies_satisfied", OccurredAt: at, SubjectID: c.owner, AggregateType: "task", AggregateID: c.id, AggregateVersion: version, Payload: raw(map[string]any{"task_id": c.id, "status": "queued"})}); err != nil {
 			return err
 		}
 	}
@@ -535,18 +534,18 @@ func settleDependentChildren(ctx context.Context, tx *sql.Tx, dependencyTaskID, 
 }
 
 func cancelPendingChildProposals(ctx context.Context, tx *sql.Tx, taskID string, at time.Time) error {
-	rows, err := tx.QueryContext(ctx, `SELECT id,workspace_id,subject_id,proposal_id,version FROM child_proposals WHERE parent_task_id=? AND status='pending'`, taskID)
+	rows, err := tx.QueryContext(ctx, `SELECT id,subject_id,proposal_id,version FROM child_proposals WHERE parent_task_id=? AND status='pending'`, taskID)
 	if err != nil {
 		return err
 	}
 	type proposal struct {
-		id, workspace, subject, publicID string
-		version                          int64
+		id, subject, publicID string
+		version               int64
 	}
 	var pending []proposal
 	for rows.Next() {
 		var item proposal
-		if err = rows.Scan(&item.id, &item.workspace, &item.subject, &item.publicID, &item.version); err != nil {
+		if err = rows.Scan(&item.id, &item.subject, &item.publicID, &item.version); err != nil {
 			rows.Close()
 			return err
 		}
@@ -564,7 +563,7 @@ func cancelPendingChildProposals(ctx context.Context, tx *sql.Tx, taskID string,
 		if _, err = tx.ExecContext(ctx, `UPDATE child_proposals SET status='canceled',version=?,decided_at=? WHERE id=? AND status='pending'`, version, at.UTC().Format(time.RFC3339Nano), item.id); err != nil {
 			return err
 		}
-		if err = appendEventTx(ctx, tx, contracts.Event{Type: "child.proposal.canceled", OccurredAt: at, WorkspaceID: item.workspace, SubjectID: item.subject, AggregateType: "child_proposal", AggregateID: item.id, AggregateVersion: version, Payload: raw(map[string]any{"proposal_id": item.publicID, "parent_task_id": taskID, "status": "canceled"})}); err != nil {
+		if err = appendEventTx(ctx, tx, contracts.Event{Type: "child.proposal.canceled", OccurredAt: at, SubjectID: item.subject, AggregateType: "child_proposal", AggregateID: item.id, AggregateVersion: version, Payload: raw(map[string]any{"proposal_id": item.publicID, "parent_task_id": taskID, "status": "canceled"})}); err != nil {
 			return err
 		}
 	}

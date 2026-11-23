@@ -159,7 +159,7 @@ func (s *Server) beginExportTemp(ctx context.Context, p contracts.Principal, sco
 		return nil, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO zoe_export_temp_registry(export_id,workspace_id,owner_id,export_scope,created_deletion_sequence,status,invalidation_sequence,created_at,updated_at,last_error) VALUES(?,?,?,?,?,'active',0,?,?, '')`, exportID, p.WorkspaceID, p.SubjectID, scope, sequence, now, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO zoe_export_temp_registry(export_id,owner_id,export_scope,created_deletion_sequence,status,invalidation_sequence,created_at,updated_at,last_error) VALUES(?,?,?,?,'active',0,?,?, '')`, exportID, p.SubjectID, scope, sequence, now, now); err != nil {
 		_ = root.Close()
 		releaseExportTempLock(exportID, lock)
 		return nil, err
@@ -220,10 +220,10 @@ func (l *exportTempLease) closeAndClean(db *sql.DB) {
 	releaseExportTempLock(l.id, l.lock)
 }
 
-func (s *Server) cleanExportTemps(ctx context.Context, workspace string, sequence int64) (bool, string, error) {
+func (s *Server) cleanExportTemps(ctx context.Context, sequence int64) (bool, string, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := s.store.DB().ExecContext(ctx, `UPDATE zoe_export_temp_registry SET status='invalidated',invalidation_sequence=?,updated_at=?,last_error=''
-WHERE workspace_id=? AND status='active' AND created_deletion_sequence<?`, sequence, now, workspace, sequence); err != nil {
+WHERE status='active' AND created_deletion_sequence<?`, sequence, now, sequence); err != nil {
 		return false, "registry_unavailable", err
 	}
 	root, err := openPrivateExportRoot(s.store, true)
@@ -258,7 +258,7 @@ WHERE workspace_id=? AND status='active' AND created_deletion_sequence<?`, seque
 		return false, "registry_unavailable", err
 	}
 	var idsRows *sql.Rows
-	idsRows, err = s.store.DB().QueryContext(ctx, `SELECT export_id FROM zoe_export_temp_registry WHERE workspace_id=? AND status='invalidated' AND invalidation_sequence<=? ORDER BY export_id`, workspace, sequence)
+	idsRows, err = s.store.DB().QueryContext(ctx, `SELECT export_id FROM zoe_export_temp_registry WHERE status='invalidated' AND invalidation_sequence<=? ORDER BY export_id`, sequence)
 	if err != nil {
 		return false, "registry_unavailable", err
 	}

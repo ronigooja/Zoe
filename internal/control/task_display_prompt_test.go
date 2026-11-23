@@ -14,7 +14,7 @@ func TestTaskDisplayInstructionOnlyOnDisplayClaims(t *testing.T) {
 	if _, err := store.DB().Exec(`ALTER TABLE tasks ADD COLUMN ui_display INTEGER NOT NULL DEFAULT 0`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('prompt-task','default','title','unchanged goal','user','worker','queued',1,'2026-01-01','2026-01-01','instance','prompt-command')`); err != nil {
+	if _, err := store.DB().Exec(`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id) VALUES('prompt-task','title','unchanged goal','user','worker','queued',1,'2026-01-01','2026-01-01','instance','prompt-command')`); err != nil {
 		t.Fatal(err)
 	}
 	p, err := prompts.Load("../../deploy/prompts")

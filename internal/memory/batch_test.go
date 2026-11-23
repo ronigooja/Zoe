@@ -35,7 +35,7 @@ func TestMemoryBatchInterval(t *testing.T) {
 }
 
 func TestMemoryIngestChunks(t *testing.T) {
-	user := memoryapi.User("workspace", "owner")
+	user := memoryapi.User("fixture-lineage", "owner")
 	for _, blocks := range [][]string{
 		{strings.Repeat("a", ingestChunkBytes), "next turn\n"},
 		{strings.Repeat("界", ingestChunkBytes), "next turn\n"},
@@ -68,7 +68,7 @@ func TestMemoryBatchDisabled(t *testing.T) {
 func TestMemoryBatchQuarantineRetainsSourcesAndAllowsOtherOwners(t *testing.T) {
 	db, repo, now := ingestFixture(t)
 	for _, session := range []string{"session", "other"} {
-		if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace',?,1,'user','fact',?)`, session, now.Format(time.RFC3339Nano)); err != nil {
+		if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES(?,1,'user','fact',?)`, session, now.Format(time.RFC3339Nano)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -77,7 +77,7 @@ func TestMemoryBatchQuarantineRetainsSourcesAndAllowsOtherOwners(t *testing.T) {
 		calls++
 		var input map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&input)
-		if input["user"] == memoryapi.User("workspace", "owner") {
+		if input["user"] == memoryapi.User("fixture-lineage", "owner") {
 			w.WriteHeader(http.StatusConflict)
 			_, _ = w.Write([]byte(`{"error_kind":"ingest_quarantined"}`))
 			return
@@ -85,7 +85,7 @@ func TestMemoryBatchQuarantineRetainsSourcesAndAllowsOtherOwners(t *testing.T) {
 		_, _ = w.Write([]byte(`{"added":1,"updated":0}`))
 	})
 	for i := 0; i < 3; i++ {
-		if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now.Add(time.Duration(i)*time.Hour), time.Hour); !memoryapi.Quarantined(err) {
+		if _, err := repo.runBatch(context.Background(), client, "owner", now.Add(time.Duration(i)*time.Hour), time.Hour); !memoryapi.Quarantined(err) {
 			t.Fatalf("error=%v", err)
 		}
 	}
@@ -105,7 +105,7 @@ func TestMemoryBatchQuarantineRetainsSourcesAndAllowsOtherOwners(t *testing.T) {
 	if boundary != 0 || status != "blocked" || reason != "ingest_quarantined" || members != 1 || chunks != 1 {
 		t.Fatalf("state=%d %s %s members=%d chunks=%d", boundary, status, reason, members, chunks)
 	}
-	if _, err := repo.runBatch(context.Background(), client, "workspace", "other", now, time.Hour); err != nil {
+	if _, err := repo.runBatch(context.Background(), client, "other", now, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
@@ -115,10 +115,10 @@ func TestMemoryBatchQuarantineRetainsSourcesAndAllowsOtherOwners(t *testing.T) {
 
 func TestMemoryBatchTransientReconcilesSameIdentity(t *testing.T) {
 	db, repo, now := ingestFixture(t)
-	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','fact',?)`, now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('session',1,'user','fact',?)`, now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO voice_context_events VALUES('workspace','owner','session','ui_input_received','answer','user','typed answer',?,?)`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_context_events VALUES('owner','session','ui_input_received','answer','user','typed answer',?,?)`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	var first map[string]string
@@ -143,13 +143,13 @@ func TestMemoryBatchTransientReconcilesSameIdentity(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"added":1,"updated":0}`))
 	})
-	if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now, time.Hour); err == nil {
+	if _, err := repo.runBatch(context.Background(), client, "owner", now, time.Hour); err == nil {
 		t.Fatal("missing transient error")
 	}
-	if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now.Add(time.Minute), time.Hour); err != nil {
+	if _, err := repo.runBatch(context.Background(), client, "owner", now.Add(time.Minute), time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	boundary, err := repo.BoundaryAt(context.Background(), "workspace", "owner")
+	boundary, err := repo.BoundaryAt(context.Background(), "owner")
 	if err != nil || !boundary.Equal(now) || calls != 2 {
 		t.Fatalf("boundary=%v calls=%d err=%v", boundary, calls, err)
 	}
@@ -164,17 +164,19 @@ func ingestFixture(t *testing.T) (*sql.DB, *Repository, time.Time) {
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(`CREATE TABLE voice_sessions(id TEXT PRIMARY KEY,workspace_id TEXT,owner_id TEXT);
-CREATE TABLE voice_transcript_turns(workspace_id TEXT,session_id TEXT,seq INTEGER,role TEXT,text TEXT,at TEXT);
-CREATE TABLE voice_context_events(workspace_id TEXT,owner_id TEXT,session_id TEXT,source_kind TEXT,source_id TEXT,role TEXT,text TEXT,at TEXT,received_at TEXT,PRIMARY KEY(workspace_id,owner_id,source_kind,source_id));
-CREATE TABLE tasks(id TEXT,workspace_id TEXT,owner_subject_id TEXT,status TEXT,finished_at TEXT,goal TEXT,result TEXT);
-CREATE TABLE memory_ingest_batches(id TEXT PRIMARY KEY,workspace_id TEXT,principal_id TEXT,from_ns INTEGER,until_ns INTEGER,status TEXT NOT NULL DEFAULT 'pending',error_kind TEXT NOT NULL DEFAULT '',UNIQUE(workspace_id,principal_id,from_ns));
+	_, err = db.Exec(`CREATE TABLE zoe_instance_state(singleton INTEGER PRIMARY KEY,lineage_id TEXT NOT NULL);
+INSERT INTO zoe_instance_state(singleton,lineage_id) VALUES(1,'fixture-lineage');
+CREATE TABLE voice_sessions(id TEXT PRIMARY KEY,owner_id TEXT);
+CREATE TABLE voice_transcript_turns(session_id TEXT,seq INTEGER,role TEXT,text TEXT,at TEXT);
+CREATE TABLE voice_context_events(owner_id TEXT,session_id TEXT,source_kind TEXT,source_id TEXT,role TEXT,text TEXT,at TEXT,received_at TEXT,PRIMARY KEY(owner_id,source_kind,source_id));
+CREATE TABLE tasks(id TEXT,owner_subject_id TEXT,status TEXT,finished_at TEXT,goal TEXT,result TEXT);
+CREATE TABLE memory_ingest_batches(id TEXT PRIMARY KEY,principal_id TEXT,from_ns INTEGER,until_ns INTEGER,status TEXT NOT NULL DEFAULT 'pending',error_kind TEXT NOT NULL DEFAULT '',UNIQUE(principal_id,from_ns));
 CREATE TABLE memory_ingest_chunks(batch_id TEXT,position INTEGER,id TEXT UNIQUE,text TEXT,done INTEGER DEFAULT 0,PRIMARY KEY(batch_id,position));
-CREATE TABLE memory_ingest_members(workspace_id TEXT,principal_id TEXT,source_id TEXT,batch_id TEXT,PRIMARY KEY(workspace_id,principal_id,source_id));
-CREATE TABLE memory_ingest_state(workspace_id TEXT,principal_id TEXT,boundary_ns INTEGER NOT NULL,next_attempt_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(workspace_id,principal_id));
+CREATE TABLE memory_ingest_members(principal_id TEXT,source_id TEXT,batch_id TEXT,PRIMARY KEY(principal_id,source_id));
+CREATE TABLE memory_ingest_state(principal_id TEXT,boundary_ns INTEGER NOT NULL,next_attempt_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(principal_id));
 CREATE TABLE model_retry_state(consumer TEXT,scope TEXT,failures INTEGER,next_attempt_at TEXT,auth_failed INTEGER,last_error TEXT,updated_at TEXT,PRIMARY KEY(consumer,scope));
 CREATE TABLE model_config_fingerprints(consumer TEXT PRIMARY KEY,fingerprint TEXT);
-INSERT INTO voice_sessions VALUES('session','workspace','owner'),('other','workspace','other');`)
+INSERT INTO voice_sessions VALUES('session','owner'),('other','other');`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,11 +207,11 @@ func ingestWorker(t *testing.T, handler func(http.ResponseWriter, *http.Request)
 func TestMemoryEqualTimestampNumericTurnAndEventOrder(t *testing.T) {
 	db, _, now := ingestFixture(t)
 	at := now.Format(time.RFC3339Nano)
-	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',10,'assistant','ten',?),('workspace','session',9,'user','nine',?);
-INSERT INTO voice_context_events VALUES('workspace','owner','session','ui_feedback','a','background','feedback',?,?),('workspace','owner','session','task_result','z','background','result z',?,?),('workspace','owner','session','task_result','a','background','result a',?,?)`, at, at, at, at, at, at, at, at); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('session',10,'assistant','ten',?),('session',9,'user','nine',?);
+INSERT INTO voice_context_events VALUES('owner','session','ui_feedback','a','background','feedback',?,?),('owner','session','task_result','z','background','result z',?,?),('owner','session','task_result','a','background','result a',?,?)`, at, at, at, at, at, at, at, at); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := batchSources(context.Background(), db, "workspace", "owner", time.Time{}, now, false)
+	entries, err := batchSources(context.Background(), db, "owner", time.Time{}, now, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,21 +235,21 @@ func TestMemoryIngestTranscriptEventsWindowAndCadence(t *testing.T) {
 	}{
 		{2, "assistant", "answer", now}, {1, "user", "original words", now.Add(-time.Hour + 59*time.Second + time.Nanosecond).In(time.FixedZone("UTC+2", 7200))}, {3, "user", "future", now.Add(time.Second)},
 	} {
-		if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',?,?,?,?)`, turn.seq, turn.role, turn.text, turn.at.Format(time.RFC3339Nano)); err != nil {
+		if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('session',?,?,?,?)`, turn.seq, turn.role, turn.text, turn.at.Format(time.RFC3339Nano)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Keep the other owner's first batch outside this owner's cadence window:
 	// no state means due immediately, independently of the first owner's timer.
-	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','other',1,'user','private',?)`, now.Add(48*time.Hour).Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('other',1,'user','private',?)`, now.Add(48*time.Hour).Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO tasks VALUES('done','workspace','owner','complete',?,'original task sentence','result text'),('failed','workspace','owner','failed',?,'do not send','failure')`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO tasks VALUES('done','owner','complete',?,'original task sentence','result text'),('failed','owner','failed',?,'do not send','failure')`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
 	eventAt := now.Add(-time.Nanosecond).Format(time.RFC3339Nano)
-	if _, err := db.Exec(`INSERT INTO voice_context_events VALUES('workspace','owner','session','task_result','done','background','result text',?,?)`, eventAt, eventAt); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_context_events VALUES('owner','session','task_result','done','background','result text',?,?)`, eventAt, eventAt); err != nil {
 		t.Fatal(err)
 	}
 	want := "[2026-11-13T11:00Z] user: original words\n[2026-11-13T11:59Z] background: result text\n[2026-11-13T12:00Z] assistant: answer\n"
@@ -257,7 +259,7 @@ func TestMemoryIngestTranscriptEventsWindowAndCadence(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			t.Error(err)
 		}
-		if input["text"] != want || input["user"] != memoryapi.User("workspace", "owner") || r.URL.Path != "/v1/memory/ingest" {
+		if input["text"] != want || input["user"] != memoryapi.User("fixture-lineage", "owner") || r.URL.Path != "/v1/memory/ingest" {
 			t.Errorf("unexpected input: %#v", input)
 		}
 		if id := fmt.Sprintf("%x", sha256.Sum256([]byte(input["batch_id"]+":0:"+want))); input["chunk_id"] != id {
@@ -285,7 +287,7 @@ func TestMemoryIngestTranscriptEventsWindowAndCadence(t *testing.T) {
 	if calls != 1 {
 		t.Fatal("ran before interval")
 	}
-	if _, err := repo.runBatch(context.Background(), client, "workspace", "nobody", now, time.Hour); err != nil {
+	if _, err := repo.runBatch(context.Background(), client, "nobody", now, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -312,7 +314,7 @@ func TestMemoryIngestTranscriptEventsWindowAndCadence(t *testing.T) {
 func TestMemoryIngestFailureResumesPendingChunksAndSuccessOnlyCAS(t *testing.T) {
 	db, repo, now := ingestFixture(t)
 	for seq := 0; seq < 2; seq++ {
-		if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',?,'user',?,?)`, seq, strings.Repeat("a", 150*1024), now.Format(time.RFC3339Nano)); err != nil {
+		if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('session',?,'user',?,?)`, seq, strings.Repeat("a", 150*1024), now.Format(time.RFC3339Nano)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -381,7 +383,7 @@ func TestMemoryIngestFailureResumesPendingChunksAndSuccessOnlyCAS(t *testing.T) 
 
 func TestIngestAuthStopClearsOnlyOnConfigChange(t *testing.T) {
 	db, repo, now := ingestFixture(t)
-	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	digest := strings.Repeat("a", 64)
@@ -422,7 +424,7 @@ func TestIngestAuthStopClearsOnlyOnConfigChange(t *testing.T) {
 
 func TestMemoryIngestCASRejectsConcurrentAdvance(t *testing.T) {
 	db, repo, now := ingestFixture(t)
-	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('session',1,'user','text',?)`, now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	client := ingestWorker(t, func(w http.ResponseWriter, r *http.Request) {
@@ -431,7 +433,7 @@ func TestMemoryIngestCASRejectsConcurrentAdvance(t *testing.T) {
 		}
 		w.Write([]byte(`{"added":1,"updated":0}`))
 	})
-	if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now, time.Hour); err != ErrVersionConflict {
+	if _, err := repo.runBatch(context.Background(), client, "owner", now, time.Hour); err != ErrVersionConflict {
 		t.Fatalf("CAS error=%v", err)
 	}
 	var boundary int64
@@ -442,7 +444,7 @@ func TestMemoryIngestCASRejectsConcurrentAdvance(t *testing.T) {
 
 func TestMemoryIngestLateBackdatedSourceAfterSnapshot(t *testing.T) {
 	db, repo, now := ingestFixture(t)
-	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',1,'user','first',?)`, now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('session',1,'user','first',?)`, now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
@@ -452,7 +454,7 @@ func TestMemoryIngestLateBackdatedSourceAfterSnapshot(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&input)
 		if calls == 1 {
 			// This independent insert proves HTTP happens outside snapshot tx.
-			if _, err := db.Exec(`INSERT INTO voice_context_events VALUES('workspace','owner','session','task_result','late','background','late backdated',?,?)`, now.Add(-time.Hour).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+			if _, err := db.Exec(`INSERT INTO voice_context_events VALUES('owner','session','task_result','late','background','late backdated',?,?)`, now.Add(-time.Hour).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 				t.Error(err)
 			}
 		} else if !strings.Contains(input["text"], "late backdated") || strings.Contains(input["text"], "user: first") {
@@ -460,10 +462,10 @@ func TestMemoryIngestLateBackdatedSourceAfterSnapshot(t *testing.T) {
 		}
 		w.Write([]byte(`{"added":1,"updated":0}`))
 	})
-	if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now, time.Hour); err != nil {
+	if _, err := repo.runBatch(context.Background(), client, "owner", now, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.runBatch(context.Background(), client, "workspace", "owner", now.Add(time.Hour), time.Hour); err != nil {
+	if _, err := repo.runBatch(context.Background(), client, "owner", now.Add(time.Hour), time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
@@ -474,21 +476,21 @@ func TestMemoryIngestLateBackdatedSourceAfterSnapshot(t *testing.T) {
 func TestMemoryIngestBoundaryReadAndWindow(t *testing.T) {
 	db, repo, now := ingestFixture(t)
 	ctx := context.Background()
-	if boundary, err := repo.BoundaryAt(ctx, "workspace", "owner"); err != nil || !boundary.IsZero() {
+	if boundary, err := repo.BoundaryAt(ctx, "owner"); err != nil || !boundary.IsZero() {
 		t.Fatalf("missing boundary=%v err=%v", boundary, err)
 	}
 	from := now.Add(-time.Hour)
-	if _, err := db.Exec(`INSERT INTO memory_ingest_state VALUES('workspace','owner',?,0)`, from.UnixNano()); err != nil {
+	if _, err := db.Exec(`INSERT INTO memory_ingest_state VALUES('owner',?,0)`, from.UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 	// Transcript at is RFC3339Nano TEXT; only the ingestion boundary is ns.
-	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('workspace','session',0,'user','exclude boundary',?),('workspace','session',1,'assistant','include now',?)`, from.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO voice_transcript_turns VALUES('session',0,'user','exclude boundary',?),('session',1,'assistant','include now',?)`, from.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	if boundary, err := repo.BoundaryAt(ctx, "workspace", "owner"); err != nil || !boundary.Equal(from) {
+	if boundary, err := repo.BoundaryAt(ctx, "owner"); err != nil || !boundary.Equal(from) {
 		t.Fatalf("boundary=%v err=%v", boundary, err)
 	}
-	blocks, err := repo.batchInput(ctx, "workspace", "owner", from, now)
+	blocks, err := repo.batchInput(ctx, "owner", from, now)
 	if err != nil || len(blocks) != 1 || blocks[0] != "[2026-11-13T12:00Z] assistant: include now\n" {
 		t.Fatalf("blocks=%v err=%v", blocks, err)
 	}

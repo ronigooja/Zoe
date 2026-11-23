@@ -175,7 +175,7 @@ func (c *controlFake) Observe(_ context.Context, _ string, o contracts.RunnerObs
 	return nil
 }
 func testClaim() contracts.JobClaim {
-	return contracts.JobClaim{RunID: "run", TaskID: "task", AttemptID: "attempt", WorkspaceID: "workspace", ProfileID: "profile", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Role: "worker", Agent: "zoe-worker", PermissionTier: "workspace_read_write", PermissionRules: []contracts.PermissionRule{{Action: "*", Resource: "*", Effect: "deny"}, {Action: "read", Resource: "*", Effect: "allow"}}, Fence: 1, Budget: contracts.RunBudgetSnapshot{MaxToolSteps: 1}}
+	return contracts.JobClaim{RunID: "run", TaskID: "task", AttemptID: "attempt", ProfileID: "profile", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Role: "worker", Agent: "zoe-worker", PermissionTier: "workspace_read_write", PermissionRules: []contracts.PermissionRule{{Action: "*", Resource: "*", Effect: "deny"}, {Action: "read", Resource: "*", Effect: "allow"}}, Fence: 1, Budget: contracts.RunBudgetSnapshot{MaxToolSteps: 1}}
 }
 
 func TestValidateClaimFailsClosedWithoutPermissionRuleset(t *testing.T) {
@@ -215,7 +215,7 @@ func TestMessageTextShapesAndWhitespace(t *testing.T) {
 func TestEmitMessageTruncatesAssistantOutputToCapAndKeepsJSONValid(t *testing.T) {
 	j := openTestJournal(t)
 	c := testClaim()
-	if _, err := j.SaveClaim(context.Background(), c, RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: "p", Workspace: c.WorkspaceID}, "claimed"); err != nil {
+	if _, err := j.SaveClaim(context.Background(), c, RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: "p"}, "claimed"); err != nil {
 		t.Fatal(err)
 	}
 	control := &controlFake{}
@@ -271,7 +271,7 @@ func TestObservationEmittersReplayStoredBodyAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	j := openTestJournal(t)
 	c := testClaim()
-	spec := RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: buildPrompt(c), Workspace: c.WorkspaceID}
+	spec := RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: buildPrompt(c)}
 	if _, err := j.SaveClaim(ctx, c, spec, "claimed"); err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +537,7 @@ func liveSessions(f *runtimeFake) []string {
 func seedRotation(t *testing.T, j *Journal, phase, summary, old, replacement string) contracts.JobClaim {
 	t.Helper()
 	c := testClaim()
-	spec := RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: buildPrompt(c), Workspace: c.WorkspaceID, Agent: c.Agent, Model: "model", Permissions: c.PermissionRules}
+	spec := RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: buildPrompt(c), Agent: c.Agent, Model: "model", Permissions: c.PermissionRules}
 	if _, err := j.SaveClaim(context.Background(), c, spec, "claimed"); err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +632,7 @@ func TestRotationLimitTerminatesWithProofWithoutCreating(t *testing.T) {
 	j := openTestJournal(t)
 	c := testClaim()
 	c.Budget.MaxContextTokens = 10
-	if _, err := j.SaveClaim(context.Background(), c, RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: buildPrompt(c), Workspace: c.WorkspaceID}, "claimed"); err != nil {
+	if _, err := j.SaveClaim(context.Background(), c, RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: buildPrompt(c)}, "claimed"); err != nil {
 		t.Fatal(err)
 	}
 	if err := j.SetSession(context.Background(), c.RunID, c.AttemptID, c.Fence, "session", "prompt_sent"); err != nil {
@@ -745,7 +745,7 @@ func testContext(t *testing.T) context.Context {
 func seedRuntimePhase(t *testing.T, j *Journal, phase string) contracts.JobClaim {
 	t.Helper()
 	claim := testClaim()
-	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: "1", Prompt: buildPrompt(claim), Workspace: claim.WorkspaceID}
+	spec := RuntimeSpec{RunID: claim.RunID, AttemptID: claim.AttemptID, Fence: "1", Prompt: buildPrompt(claim)}
 	if _, err := j.SaveClaim(context.Background(), claim, spec, "claimed"); err != nil {
 		t.Fatal(err)
 	}

@@ -86,12 +86,12 @@ func (s *Service) storeTranscript(ctx context.Context, principal contracts.Runne
 		return 0, 0, err
 	}
 	defer tx.Rollback()
-	var workspace, session, state, runner string
+	var session, state, runner string
 	var storedGeneration, zoeGeneration, bindings int64
 	var ended sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT workspace_id,id,gateway_media_generation,generation,state,ended_at,lifecycle_runner_id,
+	err = tx.QueryRowContext(ctx, `SELECT id,gateway_media_generation,generation,state,ended_at,lifecycle_runner_id,
  (SELECT count(*) FROM voice_sessions WHERE gateway_session_id=? AND gateway_media_generation=?)
- FROM voice_sessions WHERE gateway_session_id=? ORDER BY (gateway_media_generation=?) DESC,created_at DESC LIMIT 1`, gateway, generation, gateway, generation).Scan(&workspace, &session, &storedGeneration, &zoeGeneration, &state, &ended, &runner, &bindings)
+ FROM voice_sessions WHERE gateway_session_id=? ORDER BY (gateway_media_generation=?) DESC,created_at DESC LIMIT 1`, gateway, generation, gateway, generation).Scan(&session, &storedGeneration, &zoeGeneration, &state, &ended, &runner, &bindings)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, 0, apiError(http.StatusNotFound, "not_found", "voice session not found", nil)
 	}
@@ -99,7 +99,7 @@ func (s *Service) storeTranscript(ctx context.Context, principal contracts.Runne
 		return 0, 0, err
 	}
 	if !control.HasRunnerScope(principal, "voice:turn:ingest") {
-		return 0, 0, apiError(http.StatusForbidden, "forbidden", "voice:turn:ingest scope and session workspace authorization required", nil)
+		return 0, 0, apiError(http.StatusForbidden, "forbidden", "voice:turn:ingest runner scope required", nil)
 	}
 	if generation != storedGeneration || bindings != 1 || state == "allocating" || state == "failed" {
 		return 0, 0, apiError(http.StatusConflict, "voice_generation_stale", "gateway media generation does not match", nil)
@@ -134,13 +134,13 @@ func (s *Service) storeTranscript(ctx context.Context, principal contracts.Runne
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return 0, 0, err
 		} else {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO voice_transcript_turns(workspace_id,session_id,seq,role,text,at,received_at) VALUES(?,?,?,?,?,?,?)`, workspace, session, turn.Seq, turn.Role, turn.Text, turn.At, received); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO voice_transcript_turns(session_id,seq,role,text,at,received_at) VALUES(?,?,?,?,?,?)`, session, turn.Seq, turn.Role, turn.Text, turn.At, received); err != nil {
 				return 0, 0, err
 			}
 			accepted++
 		}
 		if delegation != "" {
-			if err := storeDelegationTx(ctx, tx, workspace, session, zoeGeneration, delegation, turn, received); err != nil {
+			if err := storeDelegationTx(ctx, tx, session, zoeGeneration, delegation, turn, received); err != nil {
 				return 0, 0, err
 			}
 		}
@@ -151,7 +151,7 @@ func (s *Service) storeTranscript(ctx context.Context, principal contracts.Runne
 	return accepted, duplicates, nil
 }
 
-func storeDelegationTx(ctx context.Context, tx *sql.Tx, workspace, session string, generation int64, delegation string, turn TranscriptTurn, received string) error {
+func storeDelegationTx(ctx context.Context, tx *sql.Tx, session string, generation int64, delegation string, turn TranscriptTurn, received string) error {
 	hash := sha256.Sum256([]byte(turn.Text))
 	var existingHash []byte
 	var existingText string
@@ -165,15 +165,14 @@ func storeDelegationTx(ctx context.Context, tx *sql.Tx, workspace, session strin
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,transcript_seq) VALUES(?,?,?,?,?,1,?,?,?,?,?)`, uuid.NewString(), workspace, session, generation, delegation, turn.Text, hash[:], received, delegationKey(session, generation, delegation, 1), turn.Seq)
+	_, err = tx.ExecContext(ctx, `INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id,transcript_seq) VALUES(?,?,?,?,1,?,?,?,?,?)`, uuid.NewString(), session, generation, delegation, turn.Text, hash[:], received, delegationKey(session, generation, delegation, 1), turn.Seq)
 	return err
 }
 
-// ReadTranscriptTurns returns a workspace's session turns in sequence order,
-// inclusive of firstSeq and lastSeq. Callers must supply their trusted workspace
-// identity; no subject ownership restriction is applied to this internal helper.
-func ReadTranscriptTurns(ctx context.Context, db *sql.DB, workspace, session string, firstSeq, lastSeq int64) ([]TranscriptTurn, error) {
-	rows, err := db.QueryContext(ctx, `SELECT seq,role,text,at,received_at FROM voice_transcript_turns WHERE workspace_id=? AND session_id=? AND seq>=? AND seq<=? ORDER BY seq`, workspace, session, firstSeq, lastSeq)
+// ReadTranscriptTurns returns the owner's session turns in sequence order,
+// inclusive of firstSeq and lastSeq. The owner must come from trusted context.
+func ReadTranscriptTurns(ctx context.Context, db *sql.DB, owner, session string, firstSeq, lastSeq int64) ([]TranscriptTurn, error) {
+	rows, err := db.QueryContext(ctx, `SELECT t.seq,t.role,t.text,t.at,t.received_at FROM voice_transcript_turns t JOIN voice_sessions s ON s.id=t.session_id WHERE s.owner_id=? AND t.session_id=? AND t.seq>=? AND t.seq<=? ORDER BY t.seq`, owner, session, firstSeq, lastSeq)
 	if err != nil {
 		return nil, err
 	}

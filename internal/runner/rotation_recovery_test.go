@@ -71,7 +71,7 @@ func TestRotationCrashBeforeCreateReusesStoredPromptWithoutRefetch(t *testing.T)
 	c := rotationClaim()
 	producer := rotationEngine(t, &rotationSummarizerFake{runtimeFake: f}, control, j)
 	stored := producer.buildRotationPrompt(context.Background(), c, msgs)
-	if _, err := j.SaveClaim(context.Background(), c, RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: buildPrompt(c), Workspace: c.WorkspaceID}, "claimed"); err != nil {
+	if _, err := j.SaveClaim(context.Background(), c, RuntimeSpec{RunID: c.RunID, AttemptID: c.AttemptID, Fence: "1", Prompt: buildPrompt(c)}, "claimed"); err != nil {
 		t.Fatal(err)
 	}
 	if err := j.SetSession(context.Background(), c.RunID, c.AttemptID, c.Fence, "session", "prompt_sent"); err != nil {

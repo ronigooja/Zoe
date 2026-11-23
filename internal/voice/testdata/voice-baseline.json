@@ -24,6 +24,12 @@
       "ui_requests",
       ""
     ],
+    "sqlite_autoindex_ui_result_sources_1": [
+      "index",
+      "sqlite_autoindex_ui_result_sources_1",
+      "ui_result_sources",
+      ""
+    ],
     "sqlite_autoindex_ui_screens_1": [
       "index",
       "sqlite_autoindex_ui_screens_1",
@@ -34,12 +40,6 @@
       "index",
       "sqlite_autoindex_ui_surfaces_1",
       "ui_surfaces",
-      ""
-    ],
-    "sqlite_autoindex_ui_task_cursor_1": [
-      "index",
-      "sqlite_autoindex_ui_task_cursor_1",
-      "ui_task_cursor",
       ""
     ],
     "sqlite_autoindex_voice_account_terminations_1": [
@@ -84,6 +84,24 @@
       "voice_recall_jobs",
       ""
     ],
+    "sqlite_autoindex_voice_result_checkpoints_1": [
+      "index",
+      "sqlite_autoindex_voice_result_checkpoints_1",
+      "voice_result_checkpoints",
+      ""
+    ],
+    "sqlite_autoindex_voice_result_chunks_1": [
+      "index",
+      "sqlite_autoindex_voice_result_chunks_1",
+      "voice_result_chunks",
+      ""
+    ],
+    "sqlite_autoindex_voice_result_chunks_2": [
+      "index",
+      "sqlite_autoindex_voice_result_chunks_2",
+      "voice_result_chunks",
+      ""
+    ],
     "sqlite_autoindex_voice_result_deliveries_1": [
       "index",
       "sqlite_autoindex_voice_result_deliveries_1",
@@ -102,6 +120,12 @@
       "voice_sessions",
       ""
     ],
+    "sqlite_autoindex_voice_task_inputs_1": [
+      "index",
+      "sqlite_autoindex_voice_task_inputs_1",
+      "voice_task_inputs",
+      ""
+    ],
     "sqlite_autoindex_voice_task_links_1": [
       "index",
       "sqlite_autoindex_voice_task_links_1",
@@ -112,6 +136,24 @@
       "index",
       "sqlite_autoindex_voice_task_links_2",
       "voice_task_links",
+      ""
+    ],
+    "sqlite_autoindex_voice_text_checkpoints_1": [
+      "index",
+      "sqlite_autoindex_voice_text_checkpoints_1",
+      "voice_text_checkpoints",
+      ""
+    ],
+    "sqlite_autoindex_voice_text_chunks_1": [
+      "index",
+      "sqlite_autoindex_voice_text_chunks_1",
+      "voice_text_chunks",
+      ""
+    ],
+    "sqlite_autoindex_voice_text_chunks_2": [
+      "index",
+      "sqlite_autoindex_voice_text_chunks_2",
+      "voice_text_chunks",
       ""
     ],
     "sqlite_autoindex_voice_transcript_turns_1": [
@@ -136,13 +178,13 @@
       "table",
       "tasks",
       "tasks",
-      "CREATE TABLE tasks (\n  id TEXT PRIMARY KEY,\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id),\n  project_id TEXT,\n  title TEXT NOT NULL,\n  goal TEXT NOT NULL,\n  source TEXT NOT NULL,\n  profile_id TEXT NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('queued','active','waiting','awaiting_user','paused','complete','failed','canceled')),\n  version INTEGER NOT NULL,\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL,\n  accepted_at TEXT,\n  started_at TEXT,\n  finished_at TEXT,\n  result TEXT NOT NULL DEFAULT '',\n  error TEXT NOT NULL DEFAULT '',\n  created_by_device_id TEXT NOT NULL REFERENCES actors(id),\n  command_id TEXT NOT NULL, owner_subject_id TEXT NOT NULL DEFAULT '', lineage_root_task_id TEXT REFERENCES tasks(id), lineage_parent_task_id TEXT REFERENCES tasks(id), lineage_depth INTEGER NOT NULL DEFAULT 0, child_policy_json BLOB NOT NULL DEFAULT '', root_child_limit INTEGER NOT NULL DEFAULT 0, pregrant_capabilities_json BLOB NOT NULL DEFAULT '[]', harness TEXT NOT NULL DEFAULT 'codex', interaction_state TEXT NOT NULL DEFAULT 'none' CHECK(interaction_state IN ('none','awaiting_message','explicit_confirmation','approval_required')), interaction_scope TEXT NOT NULL DEFAULT '', interaction_run_id TEXT NOT NULL DEFAULT '', interaction_action_digest TEXT NOT NULL DEFAULT '', interaction_expires_at TEXT, interaction_expected_version INTEGER NOT NULL DEFAULT 0, interaction_question TEXT NOT NULL DEFAULT '', interaction_expired_kind TEXT NOT NULL DEFAULT '', ui_display INTEGER NOT NULL DEFAULT 0 CHECK(ui_display IN (0,1)),\n  FOREIGN KEY(workspace_id,project_id) REFERENCES projects(workspace_id,id)\n)"
+      "CREATE TABLE tasks ( id TEXT PRIMARY KEY, project_id TEXT, title TEXT NOT NULL, goal TEXT NOT NULL, source TEXT NOT NULL, profile_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('queued','active','waiting','awaiting_user','paused','complete','failed','canceled')), version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, accepted_at TEXT, started_at TEXT, finished_at TEXT, result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', created_by_device_id TEXT NOT NULL REFERENCES actors(id), command_id TEXT NOT NULL, owner_subject_id TEXT NOT NULL DEFAULT '', lineage_root_task_id TEXT REFERENCES tasks(id), lineage_parent_task_id TEXT REFERENCES tasks(id), lineage_depth INTEGER NOT NULL DEFAULT 0, child_policy_json BLOB NOT NULL DEFAULT '', root_child_limit INTEGER NOT NULL DEFAULT 0, pregrant_capabilities_json BLOB NOT NULL DEFAULT '[]', harness TEXT NOT NULL DEFAULT 'codex', interaction_state TEXT NOT NULL DEFAULT 'none' CHECK(interaction_state IN ('none','awaiting_message','explicit_confirmation','approval_required')), interaction_scope TEXT NOT NULL DEFAULT '', interaction_run_id TEXT NOT NULL DEFAULT '', interaction_action_digest TEXT NOT NULL DEFAULT '', interaction_expires_at TEXT, interaction_expected_version INTEGER NOT NULL DEFAULT 0, interaction_question TEXT NOT NULL DEFAULT '', interaction_expired_kind TEXT NOT NULL DEFAULT '', ui_display INTEGER NOT NULL DEFAULT 0 CHECK(ui_display IN (0,1)), FOREIGN KEY(project_id) REFERENCES projects(id) )"
     ],
     "ui_feedback_deliveries": [
       "table",
       "ui_feedback_deliveries",
       "ui_feedback_deliveries",
-      "CREATE TABLE ui_feedback_deliveries (\nrequest_id TEXT PRIMARY KEY REFERENCES ui_requests(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),\nowner_subject_id TEXT NOT NULL, text TEXT NOT NULL,\nstatus TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')),\nattempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), next_attempt_at TEXT, last_error TEXT,\ncreated_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+      "CREATE TABLE ui_feedback_deliveries ( request_id TEXT PRIMARY KEY REFERENCES ui_requests(id), owner_subject_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')), attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts \u003e= 0), next_attempt_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
     ],
     "ui_feedback_due": [
       "index",
@@ -154,7 +196,7 @@
       "table",
       "ui_jobs",
       "ui_jobs",
-      "CREATE TABLE ui_jobs (\nid TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nkind TEXT NOT NULL CHECK(kind IN ('register','task_entry')), dedupe_key TEXT NOT NULL UNIQUE,\nui_request_id TEXT NOT NULL REFERENCES ui_requests(id), status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','failed')),\nattempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0), next_attempt_at TEXT NOT NULL, last_error TEXT,\ncreated_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+      "CREATE TABLE ui_jobs ( id TEXT PRIMARY KEY, owner_subject_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('register','task_entry')), dedupe_key TEXT NOT NULL UNIQUE, ui_request_id TEXT NOT NULL REFERENCES ui_requests(id), status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','failed')), attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts\u003e=0), next_attempt_at TEXT NOT NULL, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
     ],
     "ui_jobs_due": [
       "index",
@@ -166,49 +208,55 @@
       "table",
       "ui_requests",
       "ui_requests",
-      "CREATE TABLE ui_requests (\nid TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nsource TEXT NOT NULL CHECK(source IN ('register','task')), voice_turn_id TEXT REFERENCES voice_turns(id),\ntask_id TEXT REFERENCES tasks(id), surface_id TEXT,\ntask_question INTEGER NOT NULL DEFAULT 0 CHECK(task_question IN (0,1)), input_note TEXT,\nstatus TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','rendered','input_received','failed')),\ncreated_at TEXT NOT NULL, updated_at TEXT NOT NULL,\nrequest TEXT CHECK(request IS NULL OR (length(trim(request))>0 AND trim(request)<>'none')),\nquestion_id TEXT REFERENCES pending_runtime_actions(id), surface_version INTEGER CHECK(surface_version IS NULL OR surface_version>=1), feedback TEXT)"
+      "CREATE TABLE ui_requests ( id TEXT PRIMARY KEY, owner_subject_id TEXT NOT NULL, source TEXT NOT NULL CHECK(source IN ('register','task')), voice_turn_id TEXT REFERENCES voice_turns(id), task_id TEXT REFERENCES tasks(id), surface_id TEXT, task_question INTEGER NOT NULL DEFAULT 0 CHECK(task_question IN (0,1)), input_note TEXT, status TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','rendered','input_received','failed')), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, request TEXT CHECK(request IS NULL OR (length(trim(request))\u003e0 AND trim(request)\u003c\u003e'none')), question_id TEXT REFERENCES pending_runtime_actions(id), surface_version INTEGER CHECK(surface_version IS NULL OR surface_version\u003e=1), feedback TEXT)"
     ],
     "ui_requests_voice_turn": [
       "index",
       "ui_requests_voice_turn",
       "ui_requests",
-      "CREATE UNIQUE INDEX ui_requests_voice_turn ON ui_requests(workspace_id,voice_turn_id) WHERE voice_turn_id IS NOT NULL"
+      "CREATE UNIQUE INDEX ui_requests_voice_turn ON ui_requests(voice_turn_id) WHERE voice_turn_id IS NOT NULL"
+    ],
+    "ui_result_sources": [
+      "table",
+      "ui_result_sources",
+      "ui_result_sources",
+      "CREATE TABLE ui_result_sources ( request_id TEXT PRIMARY KEY REFERENCES ui_requests(id), task_id TEXT NOT NULL REFERENCES tasks(id), run_id TEXT NOT NULL REFERENCES runs(id), entry_id TEXT NOT NULL REFERENCES task_entries(id), event_cursor INTEGER NOT NULL CHECK(event_cursor\u003e0), content_hash TEXT NOT NULL )"
     ],
     "ui_screens": [
       "table",
       "ui_screens",
       "ui_screens",
-      "CREATE TABLE ui_screens (\nworkspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nwidth INTEGER NOT NULL, height INTEGER NOT NULL, updated_at TEXT NOT NULL,\nPRIMARY KEY(workspace_id,owner_subject_id))"
+      "CREATE TABLE ui_screens ( owner_subject_id TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(owner_subject_id))"
     ],
     "ui_surfaces": [
       "table",
       "ui_surfaces",
       "ui_surfaces",
-      "CREATE TABLE ui_surfaces (\nworkspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\nsurface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('popover','window')),\nstate_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'),\nwidth INTEGER, height INTEGER,\nversion INTEGER NOT NULL CHECK(version >= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,\nrequest_id TEXT REFERENCES ui_requests(id),\nPRIMARY KEY(workspace_id,owner_subject_id,surface_id),\nCHECK((width IS NULL AND height IS NULL) OR (width IS NOT NULL AND height IS NOT NULL)))"
+      "CREATE TABLE ui_surfaces ( owner_subject_id TEXT NOT NULL, surface_id TEXT NOT NULL, container TEXT NOT NULL CHECK(container IN ('popover','window')), state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='array'), width INTEGER, height INTEGER, version INTEGER NOT NULL CHECK(version \u003e= 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, request_id TEXT REFERENCES ui_requests(id), PRIMARY KEY(owner_subject_id,surface_id), CHECK((width IS NULL AND height IS NULL) OR (width IS NOT NULL AND height IS NOT NULL)))"
     ],
     "ui_task_cursor": [
       "table",
       "ui_task_cursor",
       "ui_task_cursor",
-      "CREATE TABLE ui_task_cursor(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),last_cursor INTEGER NOT NULL DEFAULT 0)"
+      "CREATE TABLE ui_task_cursor(singleton INTEGER PRIMARY KEY CHECK(singleton=1),last_cursor INTEGER NOT NULL DEFAULT 0)"
     ],
     "voice_account_terminations": [
       "table",
       "voice_account_terminations",
       "voice_account_terminations",
-      "CREATE TABLE voice_account_terminations (\n  id TEXT PRIMARY KEY,\n  session_id TEXT NOT NULL REFERENCES voice_sessions(id),\n  generation INTEGER NOT NULL,\n  account_id_hash BLOB NOT NULL,\n  lease_id_hash BLOB NOT NULL,\n  evidence_id TEXT NOT NULL,\n  observed_at TEXT NOT NULL,\n  adapter_kind TEXT NOT NULL\n)"
+      "CREATE TABLE voice_account_terminations ( id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES voice_sessions(id), generation INTEGER NOT NULL, account_id_hash BLOB NOT NULL, lease_id_hash BLOB NOT NULL, evidence_id TEXT NOT NULL, observed_at TEXT NOT NULL, adapter_kind TEXT NOT NULL )"
     ],
     "voice_context_registers": [
       "table",
       "voice_context_registers",
       "voice_context_registers",
-      "CREATE TABLE voice_context_registers (\nworkspace_id TEXT NOT NULL REFERENCES workspaces(id), owner_subject_id TEXT NOT NULL,\ncompact TEXT NOT NULL DEFAULT '', compact_through TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z',\nbuilt_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', version INTEGER NOT NULL DEFAULT 0,\nsource_hash TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, source_memory_boundary TEXT NOT NULL DEFAULT '',\nPRIMARY KEY(workspace_id,owner_subject_id))"
+      "CREATE TABLE voice_context_registers ( owner_subject_id TEXT NOT NULL, compact TEXT NOT NULL DEFAULT '', compact_through TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', built_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', version INTEGER NOT NULL DEFAULT 0, source_hash TEXT NOT NULL DEFAULT '', claim_token TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, source_memory_boundary TEXT NOT NULL DEFAULT '', PRIMARY KEY(owner_subject_id))"
     ],
     "voice_fast_replies": [
       "table",
       "voice_fast_replies",
       "voice_fast_replies",
-      "CREATE TABLE voice_fast_replies (\n  id TEXT PRIMARY KEY,\n  workspace_id TEXT NOT NULL,\n  session_id TEXT NOT NULL,\n  generation INTEGER NOT NULL,\n  turn_id TEXT NOT NULL,\n  text TEXT NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('pending','delivered','failed','skipped')),\n  attempts INTEGER NOT NULL DEFAULT 0,\n  next_attempt_at TEXT NOT NULL,\n  last_error_code TEXT NOT NULL DEFAULT '',\n  voice_session_id TEXT NOT NULL DEFAULT '',\n  voice_generation INTEGER NOT NULL DEFAULT 0,\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL, intent_kind TEXT NOT NULL DEFAULT 'progress',\n  UNIQUE(session_id,generation,turn_id)\n)"
+      "CREATE TABLE voice_fast_replies ( id TEXT PRIMARY KEY, session_id TEXT NOT NULL, generation INTEGER NOT NULL, turn_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','delivered','failed','skipped')), attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, last_error_code TEXT NOT NULL DEFAULT '', voice_session_id TEXT NOT NULL DEFAULT '', voice_generation INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, intent_kind TEXT NOT NULL DEFAULT 'progress', UNIQUE(session_id,generation,turn_id) )"
     ],
     "voice_fast_replies_due": [
       "index",
@@ -220,19 +268,31 @@
       "table",
       "voice_pool_reconciliations",
       "voice_pool_reconciliations",
-      "CREATE TABLE voice_pool_reconciliations (\n  id TEXT PRIMARY KEY,\n  actor_id TEXT NOT NULL,\n  source_session_id TEXT NOT NULL,\n  generation INTEGER NOT NULL,\n  reason TEXT NOT NULL,\n  method TEXT NOT NULL,\n  created_at TEXT NOT NULL\n)"
+      "CREATE TABLE voice_pool_reconciliations ( id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, source_session_id TEXT NOT NULL, generation INTEGER NOT NULL, reason TEXT NOT NULL, method TEXT NOT NULL, created_at TEXT NOT NULL )"
     ],
     "voice_pool_state": [
       "table",
       "voice_pool_state",
       "voice_pool_state",
-      "CREATE TABLE voice_pool_state (\n  id INTEGER PRIMARY KEY CHECK(id=1),\n  blocked INTEGER NOT NULL CHECK(blocked IN (0,1)),\n  reason_code TEXT NOT NULL DEFAULT '',\n  source_session_id TEXT NOT NULL DEFAULT '',\n  updated_at TEXT NOT NULL,\n  updated_by TEXT NOT NULL DEFAULT ''\n)"
+      "CREATE TABLE voice_pool_state ( id INTEGER PRIMARY KEY CHECK(id=1), blocked INTEGER NOT NULL CHECK(blocked IN (0,1)), reason_code TEXT NOT NULL DEFAULT '', source_session_id TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL, updated_by TEXT NOT NULL DEFAULT '' )"
     ],
     "voice_recall_jobs": [
       "table",
       "voice_recall_jobs",
       "voice_recall_jobs",
-      "CREATE TABLE voice_recall_jobs (\nid TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, owner_id TEXT NOT NULL,\nsession_id TEXT NOT NULL, generation INTEGER NOT NULL, turn_id TEXT NOT NULL,\nquestion TEXT NOT NULL, holding_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',\nUNIQUE(session_id,generation,turn_id))"
+      "CREATE TABLE voice_recall_jobs ( id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, session_id TEXT NOT NULL, generation INTEGER NOT NULL, turn_id TEXT NOT NULL, question TEXT NOT NULL, holding_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', UNIQUE(session_id,generation,turn_id))"
+    ],
+    "voice_result_checkpoints": [
+      "table",
+      "voice_result_checkpoints",
+      "voice_result_checkpoints",
+      "CREATE TABLE voice_result_checkpoints ( entry_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, run_id TEXT NOT NULL, subject_id TEXT NOT NULL, content_hash TEXT NOT NULL, session_id TEXT NOT NULL, generation INTEGER NOT NULL, gateway_session_id TEXT NOT NULL, media_generation INTEGER NOT NULL, claim INTEGER NOT NULL DEFAULT 0, lease_until TEXT NOT NULL DEFAULT '' )"
+    ],
+    "voice_result_chunks": [
+      "table",
+      "voice_result_chunks",
+      "voice_result_chunks",
+      "CREATE TABLE voice_result_chunks ( entry_id TEXT NOT NULL REFERENCES voice_result_checkpoints(entry_id), ordinal INTEGER NOT NULL, delivery_id TEXT NOT NULL UNIQUE, content_hash TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','attempted','confirmed','unknown')), PRIMARY KEY(entry_id,ordinal) )"
     ],
     "voice_result_cursor": [
       "table",
@@ -244,7 +304,7 @@
       "table",
       "voice_result_deliveries",
       "voice_result_deliveries",
-      "CREATE TABLE voice_result_deliveries (\n  entry_id TEXT PRIMARY KEY,\n  workspace_id TEXT NOT NULL,\n  task_id TEXT NOT NULL,\n  run_id TEXT NOT NULL,\n  subject_id TEXT NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('pending','delivered','failed','skipped_no_call','skipped_stale')),\n  attempts INTEGER NOT NULL DEFAULT 0,\n  next_attempt_at TEXT NOT NULL,\n  last_error_code TEXT NOT NULL DEFAULT '',\n  voice_session_id TEXT NOT NULL DEFAULT '',\n  generation INTEGER NOT NULL DEFAULT 0,\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL\n)"
+      "CREATE TABLE voice_result_deliveries ( entry_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, run_id TEXT NOT NULL, subject_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','delivered','failed','skipped_no_call','skipped_stale')), attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, last_error_code TEXT NOT NULL DEFAULT '', voice_session_id TEXT NOT NULL DEFAULT '', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL )"
     ],
     "voice_result_deliveries_due": [
       "index",
@@ -256,25 +316,31 @@
       "table",
       "voice_sessions",
       "voice_sessions",
-      "CREATE TABLE voice_sessions (\n  id TEXT PRIMARY KEY,\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id),\n  owner_id TEXT NOT NULL,\n  device_id TEXT NOT NULL,\n  request_id TEXT NOT NULL,\n  request_hash BLOB NOT NULL,\n  gateway_session_id TEXT NOT NULL DEFAULT '',\n  generation INTEGER NOT NULL CHECK(generation > 0),\n  state TEXT NOT NULL CHECK(state IN ('allocating','active','ending','ended','failed','quarantined')),\n  offer_answer BLOB NOT NULL DEFAULT '',\n  created_at TEXT NOT NULL,\n  updated_at TEXT NOT NULL,\n  heartbeat_at TEXT,\n  ended_at TEXT,\n  last_error_code TEXT NOT NULL DEFAULT '', account_lease_id TEXT NOT NULL DEFAULT '', account_lease_generation INTEGER NOT NULL DEFAULT 0, account_id_hash BLOB NOT NULL DEFAULT '', gateway_unbound INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbound IN (0,1)), gateway_unbind_unknown INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbind_unknown IN (0,1)), gateway_media_generation INTEGER NOT NULL DEFAULT 0, opening_context_delivery TEXT NOT NULL DEFAULT 'unsupported' CHECK(opening_context_delivery IN ('delivered','unverified','unsupported')), opening_context_version INTEGER NOT NULL DEFAULT 0, opening_context_chars INTEGER NOT NULL DEFAULT 0, opening_context_manifest BLOB NOT NULL DEFAULT '', gateway_context_chars INTEGER NOT NULL DEFAULT 0, gateway_request_id TEXT NOT NULL DEFAULT '',\n  UNIQUE(workspace_id,owner_id,request_id)\n)"
+      "CREATE TABLE voice_sessions ( id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, device_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash BLOB NOT NULL, gateway_session_id TEXT NOT NULL DEFAULT '', generation INTEGER NOT NULL CHECK(generation \u003e 0), state TEXT NOT NULL CHECK(state IN ('allocating','active','ending','ended','failed','quarantined')), offer_answer BLOB NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, heartbeat_at TEXT, ended_at TEXT, last_error_code TEXT NOT NULL DEFAULT '', account_lease_id TEXT NOT NULL DEFAULT '', account_lease_generation INTEGER NOT NULL DEFAULT 0, account_id_hash BLOB NOT NULL DEFAULT '', gateway_unbound INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbound IN (0,1)), gateway_unbind_unknown INTEGER NOT NULL DEFAULT 0 CHECK(gateway_unbind_unknown IN (0,1)), gateway_media_generation INTEGER NOT NULL DEFAULT 0, opening_context_delivery TEXT NOT NULL DEFAULT 'unsupported' CHECK(opening_context_delivery IN ('delivered','unverified','unsupported')), opening_context_version INTEGER NOT NULL DEFAULT 0, opening_context_chars INTEGER NOT NULL DEFAULT 0, opening_context_manifest BLOB NOT NULL DEFAULT '', gateway_context_chars INTEGER NOT NULL DEFAULT 0, gateway_request_id TEXT NOT NULL DEFAULT '', UNIQUE(owner_id,request_id) )"
     ],
     "voice_sessions_device": [
       "index",
       "voice_sessions_device",
       "voice_sessions",
-      "CREATE INDEX voice_sessions_device ON voice_sessions(workspace_id,device_id,state)"
+      "CREATE INDEX voice_sessions_device ON voice_sessions(device_id,state)"
     ],
     "voice_sessions_owner_lease": [
       "index",
       "voice_sessions_owner_lease",
       "voice_sessions",
-      "CREATE UNIQUE INDEX voice_sessions_owner_lease ON voice_sessions(workspace_id,owner_id)\n  WHERE state IN ('allocating','active','ending')"
+      "CREATE UNIQUE INDEX voice_sessions_owner_lease ON voice_sessions(owner_id) WHERE state IN ('allocating','active','ending')"
+    ],
+    "voice_task_inputs": [
+      "table",
+      "voice_task_inputs",
+      "voice_task_inputs",
+      "CREATE TABLE voice_task_inputs ( session_id TEXT NOT NULL REFERENCES voice_sessions(id), generation INTEGER NOT NULL, turn_id TEXT NOT NULL, turn_revision INTEGER NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id), entry_id TEXT NOT NULL REFERENCES task_entries(id), question_id TEXT REFERENCES pending_runtime_actions(id), content_hash BLOB NOT NULL, PRIMARY KEY(session_id,generation,turn_id) )"
     ],
     "voice_task_links": [
       "table",
       "voice_task_links",
       "voice_task_links",
-      "CREATE TABLE voice_task_links (\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id),\n  session_id TEXT NOT NULL REFERENCES voice_sessions(id),\n  generation INTEGER NOT NULL,\n  turn_id TEXT NOT NULL,\n  turn_revision INTEGER NOT NULL,\n  task_id TEXT NOT NULL REFERENCES tasks(id),\n  linked_by_device_id TEXT NOT NULL,\n  command_id TEXT NOT NULL,\n  linked_at TEXT NOT NULL,\n  PRIMARY KEY(session_id,generation,turn_id,turn_revision),\n  UNIQUE(workspace_id,task_id)\n)"
+      "CREATE TABLE voice_task_links ( session_id TEXT NOT NULL REFERENCES voice_sessions(id), generation INTEGER NOT NULL, turn_id TEXT NOT NULL, turn_revision INTEGER NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id), linked_by_device_id TEXT NOT NULL, command_id TEXT NOT NULL, linked_at TEXT NOT NULL, PRIMARY KEY(session_id,generation,turn_id,turn_revision), UNIQUE(task_id) )"
     ],
     "voice_task_links_stable_turn": [
       "index",
@@ -286,115 +352,37 @@
       "index",
       "voice_task_links_task",
       "voice_task_links",
-      "CREATE INDEX voice_task_links_task ON voice_task_links(workspace_id,task_id)"
+      "CREATE INDEX voice_task_links_task ON voice_task_links(task_id)"
+    ],
+    "voice_text_checkpoints": [
+      "table",
+      "voice_text_checkpoints",
+      "voice_text_checkpoints",
+      "CREATE TABLE voice_text_checkpoints ( owner_id TEXT NOT NULL,source_kind TEXT NOT NULL,source_id TEXT NOT NULL, content_hash TEXT NOT NULL,session_id TEXT NOT NULL,generation INTEGER NOT NULL,gateway_session_id TEXT NOT NULL,media_generation INTEGER NOT NULL, claim INTEGER NOT NULL DEFAULT 0,lease_until TEXT NOT NULL DEFAULT '', PRIMARY KEY(owner_id,source_kind,source_id))"
+    ],
+    "voice_text_chunks": [
+      "table",
+      "voice_text_chunks",
+      "voice_text_chunks",
+      "CREATE TABLE voice_text_chunks ( owner_id TEXT NOT NULL,source_kind TEXT NOT NULL,source_id TEXT NOT NULL,ordinal INTEGER NOT NULL, delivery_id TEXT NOT NULL UNIQUE,content_hash TEXT NOT NULL,text TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','attempted','confirmed','unknown','rejected')), PRIMARY KEY(owner_id,source_kind,source_id,ordinal), FOREIGN KEY(owner_id,source_kind,source_id) REFERENCES voice_text_checkpoints(owner_id,source_kind,source_id))"
     ],
     "voice_transcript_turns": [
       "table",
       "voice_transcript_turns",
       "voice_transcript_turns",
-      "CREATE TABLE voice_transcript_turns (\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id),\n  session_id TEXT NOT NULL REFERENCES voice_sessions(id),\n  seq INTEGER NOT NULL CHECK(seq >= 0),\n  role TEXT NOT NULL CHECK(role IN ('user','assistant')),\n  text TEXT NOT NULL,\n  at TEXT NOT NULL,\n  received_at TEXT NOT NULL,\n  PRIMARY KEY(session_id,seq)\n)"
-    ],
-    "voice_transcript_turns_workspace": [
-      "index",
-      "voice_transcript_turns_workspace",
-      "voice_transcript_turns",
-      "CREATE INDEX voice_transcript_turns_workspace ON voice_transcript_turns(workspace_id,session_id,seq)"
+      "CREATE TABLE voice_transcript_turns ( session_id TEXT NOT NULL REFERENCES voice_sessions(id), seq INTEGER NOT NULL CHECK(seq \u003e= 0), role TEXT NOT NULL CHECK(role IN ('user','assistant')), text TEXT NOT NULL, at TEXT NOT NULL, received_at TEXT NOT NULL, PRIMARY KEY(session_id,seq) )"
     ],
     "voice_turns": [
       "table",
       "voice_turns",
       "voice_turns",
-      "CREATE TABLE voice_turns (\n  id TEXT PRIMARY KEY,\n  workspace_id TEXT NOT NULL,\n  session_id TEXT NOT NULL REFERENCES voice_sessions(id),\n  generation INTEGER NOT NULL,\n  turn_id TEXT NOT NULL,\n  revision INTEGER NOT NULL CHECK(revision > 0),\n  provider_message_id TEXT NOT NULL DEFAULT '',\n  content TEXT NOT NULL,\n  content_hash BLOB NOT NULL,\n  confirmed_at TEXT NOT NULL,\n  command_id TEXT NOT NULL, resumed_task_id TEXT NOT NULL DEFAULT '', handoff_handled INTEGER NOT NULL DEFAULT 0, steward_action TEXT NOT NULL DEFAULT '', steward_task_id TEXT NOT NULL DEFAULT '', report_text TEXT NOT NULL DEFAULT '', exits TEXT, ui_handled INTEGER NOT NULL DEFAULT 0 CHECK(ui_handled IN (0,1)), request TEXT, steward_question_id TEXT NOT NULL DEFAULT '', steward_task_version INTEGER NOT NULL DEFAULT 0, steward_snapshot TEXT NOT NULL DEFAULT '',\n  UNIQUE(session_id,generation,turn_id,revision)\n)"
+      "CREATE TABLE voice_turns ( id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES voice_sessions(id), generation INTEGER NOT NULL, turn_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision \u003e 0), provider_message_id TEXT NOT NULL DEFAULT '', content TEXT NOT NULL, content_hash BLOB NOT NULL, confirmed_at TEXT NOT NULL, command_id TEXT NOT NULL, resumed_task_id TEXT NOT NULL DEFAULT '', handoff_handled INTEGER NOT NULL DEFAULT 0, steward_action TEXT NOT NULL DEFAULT '', steward_task_id TEXT NOT NULL DEFAULT '', report_text TEXT NOT NULL DEFAULT '', exits TEXT, ui_handled INTEGER NOT NULL DEFAULT 0 CHECK(ui_handled IN (0,1)), request TEXT, steward_question_id TEXT NOT NULL DEFAULT '', steward_task_version INTEGER NOT NULL DEFAULT 0, steward_snapshot TEXT NOT NULL DEFAULT '', UNIQUE(session_id,generation,turn_id,revision) )"
     ],
     "voice_turns_session": [
       "index",
       "voice_turns_session",
       "voice_turns",
       "CREATE INDEX voice_turns_session ON voice_turns(session_id,generation,confirmed_at)"
-    ],
-    "voice_task_inputs": [
-      "table",
-      "voice_task_inputs",
-      "voice_task_inputs",
-      "CREATE TABLE voice_task_inputs (\n session_id TEXT NOT NULL REFERENCES voice_sessions(id), generation INTEGER NOT NULL, turn_id TEXT NOT NULL,\n workspace_id TEXT NOT NULL REFERENCES workspaces(id), turn_revision INTEGER NOT NULL,\n task_id TEXT NOT NULL REFERENCES tasks(id), entry_id TEXT NOT NULL REFERENCES task_entries(id),\n question_id TEXT REFERENCES pending_runtime_actions(id), content_hash BLOB NOT NULL,\n PRIMARY KEY(session_id,generation,turn_id)\n)"
-    ],
-    "sqlite_autoindex_voice_task_inputs_1": [
-      "index",
-      "sqlite_autoindex_voice_task_inputs_1",
-      "voice_task_inputs",
-      ""
-    ],
-    "voice_result_checkpoints": [
-      "table",
-      "voice_result_checkpoints",
-      "voice_result_checkpoints",
-      "CREATE TABLE voice_result_checkpoints (\n entry_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, task_id TEXT NOT NULL,\n run_id TEXT NOT NULL, subject_id TEXT NOT NULL, content_hash TEXT NOT NULL,\n session_id TEXT NOT NULL, generation INTEGER NOT NULL, gateway_session_id TEXT NOT NULL,\n media_generation INTEGER NOT NULL, claim INTEGER NOT NULL DEFAULT 0, lease_until TEXT NOT NULL DEFAULT ''\n)"
-    ],
-    "sqlite_autoindex_voice_result_checkpoints_1": [
-      "index",
-      "sqlite_autoindex_voice_result_checkpoints_1",
-      "voice_result_checkpoints",
-      ""
-    ],
-    "voice_result_chunks": [
-      "table",
-      "voice_result_chunks",
-      "voice_result_chunks",
-      "CREATE TABLE voice_result_chunks (\n entry_id TEXT NOT NULL REFERENCES voice_result_checkpoints(entry_id), ordinal INTEGER NOT NULL,\n delivery_id TEXT NOT NULL UNIQUE, content_hash TEXT NOT NULL, text TEXT NOT NULL,\n state TEXT NOT NULL CHECK(state IN ('pending','attempted','confirmed','unknown')),\n PRIMARY KEY(entry_id,ordinal)\n)"
-    ],
-    "sqlite_autoindex_voice_result_chunks_1": [
-      "index",
-      "sqlite_autoindex_voice_result_chunks_1",
-      "voice_result_chunks",
-      ""
-    ],
-    "sqlite_autoindex_voice_result_chunks_2": [
-      "index",
-      "sqlite_autoindex_voice_result_chunks_2",
-      "voice_result_chunks",
-      ""
-    ],
-    "voice_text_checkpoints": [
-      "table",
-      "voice_text_checkpoints",
-      "voice_text_checkpoints",
-      "CREATE TABLE voice_text_checkpoints (\n workspace_id TEXT NOT NULL,owner_id TEXT NOT NULL,source_kind TEXT NOT NULL,source_id TEXT NOT NULL,\n content_hash TEXT NOT NULL,session_id TEXT NOT NULL,generation INTEGER NOT NULL,gateway_session_id TEXT NOT NULL,media_generation INTEGER NOT NULL,\n claim INTEGER NOT NULL DEFAULT 0,lease_until TEXT NOT NULL DEFAULT '',\n PRIMARY KEY(workspace_id,owner_id,source_kind,source_id))"
-    ],
-    "sqlite_autoindex_voice_text_checkpoints_1": [
-      "index",
-      "sqlite_autoindex_voice_text_checkpoints_1",
-      "voice_text_checkpoints",
-      ""
-    ],
-    "voice_text_chunks": [
-      "table",
-      "voice_text_chunks",
-      "voice_text_chunks",
-      "CREATE TABLE voice_text_chunks (\n workspace_id TEXT NOT NULL,owner_id TEXT NOT NULL,source_kind TEXT NOT NULL,source_id TEXT NOT NULL,ordinal INTEGER NOT NULL,\n delivery_id TEXT NOT NULL UNIQUE,content_hash TEXT NOT NULL,text TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','attempted','confirmed','unknown','rejected')),\n PRIMARY KEY(workspace_id,owner_id,source_kind,source_id,ordinal),\n FOREIGN KEY(workspace_id,owner_id,source_kind,source_id) REFERENCES voice_text_checkpoints(workspace_id,owner_id,source_kind,source_id))"
-    ],
-    "sqlite_autoindex_voice_text_chunks_1": [
-      "index",
-      "sqlite_autoindex_voice_text_chunks_1",
-      "voice_text_chunks",
-      ""
-    ],
-    "sqlite_autoindex_voice_text_chunks_2": [
-      "index",
-      "sqlite_autoindex_voice_text_chunks_2",
-      "voice_text_chunks",
-      ""
-    ],
-    "ui_result_sources": [
-      "table",
-      "ui_result_sources",
-      "ui_result_sources",
-      "CREATE TABLE ui_result_sources (\n request_id TEXT PRIMARY KEY REFERENCES ui_requests(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),\n task_id TEXT NOT NULL REFERENCES tasks(id), run_id TEXT NOT NULL REFERENCES runs(id),\n entry_id TEXT NOT NULL REFERENCES task_entries(id), event_cursor INTEGER NOT NULL CHECK(event_cursor>0),\n content_hash TEXT NOT NULL\n)"
-    ],
-    "sqlite_autoindex_ui_result_sources_1": [
-      "index",
-      "sqlite_autoindex_ui_result_sources_1",
-      "ui_result_sources",
-      ""
     ]
   },
   "columns": {
@@ -405,13 +393,6 @@
         0,
         null,
         1
-      ],
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
       ],
       [
         "project_id",
@@ -654,13 +635,6 @@
         1
       ],
       [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
         "owner_subject_id",
         "TEXT",
         1,
@@ -724,13 +698,6 @@
         0,
         null,
         1
-      ],
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
       ],
       [
         "owner_subject_id",
@@ -810,13 +777,6 @@
         0,
         null,
         1
-      ],
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
       ],
       [
         "owner_subject_id",
@@ -917,20 +877,57 @@
         0
       ]
     ],
-    "ui_screens": [
+    "ui_result_sources": [
       [
-        "workspace_id",
+        "request_id",
         "TEXT",
-        1,
+        0,
         null,
         1
       ],
+      [
+        "task_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "run_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "entry_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "event_cursor",
+        "INTEGER",
+        1,
+        null,
+        0
+      ],
+      [
+        "content_hash",
+        "TEXT",
+        1,
+        null,
+        0
+      ]
+    ],
+    "ui_screens": [
       [
         "owner_subject_id",
         "TEXT",
         1,
         null,
-        2
+        1
       ],
       [
         "width",
@@ -956,25 +953,18 @@
     ],
     "ui_surfaces": [
       [
-        "workspace_id",
+        "owner_subject_id",
         "TEXT",
         1,
         null,
         1
       ],
       [
-        "owner_subject_id",
-        "TEXT",
-        1,
-        null,
-        2
-      ],
-      [
         "surface_id",
         "TEXT",
         1,
         null,
-        3
+        2
       ],
       [
         "container",
@@ -1035,8 +1025,8 @@
     ],
     "ui_task_cursor": [
       [
-        "workspace_id",
-        "TEXT",
+        "singleton",
+        "INTEGER",
         0,
         null,
         1
@@ -1109,18 +1099,11 @@
     ],
     "voice_context_registers": [
       [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        1
-      ],
-      [
         "owner_subject_id",
         "TEXT",
         1,
         null,
-        2
+        1
       ],
       [
         "compact",
@@ -1186,13 +1169,6 @@
         0,
         null,
         1
-      ],
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
       ],
       [
         "session_id",
@@ -1390,13 +1366,6 @@
         1
       ],
       [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
         "owner_id",
         "TEXT",
         1,
@@ -1446,6 +1415,129 @@
         0
       ]
     ],
+    "voice_result_checkpoints": [
+      [
+        "entry_id",
+        "TEXT",
+        0,
+        null,
+        1
+      ],
+      [
+        "task_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "run_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "subject_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "content_hash",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "session_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "generation",
+        "INTEGER",
+        1,
+        null,
+        0
+      ],
+      [
+        "gateway_session_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "media_generation",
+        "INTEGER",
+        1,
+        null,
+        0
+      ],
+      [
+        "claim",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "lease_until",
+        "TEXT",
+        1,
+        "''",
+        0
+      ]
+    ],
+    "voice_result_chunks": [
+      [
+        "entry_id",
+        "TEXT",
+        1,
+        null,
+        1
+      ],
+      [
+        "ordinal",
+        "INTEGER",
+        1,
+        null,
+        2
+      ],
+      [
+        "delivery_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "content_hash",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "text",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "state",
+        "TEXT",
+        1,
+        null,
+        0
+      ]
+    ],
     "voice_result_cursor": [
       [
         "id",
@@ -1469,13 +1561,6 @@
         0,
         null,
         1
-      ],
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
       ],
       [
         "task_id",
@@ -1562,13 +1647,6 @@
         0,
         null,
         1
-      ],
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
       ],
       [
         "owner_id",
@@ -1746,14 +1824,65 @@
         0
       ]
     ],
-    "voice_task_links": [
+    "voice_task_inputs": [
       [
-        "workspace_id",
+        "session_id",
+        "TEXT",
+        1,
+        null,
+        1
+      ],
+      [
+        "generation",
+        "INTEGER",
+        1,
+        null,
+        2
+      ],
+      [
+        "turn_id",
+        "TEXT",
+        1,
+        null,
+        3
+      ],
+      [
+        "turn_revision",
+        "INTEGER",
+        1,
+        null,
+        0
+      ],
+      [
+        "task_id",
         "TEXT",
         1,
         null,
         0
       ],
+      [
+        "entry_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "question_id",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "content_hash",
+        "BLOB",
+        1,
+        null,
+        0
+      ]
+    ],
+    "voice_task_links": [
       [
         "session_id",
         "TEXT",
@@ -1811,14 +1940,137 @@
         0
       ]
     ],
-    "voice_transcript_turns": [
+    "voice_text_checkpoints": [
       [
-        "workspace_id",
+        "owner_id",
+        "TEXT",
+        1,
+        null,
+        1
+      ],
+      [
+        "source_kind",
+        "TEXT",
+        1,
+        null,
+        2
+      ],
+      [
+        "source_id",
+        "TEXT",
+        1,
+        null,
+        3
+      ],
+      [
+        "content_hash",
         "TEXT",
         1,
         null,
         0
       ],
+      [
+        "session_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "generation",
+        "INTEGER",
+        1,
+        null,
+        0
+      ],
+      [
+        "gateway_session_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "media_generation",
+        "INTEGER",
+        1,
+        null,
+        0
+      ],
+      [
+        "claim",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "lease_until",
+        "TEXT",
+        1,
+        "''",
+        0
+      ]
+    ],
+    "voice_text_chunks": [
+      [
+        "owner_id",
+        "TEXT",
+        1,
+        null,
+        1
+      ],
+      [
+        "source_kind",
+        "TEXT",
+        1,
+        null,
+        2
+      ],
+      [
+        "source_id",
+        "TEXT",
+        1,
+        null,
+        3
+      ],
+      [
+        "ordinal",
+        "INTEGER",
+        1,
+        null,
+        4
+      ],
+      [
+        "delivery_id",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "content_hash",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "text",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "state",
+        "TEXT",
+        1,
+        null,
+        0
+      ]
+    ],
+    "voice_transcript_turns": [
       [
         "session_id",
         "TEXT",
@@ -1869,13 +2121,6 @@
         0,
         null,
         1
-      ],
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
       ],
       [
         "session_id",
@@ -2015,396 +2260,6 @@
         "TEXT",
         1,
         "''",
-        0
-      ]
-    ],
-    "voice_task_inputs": [
-      [
-        "session_id",
-        "TEXT",
-        1,
-        null,
-        1
-      ],
-      [
-        "generation",
-        "INTEGER",
-        1,
-        null,
-        2
-      ],
-      [
-        "turn_id",
-        "TEXT",
-        1,
-        null,
-        3
-      ],
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "turn_revision",
-        "INTEGER",
-        1,
-        null,
-        0
-      ],
-      [
-        "task_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "entry_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "question_id",
-        "TEXT",
-        0,
-        null,
-        0
-      ],
-      [
-        "content_hash",
-        "BLOB",
-        1,
-        null,
-        0
-      ]
-    ],
-    "voice_result_checkpoints": [
-      [
-        "entry_id",
-        "TEXT",
-        0,
-        null,
-        1
-      ],
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "task_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "run_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "subject_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "content_hash",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "session_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "generation",
-        "INTEGER",
-        1,
-        null,
-        0
-      ],
-      [
-        "gateway_session_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "media_generation",
-        "INTEGER",
-        1,
-        null,
-        0
-      ],
-      [
-        "claim",
-        "INTEGER",
-        1,
-        "0",
-        0
-      ],
-      [
-        "lease_until",
-        "TEXT",
-        1,
-        "''",
-        0
-      ]
-    ],
-    "voice_result_chunks": [
-      [
-        "entry_id",
-        "TEXT",
-        1,
-        null,
-        1
-      ],
-      [
-        "ordinal",
-        "INTEGER",
-        1,
-        null,
-        2
-      ],
-      [
-        "delivery_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "content_hash",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "text",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "state",
-        "TEXT",
-        1,
-        null,
-        0
-      ]
-    ],
-    "voice_text_checkpoints": [
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        1
-      ],
-      [
-        "owner_id",
-        "TEXT",
-        1,
-        null,
-        2
-      ],
-      [
-        "source_kind",
-        "TEXT",
-        1,
-        null,
-        3
-      ],
-      [
-        "source_id",
-        "TEXT",
-        1,
-        null,
-        4
-      ],
-      [
-        "content_hash",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "session_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "generation",
-        "INTEGER",
-        1,
-        null,
-        0
-      ],
-      [
-        "gateway_session_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "media_generation",
-        "INTEGER",
-        1,
-        null,
-        0
-      ],
-      [
-        "claim",
-        "INTEGER",
-        1,
-        "0",
-        0
-      ],
-      [
-        "lease_until",
-        "TEXT",
-        1,
-        "''",
-        0
-      ]
-    ],
-    "voice_text_chunks": [
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        1
-      ],
-      [
-        "owner_id",
-        "TEXT",
-        1,
-        null,
-        2
-      ],
-      [
-        "source_kind",
-        "TEXT",
-        1,
-        null,
-        3
-      ],
-      [
-        "source_id",
-        "TEXT",
-        1,
-        null,
-        4
-      ],
-      [
-        "ordinal",
-        "INTEGER",
-        1,
-        null,
-        5
-      ],
-      [
-        "delivery_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "content_hash",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "text",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "state",
-        "TEXT",
-        1,
-        null,
-        0
-      ]
-    ],
-    "ui_result_sources": [
-      [
-        "request_id",
-        "TEXT",
-        0,
-        null,
-        1
-      ],
-      [
-        "workspace_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "task_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "run_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "entry_id",
-        "TEXT",
-        1,
-        null,
-        0
-      ],
-      [
-        "event_cursor",
-        "INTEGER",
-        1,
-        null,
-        0
-      ],
-      [
-        "content_hash",
-        "TEXT",
-        1,
-        null,
         0
       ]
     ]

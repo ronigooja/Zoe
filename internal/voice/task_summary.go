@@ -98,7 +98,7 @@ func (r *ContextRegister) summarizeTask(ctx context.Context, id string) error {
 	// Snapshot all input in one read, including additions in conversational order.
 	var additions string
 	err := r.db.QueryRowContext(ctx, `SELECT t.goal,t.status,t.result,t.version,
-(SELECT json_group_array(content) FROM (SELECT content FROM task_entries WHERE task_id=t.id AND workspace_id=t.workspace_id AND kind='user_message' AND julianday(created_at)>julianday(t.created_at) ORDER BY julianday(created_at),id))
+(SELECT json_group_array(content) FROM (SELECT content FROM task_entries WHERE task_id=t.id AND kind='user_message' AND julianday(created_at)>julianday(t.created_at) ORDER BY julianday(created_at),id))
 FROM tasks t WHERE t.id=? AND t.status='complete' AND t.summary_result IS NULL`, id).Scan(&input.Goal, &input.Status, &input.Result, &version, &additions)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

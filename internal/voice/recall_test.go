@@ -34,13 +34,14 @@ func TestRecallWorkerUnmodifiedContext(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			r := newReceiptDeliveryRig(t)
 			text := " \n**unmodified** 🙂\t" + strings.Repeat("memory 🙂\n", 2000) + "\x00 "
+			user := memoryapi.User("test-lineage", "owner")
 			calls := 0
 			if mode != "disabled" {
 				r.svc.recall.MemoryAPI = workerClient(t, func(w http.ResponseWriter, req *http.Request) {
 					calls++
 					var body map[string]string
 					_ = json.NewDecoder(req.Body).Decode(&body)
-					if req.URL.Path != "/v1/memory/search" || body["request"] != "register restatement" || body["user"] != memoryUser("default", "owner") {
+					if req.URL.Path != "/v1/memory/search" || body["request"] != "register restatement" || body["user"] != user {
 						t.Errorf("request=%v path=%s", body, req.URL.Path)
 					}
 					if mode == "failure" {
@@ -54,14 +55,14 @@ func TestRecallWorkerUnmodifiedContext(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
 				})
 			}
-			got, _, _ := r.svc.recallAnswer(context.Background(), "default", "owner", "register restatement")
+			got, _, _ := r.svc.recallAnswer(context.Background(), user, "register restatement")
 			switch mode {
 			case "found":
 				if got != text {
 					t.Fatal("memory text changed")
 				}
 				r.seedCall(t, "recall-call", "owner", 1)
-				ok, code := r.svc.deliverDurableText(context.Background(), "default", "owner", "fast_reply", "recall-source", "recall-call", 1, got)
+				ok, code := r.svc.deliverDurableText(context.Background(), "owner", "fast_reply", "recall-source", "recall-call", 1, got)
 				if !ok {
 					t.Fatal(code)
 				}

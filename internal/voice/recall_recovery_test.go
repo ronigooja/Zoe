@@ -25,11 +25,11 @@ func recallRecoveryFixture(t *testing.T, cfg Config, count int) (*storage.Store,
 	at := cfg.Now().UTC().Format(time.RFC3339Nano)
 	for i := 0; i < count; i++ {
 		id := fmt.Sprintf("job-%d", i)
-		_, err := store.DB().Exec(`INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,'default','handoff-session',1,?,'holding','recall_holding','delivered',?,?,?)`, "holding-"+id, id, at, at, at)
+		_, err := store.DB().Exec(`INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES(?,'handoff-session',1,?,'holding','recall_holding','delivered',?,?,?)`, "holding-"+id, id, at, at, at)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = store.DB().Exec(`INSERT INTO voice_recall_jobs(id,workspace_id,owner_id,session_id,generation,turn_id,question,holding_id) VALUES(?,'default','owner','handoff-session',1,?,'remember our conversations',?)`, id, id, "holding-"+id)
+		_, err = store.DB().Exec(`INSERT INTO voice_recall_jobs(id,owner_id,session_id,generation,turn_id,question,holding_id) VALUES(?,'owner','handoff-session',1,?,'remember our conversations',?)`, id, id, "holding-"+id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,7 +64,7 @@ func TestRecallRecoveryRestartAndLease(t *testing.T) {
 			want := stewardErrorSpeech
 			if mode == "existing_answer" {
 				want = "We discussed the garden."
-				_, err = store.DB().Exec(`INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('job-0','default','handoff-session',1,'recall-answer:job-0',?,'recall_answer','pending',?,?,?)`, want, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+				_, err = store.DB().Exec(`INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('job-0','handoff-session',1,'recall-answer:job-0',?,'recall_answer','pending',?,?,?)`, want, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 				if err != nil {
 					t.Fatal(err)
 				}

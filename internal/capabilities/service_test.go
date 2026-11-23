@@ -32,6 +32,9 @@ func TestCapabilityReleaseRequiresExplicitGrantAndAuthorizationBeforeJob(t *test
 	if err = storage.RegisterCoreMigrations(store); err != nil {
 		t.Fatal(err)
 	}
+	if err = control.RegisterInstanceMaintenanceMigration(store); err != nil {
+		t.Fatal(err)
+	}
 	if err = RegisterMigrations(store); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +48,7 @@ func TestCapabilityReleaseRequiresExplicitGrantAndAuthorizationBeforeJob(t *test
 	}
 	svc := &Service{db: store.DB(), server: server, availableCapabilityIDs: map[string]struct{}{"mail.read": {}}}
 	manifest := contracts.CapabilityManifest{SchemaVersion: 1, ArtifactRef: "oci://registry.example/zoe/mail@sha256:" + strings.Repeat("a", 64), ArtifactDigest: "sha256:" + strings.Repeat("a", 64), Entrypoint: "/app/run", Capabilities: []string{"mail.read"}, Budget: contracts.CapabilityResourceBudget{CPUMillis: 500, MemoryBytes: 1 << 20, DiskBytes: 1 << 20, TimeoutSeconds: 60, Concurrency: 1}, Network: contracts.CapabilityNetworkPolicy{Mode: "none"}, HealthCheck: &contracts.CapabilityHealthCheck{Kind: "http", Target: "/health", Port: 8080, IntervalSeconds: 10, TimeoutSeconds: 2, FailureThreshold: 2}}
-	principal := contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "device", Scopes: []string{"client:command"}}
+	principal := contracts.Principal{SubjectID: "owner", DeviceID: "device", Scopes: []string{"client:command"}}
 	command := control.CommandContext{CommandID: "cmd", Principal: principal, AcceptedAt: time.Now().UTC()}
 	payload, _ := json.Marshal(submitReleasePayload{Manifest: manifest})
 	tx := begin(t, store.DB())
@@ -93,7 +96,7 @@ func TestCapabilityReleaseRequiresExplicitGrantAndAuthorizationBeforeJob(t *test
 	if err = store.DB().QueryRowContext(ctx, `SELECT count(*) FROM capability_deployment_jobs`).Scan(&jobs); err != nil || jobs != 0 {
 		t.Fatalf("deployment scheduled before grant: jobs=%d err=%v", jobs, err)
 	}
-	authorize, _ := json.Marshal(authorizePayload{DeploymentID: deployment.ResourceID, ScopeKind: "workspace", Actions: []string{"install", "start", "stop"}, Budget: manifest.Budget, ExpiresAt: time.Now().UTC().Add(time.Hour)})
+	authorize, _ := json.Marshal(authorizePayload{DeploymentID: deployment.ResourceID, ScopeKind: "instance", Actions: []string{"install", "start", "stop"}, Budget: manifest.Budget, ExpiresAt: time.Now().UTC().Add(time.Hour)})
 	expected := int64(1)
 	command.Principal.DeviceID = ""
 	tx = begin(t, store.DB())
@@ -193,7 +196,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 	handler := server.Handler()
 	svc := &Service{db: store.DB(), server: server, availableCapabilityIDs: map[string]struct{}{"mail.read": {}}, runtimeBackend: runtimeBackendDocker}
 	manifest := contracts.CapabilityManifest{SchemaVersion: 1, ArtifactRef: "oci://registry.example/app@sha256:" + strings.Repeat("c", 64), ArtifactDigest: "sha256:" + strings.Repeat("c", 64), Entrypoint: "/app/run", Capabilities: []string{"mail.read"}, Triggers: []contracts.CapabilityTrigger{{Kind: "event", Source: "task.created", Mode: "program", Filters: []contracts.CapabilityTriggerFilter{{Field: "task_id", Operator: "eq", Value: "task-1"}}}, {Kind: "event", Source: "task.created", Mode: "worker", Scopes: []string{"mail.read"}}, {Kind: "event", Source: "task.created", Mode: "super", Scopes: []string{"mail.read"}}, {Kind: "schedule", Source: "schedule.interval", Mode: "program", IntervalSeconds: 60, MissedRunPolicy: "coalesce"}, {Kind: "schedule", Source: "schedule.interval", Mode: "super", IntervalSeconds: 60, MissedRunPolicy: "coalesce"}}, Budget: contracts.CapabilityResourceBudget{CPUMillis: 50, MemoryBytes: 100, DiskBytes: 100, TimeoutSeconds: 10, Concurrency: 1}, Network: contracts.CapabilityNetworkPolicy{Mode: "none"}, HealthCheck: &contracts.CapabilityHealthCheck{Kind: "http", Target: "/health", Port: 8080, IntervalSeconds: 10, TimeoutSeconds: 2, FailureThreshold: 2}}
-	principal := contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "device", Scopes: []string{"capability:release:submit", "capability:deployment:request", "capability:deployment:authorize"}}
+	principal := contracts.Principal{SubjectID: "owner", DeviceID: "device", Scopes: []string{"capability:release:submit", "capability:deployment:request", "capability:deployment:authorize"}}
 	command := control.CommandContext{CommandID: "cmd", Principal: principal, AcceptedAt: time.Now().UTC()}
 	tx := begin(t, store.DB())
 	release, _, err := svc.submitRelease(ctx, tx, command, contracts.CommandRequest{Payload: marshal(submitReleasePayload{Manifest: manifest})})
@@ -217,7 +220,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 	}
 	tx = begin(t, store.DB())
 	exp := int64(1)
-	_, _, err = svc.authorizeDeployment(ctx, tx, command, contracts.CommandRequest{ExpectedVersion: &exp, Payload: marshal(authorizePayload{DeploymentID: dep.ResourceID, ScopeKind: "workspace", Actions: []string{"install"}, Budget: manifest.Budget, ExpiresAt: time.Now().UTC().Add(time.Hour)})})
+	_, _, err = svc.authorizeDeployment(ctx, tx, command, contracts.CommandRequest{ExpectedVersion: &exp, Payload: marshal(authorizePayload{DeploymentID: dep.ResourceID, ScopeKind: "instance", Actions: []string{"install"}, Budget: manifest.Budget, ExpiresAt: time.Now().UTC().Add(time.Hour)})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +287,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 	if _, err = store.DB().ExecContext(ctx, `UPDATE event_counters SET current_cursor=2 WHERE singleton=1`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('trigger-event-1','default',1,1,'task.created',?,'owner','task','task-1',1,'{"type":"task.created","payload":{"task":{"task_id":"task-1"}}}'),('trigger-event-2','default',2,1,'task.created',?,'owner','task','task-2',1,'{"type":"task.created","payload":{"task":{"task_id":"task-2"}}}')`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('trigger-event-1',1,1,'task.created',?,'owner','task','task-1',1,'{"type":"task.created","payload":{"task":{"task_id":"task-1"}}}'),('trigger-event-2',2,1,'task.created',?,'owner','task','task-2',1,'{"type":"task.created","payload":{"task":{"task_id":"task-2"}}}')`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.DB().ExecContext(ctx, `UPDATE capability_trigger_definitions SET next_run_at=? WHERE kind='schedule'`, time.Now().UTC().Add(10*time.Minute).Format(time.RFC3339Nano)); err != nil {
@@ -381,13 +384,13 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var resultEventCursor int64
-	if err = store.DB().QueryRowContext(ctx, `SELECT coalesce(max(cursor),0)+1 FROM events WHERE workspace_id='default'`).Scan(&resultEventCursor); err != nil {
+	if err = store.DB().QueryRowContext(ctx, `SELECT coalesce(max(cursor),0)+1 FROM events`).Scan(&resultEventCursor); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.DB().ExecContext(ctx, `UPDATE event_counters SET current_cursor=? WHERE singleton=1`, resultEventCursor); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('task-result-decided','default',?,1,'task.result_decided',?,'owner','task',?,2,'{"type":"task.result_decided","payload":{"status":"complete"}}')`, resultEventCursor, time.Now().UTC().Format(time.RFC3339Nano), acceptedTaskID); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('task-result-decided',?,1,'task.result_decided',?,'owner','task',?,2,'{"type":"task.result_decided","payload":{"status":"complete"}}')`, resultEventCursor, time.Now().UTC().Format(time.RFC3339Nano), acceptedTaskID); err != nil {
 		t.Fatal(err)
 	}
 	acceptanceAdmissionRequest := httptest.NewRequest(http.MethodPost, "/runner/v1/capability-triggers/admissions", nil)
@@ -424,7 +427,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 		t.Fatalf("schedule observation=%d body=%s", scheduleObservationResponse.Code, scheduleObservationResponse.Body.String())
 	}
 	// Saturated old work must not consume the bounded candidate page and hide
-	// an eligible trigger later in the workspace queue.
+	// an eligible trigger later in the instance queue.
 	var eventTrigger, activeGrant, activeDigest, activeConfigRef, activeConfigHash string
 	var activeVersion int64
 	if err = store.DB().QueryRowContext(ctx, `SELECT trigger_id FROM capability_trigger_definitions WHERE deployment_id=? AND kind='event'`, dep.ResourceID).Scan(&eventTrigger); err != nil {
@@ -442,20 +445,20 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 	}
 	for i := 0; i < limits.Defaults().Int("capability_trigger_page_rows"); i++ {
 		id := fmt.Sprintf("blocked-run-%03d", i)
-		if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_trigger_runs(trigger_run_id,trigger_id,workspace_id,deployment_id,trigger_key,dedupe_key,mode,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'program','queued',?,?)`, id, eventTrigger, "default", dep.ResourceID, eventKey, "blocked-"+id, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_trigger_runs(trigger_run_id,trigger_id,deployment_id,trigger_key,dedupe_key,mode,state,created_at,updated_at) VALUES(?,?,?,?,?,'program','queued',?,?)`, id, eventTrigger, dep.ResourceID, eventKey, "blocked-"+id, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_deployments(deployment_id,workspace_id,service_id,release_digest,requested_operation,desired_state,observed_state,grant_id,config_ref,config_sha256,version,created_by,created_at,updated_at) VALUES('fair-deployment','default','fair-service',?,'install','running','running','fair-grant',?,?,?,'owner',?,?)`, activeDigest, activeConfigRef, activeConfigHash, activeVersion, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_deployments(deployment_id,service_id,release_digest,requested_operation,desired_state,observed_state,grant_id,config_ref,config_sha256,version,created_by,created_at,updated_at) VALUES('fair-deployment','fair-service',?,'install','running','running','fair-grant',?,?,?,'owner',?,?)`, activeDigest, activeConfigRef, activeConfigHash, activeVersion, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_grants(grant_id,workspace_id,deployment_id,release_digest,scope_kind,scope_id,principal_id,actions,budget,expires_at,authorized_by,created_at) SELECT 'fair-grant',workspace_id,'fair-deployment',release_digest,scope_kind,scope_id,principal_id,actions,budget,expires_at,authorized_by,created_at FROM capability_grants WHERE grant_id=?`, activeGrant); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_grants(grant_id,deployment_id,release_digest,scope_kind,scope_id,principal_id,actions,budget,expires_at,authorized_by,created_at) SELECT 'fair-grant','fair-deployment',release_digest,scope_kind,scope_id,principal_id,actions,budget,expires_at,authorized_by,created_at FROM capability_grants WHERE grant_id=?`, activeGrant); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_trigger_definitions(trigger_id,workspace_id,deployment_id,release_digest,grant_id,trigger_key,kind,source,mode,scopes,filters,interval_seconds,missed_run_policy,enabled,expected_deployment_version,config_ref,config_sha256,created_at,updated_at) SELECT 'fair-trigger',workspace_id,'fair-deployment',release_digest,'fair-grant',trigger_key,kind,source,mode,scopes,filters,interval_seconds,missed_run_policy,1,expected_deployment_version,config_ref,config_sha256,?,? FROM capability_trigger_definitions WHERE trigger_id=?`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), eventTrigger); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_trigger_definitions(trigger_id,deployment_id,release_digest,grant_id,trigger_key,kind,source,mode,scopes,filters,interval_seconds,missed_run_policy,enabled,expected_deployment_version,config_ref,config_sha256,created_at,updated_at) SELECT 'fair-trigger','fair-deployment',release_digest,'fair-grant',trigger_key,kind,source,mode,scopes,filters,interval_seconds,missed_run_policy,1,expected_deployment_version,config_ref,config_sha256,?,? FROM capability_trigger_definitions WHERE trigger_id=?`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), eventTrigger); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_trigger_runs(trigger_run_id,trigger_id,workspace_id,deployment_id,trigger_key,dedupe_key,mode,state,created_at,updated_at) SELECT 'fair-eligible-run','fair-trigger',workspace_id,'fair-deployment',trigger_key,'fair-eligible','program','queued',?,? FROM capability_trigger_definitions WHERE trigger_id='fair-trigger'`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_trigger_runs(trigger_run_id,trigger_id,deployment_id,trigger_key,dedupe_key,mode,state,created_at,updated_at) SELECT 'fair-eligible-run','fair-trigger','fair-deployment',trigger_key,'fair-eligible','program','queued',?,? FROM capability_trigger_definitions WHERE trigger_id='fair-trigger'`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	fairClaimRequest := httptest.NewRequest(http.MethodPost, "/runner/v1/capability-triggers/claims", nil)
@@ -470,7 +473,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	tx = begin(t, store.DB())
-	if err = svc.admitQueuedTaskTriggers(ctx, tx, "default", time.Now().UTC()); err != nil {
+	if err = svc.admitQueuedTaskTriggers(ctx, tx, time.Now().UTC()); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}
@@ -489,7 +492,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 		t.Fatalf("expired grant admitted another task: count=%d err=%v", serviceTasks, err)
 	}
 	tx = begin(t, store.DB())
-	if err = svc.reapInactiveServiceTasks(ctx, tx, []string{"default"}, time.Now().UTC()); err != nil {
+	if err = svc.reapInactiveServiceTasks(ctx, tx, time.Now().UTC()); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}
@@ -509,13 +512,13 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 	if err = store.DB().QueryRowContext(ctx, `SELECT grant_id,release_digest FROM capability_deployments WHERE deployment_id=?`, dep.ResourceID).Scan(&currentGrant, &currentDigest); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_grants(grant_id,workspace_id,deployment_id,release_digest,scope_kind,scope_id,principal_id,actions,budget,expires_at,authorized_by,created_at) SELECT 'grant-rollover','default',deployment_id,release_digest,scope_kind,scope_id,principal_id,actions,budget,expires_at,authorized_by,created_at FROM capability_grants WHERE grant_id=?`, currentGrant); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_grants(grant_id,deployment_id,release_digest,scope_kind,scope_id,principal_id,actions,budget,expires_at,authorized_by,created_at) SELECT 'grant-rollover',deployment_id,release_digest,scope_kind,scope_id,principal_id,actions,budget,expires_at,authorized_by,created_at FROM capability_grants WHERE grant_id=?`, currentGrant); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.DB().ExecContext(ctx, `UPDATE capability_deployments SET grant_id='grant-rollover' WHERE deployment_id=?`, dep.ResourceID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_trigger_runs(trigger_run_id,trigger_id,workspace_id,deployment_id,trigger_key,dedupe_key,mode,state,created_at,updated_at) SELECT 'obsolete-queued-run',trigger_id,workspace_id,deployment_id,trigger_key,'rollover-test',mode,'queued',?,? FROM capability_trigger_definitions WHERE deployment_id=? LIMIT 1`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), dep.ResourceID); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO capability_trigger_runs(trigger_run_id,trigger_id,deployment_id,trigger_key,dedupe_key,mode,state,created_at,updated_at) SELECT 'obsolete-queued-run',trigger_id,deployment_id,trigger_key,'rollover-test',mode,'queued',?,? FROM capability_trigger_definitions WHERE deployment_id=? LIMIT 1`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), dep.ResourceID); err != nil {
 		t.Fatal(err)
 	}
 	tx = begin(t, store.DB())
@@ -563,7 +566,7 @@ func TestRunnerDeploymentClaimAndFencedObservation(t *testing.T) {
 		postCapabilityRunTerminalObservation(t, handler, runnerToken, runID, fixture.eventKind, fence)
 	}
 	tx = begin(t, store.DB())
-	if err = (&Service{}).processTriggerEvents(ctx, tx, "default", time.Now().UTC()); err != nil {
+	if err = (&Service{}).processTriggerEvents(ctx, tx, time.Now().UTC()); err != nil {
 		tx.Rollback()
 		t.Fatalf("terminal run event processing: %v", err)
 	}
@@ -593,13 +596,13 @@ func insertCapabilityTerminalTriggerFixture(t *testing.T, store *storage.Store, 
 	t.Helper()
 	ctx := context.Background()
 	at := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id) SELECT ?,workspace_id,'terminal fixture','terminal fixture','service',profile_id,'active',1,?,?,created_by_device_id,?,owner_subject_id FROM tasks WHERE source='service' ORDER BY created_at LIMIT 1`, taskID, at, at, "terminal-command-"+taskID); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id) SELECT ?,'terminal fixture','terminal fixture','service',profile_id,'active',1,?,?,created_by_device_id,?,owner_subject_id FROM tasks WHERE source='service' ORDER BY created_at LIMIT 1`, taskID, at, at, "terminal-command-"+taskID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO capability_trigger_runs(trigger_run_id,trigger_id,workspace_id,deployment_id,trigger_key,dedupe_key,mode,state,task_id,created_at,updated_at) SELECT ?,trigger_id,workspace_id,deployment_id,trigger_key,?,'worker','uncertain',?,?,? FROM capability_trigger_definitions WHERE deployment_id=? AND mode='worker' LIMIT 1`, triggerRunID, "terminal-dedupe-"+taskID, taskID, at, at, deployment); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO capability_trigger_runs(trigger_run_id,trigger_id,deployment_id,trigger_key,dedupe_key,mode,state,task_id,created_at,updated_at) SELECT ?,trigger_id,deployment_id,trigger_key,?,'worker','uncertain',?,?,? FROM capability_trigger_definitions WHERE deployment_id=? AND mode='worker' LIMIT 1`, triggerRunID, "terminal-dedupe-"+taskID, taskID, at, at, deployment); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES(?,?,?,?,'dispatching',?,'runner-test','device',?,'terminal trigger fixture','worker-profile','runtime','model','worker','opencode',?)`, runID, "default", taskID, "attempt-"+runID, fence, "command-"+runID, at); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO runs(id,task_id,attempt_id,status,fence,runner_id,authorized_device_id,command_id,goal,profile_id,runtime_route_id,model_route_id,role,harness,started_at) VALUES(?,?,?,'dispatching',?,'runner-test','device',?,'terminal trigger fixture','worker-profile','runtime','model','worker','opencode',?)`, runID, taskID, "attempt-"+runID, fence, "command-"+runID, at); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -736,7 +739,7 @@ func TestCapabilityTriggerRunnerOpenCodeResultChain(t *testing.T) {
 	handler := server.Handler()
 	svc := &Service{db: store.DB(), server: server, availableCapabilityIDs: map[string]struct{}{"mail.read": {}}, runtimeBackend: runtimeBackendDocker}
 	manifest := contracts.CapabilityManifest{SchemaVersion: 1, ArtifactRef: "oci://registry.example/app@sha256:" + strings.Repeat("c", 64), ArtifactDigest: "sha256:" + strings.Repeat("c", 64), Entrypoint: "/app/run", Capabilities: []string{"mail.read"}, Triggers: []contracts.CapabilityTrigger{{Kind: "event", Source: "task.created", Mode: "worker", Scopes: []string{"mail.read"}}}, Budget: contracts.CapabilityResourceBudget{CPUMillis: 50, MemoryBytes: 100, DiskBytes: 100, TimeoutSeconds: 30, Concurrency: 1}, Network: contracts.CapabilityNetworkPolicy{Mode: "none"}, HealthCheck: &contracts.CapabilityHealthCheck{Kind: "http", Target: "/health", Port: 8080, IntervalSeconds: 10, TimeoutSeconds: 2, FailureThreshold: 2}}
-	principal := contracts.Principal{WorkspaceID: "default", SubjectID: "owner", DeviceID: "device", Scopes: []string{"capability:release:submit", "capability:deployment:request", "capability:deployment:authorize"}}
+	principal := contracts.Principal{SubjectID: "owner", DeviceID: "device", Scopes: []string{"capability:release:submit", "capability:deployment:request", "capability:deployment:authorize"}}
 	command := control.CommandContext{CommandID: "trigger-chain", Principal: principal, AcceptedAt: time.Now().UTC()}
 	tx := begin(t, store.DB())
 	release, _, err := svc.submitRelease(ctx, tx, command, contracts.CommandRequest{Payload: marshal(submitReleasePayload{Manifest: manifest})})
@@ -761,7 +764,7 @@ func TestCapabilityTriggerRunnerOpenCodeResultChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectedVersion := int64(1)
-	authorize := authorizePayload{DeploymentID: deployment.ResourceID, ScopeKind: "workspace", Actions: []string{"install"}, Budget: manifest.Budget, ExpiresAt: time.Now().UTC().Add(time.Hour)}
+	authorize := authorizePayload{DeploymentID: deployment.ResourceID, ScopeKind: "instance", Actions: []string{"install"}, Budget: manifest.Budget, ExpiresAt: time.Now().UTC().Add(time.Hour)}
 	tx = begin(t, store.DB())
 	if _, _, err = svc.authorizeDeployment(ctx, tx, command, contracts.CommandRequest{ExpectedVersion: &expectedVersion, Payload: marshal(authorize)}); err != nil {
 		tx.Rollback()
@@ -787,7 +790,7 @@ func TestCapabilityTriggerRunnerOpenCodeResultChain(t *testing.T) {
 	if _, err = store.DB().ExecContext(ctx, `UPDATE event_counters SET current_cursor=2 WHERE singleton=1`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.DB().ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('chain-source-1','default',1,1,'task.created',?,'owner','task','source-task-1',1,'{"type":"task.created","payload":{"task":{"task_id":"source-task-1"}}}'),('chain-source-2','default',2,1,'task.created',?,'owner','task','source-task-2',1,'{"type":"task.created","payload":{"task":{"task_id":"source-task-2"}}}')`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err = store.DB().ExecContext(ctx, `INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('chain-source-1',1,1,'task.created',?,'owner','task','source-task-1',1,'{"type":"task.created","payload":{"task":{"task_id":"source-task-1"}}}'),('chain-source-2',2,1,'task.created',?,'owner','task','source-task-2',1,'{"type":"task.created","payload":{"task":{"task_id":"source-task-2"}}}')`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	postAdmissions := func() {

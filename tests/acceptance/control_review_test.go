@@ -78,8 +78,7 @@ func reviewRequest(h http.Handler, method, path, token, key string, body any) *h
 }
 
 type reviewAuditActor struct {
-	ID          string
-	WorkspaceID string
+	ID string
 }
 type reviewInstanceIdentity struct{ Device reviewAuditActor }
 type reviewHandler struct {
@@ -96,7 +95,7 @@ func reviewInitializeInstance(t *testing.T, h http.Handler, code, token string) 
 	if _, _, err := control.InitializeInstanceAuth(context.Background(), fixture.store, token); err != nil {
 		t.Fatal(err)
 	}
-	return reviewInstanceIdentity{Device: reviewAuditActor{ID: "instance", WorkspaceID: "default"}}
+	return reviewInstanceIdentity{Device: reviewAuditActor{ID: "instance"}}
 }
 func bindReviewHandler(h http.Handler, store *storage.Store) http.Handler {
 	return &reviewHandler{Handler: h, store: store}
@@ -151,7 +150,7 @@ func TestReviewExtensionRollback(t *testing.T) {
 	code, token := reviewToken(t), reviewToken(t)
 	s, h := reviewServer(t, control.Config{}, func(srv *control.Server) {
 		if e := srv.RegisterCommand("review.fail", func(ctx context.Context, tx *sql.Tx, c control.CommandContext, r contracts.CommandRequest) (contracts.CommandResult, []contracts.Event, error) {
-			_, e := tx.ExecContext(ctx, "INSERT INTO projects VALUES('partial',?,'partial','','active',1,'now','now')", c.Principal.WorkspaceID)
+			_, e := tx.ExecContext(ctx, "INSERT INTO projects(id,name,description,status,version,created_at,updated_at,owner_subject_id) VALUES('partial','partial','','active',1,'now','now',?)", c.Principal.SubjectID)
 			if e != nil {
 				return contracts.CommandResult{}, nil, e
 			}
@@ -259,12 +258,12 @@ func TestReviewSSERevocationBlocksNewEvents(t *testing.T) {
 	if response.StatusCode != 200 {
 		t.Fatalf("SSE=%d", response.StatusCode)
 	}
-	// Simulate the authoritative revoke transaction before a later workspace event.
+	// Simulate the authoritative revoke transaction before a later instance event.
 	if _, e = s.DB().Exec("UPDATE instance_auth SET generation=generation+1"); e != nil {
 		t.Fatal(e)
 	}
-	payload := `{"schema_version":1,"event_id":"after-revoke","cursor":"3","type":"review.after_revoke","occurred_at":"2026-10-21T00:00:00Z","workspace_id":"default","aggregate_type":"review","aggregate_id":"review","aggregate_version":1,"payload":{}}`
-	if _, e = s.DB().Exec("INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('after-revoke','default',3,1,'review.after_revoke','now','review','review',1,?)", payload); e != nil {
+	payload := `{"schema_version":1,"event_id":"after-revoke","cursor":"3","type":"review.after_revoke","occurred_at":"2026-10-21T00:00:00Z","aggregate_type":"review","aggregate_id":"review","aggregate_version":1,"payload":{}}`
+	if _, e = s.DB().Exec("INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) VALUES('after-revoke',3,1,'review.after_revoke','now','review','review',1,?)", payload); e != nil {
 		t.Fatal(e)
 	}
 	scanner := bufio.NewScanner(response.Body)
@@ -337,7 +336,7 @@ func TestReviewProtectedRoutesAndReceiptIsolation(t *testing.T) {
 			t.Errorf("%s got=%d want=%d", test.path, w.Code, test.status)
 		}
 	}
-	req := contracts.CommandRequest{Kind: "project.create", Payload: json.RawMessage(`{"name":"private workspace"}`)}
+	req := contracts.CommandRequest{Kind: "project.create", Payload: json.RawMessage(`{"name":"private project"}`)}
 	w := reviewRequest(h, "POST", "/v1/commands", token, "shared-key", req)
 	if w.Code != 200 {
 		t.Fatal("command failed")
@@ -367,7 +366,7 @@ func TestReviewApprovalCannotResurrectStoppedTask(t *testing.T) {
 	if e := json.Unmarshal(w.Body.Bytes(), &receipt); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := s.DB().Exec("INSERT INTO approvals(id,workspace_id,task_id,status,prompt,created_at,task_version) VALUES('pending','default',?,'pending','Review','2026-10-21T00:00:00Z',1)", receipt.ResourceID); e != nil {
+	if _, e := s.DB().Exec("INSERT INTO approvals(id,task_id,status,prompt,created_at,task_version) VALUES('pending',?,'pending','Review','2026-10-21T00:00:00Z',1)", receipt.ResourceID); e != nil {
 		t.Fatal(e)
 	}
 	stop, _ := json.Marshal(map[string]string{"task_id": receipt.ResourceID})

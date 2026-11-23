@@ -100,24 +100,24 @@ func (r *deliveryRig) seedTask(t *testing.T, taskID, subject string) {
 	at := r.now().Format(time.RFC3339Nano)
 	r.exec(t, `INSERT OR IGNORE INTO actors(id,subject_id,name,status,created_at) VALUES('device-1',?, 'test','approved',?)`, subject, at)
 	r.exec(t, `INSERT INTO command_receipts(command_id,subject_id,idempotency_key,request_hash,receipt_json,accepted_at) VALUES(?,?,?,X'01','{}',?)`, "cmd-"+taskID, subject, "key-"+taskID, at)
-	r.exec(t, `INSERT INTO tasks(id,workspace_id,title,goal,source,profile_id,status,version,created_at,updated_at,result,error,created_by_device_id,command_id,owner_subject_id) VALUES(?, 'default','title','goal','voice','zoe-steward','awaiting_user',1,?,?, '', '', 'device-1',?,?)`, taskID, at, at, "cmd-"+taskID, subject)
+	r.exec(t, `INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,result,error,created_by_device_id,command_id,owner_subject_id) VALUES(?,'title','goal','voice','zoe-steward','awaiting_user',1,?,?, '', '', 'device-1',?,?)`, taskID, at, at, "cmd-"+taskID, subject)
 }
 
 func (r *deliveryRig) seedEntry(t *testing.T, taskID, entryID, text string) {
 	t.Helper()
-	r.exec(t, `INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,?,'default','assistant_message',?,'device-1',?)`, entryID, taskID, text, r.now().Format(time.RFC3339Nano))
+	r.exec(t, `INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES(?,?,'assistant_message',?,'device-1',?)`, entryID, taskID, text, r.now().Format(time.RFC3339Nano))
 }
 
 func (r *deliveryRig) seedEvent(t *testing.T, cursor int64, taskID, runID, entryID string) {
 	t.Helper()
 	payload, _ := json.Marshal(map[string]any{"payload": map[string]string{"task_id": taskID, "run_id": runID, "entry_id": entryID, "entry_kind": "assistant_message", "role": "steward"}})
-	r.exec(t, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?, 'default',?,1,'task.assistant_message',?,'task',?,1,?)`, "event-"+entryID, cursor, r.now().Format(time.RFC3339Nano), taskID, payload)
+	r.exec(t, `INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,1,'task.assistant_message',?,'task',?,1,?)`, "event-"+entryID, cursor, r.now().Format(time.RFC3339Nano), taskID, payload)
 }
 
 func (r *deliveryRig) seedCall(t *testing.T, sessionID, owner string, generation int64) {
 	t.Helper()
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,gateway_session_id,generation,gateway_media_generation,state,created_at,updated_at) VALUES(?, 'default',?, 'device-1',?,X'01','gw-'||?,?,1,'active',?,?)`, sessionID, owner, "req-"+sessionID, sessionID, generation, at, at)
+	r.exec(t, `INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,gateway_session_id,generation,gateway_media_generation,state,created_at,updated_at) VALUES(?,?, 'device-1',?,X'01','gw-'||?,?,1,'active',?,?)`, sessionID, owner, "req-"+sessionID, sessionID, generation, at, at)
 }
 
 func (r *deliveryRig) run(t *testing.T) {
@@ -378,8 +378,8 @@ func TestFastReplyLongTextChunks(t *testing.T) {
 	r.enableReceiptFixture(t)
 	text := " \n\t" + strings.Repeat("界🙂", 10000) + "\x00\n "
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('reply','default','s1',1,'turn',?,'pending',?,?,?)`, text, at, at, at)
-	r.svc.deliverFastReply(context.Background(), "reply", "default", "s1", 1, 0)
+	r.exec(t, `INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,status,next_attempt_at,created_at,updated_at) VALUES('reply','s1',1,'turn',?,'pending',?,?,?)`, text, at, at, at)
+	r.svc.deliverFastReply(context.Background(), "reply", "s1", 1, 0)
 	assertContextChunks(t, r.texts, text)
 	var status string
 	if err := r.store.DB().QueryRow(`SELECT status FROM voice_fast_replies WHERE id='reply'`).Scan(&status); err != nil || status != "delivered" {
@@ -406,7 +406,7 @@ func TestDeliverDurableTextStopsOnChunkFailure(t *testing.T) {
 		r.svc.base, _ = url.Parse(gw.URL)
 		r.svc.client = gw.Client()
 		r.svc.resultReceiptAdapter = NewGatewayResultReceiptAdapter(r.svc)
-		ok, got := r.svc.deliverDurableText(context.Background(), "default", "user-1", "fast_reply", "chunk-source", "chunk-call", 1, strings.Repeat("x", 20000))
+		ok, got := r.svc.deliverDurableText(context.Background(), "user-1", "fast_reply", "chunk-source", "chunk-call", 1, strings.Repeat("x", 20000))
 		gw.Close()
 		want := "receipt_transport_unknown"
 		if ok || got != want || len(chunks) != 2 {
@@ -420,7 +420,7 @@ func TestDeliverDurableTextRejectsInvalidOrEmptyText(t *testing.T) {
 	r.seedCall(t, "invalid-call", "user-1", 1)
 	r.enableReceiptFixture(t)
 	for _, text := range []string{"", " \n\t", string([]byte{0xff})} {
-		if ok, _ := r.svc.deliverDurableText(context.Background(), "default", "user-1", "fast_reply", "invalid-source", "invalid-call", 1, text); ok {
+		if ok, _ := r.svc.deliverDurableText(context.Background(), "user-1", "fast_reply", "invalid-source", "invalid-call", 1, text); ok {
 			t.Fatal("invalid or empty text accepted")
 		}
 	}
@@ -477,7 +477,7 @@ func TestResultCursorAdvancesMonotonicallyAndSurvivesRestart(t *testing.T) {
 func TestFastReplyPendingWhenNoActiveCall(t *testing.T) {
 	r := newDeliveryRig(t)
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-none','default','missing',1,'turn','现在没有在处理的任务。','progress','pending',?,?,?)`, at, at, at)
+	r.exec(t, `INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-none','missing',1,'turn','现在没有在处理的任务。','progress','pending',?,?,?)`, at, at, at)
 	r.svc.dispatchFastReplies(context.Background())
 	var status string
 	if err := r.store.DB().QueryRow(`SELECT status FROM voice_fast_replies WHERE id='fast-none'`).Scan(&status); err != nil {
@@ -493,7 +493,7 @@ func TestFastReplyDeliveryFailureReconcilesWithoutResubmit(t *testing.T) {
 	r.code.Store(503)
 	r.seedCall(t, "s-fast", "user-1", 1)
 	at := r.now().Format(time.RFC3339Nano)
-	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-fail','default','s-fast',1,'turn','hello','progress','pending',?,?,?)`, at, at, at)
+	r.exec(t, `INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-fail','s-fast',1,'turn','hello','progress','pending',?,?,?)`, at, at, at)
 	for i := 0; i < 4; i++ {
 		r.svc.dispatchFastReplies(context.Background())
 		r.advance(time.Minute)
@@ -513,9 +513,9 @@ func TestTaskReportRetryPreservesStewardReply(t *testing.T) {
 	at := r.now().Add(-5 * time.Second).Format(time.RFC3339Nano)
 	r.seedTask(t, "task-fast", "user-1")
 	r.exec(t, `UPDATE tasks SET status='active',started_at=?,updated_at=? WHERE id='task-fast'`, at, at)
-	r.exec(t, `INSERT INTO voice_task_links(workspace_id,session_id,generation,turn_id,turn_revision,task_id,linked_by_device_id,command_id,linked_at) VALUES('default','s-fast',1,'old',1,'task-fast','device-1','cmd-fast',?)`, at)
+	r.exec(t, `INSERT INTO voice_task_links(session_id,generation,turn_id,turn_revision,task_id,linked_by_device_id,command_id,linked_at) VALUES('s-fast',1,'old',1,'task-fast','device-1','cmd-fast',?)`, at)
 	const reply = "The lunar mission research is still running."
-	r.exec(t, `INSERT INTO voice_fast_replies(id,workspace_id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-report','default','s-fast',1,'turn',?,'task_report','pending',?,?,?)`, reply, r.now().Format(time.RFC3339Nano), at, at)
+	r.exec(t, `INSERT INTO voice_fast_replies(id,session_id,generation,turn_id,text,intent_kind,status,next_attempt_at,created_at,updated_at) VALUES('fast-report','s-fast',1,'turn',?,'task_report','pending',?,?,?)`, reply, r.now().Format(time.RFC3339Nano), at, at)
 	r.svc.dispatchFastReplies(context.Background())
 	var status string
 	var attempts int
@@ -554,7 +554,7 @@ func TestRegisterIsNeverCalledInsideATransaction(t *testing.T) {
 	svc := newService(r.store.DB(), Config{ContextRegister: register, Now: r.now})
 	at := r.now().Format(time.RFC3339Nano)
 	r.seedCall(t, "s-lock", "user-1", 1)
-	r.exec(t, `INSERT INTO voice_turns(id,workspace_id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('turn-lock','default','s-lock',1,'turn',1,'is it done',X'01',?, 'cmd')`, at)
+	r.exec(t, `INSERT INTO voice_turns(id,session_id,generation,turn_id,revision,content,content_hash,confirmed_at,command_id) VALUES('turn-lock','s-lock',1,'turn',1,'is it done',X'01',?, 'cmd')`, at)
 	done := make(chan struct{})
 	go func() { svc.classifyTurnFixture("turn-lock"); close(done) }()
 	select {

@@ -20,9 +20,9 @@ func TestTaskSummaryDurableSweep(t *testing.T) {
 		t.Run(output, func(t *testing.T) {
 			db, _, now := rosterFixture(t)
 			candidateSeed(t, db, now, rosterSeed{id: "summary", status: "active", result: "full authoritative budget result"}, "budget goal")
-			rosterExec(t, db, `INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES
-('addition-2','summary','default','user_message','second addition','default-owner',?),
-('addition-1','summary','default','user_message','first addition','default-owner',?)`, now.Add(-time.Hour).Format(time.RFC3339Nano), now.Add(-2*time.Hour).Format(time.RFC3339Nano))
+			rosterExec(t, db, `INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES
+('addition-2','summary','user_message','second addition','device-owner',?),
+('addition-1','summary','user_message','first addition','device-owner',?)`, now.Add(-time.Hour).Format(time.RFC3339Nano), now.Add(-2*time.Hour).Format(time.RFC3339Nano))
 			calls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				calls++
@@ -130,7 +130,7 @@ func TestCandidateSummaryFallback(t *testing.T) {
 			db, svc, now := rosterFixture(t)
 			candidateSeed(t, db, now, rosterSeed{id: "summary", status: tc.status, result: tc.result}, "budget")
 			rosterExec(t, db, `UPDATE tasks SET summary_result=? WHERE id='summary'`, tc.summary)
-			candidates, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 8)
+			candidates, err := svc.taskCandidates(context.Background(), db, "owner", "budget", now, 8)
 			if err != nil || len(candidates) != 1 {
 				t.Fatalf("candidates=%+v err=%v", candidates, err)
 			}

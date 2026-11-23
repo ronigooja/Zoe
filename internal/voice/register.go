@@ -21,7 +21,7 @@ import (
 	"github.com/ronigooja/Zoe/internal/steward"
 )
 
-type RegisterOwner struct{ WorkspaceID, OwnerSubjectID string }
+type RegisterOwner struct{ OwnerSubjectID string }
 
 // RegisterModelConfig supplies model settings directly; no process environment is read.
 type RegisterModelConfig struct {
@@ -273,7 +273,7 @@ type registerState struct {
 const registerEpoch = "1970-01-01T00:00:00Z"
 
 func validRegisterOwner(o RegisterOwner) error {
-	if o.WorkspaceID == "" || o.OwnerSubjectID == "" {
+	if o.OwnerSubjectID == "" {
 		return errors.New("register owner is required")
 	}
 	return nil
@@ -299,7 +299,7 @@ func (r *ContextRegister) snapshotForTurn(ctx context.Context, o RegisterOwner, 
 	}
 	defer tx.Rollback()
 	edge, built, used := time.Time{}.Format(time.RFC3339Nano), registerEpoch, ""
-	err = tx.QueryRowContext(ctx, `SELECT compact,compact_through,built_at,version,source_hash,source_memory_boundary,event_watermark FROM voice_context_registers WHERE workspace_id=? AND owner_subject_id=?`, o.WorkspaceID, o.OwnerSubjectID).Scan(&s.Compact, &edge, &built, &s.Version, &s.hash, &used, &s.eventWatermark)
+	err = tx.QueryRowContext(ctx, `SELECT compact,compact_through,built_at,version,source_hash,source_memory_boundary,event_watermark FROM voice_context_registers WHERE owner_subject_id=?`, o.OwnerSubjectID).Scan(&s.Compact, &edge, &built, &s.Version, &s.hash, &used, &s.eventWatermark)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return s, err
 	}
@@ -328,7 +328,7 @@ func (r *ContextRegister) snapshotForTurn(ctx context.Context, o RegisterOwner, 
 		return s, err
 	}
 	if membership {
-		members, err := tx.QueryContext(ctx, `SELECT m.source_id FROM memory_ingest_members m JOIN memory_ingest_batches b ON b.id=m.batch_id AND b.workspace_id=m.workspace_id AND b.principal_id=m.principal_id WHERE m.workspace_id=? AND m.principal_id=? AND b.until_ns<=?`, o.WorkspaceID, o.OwnerSubjectID, s.MemoryBoundary.UnixNano())
+		members, err := tx.QueryContext(ctx, `SELECT m.source_id FROM memory_ingest_members m JOIN memory_ingest_batches b ON b.id=m.batch_id AND b.principal_id=m.principal_id WHERE m.principal_id=? AND b.until_ns<=?`, o.OwnerSubjectID, s.MemoryBoundary.UnixNano())
 		if err != nil {
 			return s, err
 		}
@@ -346,7 +346,7 @@ func (r *ContextRegister) snapshotForTurn(ctx context.Context, o RegisterOwner, 
 			return s, err
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT t.at,t.received_at,t.session_id,t.seq,t.role,t.text,'','',0 FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id AND v.workspace_id=t.workspace_id WHERE v.workspace_id=? AND v.owner_id=? UNION ALL SELECT at,received_at,session_id,0,role,text,source_kind,source_id,rowid FROM voice_context_events WHERE workspace_id=? AND owner_id=?`, o.WorkspaceID, o.OwnerSubjectID, o.WorkspaceID, o.OwnerSubjectID)
+	rows, err := tx.QueryContext(ctx, `SELECT t.at,t.received_at,t.session_id,t.seq,t.role,t.text,'','',0 FROM voice_transcript_turns t JOIN voice_sessions v ON v.id=t.session_id WHERE v.owner_id=? UNION ALL SELECT at,received_at,session_id,0,role,text,source_kind,source_id,rowid FROM voice_context_events WHERE owner_id=?`, o.OwnerSubjectID, o.OwnerSubjectID)
 	if err != nil {
 		return s, err
 	}

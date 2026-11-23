@@ -14,12 +14,12 @@ import (
 func TestRunEntryDeliveriesDurableOrderingAndGates(t *testing.T) {
 	s, closeStore := taskEntriesTestServer(t)
 	defer closeStore()
-	_, err := s.store.DB().Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('entry-run','default','entries-task','attempt','active','run',1,1,'runner','entries-device','cmd','goal','worker','opencode','runtime','model','worker','2026-10-24T12:00:00Z')`)
+	_, err := s.store.DB().Exec(`INSERT INTO runs(id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('entry-run','entries-task','attempt','active','run',1,1,'runner','entries-device','cmd','goal','worker','opencode','runtime','model','worker','2026-10-24T12:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range []struct{ id, stamp string }{{"b", "2026-10-24T12:00:00.1Z"}, {"a", "2026-10-24T12:00:00Z"}, {"c", "2026-10-24T12:00:00.100000001Z"}} {
-		if _, err = s.store.DB().Exec(`INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,'entries-task','default','user_message',?,'entries-device',?)`, e.id, e.id, e.stamp); err != nil {
+		if _, err = s.store.DB().Exec(`INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES(?,'entries-task','user_message',?,'entries-device',?)`, e.id, e.id, e.stamp); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -90,12 +90,12 @@ func TestRunEntryDeliveriesDurableOrderingAndGates(t *testing.T) {
 func TestRunEntryPromptSnapshotsExcludeRedelivery(t *testing.T) {
 	s, closeStore := taskEntriesTestServer(t)
 	defer closeStore()
-	_, err := s.store.DB().Exec(`INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('snapshot-run','default','entries-task','attempt','active','run',1,1,'runner','entries-device','cmd','goal','worker','opencode','runtime','model','worker','2026-10-24T12:00:00Z')`)
+	_, err := s.store.DB().Exec(`INSERT INTO runs(id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,started_at) VALUES('snapshot-run','entries-task','attempt','active','run',1,1,'runner','entries-device','cmd','goal','worker','opencode','runtime','model','worker','2026-10-24T12:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, kind := range []string{"initial", "rotation", "answer"} {
-		if _, err = s.store.DB().Exec(`INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,'entries-task','default','user_message',?,'entries-device','2026-10-24T12:00:00Z')`, kind, kind); err != nil {
+		if _, err = s.store.DB().Exec(`INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES(?,'entries-task','user_message',?,'entries-device','2026-10-24T12:00:00Z')`, kind, kind); err != nil {
 			t.Fatal(err)
 		}
 		tx, err := s.store.DB().BeginTx(context.Background(), nil)

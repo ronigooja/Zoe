@@ -59,7 +59,7 @@ func TestCandidatesTermsAndWildcardEscaping(t *testing.T) {
 		t.Fatalf("wildcard escaped=%v err=%v", match, err)
 	}
 	candidateSeed(t, db, now, rosterSeed{id: "match", status: "complete"}, "budget")
-	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "%_", now, 8)
+	got, err := svc.taskCandidates(context.Background(), db, "owner", "%_", now, 8)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("punctuation query=%+v err=%v", got, err)
 	}
@@ -70,7 +70,7 @@ func TestCandidatesChineseEnglishAndCrossSession(t *testing.T) {
 	candidateSeed(t, db, now, rosterSeed{id: "chinese", status: "complete", session: "other-call"}, "调查项目研究进展")
 	candidateSeed(t, db, now, rosterSeed{id: "english", status: "complete", result: "BUDGET report available"}, "other")
 	for _, tc := range []struct{ text, want string }{{"项目研究", "调查项目研究进展"}, {"Please report the budget", "other"}} {
-		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", tc.text, now, 8)
+		got, err := svc.taskCandidates(context.Background(), db, "owner", tc.text, now, 8)
 		if err != nil || len(got) != 1 || got[0].Goal != tc.want {
 			t.Fatalf("%q got=%+v err=%v", tc.text, got, err)
 		}
@@ -81,16 +81,16 @@ func TestCandidatesTitleWeightRankingAndOldestPresentation(t *testing.T) {
 	db, svc, now := rosterFixture(t)
 	candidateSeed(t, db, now, rosterSeed{id: "title", status: "complete", created: now.Add(-4 * time.Hour)}, "budget")
 	candidateSeed(t, db, now, rosterSeed{id: "result", status: "complete", result: "budget", created: now.Add(-2 * time.Hour)}, "unrelated")
-	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 1)
+	got, err := svc.taskCandidates(context.Background(), db, "owner", "budget", now, 1)
 	if err != nil || len(got) != 1 || got[0].Goal != "budget" {
 		t.Fatalf("title weight got=%+v err=%v", got, err)
 	}
-	got, err = svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 2)
+	got, err = svc.taskCandidates(context.Background(), db, "owner", "budget", now, 2)
 	if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{"budget", "unrelated"}) {
 		t.Fatalf("oldest presentation got=%+v err=%v", got, err)
 	}
 	candidateSeed(t, db, now, rosterSeed{id: "new-title", status: "complete", created: now.Add(-3 * time.Hour)}, "budget latest")
-	got, err = svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 1)
+	got, err = svc.taskCandidates(context.Background(), db, "owner", "budget", now, 1)
 	if err != nil || len(got) != 1 || got[0].Goal != "budget latest" {
 		t.Fatalf("score tie recency got=%+v err=%v", got, err)
 	}
@@ -109,7 +109,7 @@ func TestCandidatesOldestPresentationPreservesNewestSelection(t *testing.T) {
 	}
 	for _, status := range []string{"active", "complete"} {
 		rosterExec(t, db, `UPDATE tasks SET status=?`, status)
-		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 3)
+		got, err := svc.taskCandidates(context.Background(), db, "owner", "budget", now, 3)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -120,7 +120,7 @@ func TestCandidatesOldestPresentationPreservesNewestSelection(t *testing.T) {
 		if !reflect.DeepEqual(ids, []string{"a", "b", "new"}) {
 			t.Fatalf("status=%s selected/presented IDs=%v", status, ids)
 		}
-		got, err = svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 2)
+		got, err = svc.taskCandidates(context.Background(), db, "owner", "budget", now, 2)
 		if err != nil || len(got) != 2 || got[0].TaskID != "b" || got[1].TaskID != "new" {
 			t.Fatalf("status=%s newest selection/tie break changed: got=%+v err=%v", status, got, err)
 		}
@@ -137,12 +137,11 @@ func TestCandidatesOwnerStatusAndNoAgeLimit(t *testing.T) {
 		{id: "future", status: "active", created: now.Add(time.Minute)},
 		{id: "failed", status: "failed"}, {id: "canceled", status: "canceled"}, {id: "paused", status: "paused"},
 		{id: "other-owner", status: "active", owner: "other-owner"},
-		{id: "other-workspace", status: "active", workspace: "other-workspace"},
 	}
 	for _, seed := range seeds {
 		candidateSeed(t, db, now, seed, "budget "+seed.id)
 	}
-	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 20)
+	got, err := svc.taskCandidates(context.Background(), db, "owner", "budget", now, 20)
 	if err != nil || len(got) != 7 {
 		t.Fatalf("filters got=%+v err=%v", got, err)
 	}
@@ -168,7 +167,7 @@ func TestCandidatesPausedLatestSessionAndCrossSession(t *testing.T) {
 		{"", []string{"unrelated latest task"}},
 		{"budget", []string{"budget research", "unrelated latest task"}},
 	} {
-		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", tc.text, now, 8)
+		got, err := svc.taskCandidates(context.Background(), db, "owner", tc.text, now, 8)
 		if err != nil || !reflect.DeepEqual(candidateRequests(got), tc.want) {
 			t.Fatalf("text=%q paused candidates=%+v err=%v", tc.text, got, err)
 		}
@@ -196,16 +195,16 @@ func TestCandidatesAlwaysIncludeLatestSessionEmptyTermsAndDedup(t *testing.T) {
 		candidateSeed(t, db, now, seed, "unrelated "+seed.id)
 	}
 	for _, text := range []string{"", "the is %_", "budget"} {
-		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", text, now, 5)
+		got, err := svc.taskCandidates(context.Background(), db, "owner", text, now, 5)
 		if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{"budget 4", "budget 3", "budget 2", "budget 1", "budget 0"}) {
 			t.Fatalf("text=%q always=%+v err=%v", text, got, err)
 		}
 	}
-	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 8)
+	got, err := svc.taskCandidates(context.Background(), db, "owner", "budget", now, 8)
 	if err != nil || len(got) != 7 {
 		t.Fatalf("dedup got=%+v err=%v", got, err)
 	}
-	got, err = svc.taskCandidates(context.Background(), db, "default", "owner", "", now, 2)
+	got, err = svc.taskCandidates(context.Background(), db, "owner", "", now, 2)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("small limit got=%+v err=%v", got, err)
 	}
@@ -221,12 +220,12 @@ func TestCandidatesLimitsAndUnboundedScan(t *testing.T) {
 		candidateSeed(t, db, now, rosterSeed{id: fmt.Sprintf("task-%03d", i), status: "complete", created: now.Add(-time.Duration(i+120) * time.Minute)}, title)
 	}
 	for _, tc := range []struct{ limit, want int }{{0, 8}, {-1, 8}, {100, 20}, {3, 3}} {
-		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, tc.limit)
+		got, err := svc.taskCandidates(context.Background(), db, "owner", "budget", now, tc.limit)
 		if err != nil || len(got) != tc.want {
 			t.Fatalf("limit=%d count=%d err=%v", tc.limit, len(got), err)
 		}
 	}
-	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "uniqueolder", now, 8)
+	got, err := svc.taskCandidates(context.Background(), db, "owner", "uniqueolder", now, 8)
 	if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{"uniqueolder"}) {
 		t.Fatalf("match beyond newest 500 tasks got=%+v err=%v", got, err)
 	}
@@ -244,7 +243,7 @@ func TestCandidatesAllTermsParticipate(t *testing.T) {
 	// final term breaks score ties and must win even with the output limit of 1.
 	for _, word := range words {
 		rosterExec(t, db, `UPDATE tasks SET result=? WHERE id=?`, word, word)
-		got, err := svc.taskCandidates(context.Background(), db, "default", "owner", strings.Join(words, " "), now, 1)
+		got, err := svc.taskCandidates(context.Background(), db, "owner", strings.Join(words, " "), now, 1)
 		if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{word}) {
 			t.Fatalf("term %q must participate: got=%+v err=%v", word, got, err)
 		}
@@ -255,7 +254,7 @@ func TestCandidatesAllTermsParticipate(t *testing.T) {
 		words = append(words, fmt.Sprintf("word%04d", i))
 	}
 	candidateSeed(t, db, now, rosterSeed{id: "last-term", status: "complete", result: words[len(words)-1]}, "last match")
-	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", strings.Join(words[30:], " "), now, 1)
+	got, err := svc.taskCandidates(context.Background(), db, "owner", strings.Join(words[30:], " "), now, 1)
 	if err != nil || !reflect.DeepEqual(candidateRequests(got), []string{"last match"}) {
 		t.Fatalf("long query final term got=%+v err=%v", got, err)
 	}
@@ -279,7 +278,7 @@ func TestCandidatesFieldsAdditionsAndNullHandling(t *testing.T) {
 		if i == 5 {
 			kind = "system"
 		}
-		rosterExec(t, db, `INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,'waiting','default',?,?,'default-owner',?)`, fmt.Sprintf("entry-%d", i), kind, fmt.Sprintf("%d", i)+strings.Repeat("文", 350), now.Add(time.Duration(-180+i)*time.Minute).Format(time.RFC3339Nano))
+		rosterExec(t, db, `INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES(?,'waiting',?,?,'device-owner',?)`, fmt.Sprintf("entry-%d", i), kind, fmt.Sprintf("%d", i)+strings.Repeat("文", 350), now.Add(time.Duration(-180+i)*time.Minute).Format(time.RFC3339Nano))
 	}
 	// Nullability is tested against a real SQLite temporary shadow of tasks;
 	// production's result/question columns are currently NOT NULL. Titles do
@@ -288,7 +287,7 @@ func TestCandidatesFieldsAdditionsAndNullHandling(t *testing.T) {
 	rosterExec(t, db, `UPDATE tasks SET result=NULL,interaction_question=NULL,finished_at=NULL WHERE id='hidden'`)
 	rosterExec(t, db, `UPDATE tasks SET title=NULL WHERE id='null-title'`)
 	rosterExec(t, db, `PRAGMA query_only=ON`)
-	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 20)
+	got, err := svc.taskCandidates(context.Background(), db, "owner", "budget", now, 20)
 	if err != nil || len(got) != 6 {
 		t.Fatalf("fields got=%+v err=%v", got, err)
 	}
@@ -328,7 +327,7 @@ func TestCandidatesFieldsAdditionsAndNullHandling(t *testing.T) {
 func TestCandidatesKnownSynonymRecallLimit(t *testing.T) {
 	db, svc, now := rosterFixture(t)
 	candidateSeed(t, db, now, rosterSeed{id: "synonym", status: "complete"}, "医生")
-	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "大夫", now, 8)
+	got, err := svc.taskCandidates(context.Background(), db, "owner", "大夫", now, 8)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("no shared bigram: synonym is intentionally not found, got=%+v err=%v", got, err)
 	}
@@ -336,13 +335,13 @@ func TestCandidatesKnownSynonymRecallLimit(t *testing.T) {
 
 func TestCandidatesEmptyAndQueryError(t *testing.T) {
 	db, svc, now := rosterFixture(t)
-	got, err := svc.taskCandidates(context.Background(), db, "default", "owner", "budget", now, 8)
+	got, err := svc.taskCandidates(context.Background(), db, "owner", "budget", now, 8)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("empty=%+v err=%v", got, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := svc.taskCandidates(ctx, db, "default", "owner", "budget", now, 8); err == nil {
+	if _, err := svc.taskCandidates(ctx, db, "owner", "budget", now, 8); err == nil {
 		t.Fatal("expected canceled query error")
 	}
 }

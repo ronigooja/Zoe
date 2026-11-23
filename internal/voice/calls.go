@@ -123,7 +123,7 @@ func (s *Service) startCall(ctx context.Context, p contracts.Principal, runner c
 		}
 		var existingHash, saved []byte
 		var runnerID string
-		err = tx.QueryRowContext(ctx, `SELECT request_hash,call_start_response,lifecycle_runner_id FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND request_id=?`, p.WorkspaceID, p.SubjectID, req.RequestID).Scan(&existingHash, &saved, &runnerID)
+		err = tx.QueryRowContext(ctx, `SELECT request_hash,call_start_response,lifecycle_runner_id FROM voice_sessions WHERE owner_id=? AND request_id=?`, p.SubjectID, req.RequestID).Scan(&existingHash, &saved, &runnerID)
 		if !errors.Is(err, sql.ErrNoRows) {
 			tx.Rollback()
 			switch {
@@ -163,7 +163,7 @@ func (s *Service) startCall(ctx context.Context, p contracts.Principal, runner c
 func callAdmission(ctx context.Context, tx *sql.Tx, p contracts.Principal) error {
 	var busy, blocked bool
 	var reason string
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM voice_sessions WHERE workspace_id=? AND owner_id=? AND state IN ('allocating','active','ending')),blocked,reason_code FROM voice_pool_state WHERE id=1`, p.WorkspaceID, p.SubjectID).Scan(&busy, &blocked, &reason); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM voice_sessions WHERE owner_id=? AND state IN ('allocating','active','ending')),blocked,reason_code FROM voice_pool_state WHERE id=1`, p.SubjectID).Scan(&busy, &blocked, &reason); err != nil {
 		return err
 	}
 	if blocked && reason != "active_session" && reason != "negotiation_in_progress" {
@@ -178,7 +178,7 @@ func callAdmission(ctx context.Context, tx *sql.Tx, p contracts.Principal) error
 func (s *Service) allocateCall(ctx context.Context, tx *sql.Tx, p contracts.Principal, runner, request string, hash []byte, registerText string) (callStartResponse, error) {
 	result := callStartResponse{SessionID: uuid.NewString(), Generation: 1, GatewayRequestID: uuid.NewString(), Instructions: s.recall.InstructionText}
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO voice_sessions(id,workspace_id,owner_id,device_id,request_id,request_hash,gateway_request_id,lifecycle_runner_id,generation,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,1,'allocating',?,?)`, result.SessionID, p.WorkspaceID, p.SubjectID, p.DeviceID, request, hash, result.GatewayRequestID, runner, now, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO voice_sessions(id,owner_id,device_id,request_id,request_hash,gateway_request_id,lifecycle_runner_id,generation,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,'allocating',?,?)`, result.SessionID, p.SubjectID, p.DeviceID, request, hash, result.GatewayRequestID, runner, now, now); err != nil {
 		return result, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE voice_pool_state SET blocked=1,reason_code='negotiation_in_progress',source_session_id=?,updated_at=?,updated_by='system' WHERE id=1`, result.SessionID, now); err != nil {
@@ -264,7 +264,7 @@ type lifecycleCall struct {
 
 func loadLifecycleCall(ctx context.Context, tx *sql.Tx, id string) (lifecycleCall, error) {
 	var c lifecycleCall
-	err := tx.QueryRowContext(ctx, `SELECT s.generation,s.gateway_session_id,s.gateway_media_generation,s.account_lease_id,s.account_lease_generation,s.workspace_id,s.owner_id,s.device_id,s.lifecycle_runner_id,s.state,s.call_established_hash,p.source_session_id,s.call_ended_reason,s.call_closed_at,s.call_effective_closed_at,s.call_end_evidence_hash,s.account_id_hash,s.opening_context_manifest FROM voice_sessions s CROSS JOIN voice_pool_state p WHERE s.id=? AND p.id=1`, id).Scan(&c.Generation, &c.GatewaySessionID, &c.MediaGeneration, &c.AccountLeaseID, &c.AccountLeaseGeneration, &c.principal.WorkspaceID, &c.principal.SubjectID, &c.principal.DeviceID, &c.runner, &c.state, &c.establishedHash, &c.poolSource, &c.endReason, &c.closedAt, &c.effectiveClosedAt, &c.endEvidenceHash, &c.accountHash, &c.opening)
+	err := tx.QueryRowContext(ctx, `SELECT s.generation,s.gateway_session_id,s.gateway_media_generation,s.account_lease_id,s.account_lease_generation,s.owner_id,s.device_id,s.lifecycle_runner_id,s.state,s.call_established_hash,p.source_session_id,s.call_ended_reason,s.call_closed_at,s.call_effective_closed_at,s.call_end_evidence_hash,s.account_id_hash,s.opening_context_manifest FROM voice_sessions s CROSS JOIN voice_pool_state p WHERE s.id=? AND p.id=1`, id).Scan(&c.Generation, &c.GatewaySessionID, &c.MediaGeneration, &c.AccountLeaseID, &c.AccountLeaseGeneration, &c.principal.SubjectID, &c.principal.DeviceID, &c.runner, &c.state, &c.establishedHash, &c.poolSource, &c.endReason, &c.closedAt, &c.effectiveClosedAt, &c.endEvidenceHash, &c.accountHash, &c.opening)
 	if errors.Is(err, sql.ErrNoRows) {
 		logging.Errorf("voice lifecycle report references an unknown session")
 		return c, apiError(http.StatusNotFound, "not_found", "voice session not found", nil)

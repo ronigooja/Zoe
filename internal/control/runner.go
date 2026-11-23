@@ -73,26 +73,26 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	rows, err := tx.QueryContext(r.Context(), `SELECT id,workspace_id,title,goal,profile_id,harness,version,created_by_device_id,command_id,coalesce(lineage_root_task_id,id),coalesce(lineage_parent_task_id,''),lineage_depth,child_policy_json,pregrant_capabilities_json,source,interaction_state,interaction_expired_kind,coalesce(interaction_question,''),interaction_expected_version,coalesce(owner_subject_id,'') FROM tasks WHERE status='queued' AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id=tasks.id AND r.status IN ('dispatching','active','uncertain')) AND NOT EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id=tasks.id AND d.status<>'satisfied') ORDER BY created_at,id`)
+	rows, err := tx.QueryContext(r.Context(), `SELECT id,title,goal,profile_id,harness,version,created_by_device_id,command_id,coalesce(lineage_root_task_id,id),coalesce(lineage_parent_task_id,''),lineage_depth,child_policy_json,pregrant_capabilities_json,source,interaction_state,interaction_expired_kind,coalesce(interaction_question,''),interaction_expected_version,coalesce(owner_subject_id,'') FROM tasks WHERE status='queued' AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id=tasks.id AND r.status IN ('dispatching','active','uncertain')) AND NOT EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id=tasks.id AND d.status<>'satisfied') ORDER BY created_at,id`)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	type candidate struct {
-		id, workspace, title, goal, profile, harness, device, command string
-		source                                                        string
-		root, parent                                                  string
-		depth                                                         int
-		childPolicyJSON, pregrantJSON                                 []byte
-		version                                                       int64
-		interaction, interactionExpiredKind, interactionQuestion      string
-		interactionExpectedVersion                                    int64
-		owner                                                         string
+		id, title, goal, profile, harness, device, command       string
+		source                                                   string
+		root, parent                                             string
+		depth                                                    int
+		childPolicyJSON, pregrantJSON                            []byte
+		version                                                  int64
+		interaction, interactionExpiredKind, interactionQuestion string
+		interactionExpectedVersion                               int64
+		owner                                                    string
 	}
 	var chosen *candidate
 	for rows.Next() {
 		var c candidate
-		if err = rows.Scan(&c.id, &c.workspace, &c.title, &c.goal, &c.profile, &c.harness, &c.version, &c.device, &c.command, &c.root, &c.parent, &c.depth, &c.childPolicyJSON, &c.pregrantJSON, &c.source, &c.interaction, &c.interactionExpiredKind, &c.interactionQuestion, &c.interactionExpectedVersion, &c.owner); err != nil {
+		if err = rows.Scan(&c.id, &c.title, &c.goal, &c.profile, &c.harness, &c.version, &c.device, &c.command, &c.root, &c.parent, &c.depth, &c.childPolicyJSON, &c.pregrantJSON, &c.source, &c.interaction, &c.interactionExpiredKind, &c.interactionQuestion, &c.interactionExpectedVersion, &c.owner); err != nil {
 			rows.Close()
 			writeError(w, err)
 			return
@@ -124,13 +124,13 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if reason, guardErr := s.taskDispatchReasonTx(r.Context(), tx, chosen.source, chosen.workspace, chosen.id, time.Now().UTC()); guardErr != nil {
+	if reason, guardErr := s.taskDispatchReasonTx(r.Context(), tx, chosen.source, chosen.id, time.Now().UTC()); guardErr != nil {
 		writeError(w, guardErr)
 		return
 	} else if reason != "" {
 		now := time.Now().UTC()
 		at := now.Format(time.RFC3339Nano)
-		result, updateErr := tx.ExecContext(r.Context(), `UPDATE tasks SET status='canceled',version=version+1,finished_at=?,updated_at=? WHERE id=? AND workspace_id=? AND status='queued' AND version=?`, at, at, chosen.id, chosen.workspace, chosen.version)
+		result, updateErr := tx.ExecContext(r.Context(), `UPDATE tasks SET status='canceled',version=version+1,finished_at=?,updated_at=? WHERE id=? AND status='queued' AND version=?`, at, at, chosen.id, chosen.version)
 		if updateErr != nil {
 			writeError(w, updateErr)
 			return
@@ -143,7 +143,7 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 			writeError(w, updateErr)
 			return
 		}
-		if err = appendEventTx(r.Context(), tx, contracts.Event{Type: "task.canceled", OccurredAt: now, WorkspaceID: chosen.workspace, AggregateType: "task", AggregateID: chosen.id, AggregateVersion: chosen.version + 1, Payload: raw(map[string]any{"task_id": chosen.id, "reason_code": reason})}); err != nil {
+		if err = appendEventTx(r.Context(), tx, contracts.Event{Type: "task.canceled", OccurredAt: now, AggregateType: "task", AggregateID: chosen.id, AggregateVersion: chosen.version + 1, Payload: raw(map[string]any{"task_id": chosen.id, "reason_code": reason})}); err != nil {
 			writeError(w, err)
 			return
 		}
@@ -202,21 +202,21 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	_, err = tx.ExecContext(r.Context(), `INSERT INTO runs(id,workspace_id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,isolation_policy,started_at,task_version,authorization_json,child_policy_json,lineage_root_task_id,lineage_parent_task_id,lineage_depth,budget_snapshot_json) VALUES(?,?,?,?,'dispatching','run',1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, runID, chosen.workspace, chosen.id, attemptID, fence, p.RunnerID, chosen.device, chosen.command, chosen.goal, profile.ID, chosen.harness, profile.RuntimeRouteID, profile.ModelRouteID, profile.Role, profile.IsolationPolicy, now, newVersion, authorizationJSON, policyBytes, chosen.root, nullString(chosen.parent), chosen.depth, budgetJSON)
+	_, err = tx.ExecContext(r.Context(), `INSERT INTO runs(id,task_id,attempt_id,status,desired_control,control_version,fence,runner_id,authorized_device_id,command_id,goal,profile_id,harness,runtime_route_id,model_route_id,role,isolation_policy,started_at,task_version,authorization_json,child_policy_json,lineage_root_task_id,lineage_parent_task_id,lineage_depth,budget_snapshot_json) VALUES(?,?,?,'dispatching','run',1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, runID, chosen.id, attemptID, fence, p.RunnerID, chosen.device, chosen.command, chosen.goal, profile.ID, chosen.harness, profile.RuntimeRouteID, profile.ModelRouteID, profile.Role, profile.IsolationPolicy, now, newVersion, authorizationJSON, policyBytes, chosen.root, nullString(chosen.parent), chosen.depth, budgetJSON)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET status='active',version=?,started_at=coalesce(started_at,?),updated_at=? WHERE id=? AND workspace_id=? AND status='queued' AND version=?`, newVersion, now, now, chosen.id, chosen.workspace, chosen.version)
+	_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET status='active',version=?,started_at=coalesce(started_at,?),updated_at=? WHERE id=? AND status='queued' AND version=?`, newVersion, now, now, chosen.id, chosen.version)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	if err = appendEventTx(r.Context(), tx, contracts.Event{Type: "run.claimed", OccurredAt: time.Now().UTC(), WorkspaceID: chosen.workspace, SubjectID: "", AggregateType: "task", AggregateID: chosen.id, AggregateVersion: newVersion, Payload: raw(map[string]any{"task_id": chosen.id, "run_id": runID, "attempt_id": attemptID})}); err != nil {
+	if err = appendEventTx(r.Context(), tx, contracts.Event{Type: "run.claimed", OccurredAt: time.Now().UTC(), SubjectID: "", AggregateType: "task", AggregateID: chosen.id, AggregateVersion: newVersion, Payload: raw(map[string]any{"task_id": chosen.id, "run_id": runID, "attempt_id": attemptID})}); err != nil {
 		writeError(w, err)
 		return
 	}
-	claim := contracts.JobClaim{RunID: runID, TaskID: chosen.id, AttemptID: attemptID, WorkspaceID: chosen.workspace, TaskVersion: newVersion, Goal: chosen.goal, ProfileID: profile.ID, Harness: chosen.harness, RuntimeRouteID: profile.RuntimeRouteID, ModelRouteID: profile.ModelRouteID, IsolationPolicy: profile.IsolationPolicy, Role: profile.Role, Agent: profile.Agent, PermissionTier: profile.PermissionTier, PermissionRules: rules, ImpactLevel: impact, Authorization: authorization, Fence: fence, LineageRootTaskID: chosen.root, LineageParentTaskID: chosen.parent, LineageDepth: chosen.depth, PregrantCapabilityIDs: append([]string{}, pregrant...), Budget: budget}
+	claim := contracts.JobClaim{RunID: runID, TaskID: chosen.id, AttemptID: attemptID, TaskVersion: newVersion, Goal: chosen.goal, ProfileID: profile.ID, Harness: chosen.harness, RuntimeRouteID: profile.RuntimeRouteID, ModelRouteID: profile.ModelRouteID, IsolationPolicy: profile.IsolationPolicy, Role: profile.Role, Agent: profile.Agent, PermissionTier: profile.PermissionTier, PermissionRules: rules, ImpactLevel: impact, Authorization: authorization, Fence: fence, LineageRootTaskID: chosen.root, LineageParentTaskID: chosen.parent, LineageDepth: chosen.depth, PregrantCapabilityIDs: append([]string{}, pregrant...), Budget: budget}
 	if err = addTaskDisplayInstruction(r.Context(), tx, &claim, s.cfg.TaskUIDisplayInstruction); err != nil {
 		writeError(w, err)
 		return
@@ -258,9 +258,9 @@ func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
 	}
 	var claim contracts.JobClaim
 	var budgetJSON, authJSON []byte
-	var runnerID, workspace, taskID string
+	var runnerID, taskID string
 	var storedFence uint64
-	err = s.store.DB().QueryRowContext(r.Context(), `SELECT r.runner_id,r.workspace_id,r.task_id,r.attempt_id,r.fence,r.goal,r.profile_id,r.harness,r.runtime_route_id,r.model_route_id,r.role,r.isolation_policy,r.authorization_json,r.budget_snapshot_json FROM runs r WHERE r.id=? AND r.status IN ('dispatching','active','uncertain')`, runID).Scan(&runnerID, &workspace, &taskID, &claim.AttemptID, &storedFence, &claim.Goal, &claim.ProfileID, &claim.Harness, &claim.RuntimeRouteID, &claim.ModelRouteID, &claim.Role, &claim.IsolationPolicy, &authJSON, &budgetJSON)
+	err = s.store.DB().QueryRowContext(r.Context(), `SELECT r.runner_id,r.task_id,r.attempt_id,r.fence,r.goal,r.profile_id,r.harness,r.runtime_route_id,r.model_route_id,r.role,r.isolation_policy,r.authorization_json,r.budget_snapshot_json FROM runs r WHERE r.id=? AND r.status IN ('dispatching','active','uncertain')`, runID).Scan(&runnerID, &taskID, &claim.AttemptID, &storedFence, &claim.Goal, &claim.ProfileID, &claim.Harness, &claim.RuntimeRouteID, &claim.ModelRouteID, &claim.Role, &claim.IsolationPolicy, &authJSON, &budgetJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, apiError(http.StatusNotFound, "not_found", "active run not found", nil))
 		return
@@ -273,7 +273,7 @@ func (s *Server) handleRotationContext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, apiError(http.StatusConflict, "fence_conflict", "rotation context does not match the active run fence", nil))
 		return
 	}
-	claim.RunID, claim.TaskID, claim.WorkspaceID, claim.Fence = runID, taskID, workspace, fence
+	claim.RunID, claim.TaskID, claim.Fence = runID, taskID, fence
 	if err := json.Unmarshal(authJSON, &claim.Authorization); err != nil {
 		writeError(w, err)
 		return
@@ -386,7 +386,7 @@ func loadClaim(ctx context.Context, tx *sql.Tx, runID string, cfg Config) (contr
 	var fence uint64
 	var authJSON []byte
 	var budgetJSON []byte
-	err := tx.QueryRowContext(ctx, `SELECT r.id,r.task_id,r.attempt_id,r.workspace_id,r.task_version,r.goal,r.profile_id,r.harness,r.runtime_route_id,r.model_route_id,r.role,r.isolation_policy,r.runtime_session_id,r.fence,r.authorization_json,coalesce(r.lineage_root_task_id,''),coalesce(r.lineage_parent_task_id,''),r.lineage_depth,r.budget_snapshot_json FROM runs r WHERE r.id=?`, runID).Scan(&c.RunID, &c.TaskID, &c.AttemptID, &c.WorkspaceID, &c.TaskVersion, &c.Goal, &c.ProfileID, &c.Harness, &c.RuntimeRouteID, &c.ModelRouteID, &c.Role, &c.IsolationPolicy, &c.RuntimeSessionID, &fence, &authJSON, &c.LineageRootTaskID, &c.LineageParentTaskID, &c.LineageDepth, &budgetJSON)
+	err := tx.QueryRowContext(ctx, `SELECT r.id,r.task_id,r.attempt_id,r.task_version,r.goal,r.profile_id,r.harness,r.runtime_route_id,r.model_route_id,r.role,r.isolation_policy,r.runtime_session_id,r.fence,r.authorization_json,coalesce(r.lineage_root_task_id,''),coalesce(r.lineage_parent_task_id,''),r.lineage_depth,r.budget_snapshot_json FROM runs r WHERE r.id=?`, runID).Scan(&c.RunID, &c.TaskID, &c.AttemptID, &c.TaskVersion, &c.Goal, &c.ProfileID, &c.Harness, &c.RuntimeRouteID, &c.ModelRouteID, &c.Role, &c.IsolationPolicy, &c.RuntimeSessionID, &fence, &authJSON, &c.LineageRootTaskID, &c.LineageParentTaskID, &c.LineageDepth, &budgetJSON)
 	if err != nil {
 		return c, err
 	}
@@ -488,7 +488,7 @@ func (s *Server) handleCurrentClaims(w http.ResponseWriter, r *http.Request) {
 		var claim contracts.JobClaim
 		var authJSON []byte
 		var budgetJSON []byte
-		err = s.store.DB().QueryRowContext(r.Context(), `SELECT r.id,r.task_id,r.attempt_id,r.workspace_id,r.task_version,r.goal,r.profile_id,r.harness,r.runtime_route_id,r.model_route_id,r.role,r.isolation_policy,r.runtime_session_id,r.fence,r.authorization_json,coalesce(r.lineage_root_task_id,''),coalesce(r.lineage_parent_task_id,''),r.lineage_depth,r.budget_snapshot_json FROM runs r WHERE r.id=?`, id).Scan(&claim.RunID, &claim.TaskID, &claim.AttemptID, &claim.WorkspaceID, &claim.TaskVersion, &claim.Goal, &claim.ProfileID, &claim.Harness, &claim.RuntimeRouteID, &claim.ModelRouteID, &claim.Role, &claim.IsolationPolicy, &claim.RuntimeSessionID, &claim.Fence, &authJSON, &claim.LineageRootTaskID, &claim.LineageParentTaskID, &claim.LineageDepth, &budgetJSON)
+		err = s.store.DB().QueryRowContext(r.Context(), `SELECT r.id,r.task_id,r.attempt_id,r.task_version,r.goal,r.profile_id,r.harness,r.runtime_route_id,r.model_route_id,r.role,r.isolation_policy,r.runtime_session_id,r.fence,r.authorization_json,coalesce(r.lineage_root_task_id,''),coalesce(r.lineage_parent_task_id,''),r.lineage_depth,r.budget_snapshot_json FROM runs r WHERE r.id=?`, id).Scan(&claim.RunID, &claim.TaskID, &claim.AttemptID, &claim.TaskVersion, &claim.Goal, &claim.ProfileID, &claim.Harness, &claim.RuntimeRouteID, &claim.ModelRouteID, &claim.Role, &claim.IsolationPolicy, &claim.RuntimeSessionID, &claim.Fence, &authJSON, &claim.LineageRootTaskID, &claim.LineageParentTaskID, &claim.LineageDepth, &budgetJSON)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -577,9 +577,8 @@ func (s *Server) handleRunControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	var workspace string
 	var ready bool
-	err = tx.QueryRowContext(r.Context(), `SELECT r.workspace_id,r.status='active' AND r.desired_control='run' AND t.status='active' AND t.interaction_state='none' FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id=? AND r.runner_id=?`, control.RunID, p.RunnerID).Scan(&workspace, &ready)
+	err = tx.QueryRowContext(r.Context(), `SELECT r.status='active' AND r.desired_control='run' AND t.status='active' AND t.interaction_state='none' FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id=? AND r.runner_id=?`, control.RunID, p.RunnerID).Scan(&ready)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -616,7 +615,7 @@ func (s *Server) handleRuntimeAuthorization(w http.ResponseWriter, r *http.Reque
 	var out contracts.RuntimeAuthorization
 	var used int
 	var expires string
-	query := `SELECT a.run_id,a.request_id,a.fence,a.decision,a.expires_at,a.authorization_used,a.message,a.action_digest FROM pending_runtime_actions a JOIN runs r ON r.id=a.run_id JOIN tasks t ON t.id=a.task_id AND t.workspace_id=a.workspace_id WHERE a.run_id=? AND a.fence=? AND r.runner_id=? AND r.fence=a.fence AND r.status IN ('dispatching','active','uncertain') AND (a.kind<>'worker_question' OR (a.decision='answer' AND t.interaction_run_id=a.run_id AND t.interaction_action_digest=a.action_digest AND EXISTS (SELECT 1 FROM task_question_answers b JOIN task_entries e ON e.id=b.entry_id WHERE b.question_id=a.id AND b.task_id=a.task_id AND b.workspace_id=a.workspace_id AND e.content=a.message)))`
+	query := `SELECT a.run_id,a.request_id,a.fence,a.decision,a.expires_at,a.authorization_used,a.message,a.action_digest FROM pending_runtime_actions a JOIN runs r ON r.id=a.run_id JOIN tasks t ON t.id=a.task_id WHERE a.run_id=? AND a.fence=? AND r.runner_id=? AND r.fence=a.fence AND r.status IN ('dispatching','active','uncertain') AND (a.kind<>'worker_question' OR (a.decision='answer' AND t.interaction_run_id=a.run_id AND t.interaction_action_digest=a.action_digest AND EXISTS (SELECT 1 FROM task_question_answers b JOIN task_entries e ON e.id=b.entry_id WHERE b.question_id=a.id AND b.task_id=a.task_id AND e.content=a.message)))`
 	args := []any{runID, fence, p.RunnerID}
 	if requestID != "" {
 		query += ` AND a.request_id=?`
@@ -704,9 +703,9 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	var workspace, taskID, attempt, runnerID, status, desired, boundSession, boundHarness, authorizedDevice string
+	var taskID, attempt, runnerID, status, desired, boundSession, boundHarness, authorizedDevice string
 	var fence uint64
-	err = tx.QueryRowContext(r.Context(), `SELECT workspace_id,task_id,attempt_id,runner_id,status,desired_control,fence,runtime_session_id,harness,authorized_device_id FROM runs WHERE id=?`, runID).Scan(&workspace, &taskID, &attempt, &runnerID, &status, &desired, &fence, &boundSession, &boundHarness, &authorizedDevice)
+	err = tx.QueryRowContext(r.Context(), `SELECT task_id,attempt_id,runner_id,status,desired_control,fence,runtime_session_id,harness,authorized_device_id FROM runs WHERE id=?`, runID).Scan(&taskID, &attempt, &runnerID, &status, &desired, &fence, &boundSession, &boundHarness, &authorizedDevice)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, apiError(404, "not_found", "run not found", nil))
 		return
@@ -909,7 +908,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 	}
 	var taskVersion int64
 	var interactionState string
-	if err = tx.QueryRowContext(r.Context(), `SELECT interaction_state FROM tasks WHERE id=? AND workspace_id=?`, taskID, workspace).Scan(&interactionState); err != nil {
+	if err = tx.QueryRowContext(r.Context(), `SELECT interaction_state FROM tasks WHERE id=?`, taskID).Scan(&interactionState); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -918,7 +917,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 	completeResult := false
 	if observation.Kind == "permission_requested" || observation.Kind == "worker_question" {
 		now := time.Now().UTC()
-		if err = tx.QueryRowContext(r.Context(), `SELECT version FROM tasks WHERE id=? AND workspace_id=?`, taskID, workspace).Scan(&taskVersion); err != nil {
+		if err = tx.QueryRowContext(r.Context(), `SELECT version FROM tasks WHERE id=?`, taskID).Scan(&taskVersion); err != nil {
 			writeError(w, err)
 			return
 		}
@@ -951,7 +950,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		}
 		expires := time.Now().UTC().Add(s.cfg.WaitLimit).Format(time.RFC3339Nano)
 		resourcesJSON, _ := json.Marshal(resources)
-		_, err = tx.ExecContext(r.Context(), `INSERT INTO pending_runtime_actions(id,workspace_id,task_id,run_id,fence,request_id,kind,action,resources_json,question,action_digest,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,request_id) DO NOTHING`, id, workspace, taskID, runID, fence, requestID, observation.Kind, action, resourcesJSON, question, digest, expires, now.Format(time.RFC3339Nano))
+		_, err = tx.ExecContext(r.Context(), `INSERT INTO pending_runtime_actions(id,task_id,run_id,fence,request_id,kind,action,resources_json,question,action_digest,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,request_id) DO NOTHING`, id, taskID, runID, fence, requestID, observation.Kind, action, resourcesJSON, question, digest, expires, now.Format(time.RFC3339Nano))
 		if err != nil {
 			writeError(w, err)
 			return
@@ -964,7 +963,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		taskVersion++
-		if _, err = tx.ExecContext(r.Context(), `UPDATE tasks SET status='awaiting_user',interaction_scope=?,interaction_state=?,interaction_run_id=?,interaction_action_digest=?,interaction_expires_at=?,interaction_expected_version=?,interaction_question=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, map[bool]string{true: "runtime:permission", false: ""}[observation.Kind == "permission_requested"], map[bool]string{true: "explicit_confirmation", false: "awaiting_message"}[observation.Kind == "permission_requested"], runID, digest, expires, taskVersion, question, now.Format(time.RFC3339Nano), taskID, workspace); err != nil {
+		if _, err = tx.ExecContext(r.Context(), `UPDATE tasks SET status='awaiting_user',interaction_scope=?,interaction_state=?,interaction_run_id=?,interaction_action_digest=?,interaction_expires_at=?,interaction_expected_version=?,interaction_question=?,version=version+1,updated_at=? WHERE id=?`, map[bool]string{true: "runtime:permission", false: ""}[observation.Kind == "permission_requested"], map[bool]string{true: "explicit_confirmation", false: "awaiting_message"}[observation.Kind == "permission_requested"], runID, digest, expires, taskVersion, question, now.Format(time.RFC3339Nano), taskID); err != nil {
 			writeError(w, err)
 			return
 		}
@@ -983,7 +982,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if err = tx.QueryRowContext(r.Context(), `SELECT version FROM tasks WHERE id=? AND workspace_id=?`, taskID, workspace).Scan(&taskVersion); err != nil {
+	if err = tx.QueryRowContext(r.Context(), `SELECT version FROM tasks WHERE id=?`, taskID).Scan(&taskVersion); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -999,7 +998,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			writeError(w, e)
 			return
 		}
-		_, e = tx.ExecContext(r.Context(), `INSERT INTO evidence(id,workspace_id,task_id,run_id,kind,summary,source,provenance,created_at,verified,verifier_id) VALUES(?,?,?,?,?,?, 'runner',?,?,0,'')`, eid, workspace, taskID, runID, item.Kind, item.Summary, provenance, now.Format(time.RFC3339Nano))
+		_, e = tx.ExecContext(r.Context(), `INSERT INTO evidence(id,task_id,run_id,kind,summary,source,provenance,created_at,verified,verifier_id) VALUES(?,?,?,?,?, 'runner',?,?,0,'')`, eid, taskID, runID, item.Kind, item.Summary, provenance, now.Format(time.RFC3339Nano))
 		if e != nil {
 			writeError(w, e)
 			return
@@ -1033,15 +1032,15 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			writeError(w, e)
 			return
 		}
-		_, e = tx.ExecContext(r.Context(), `INSERT INTO evidence(id,workspace_id,task_id,run_id,kind,summary,source,provenance,created_at,verified,verifier_id) VALUES(?,?,?,?, 'agent_result',?,'runner',?,?,0,'')`, eid, workspace, taskID, runID, summary, provenance, now.Format(time.RFC3339Nano))
+		_, e = tx.ExecContext(r.Context(), `INSERT INTO evidence(id,task_id,run_id,kind,summary,source,provenance,created_at,verified,verifier_id) VALUES(?,?,?, 'agent_result',?,'runner',?,?,0,'')`, eid, taskID, runID, summary, provenance, now.Format(time.RFC3339Nano))
 		if e != nil {
 			writeError(w, e)
 			return
 		}
 		if observation.Kind == "result" {
-			_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET result=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, taskResult, now.Format(time.RFC3339Nano), taskID, workspace)
+			_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET result=?,version=version+1,updated_at=? WHERE id=?`, taskResult, now.Format(time.RFC3339Nano), taskID)
 		} else if taskResult != "" {
-			_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET result=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, taskResult, now.Format(time.RFC3339Nano), taskID, workspace)
+			_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET result=?,version=version+1,updated_at=? WHERE id=?`, taskResult, now.Format(time.RFC3339Nano), taskID)
 		}
 		if err != nil {
 			writeError(w, err)
@@ -1068,7 +1067,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 					writeError(w, entryErr)
 					return
 				}
-				if _, entryErr = tx.ExecContext(r.Context(), `INSERT INTO task_entries(id,task_id,workspace_id,kind,content,author_device_id,created_at) VALUES(?,?,?,'assistant_message',?,?,?)`, entryID, taskID, workspace, assistantOutput, authorizedDevice, now.Format(time.RFC3339Nano)); entryErr != nil {
+				if _, entryErr = tx.ExecContext(r.Context(), `INSERT INTO task_entries(id,task_id,kind,content,author_device_id,created_at) VALUES(?,?,'assistant_message',?,?,?)`, entryID, taskID, assistantOutput, authorizedDevice, now.Format(time.RFC3339Nano)); entryErr != nil {
 					writeError(w, entryErr)
 					return
 				}
@@ -1078,7 +1077,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if observation.Kind == "failure" {
-		_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET error=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, observation.Error, now.Format(time.RFC3339Nano), taskID, workspace)
+		_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET error=?,version=version+1,updated_at=? WHERE id=?`, observation.Error, now.Format(time.RFC3339Nano), taskID)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -1086,7 +1085,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		taskVersion++
 	}
 	if observation.Kind == "no_effect_terminal" && observation.NoEffectProof.Outcome == "failed" {
-		_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET error=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, observation.Error, now.Format(time.RFC3339Nano), taskID, workspace)
+		_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET error=?,version=version+1,updated_at=? WHERE id=?`, observation.Error, now.Format(time.RFC3339Nano), taskID)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -1094,7 +1093,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		taskVersion++
 	}
 	if observation.Kind == "create_rejected" {
-		_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET error=?,version=version+1,updated_at=? WHERE id=? AND workspace_id=?`, "runtime_create_rejected", now.Format(time.RFC3339Nano), taskID, workspace)
+		_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET error=?,version=version+1,updated_at=? WHERE id=?`, "runtime_create_rejected", now.Format(time.RFC3339Nano), taskID)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -1107,7 +1106,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			writeError(w, apiError(400, "invalid_request", "external effect requires id and kind", nil))
 			return
 		}
-		_, err = tx.ExecContext(r.Context(), `INSERT INTO external_effects(id,workspace_id,task_id,run_id,kind,status,external_reference,first_observed_at,last_observed_at,details) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,external_reference=excluded.external_reference,last_observed_at=excluded.last_observed_at,details=excluded.details WHERE external_effects.run_id=excluded.run_id`, effect.ID, workspace, taskID, runID, effect.Kind, effect.Status, effect.Reference, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), details)
+		_, err = tx.ExecContext(r.Context(), `INSERT INTO external_effects(id,task_id,run_id,kind,status,external_reference,first_observed_at,last_observed_at,details) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,external_reference=excluded.external_reference,last_observed_at=excluded.last_observed_at,details=excluded.details WHERE external_effects.run_id=excluded.run_id`, effect.ID, taskID, runID, effect.Kind, effect.Status, effect.Reference, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), details)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -1157,7 +1156,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		}
 		if json.Unmarshal(observation.Result, &uncertainty) == nil && uncertainty.Reason == "answer_delivery_uncertain" {
 			nextTaskStatus = "paused"
-			if _, err = tx.ExecContext(r.Context(), `UPDATE tasks SET error=? WHERE id=? AND workspace_id=?`, "The accepted answer delivery is uncertain; automatic replay is paused pending runtime reconciliation.", taskID, workspace); err != nil {
+			if _, err = tx.ExecContext(r.Context(), `UPDATE tasks SET error=? WHERE id=?`, "The accepted answer delivery is uncertain; automatic replay is paused pending runtime reconciliation.", taskID); err != nil {
 				writeError(w, err)
 				return
 			}
@@ -1220,7 +1219,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		if nextTaskStatus == "canceled" || nextTaskStatus == "failed" {
 			finished = now.Format(time.RFC3339Nano)
 		}
-		_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET status=?,version=?,updated_at=?,finished_at=coalesce(?,finished_at) WHERE id=? AND workspace_id=?`, nextTaskStatus, taskVersion, now.Format(time.RFC3339Nano), finished, taskID, workspace)
+		_, err = tx.ExecContext(r.Context(), `UPDATE tasks SET status=?,version=?,updated_at=?,finished_at=coalesce(?,finished_at) WHERE id=?`, nextTaskStatus, taskVersion, now.Format(time.RFC3339Nano), finished, taskID)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -1233,14 +1232,14 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
-		_, err = tx.ExecContext(r.Context(), `UPDATE approvals SET status='canceled',version=version+1 WHERE task_id=? AND workspace_id=? AND status='pending'`, taskID, workspace)
+		_, err = tx.ExecContext(r.Context(), `UPDATE approvals SET status='canceled',version=version+1 WHERE task_id=? AND status='pending'`, taskID)
 		if err != nil {
 			writeError(w, err)
 			return
 		}
 	}
 	if completeResult {
-		result, events, finalizeErr := finalizeTaskResultTx(r.Context(), tx, workspace, taskID, runID, taskVersion, "complete", "accept", "", now)
+		result, events, finalizeErr := finalizeTaskResultTx(r.Context(), tx, taskID, runID, taskVersion, "complete", "accept", "", now)
 		if finalizeErr != nil {
 			writeError(w, finalizeErr)
 			return
@@ -1248,19 +1247,19 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		taskVersion = result.ResourceVersion
 		nextTaskStatus = "complete"
 		for _, e := range events {
-			e.OccurredAt, e.WorkspaceID = now, workspace
+			e.OccurredAt = now
 			if err = appendEventTx(r.Context(), tx, e); err != nil {
 				writeError(w, err)
 				return
 			}
 		}
 	}
-	if err = appendEventTx(r.Context(), tx, contracts.Event{Type: eventKind, OccurredAt: now, WorkspaceID: workspace, SubjectID: "", AggregateType: "run", AggregateID: runID, AggregateVersion: int64(fence), Payload: raw(map[string]any{"run_id": runID, "task_id": taskID, "attempt_id": attempt, "kind": observation.Kind, "task_status": nextTaskStatus, "result": taskResult})}); err != nil {
+	if err = appendEventTx(r.Context(), tx, contracts.Event{Type: eventKind, OccurredAt: now, SubjectID: "", AggregateType: "run", AggregateID: runID, AggregateVersion: int64(fence), Payload: raw(map[string]any{"run_id": runID, "task_id": taskID, "attempt_id": attempt, "kind": observation.Kind, "task_status": nextTaskStatus, "result": taskResult})}); err != nil {
 		writeError(w, err)
 		return
 	}
 	if assistantEntryID != "" && assistantMessageNew {
-		if err = appendEventTx(r.Context(), tx, contracts.Event{Type: "task.assistant_message", OccurredAt: now, WorkspaceID: workspace, AggregateType: "task", AggregateID: taskID, AggregateVersion: taskVersion, Payload: raw(map[string]any{"task_id": taskID, "run_id": runID, "entry_id": assistantEntryID, "entry_kind": "assistant_message", "role": assistantRole})}); err != nil {
+		if err = appendEventTx(r.Context(), tx, contracts.Event{Type: "task.assistant_message", OccurredAt: now, AggregateType: "task", AggregateID: taskID, AggregateVersion: taskVersion, Payload: raw(map[string]any{"task_id": taskID, "run_id": runID, "entry_id": assistantEntryID, "entry_kind": "assistant_message", "role": assistantRole})}); err != nil {
 			writeError(w, err)
 			return
 		}
@@ -1318,7 +1317,7 @@ func appendEventTx(ctx context.Context, tx *sql.Tx, e contracts.Event) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO events(event_id,workspace_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, e.EventID, e.WorkspaceID, cursor, e.SchemaVersion, e.Type, e.OccurredAt.Format(time.RFC3339Nano), e.SubjectID, e.AggregateType, e.AggregateID, e.AggregateVersion, payload)
+	_, err = tx.ExecContext(ctx, `INSERT INTO events(event_id,cursor,schema_version,event_type,occurred_at,subject_id,aggregate_type,aggregate_id,aggregate_version,payload) VALUES(?,?,?,?,?,?,?,?,?,?)`, e.EventID, cursor, e.SchemaVersion, e.Type, e.OccurredAt.Format(time.RFC3339Nano), e.SubjectID, e.AggregateType, e.AggregateID, e.AggregateVersion, payload)
 	if err != nil {
 		return err
 	}
@@ -1334,7 +1333,7 @@ func sameHash(a, b []byte) bool {
 	}
 	return v == 0
 }
-func ensureAcceptanceApprovalPlaceholder(ctx context.Context, tx *sql.Tx, workspace, task string) error {
+func ensureAcceptanceApprovalPlaceholder(ctx context.Context, tx *sql.Tx, task string) error {
 	return nil
 }
 
