@@ -40,6 +40,11 @@ public final class LibWebRTCTransport: NSObject, WebRTCTransport, @unchecked Sen
     private let dataChannel: RTCDataChannel
     private let lock = NSLock()
     private var isClosed = false
+    private let gatheringLock = NSLock()
+    private var gatheringStartedAt: ContinuousClock.Instant?
+    private var gatheringFinishedAt: ContinuousClock.Instant?
+    private var gatheringTimedOut = false
+    private var candidateStats: [String: (count: Int, firstMs: Int)] = [:]
 #if DEBUG
     private var dataChannelStateOverrideForTesting: RTCDataChannelState?
 #endif
@@ -97,6 +102,9 @@ public final class LibWebRTCTransport: NSObject, WebRTCTransport, @unchecked Sen
                 else { continuation.resume(throwing: WebRTCTransportError.offerFailed("The SDK returned no description.")) }
             }
         }
+        gatheringLock.lock()
+        gatheringStartedAt = ContinuousClock.now
+        gatheringLock.unlock()
         try await setLocalDescription(offer)
         try await waitForICEGathering()
         guard let sdp = peerConnection.localDescription?.sdp, !sdp.isEmpty else {
@@ -166,6 +174,10 @@ public final class LibWebRTCTransport: NSObject, WebRTCTransport, @unchecked Sen
         let deadline = ContinuousClock.now + .seconds(20)
         while peerConnection.iceGatheringState != .complete {
             guard ContinuousClock.now < deadline else {
+                gatheringLock.lock()
+                gatheringTimedOut = true
+                gatheringFinishedAt = ContinuousClock.now
+                gatheringLock.unlock()
                 // Non-trickle signaling normally waits for `complete`, but a
                 // STUN server can remain in `gathering` indefinitely while
                 // host candidates are already usable. Continue with the
@@ -177,6 +189,43 @@ public final class LibWebRTCTransport: NSObject, WebRTCTransport, @unchecked Sen
             }
             try await Task.sleep(for: .milliseconds(100))
         }
+        gatheringLock.lock()
+        gatheringFinishedAt = gatheringFinishedAt ?? ContinuousClock.now
+        gatheringLock.unlock()
+    }
+
+    /// Timing and candidate-type counts for the last offer; addresses are never recorded.
+    public var iceGatheringReport: (timedOut: Bool, summary: String) {
+        gatheringLock.lock()
+        defer { gatheringLock.unlock() }
+        let now = ContinuousClock.now
+        let elapsed = gatheringStartedAt.map { Self.milliseconds($0.duration(to: gatheringFinishedAt ?? now)) } ?? 0
+        let result = gatheringTimedOut ? "timeout" : (gatheringFinishedAt == nil ? "pending" : "complete")
+        let types = candidateStats.keys.sorted().map { "\($0)=\(candidateStats[$0]!.count)@\(candidateStats[$0]!.firstMs)ms" }
+        return (gatheringTimedOut, (["result=\(result)", "ms=\(elapsed)"] + types).joined(separator: " "))
+    }
+
+    private static func milliseconds(_ duration: Duration) -> Int {
+        let parts = duration.components
+        return Int(parts.seconds * 1000 + parts.attoseconds / 1_000_000_000_000_000)
+    }
+
+    private func recordCandidate(_ sdp: String) {
+        guard let range = sdp.range(of: " typ ") else { return }
+        let type = String(sdp[range.upperBound...].prefix { $0.isLetter })
+        guard !type.isEmpty else { return }
+        gatheringLock.lock()
+        defer { gatheringLock.unlock() }
+        let elapsed = gatheringStartedAt.map { Self.milliseconds($0.duration(to: ContinuousClock.now)) } ?? 0
+        let current = candidateStats[type]
+        candidateStats[type] = (count: (current?.count ?? 0) + 1, firstMs: current?.firstMs ?? elapsed)
+    }
+
+    fileprivate func noteGatheringState(_ state: RTCIceGatheringState) {
+        guard state == .complete else { return }
+        gatheringLock.lock()
+        gatheringFinishedAt = gatheringFinishedAt ?? ContinuousClock.now
+        gatheringLock.unlock()
     }
 }
 
@@ -186,8 +235,12 @@ extension LibWebRTCTransport: RTCPeerConnectionDelegate {
     public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     public func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {}
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
+        noteGatheringState(newState)
+    }
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+        recordCandidate(candidate.sdp)
+    }
     public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
     public func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCPeerConnectionState) {

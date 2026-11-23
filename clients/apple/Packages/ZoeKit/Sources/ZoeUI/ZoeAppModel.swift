@@ -797,7 +797,18 @@ public final class ZoeAppModel: ObservableObject {
         let transport = try LibWebRTCTransport(iceServers: iceServers, dataChannelLabel: config.webRTC.dataChannel.label)
         voiceTransport = transport
         wireVoiceTransport(transport, generation: generation, mediaEpoch: mediaEpoch)
-        return try await transport.createOffer()
+        func recordGathering() {
+            let report = transport.iceGatheringReport
+            api.recordDiagnostic(phase: "ice_gathering", requestPath: "client", errorType: report.timedOut ? "ice_gathering_timeout" : "", errorSummary: report.summary, level: report.timedOut ? .error : .info, voiceMediaEpoch: mediaEpoch)
+        }
+        do {
+            let offer = try await transport.createOffer()
+            recordGathering()
+            return offer
+        } catch {
+            recordGathering()
+            throw error
+        }
     }
 
     private func connectVoiceMedia(answer: String, generation: UInt64, mediaEpoch: UInt64) async throws {
