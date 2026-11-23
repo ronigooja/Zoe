@@ -85,6 +85,7 @@ public final class ZoeAppModel: ObservableObject {
     var eventCursorForTesting: String? { eventCursor }
     var recoveryApplicationGateForTesting: (() async -> Void)?
     var recoveryCommitGateForTesting: (() async -> Void)?
+    var journalFactoryForTesting: ((String) throws -> CommandJournal)?
     func recoverGlobalStateForTesting(api: APIClient) async throws {
         try await recoverGlobalState(using: api, generation: connectionGeneration.value)
     }
@@ -1280,7 +1281,16 @@ public final class ZoeAppModel: ObservableObject {
     private func adoptInstanceIdentity(_ identity: String, api: APIClient) throws {
         guard !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ZoeError.invalidResponse }
         guard instanceLineageID != identity || coordinator == nil else { return }
-        let journal = try CommandJournal(instanceLineageID: identity)
+        let journal: CommandJournal
+        #if DEBUG
+        if let journalFactoryForTesting {
+            journal = try journalFactoryForTesting(identity)
+        } else {
+            journal = try CommandJournal(instanceLineageID: identity)
+        }
+        #else
+        journal = try CommandJournal(instanceLineageID: identity)
+        #endif
         if instanceLineageID != identity {
             closeUISurfaces()
             eventCursor = nil

@@ -83,6 +83,19 @@ private actor AsyncTestGate {
 }
 
 final class ClientContractTests: XCTestCase {
+    @MainActor private func isolatedJournal(_ model: ZoeAppModel) -> ZoeAppModel {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        addTeardownBlock {
+            await model.waitForRecoveryACKForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        model.journalFactoryForTesting = { identity in
+            let name = identity.utf8.map { String(format: "%02x", $0) }.joined()
+            return try CommandJournal(fileURL: directory.appendingPathComponent(name + ".json"))
+        }
+        return model
+    }
+
     @MainActor func testSilenceTimeoutClosesLocalMediaBeforeGatewayHangup() async throws {
         let clock = VoiceContractSilenceClock()
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!, silenceClock: clock)
@@ -440,7 +453,7 @@ final class ClientContractTests: XCTestCase {
 
     @MainActor func testReconnectTransportReplaysNonUIEventsDespiteNewerUISnapshotAndFetchFailure() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "1", authority: InstanceAuthority(instanceLineageId: "default")))
         model.setAuthenticationForTesting(.connected)
         _ = model.installVoiceSessionForTesting(try voiceDialFixture("replayed-call", generation: 1), api: api)
@@ -499,7 +512,7 @@ final class ClientContractTests: XCTestCase {
 
     @MainActor func testExpiredGlobalHistoryStopsWithoutAdvancingToUISnapshotCursor() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         model.setAuthenticationForTesting(.connected)
         model.setSnapshotForTesting(Snapshot(serverVersion: "test", eventCursor: "10", authority: InstanceAuthority(instanceLineageId: "default")))
         ContractURLProtocol.responseHandler = { request in
@@ -522,7 +535,7 @@ final class ClientContractTests: XCTestCase {
 
     @MainActor func testExpiredHistoryRecoveryThenPostCheckpointVoiceEnd() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         model.setAuthenticationForTesting(.connected)
         model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10", authority: InstanceAuthority(instanceLineageId: "default")))
         _ = model.installVoiceSessionForTesting(try voiceDialFixture("old", generation: 1), api: api)
@@ -567,7 +580,7 @@ final class ClientContractTests: XCTestCase {
 
     @MainActor func testInitialZeroHistoryUsesAuthoritativeBaselineBeforeSSE() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         model.setAuthenticationForTesting(.connected)
         var paths: [String] = []
         ContractURLProtocol.responseHandler = { request in
@@ -586,7 +599,7 @@ final class ClientContractTests: XCTestCase {
 
     @MainActor func testRecoveryResponseFromOldConnectionCannotAdoptCheckpoint() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         model.setAuthenticationForTesting(.connected)
         model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "0", authority: InstanceAuthority(instanceLineageId: "default")))
         let gate = AsyncTestGate()
@@ -606,7 +619,7 @@ final class ClientContractTests: XCTestCase {
 
     @MainActor func testRecoveryPreservesOnlyExactActiveLocalVoiceIdentity() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         model.setAuthenticationForTesting(.connected)
         _ = model.installVoiceSessionForTesting(try voiceDialFixture("local", generation: 3), api: api)
         var hangups = 0
@@ -630,7 +643,7 @@ final class ClientContractTests: XCTestCase {
 
     @MainActor func testRecoveryFailedRenderRetriesSameRevisionWithoutModelCommit() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10", authority: InstanceAuthority(instanceLineageId: "default")))
         var renders = 0
         model.onUISurface = { _ in renders += 1; return renders > 1 }
@@ -655,7 +668,7 @@ final class ClientContractTests: XCTestCase {
 
     @MainActor func testRecoverySuppressesHistoricalSurfaceButLiveRevisionStillDisplays() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         model.setAuthenticationForTesting(.connected)
         var renders = 0
         model.onUISurface = { _ in renders += 1; return true }
@@ -676,7 +689,7 @@ final class ClientContractTests: XCTestCase {
 
     @MainActor func testRecoveryWithoutDeletedPresentsPendingQuestionOnLaunch() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         var renders = 0
         model.onUISurface = { event in
             XCTAssertTrue(event.taskQuestion)
@@ -704,7 +717,7 @@ final class ClientContractTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try CommandJournal(fileURL: directory.appendingPathComponent("journal.json"))
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         let manager = SurfaceManager(popoverAnchor: { nil })
         defer { manager.reset() }
         model.installRecoveryCoordinatorForTesting(CommandCoordinator(api: api, journal: journal))
@@ -737,7 +750,7 @@ final class ClientContractTests: XCTestCase {
 
     @MainActor func testGenerationSwitchAfterRenderingCannotCommitStagedModel() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10", authority: InstanceAuthority(instanceLineageId: "default")))
         let gate = AsyncTestGate()
         model.recoveryCommitGateForTesting = { await gate.pause() }
@@ -763,7 +776,7 @@ final class ClientContractTests: XCTestCase {
         do {
             _ = try await coordinator.submit(kind: "ui.rendered", payload: JSONValue.object([:]), instanceLineageID: "default", idempotencyKey: "pending-render")
         } catch { }
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         model.installRecoveryCoordinatorForTesting(coordinator)
         model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "10", authority: InstanceAuthority(instanceLineageId: "default")))
         ContractURLProtocol.responseHandler = { request in
@@ -781,7 +794,7 @@ final class ClientContractTests: XCTestCase {
     @MainActor func testRecoveryStopsEndedReplacedAndGenerationMismatchedVoice() async throws {
         for current in ["null", #"{"id":"local","generation":3,"state":"ended"}"#, #"{"id":"replacement","generation":3,"state":"active"}"#, #"{"id":"local","generation":4,"state":"active"}"#] {
             let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-            let model = ZoeAppModel()
+            let model = isolatedJournal(ZoeAppModel())
             model.setAuthenticationForTesting(.connected)
             _ = model.installVoiceSessionForTesting(try voiceDialFixture("local", generation: 3), api: api)
             var stops = 0
@@ -798,7 +811,7 @@ final class ClientContractTests: XCTestCase {
 
     @MainActor func testRecoveryRejectsRotatedCredentialWithoutCursorAdvance() async throws {
         let api = try APIClient(serverURL: URL(string: "https://zoe.example")!, credentials: StaticCredential(), session: session())
-        let model = ZoeAppModel()
+        let model = isolatedJournal(ZoeAppModel())
         model.setSnapshotForTesting(Snapshot(serverVersion: "1", eventCursor: "0", authority: InstanceAuthority(instanceLineageId: "default")))
         ContractURLProtocol.responseHandler = { _ in
             (401, [:], Data(#"{"error":{"code":"unauthenticated","message":"rotated"}}"#.utf8))
