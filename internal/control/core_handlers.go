@@ -37,16 +37,6 @@ type appendPayload struct {
 	QuestionID *string `json:"question_id"`
 }
 
-var explicitConfirmationPhrases = map[string]bool{
-	"confirm": true, "confirm and continue": true, "yes, proceed": true,
-	"确认": true, "确认并继续": true, "是，继续": true,
-}
-
-// IsExplicitConfirmation applies to exact server-owned confirmation phrases.
-func IsExplicitConfirmation(text string) bool {
-	return explicitConfirmationPhrases[strings.ToLower(strings.TrimSpace(text))]
-}
-
 // StopTaskTx applies the normal task.stop policy to authenticated voice controls.
 func (s *Server) StopTaskTx(ctx context.Context, tx *sql.Tx, c CommandContext, taskID string) (contracts.CommandResult, []contracts.Event, error) {
 	payload, _ := json.Marshal(taskIDPayload{TaskID: taskID})
