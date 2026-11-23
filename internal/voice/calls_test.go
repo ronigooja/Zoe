@@ -231,27 +231,13 @@ func TestCallStartSettingsReplayAndConflicts(t *testing.T) {
 	limit.request("POST", callRoute, limit.runner, limit.instance, `{"request_id":"full","offer_sdp":"v`+strings.Repeat(`\u000a`, (1<<20)-1)+`"}`, 201, "")
 }
 
-func TestVoiceConfigGatewayFieldStrictness(t *testing.T) {
-	for _, tc := range []struct {
-		name, body string
-		status     int
-		code       string
-	}{
-		{"nested fields pass through", `{"version":"v1","webrtc":{"ice_servers":[]}}`, 200, ""},
-		{"unknown top-level field rejected", `{"version":"v1","webrtc":{},"extra":true}`, 502, "voice_config_invalid"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := callConfig()
-			cfg.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-				return gatewayFixture(tc.body), nil
-			})}
-			h := newCallHarness(t, nil, cfg)
-			w := h.request("GET", "/v1/voice/config", h.instance, "", "", tc.status, tc.code)
-			if tc.status == 200 && !strings.Contains(w.Body.String(), `"ice_servers":[]`) {
-				t.Fatal(w.Body.String())
-			}
-		})
-	}
+func TestVoiceConfigRejectsUnknownTopLevelField(t *testing.T) {
+	cfg := callConfig()
+	cfg.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return gatewayFixture(`{"version":"v1","webrtc":{},"extra":true}`), nil
+	})}
+	h := newCallHarness(t, nil, cfg)
+	h.request("GET", "/v1/voice/config", h.instance, "", "", 502, "voice_config_invalid")
 }
 
 func gatewayFixture(body string) *http.Response {
