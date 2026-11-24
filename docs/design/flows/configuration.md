@@ -144,6 +144,9 @@ the path and byte size, not the contents.
 | `prompt_file_max_bytes` | 16000 | 1–1048576 | Each prompt file, bytes |
 | `profile_max_external_directories` | 8 | 1–32 | External directory rules per profile |
 | `max_concurrent_runs` | 12 | 1–64 | Concurrent runs including uncertain runs |
+| `client_mcp_call_timeout_seconds` | 120 | 1–3600 | Client MCP call before `mcp_timeout`, seconds |
+| `client_ws_heartbeat_seconds` | 30 | 5–300 | Client WebSocket silence before close, seconds |
+| `client_ws_frame_max_bytes` | 8388608 | 4096–33554432 | Client WebSocket frame, bytes |
 | `runner_context_max_tokens` | 9223372036854775807 | 1–9223372036854775807 | Runner context ceiling, tokens |
 | `runner_max_rotations` | 3 | 1–64 | Context rotations per run |
 | `runner_rotation_prompt_bytes` | 24000 | 1024–1048576 | Rotation prompt budget for derived history, bytes |
