@@ -33,11 +33,8 @@ func (r *stoppedAnswerRuntime) Status(context.Context, runner.RuntimeBinding) (m
 	return nil, nil
 }
 func (r *stoppedAnswerRuntime) Messages(context.Context, runner.RuntimeBinding) ([]opencode.Message, error) {
-	return nil, nil
-}
-func (r *stoppedAnswerRuntime) Events(context.Context, runner.RuntimeBinding) (<-chan opencode.Event, <-chan error) {
 	r.cancel()
-	return make(chan opencode.Event), make(chan error)
+	return nil, nil
 }
 func (r *stoppedAnswerRuntime) Abort(context.Context, runner.RuntimeBinding) error { return nil }
 func (r *stoppedAnswerRuntime) Terminate(context.Context, runner.RuntimeBinding) (string, error) {
