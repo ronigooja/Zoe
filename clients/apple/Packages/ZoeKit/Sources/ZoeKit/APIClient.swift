@@ -353,6 +353,16 @@ public final class APIClient: @unchecked Sendable {
         if let installationID { request.setValue(installationID, forHTTPHeaderField: "X-Zoe-Installation-ID") }
     }
 
+    func clientWebSocketRequest() throws -> URLRequest {
+        let endpoint = try makeURL(path: ["v1", "ws"])
+        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+        components?.scheme = endpoint.scheme == "https" ? "wss" : "ws"
+        var request = URLRequest(url: components?.url ?? endpoint)
+        request.httpMethod = "GET"
+        try authorize(&request)
+        return request
+    }
+
     private func makeURL(path: [String]) throws -> URL {
         var url = serverURL
         for component in path {
