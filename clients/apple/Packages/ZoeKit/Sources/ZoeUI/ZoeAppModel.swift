@@ -77,6 +77,7 @@ public final class ZoeAppModel: ObservableObject {
     var voiceLocalMediaStopObserverForTesting: (() -> Void)?
     var voiceStatusObserverForTesting: ((VoiceIntegrationStatus) -> Void)?
     var voiceHangupOverrideForTesting: ((String) async throws -> Void)?
+    var voiceHangupTimeoutForTesting: Duration?
     var voiceOfferOverrideForTesting: (() async throws -> String)?
     var voiceAnswerOverrideForTesting: ((String) async throws -> Void)?
     func handleEventForTesting(_ envelope: EventEnvelope, expectedConnectionEpoch: UInt64? = nil) async {
@@ -257,7 +258,7 @@ public final class ZoeAppModel: ObservableObject {
         #endif
         if let syncLoop { Task { await syncLoop.cancel() } }
     }
-    public var canEndVoiceSession: Bool { voiceSession != nil }
+    public var canEndVoiceSession: Bool { voiceSession != nil && voiceShutdownEpochs.isEmpty }
 
     public func start() async {
         guard !eventRecoveryRequired else { return }
@@ -646,7 +647,7 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     private func startVoice(voice: String?, voiceMode: String?, languageCode: String?, trigger: String) async {
-        guard voiceSession == nil, !voiceStartInProgress else { return }
+        guard voiceSession == nil, !voiceStartInProgress, voiceShutdownEpochs.isEmpty else { return }
         let api: APIClient
         do { api = try configure() }
         catch {
@@ -877,10 +878,13 @@ public final class ZoeAppModel: ObservableObject {
               voiceShutdownEpochs.insert(mediaEpoch).inserted else { return }
         defer { voiceShutdownEpochs.remove(mediaEpoch) }
         let duration = voiceStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        let hangupBeforeClose = lossReason == nil && !gatewayIsEnding && !voiceSessionMediaClosed
         if let lossReason {
             voiceStatus = .interrupted(reason: uiFormat("%@ Closing local media and requesting gateway hangup.", lossReason))
+        } else if hangupBeforeClose {
+            voiceStatus = .interrupted(reason: uiText("Ending voice call."))
         }
-        if !voiceSessionMediaClosed {
+        if !hangupBeforeClose && !voiceSessionMediaClosed {
             guard voiceMediaEpoch == mediaEpoch else { return }
             closeVoiceLocalMedia(mediaEpoch: mediaEpoch)
             guard voiceSession?.handle == session.handle,
@@ -894,7 +898,14 @@ public final class ZoeAppModel: ObservableObject {
             refreshPoolAfterVoiceEnd(api: api)
             return
         }
-        let confirmed = await requestVoiceHangup(session, api: api, phase: "hangup", epoch: mediaEpoch, reconnect: lossReason != nil)
+        let confirmed = await requestVoiceHangup(session, api: api, phase: "hangup", epoch: mediaEpoch, reconnect: lossReason != nil, bounded: hangupBeforeClose)
+        if hangupBeforeClose {
+            guard voiceSession?.handle == session.handle, voiceSessionMediaEpoch == mediaEpoch,
+                  voiceMediaEpoch == mediaEpoch else { return }
+            closeVoiceLocalMedia(mediaEpoch: mediaEpoch)
+            guard voiceSession?.handle == session.handle, voiceSessionMediaEpoch == mediaEpoch else { return }
+            voiceSessionMediaClosed = true
+        }
         guard voiceSession?.handle == session.handle, voiceSessionMediaEpoch == mediaEpoch,
               voiceMediaEpoch == (mediaEpoch &+ 1) else { return }
         if confirmed {
@@ -935,11 +946,13 @@ public final class ZoeAppModel: ObservableObject {
         else if let data = try? JSONEncoder().encode(rows) { defaults.set(data, forKey: pendingVoiceHangupKey) }
     }
 
-    private func requestVoiceHangup(_ call: GatewayCall, api: APIClient, phase: String, epoch: UInt64? = nil, reconnect: Bool = false) async -> Bool {
+    private func requestVoiceHangup(_ call: GatewayCall, api: APIClient, phase: String, epoch: UInt64? = nil, reconnect: Bool = false, bounded: Bool = false) async -> Bool {
         let pending = PendingVoiceHangup(serverURL: api.serverURL.absoluteString, originDigest: Self.originDigest(call.origin), handle: call.handle)
         updatePendingHangup(pending, adding: true)
         let generation = connectionGeneration.value
-        let result = await attemptVoiceHangup(pending, origin: call.origin, api: api, phase: phase)
+        let result = bounded
+            ? await boundedVoiceHangup(pending, origin: call.origin, api: api, phase: phase)
+            : await attemptVoiceHangup(pending, origin: call.origin, api: api, phase: phase)
         if result == .retryable {
             scheduleVoiceHangupRetry(pending, origin: call.origin, api: api, phase: phase, generation: generation, epoch: epoch, reconnect: reconnect)
         }
@@ -948,7 +961,40 @@ public final class ZoeAppModel: ObservableObject {
 
     private enum HangupResult { case confirmed, retryable, unconfirmed, inFlight }
 
-    private func attemptVoiceHangup(_ pending: PendingVoiceHangup, origin: URL, api: APIClient, phase: String) async -> HangupResult {
+    private final class HangupDeadline {
+        var continuation: CheckedContinuation<HangupResult, Never>?
+        var timedOut = false
+
+        func finish(_ result: HangupResult) {
+            guard let continuation else { return }
+            self.continuation = nil
+            continuation.resume(returning: result)
+        }
+    }
+
+    private func boundedVoiceHangup(_ pending: PendingVoiceHangup, origin: URL, api: APIClient, phase: String) async -> HangupResult {
+        let deadline = HangupDeadline()
+        #if DEBUG
+        let timeout = voiceHangupTimeoutForTesting ?? .seconds(3)
+        #else
+        let timeout: Duration = .seconds(3)
+        #endif
+        return await withCheckedContinuation { continuation in
+            deadline.continuation = continuation
+            Task {
+                let result = await self.attemptVoiceHangup(pending, origin: origin, api: api, phase: phase, deadline: deadline)
+                deadline.finish(result)
+            }
+            Task {
+                try? await Task.sleep(for: timeout)
+                guard deadline.continuation != nil else { return }
+                deadline.timedOut = true
+                deadline.finish(.retryable)
+            }
+        }
+    }
+
+    private func attemptVoiceHangup(_ pending: PendingVoiceHangup, origin: URL, api: APIClient, phase: String, deadline: HangupDeadline? = nil) async -> HangupResult {
         guard hangupInFlight.insert(pending).inserted else { return .inFlight }
         defer { hangupInFlight.remove(pending) }
         do {
@@ -958,7 +1004,7 @@ public final class ZoeAppModel: ObservableObject {
             #else
             try await api.hangupVoiceCall(origin: origin, gatewaySessionID: pending.handle)
             #endif
-            updatePendingHangup(pending, adding: false)
+            if deadline?.timedOut != true { updatePendingHangup(pending, adding: false) }
             return .confirmed
         } catch {
             let redacted = RedactedDiagnostic(error)
@@ -1064,7 +1110,7 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     private func handleVoiceMediaLoss(_ loss: VoiceMediaLoss, mediaEpoch: UInt64) async {
-        guard mediaEpoch == voiceMediaEpoch else { return }
+        guard mediaEpoch == voiceMediaEpoch, !voiceShutdownEpochs.contains(mediaEpoch) else { return }
         guard let rawReason = loss.message else { return }
         let reason = uiText(rawReason)
         if continuousVoiceEnabled {
@@ -1098,7 +1144,7 @@ public final class ZoeAppModel: ObservableObject {
                 Task { await api.uploadDiagnosticsIfPossible() }
             }
         }
-        guard mediaEpoch == voiceMediaEpoch else { return }
+        guard mediaEpoch == voiceMediaEpoch, !voiceShutdownEpochs.contains(mediaEpoch) else { return }
         if let session = voiceSession, let api = voiceAPI, voiceSessionMediaEpoch == mediaEpoch {
             if continuousVoiceEnabled {
                 voiceStatus = .reconnecting(reason: reason)
