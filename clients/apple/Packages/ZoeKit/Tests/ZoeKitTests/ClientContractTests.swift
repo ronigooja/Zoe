@@ -177,6 +177,7 @@ final class ClientContractTests: XCTestCase {
         }
         defer { model.voiceAnswerOverrideForTesting = nil }
         await model.startVoice()
+        await model.voicePoolRefreshTaskForTesting?.value
         XCTAssertEqual(model.voiceStatus, .idle)
         XCTAssertFalse(model.canEndVoiceSession)
         XCTAssertFalse(model.hasPendingVoiceHangupForTesting)
@@ -353,6 +354,7 @@ final class ClientContractTests: XCTestCase {
         model.installVoiceSessionForTesting(replacement, api: api)
         await gate.resume()
         await dial.value
+        await model.voicePoolRefreshTaskForTesting?.value
         XCTAssertEqual(hangups, 1)
         XCTAssertEqual(model.voiceStatus, .active(sessionID: "new-call", mediaGeneration: 5))
         XCTAssertFalse(model.hasPendingVoiceHangupForTesting)
@@ -401,6 +403,7 @@ final class ClientContractTests: XCTestCase {
             model.configureVoiceCoordinatorForTesting(api: api, journal: journal)
             await model.receiveVoiceDataForTesting(Data(#"{"type":"user_audio_turn.final","turn_id":"obsolete","revision":1,"transcript":"ignored"}"#.utf8))
             await model.endVoiceSession()
+            await model.voicePoolRefreshTaskForTesting?.value
             XCTAssertEqual(model.voiceStatus, .idle)
             XCTAssertTrue(model.voicePoolStatus?.blocked == true, "204 alone says nothing about pool reuse")
         }
@@ -520,6 +523,7 @@ final class ClientContractTests: XCTestCase {
             if request.url?.path == "/v1/ui/snapshot" {
                 return (200, ["Content-Type": "application/json"], Data(#"{"cursor":99,"surfaces":[]}"#.utf8))
             }
+            XCTAssertEqual(request.url?.path, "/v1/events")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Last-Event-ID"), "10")
             return (200, ["Content-Type": "text/event-stream"], Data("event: snapshot_required\ndata: {\"reason\":\"cursor_expired\"}\n\n".utf8))
         }
@@ -1253,6 +1257,10 @@ final class ClientContractTests: XCTestCase {
         }
         let end = Task { await model.endVoiceSession() }
         await gate.waitUntilStarted()
+        addTeardownBlock {
+            await gate.resume()
+            await end.value
+        }
         XCTAssertEqual(events, ["gateway_hangup"])
         XCTAssertFalse(model.canEndVoiceSession)
         guard case .interrupted = model.voiceStatus else { return XCTFail("call must show ending") }
@@ -1287,8 +1295,11 @@ final class ClientContractTests: XCTestCase {
         await end.value
         XCTAssertEqual(events, ["gateway_hangup", "local_close"])
         XCTAssertTrue(model.hasPendingVoiceHangupForTesting)
-        guard case let .interrupted(reason) = model.voiceStatus else { return XCTFail("expected unconfirmed hangup") }
-        XCTAssertTrue(reason.contains("gateway hangup is unconfirmed"))
+        if case let .interrupted(reason) = model.voiceStatus {
+            XCTAssertTrue(reason.contains("gateway hangup is unconfirmed"))
+        } else {
+            XCTFail("expected unconfirmed hangup")
+        }
         await gate.resume()
     }
 

@@ -47,21 +47,32 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [IndependentVoiceURLProtocol.self]
         return try APIClient(
-            serverURL: URL(string: "https://voice-independent.example")!,
+            serverURL: URL(string: "https://\(installationID).voice-independent.example")!,
             credentials: IndependentVoiceCredential(),
             session: URLSession(configuration: configuration),
             installationID: installationID
         )
     }
 
-    private func recordedMediaLossDiagnostics(for installationID: String) async throws -> [DiagnosticEvent] {
-        let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: try voiceAPI(installationID: installationID).serverURL, installationID: installationID))
-        for _ in 0..<100 {
-            let events = await queue.take(limit: 20).filter { $0.phase == "voice_media_loss" }
-            if !events.isEmpty { return events }
-            await Task.yield()
+    private func recordedDiagnostics(api: APIClient, installationID: String) async throws -> [DiagnosticEvent] {
+        let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: api.serverURL, installationID: installationID))
+        return await queue.take(limit: 50)
+    }
+
+    @MainActor
+    private func waitForCompletedMediaLoss(model: ZoeAppModel, api: APIClient, installationID: String) async throws -> [DiagnosticEvent] {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while clock.now < deadline {
+            if case .interrupted = model.voiceStatus, !model.canEndVoiceSession {
+                let events = try await recordedDiagnostics(api: api, installationID: installationID)
+                let losses = events.filter { $0.phase == "voice_media_loss" }
+                if !losses.isEmpty { return losses }
+            }
+            try await clock.sleep(for: .milliseconds(10))
         }
-        return await queue.take(limit: 20).filter { $0.phase == "voice_media_loss" }
+        XCTFail("Timed out waiting for media-loss closure and its diagnostic")
+        return []
     }
 
     @MainActor
@@ -128,6 +139,8 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let api = try voiceAPI(installationID: installationID)
         let epoch = model.installVoiceSessionForTesting(try voiceDialFixture("ending", generation: 1), api: api)
+        var deliveries: [Task<Void, Never>] = []
+        model.voiceEndDiagnosticsTaskObserverForTesting = { deliveries.append($0) }
         var hangups = 0
         model.voiceHangupOverrideForTesting = { _ in
             hangups += 1
@@ -136,9 +149,8 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
             await model.receiveVoiceDataForTesting(Data(#"{"type":"voice.end"}"#.utf8), mediaEpoch: epoch)
         }
         await model.endVoiceSession()
-        for _ in 0..<100 { await Task.yield() }
-        let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: api.serverURL, installationID: installationID))
-        let events = await queue.take(limit: 50)
+        for delivery in deliveries { await delivery.value }
+        let events = try await recordedDiagnostics(api: api, installationID: installationID)
         XCTAssertEqual(hangups, 1)
         XCTAssertTrue(events.filter { $0.phase == "voice_media_loss" }.isEmpty)
         XCTAssertEqual(events.filter { $0.phase == "voice_end" }.count, 1)
@@ -153,11 +165,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let epoch = model.installVoiceSessionForTesting(session, api: api)
         let transport = try wiredTransport(for: model, mediaEpoch: epoch)
         transport.driveDataChannelStateForTesting(.closed)
-        for _ in 0..<20 {
-            if case .interrupted = model.voiceStatus { break }
-            await Task.yield()
-        }
-        let events = try await recordedMediaLossDiagnostics(for: installationID)
+        let events = try await waitForCompletedMediaLoss(model: model, api: api, installationID: installationID)
         XCTAssertEqual(events.count, 1)
         XCTAssertEqual(events.first?.errorType, "data_channel")
         XCTAssertEqual(events.first?.errorSummary, "closed")
@@ -190,9 +198,13 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         _ = model.beginVoiceAttemptForTesting()
         let transport = try wiredTransport(for: model, mediaEpoch: staleEpoch)
         transport.driveDataChannelStateForTesting(.closed)
-        await Task.yield()
+        var events: [DiagnosticEvent] = []
+        for _ in 0..<100 {
+            events = try await recordedDiagnostics(api: api, installationID: installationID).filter { $0.phase == "voice_media_loss" }
+            if !events.isEmpty { break }
+            await Task.yield()
+        }
         XCTAssertEqual(model.voiceStatus, .connecting)
-        let events = try await recordedMediaLossDiagnostics(for: installationID)
         XCTAssertTrue(events.isEmpty)
     }
 
@@ -205,11 +217,7 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
         let epoch = model.installVoiceSessionForTesting(session, api: api)
         let transport = try wiredTransport(for: model, mediaEpoch: epoch)
         transport.driveConnectionStateForTesting(.failed)
-        for _ in 0..<20 {
-            if case .interrupted = model.voiceStatus { break }
-            await Task.yield()
-        }
-        let events = try await recordedMediaLossDiagnostics(for: installationID)
+        let events = try await waitForCompletedMediaLoss(model: model, api: api, installationID: installationID)
         XCTAssertEqual(events.count, 1)
         XCTAssertEqual(events.first?.errorType, "connection")
         XCTAssertEqual(events.first?.errorSummary, "failed")

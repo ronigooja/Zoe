@@ -71,6 +71,8 @@ public final class ZoeAppModel: ObservableObject {
     var keyStoreOverrideForTesting: ((URL) throws -> any InstanceKeyStoring)?
     var suppressConnectionFollowupsForTesting = false
     var voiceDiagnosticObserverForTesting: ((String, String) -> Void)?
+    var voiceEndDiagnosticsTaskObserverForTesting: ((Task<Void, Never>) -> Void)?
+    var voicePoolRefreshTaskForTesting: Task<Void, Never>?
     var voiceCensusSummaryForTesting: String { voiceEventCensus.summary() }
     func reportVoiceCensusForTesting() { reportVoiceCensusIfNeeded() }
     func tickVoiceSilenceForTesting() async { await checkVoiceSilence() }
@@ -860,7 +862,7 @@ public final class ZoeAppModel: ObservableObject {
         let typeReports = censusEndRecorded ? [] : voiceInnerEventCensus.typeReports()
         censusEndRecorded = true
         // Independent best-effort delivery never gates hangup, even if URLSession ignores cancellation.
-        Task {
+        let delivery = Task {
             if let census {
                 await api.recordDiagnosticAndWait(phase: "voice_event_census", requestPath: "client", errorSummary: census, level: .info, voiceSessionID: session.voiceSessionId, voiceGeneration: session.generation, voiceMediaEpoch: mediaEpoch)
             }
@@ -870,6 +872,9 @@ public final class ZoeAppModel: ObservableObject {
             await api.recordDiagnosticAndWait(phase: "voice_end", requestPath: "client", errorType: reason.isError ? "voice_lifecycle" : "", errorSummary: summary, level: reason.isError ? .error : .info, voiceSessionID: session.voiceSessionId, voiceGeneration: session.generation, voiceMediaEpoch: mediaEpoch)
             api.triggerDiagnosticUpload()
         }
+        #if DEBUG
+        voiceEndDiagnosticsTaskObserverForTesting?(delivery)
+        #endif
     }
 
     private func finishVoiceSession(_ session: GatewayCall, api: APIClient, mediaEpoch: UInt64, lossReason: String?, reason: VoiceEndReason, gatewayIsEnding: Bool = false) async {
@@ -1066,12 +1071,15 @@ public final class ZoeAppModel: ObservableObject {
         let generation = connectionGeneration.value
         let epoch = voiceMediaEpoch
         let revision = voiceReadinessRevision
-        Task { [weak self] in
+        let refresh = Task { [weak self] in
             guard let status = try? await api.voicePoolStatus(), let self,
                   generation == self.connectionGeneration.value, self.api === api,
                   epoch == self.voiceMediaEpoch, revision == self.voiceReadinessRevision else { return }
             self.voicePoolStatus = status
         }
+        #if DEBUG
+        voicePoolRefreshTaskForTesting = refresh
+        #endif
     }
 
     #if os(macOS)
