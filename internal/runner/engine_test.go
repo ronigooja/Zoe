@@ -385,7 +385,8 @@ func executedToolMessage() opencode.Message {
 func TestRuntimeBelowToolStepLimitRecoversFromPollError(t *testing.T) {
 	f := completingRuntimeFake()
 	f.messageErrors = 1
-	f.messages = []opencode.Message{executedToolMessage(), f.result}
+	f.messages = []opencode.Message{executedToolMessage(), {Type: "idle", Outcome: "succeeded"}}
+	f.messages[1].Time.Created = 2
 	c := &controlFake{}
 	e := testEngine(t, f, c, openTestJournal(t))
 	claim := testClaim()
