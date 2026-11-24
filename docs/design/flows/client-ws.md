@@ -10,7 +10,7 @@ This transport does not replace SSE `GET /v1/events`, `POST /v1/commands` or the
 
 | Producer / fields | Consumer and transformation |
 |---|---|
-| Client `GET /v1/ws` (instance bearer, WebSocket upgrade) | Zoe validates the bearer as for other client routes, then upgrades. At most one connection per instance: a newer connection replaces the older, which is closed. |
+| Client `GET /v1/ws` (instance bearer, WebSocket upgrade) | Zoe validates the bearer as for other client routes, then upgrades. At most one connection per device, the device of the validated principal: a newer connection from the same device replaces the older, which is closed. An instance can have several devices connected. |
 | Frame: JSON object with required string `channel`, other fields owned by that channel | Receiver routes by `channel` to its handler. A frame with an unknown or unsupported `channel` is dropped and answered with a `transport.error` frame `{code:"unknown_channel", channel}`. |
 | Channel need: a channel asks the client to hold the connection | The client opens the connection while at least one channel needs it and closes it when none does. |
 | Ping/pong | Both sides send them. |
@@ -37,4 +37,4 @@ None yet.
 
 ## Verification obligations
 
-Verify bearer validation at upgrade, single-connection replacement, channel routing and the unknown-channel response, heartbeat close, oversize close, reconnect backoff, stopping on `401`, and that closing is reported to all channels. Verify the transport holds no state across reconnect. Follow the [acceptance boundary](../../development.md#evidence-and-acceptance).
+Verify bearer validation at upgrade, per-device single-connection replacement, channel routing and the unknown-channel response, heartbeat close, oversize close, reconnect backoff, stopping on `401`, and that closing is reported to all channels. Verify the transport holds no state across reconnect. Follow the [acceptance boundary](../../development.md#evidence-and-acceptance).
