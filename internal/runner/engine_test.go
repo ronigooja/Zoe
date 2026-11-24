@@ -494,8 +494,14 @@ func TestToolStepBudgetSurvivesRotationRecovery(t *testing.T) {
 			if runtime.stopAt != 2 {
 				t.Fatalf("paging target=%d, want one beyond the remaining allowance", runtime.stopAt)
 			}
-			if f.aborts != tc.aborts || f.creates != 0 || f.terminates != 1 || control.observations[len(control.observations)-1].Error != tc.reason {
-				t.Fatalf("aborts=%d creates=%d terminates=%d observations=%s", f.aborts, f.creates, f.terminates, kinds(control))
+			var terminalReasons []string
+			for _, obs := range control.observations {
+				if obs.Kind == "runtime_terminated" {
+					terminalReasons = append(terminalReasons, obs.Error)
+				}
+			}
+			if f.aborts != tc.aborts || f.creates != 0 || f.terminates != 1 || !reflect.DeepEqual(terminalReasons, []string{tc.reason}) {
+				t.Fatalf("aborts=%d creates=%d terminates=%d terminal reasons=%v", f.aborts, f.creates, f.terminates, terminalReasons)
 			}
 		})
 	}
