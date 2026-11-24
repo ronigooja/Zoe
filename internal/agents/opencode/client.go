@@ -313,9 +313,9 @@ func (c *Client) messagesPage(ctx context.Context, id, cursor string) (messagePa
 	return out, err
 }
 
-// MessagesWithToolSteps also checks older pages for the budget. Only the first
-// page goes to the existing completion and context-rotation logic.
-func (c *Client) MessagesWithToolSteps(ctx context.Context, id string, cap int64) ([]Message, int64, error) {
+// MessagesWithToolSteps counts until stopAt is reached or the pages are exhausted.
+// Only the first page goes to completion and context-rotation logic.
+func (c *Client) MessagesWithToolSteps(ctx context.Context, id string, stopAt int64) ([]Message, int64, error) {
 	first, err := c.messagesPage(ctx, id, "")
 	if err != nil {
 		return nil, 0, err
@@ -323,7 +323,7 @@ func (c *Client) MessagesWithToolSteps(ctx context.Context, id string, cap int64
 	page := first
 	steps := ToolSteps(page.Data)
 	seen := map[string]bool{}
-	for steps < cap && page.Cursor.Next != "" {
+	for steps < stopAt && page.Cursor.Next != "" {
 		cursor := page.Cursor.Next
 		if seen[cursor] {
 			return first.Data, 0, errors.New("repeated OpenCode message cursor")

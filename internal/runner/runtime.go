@@ -262,12 +262,12 @@ func (r OpenCodeRuntime) ReplyForm(ctx context.Context, b RuntimeBinding, formID
 	}
 	return c.ReplyForm(ctx, b.SessionID, formID, answer)
 }
-func (r OpenCodeRuntime) MessagesWithToolSteps(ctx context.Context, b RuntimeBinding, cap int64) ([]opencode.Message, int64, error) {
+func (r OpenCodeRuntime) MessagesWithToolSteps(ctx context.Context, b RuntimeBinding, stopAt int64) ([]opencode.Message, int64, error) {
 	c, err := r.client()
 	if err != nil {
 		return nil, 0, err
 	}
-	return c.MessagesWithToolSteps(ctx, b.SessionID, cap)
+	return c.MessagesWithToolSteps(ctx, b.SessionID, stopAt)
 }
 func (r OpenCodeRuntime) Abort(ctx context.Context, b RuntimeBinding) error {
 	c, e := r.client()

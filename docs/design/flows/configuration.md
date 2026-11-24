@@ -146,7 +146,7 @@ Each claim snapshots the six `run_*` budget limits below; changes affect new cla
 | `prompt_file_max_bytes` | 16000 | 1–1048576 | Each prompt file, bytes |
 | `profile_max_external_directories` | 8 | 1–32 | External directory rules per profile |
 | `max_concurrent_runs` | 12 | 1–64 | Concurrent runs including uncertain runs |
-| `run_max_tool_steps` | 128 | 1–10000 | Tool calls that reach execution in a run's OpenCode sessions, including calls that subsequently fail; the runner stops the run with `tool_step_limit` at the cap. |
+| `run_max_tool_steps` | 128 | 1–10000 | Tool calls that reach execution in a run's OpenCode sessions, including calls that subsequently fail; the runner stops the run with `tool_step_limit` only when the count exceeds the cap. |
 | `run_max_model_calls` | 32 | 1–10000 | Model calls chargeable to one run |
 | `run_max_input_units` | 500000 | 1–100000000 | Upstream provider-native input usage units chargeable to one run |
 | `run_max_output_units` | 100000 | 1–100000000 | Upstream provider-native output usage units chargeable to one run |

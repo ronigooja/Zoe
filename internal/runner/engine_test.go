@@ -367,7 +367,7 @@ func TestRuntimeProcessNewestFirstMessagesReachesResultAndTermination(t *testing
 	}
 }
 func TestRuntimeAbortOnToolStepLimit(t *testing.T) {
-	f := &runtimeFake{messages: []opencode.Message{executedToolMessage()}}
+	f := &runtimeFake{messages: []opencode.Message{executedToolMessage(), executedToolMessage()}}
 	c := &controlFake{}
 	e := testEngine(t, f, c, openTestJournal(t))
 	if err := e.Process(testContext(t), testClaim()); err != nil {
@@ -376,6 +376,31 @@ func TestRuntimeAbortOnToolStepLimit(t *testing.T) {
 	if f.aborts != 1 || f.terminates != 1 || c.observations[len(c.observations)-1].Error != "tool_step_limit" {
 		t.Fatalf("aborts=%d terminates=%d observations=%s", f.aborts, f.terminates, kinds(c))
 	}
+}
+
+func TestRuntimeCompletesAtToolStepLimit(t *testing.T) {
+	f := &runtimeFake{done: true, messages: completedToolRun(1)}
+	c := &controlFake{}
+	if err := testEngine(t, f, c, openTestJournal(t)).Process(testContext(t), testClaim()); err != nil {
+		t.Fatal(err)
+	}
+	if f.aborts != 0 || f.terminates != 1 || kinds(c) != "dispatch_started,dispatch_bound,result,runtime_terminated" || c.observations[len(c.observations)-1].Error != "completed" {
+		t.Fatalf("aborts=%d terminates=%d observations=%s", f.aborts, f.terminates, kinds(c))
+	}
+}
+
+func completedToolRun(steps int) []opencode.Message {
+	idle := opencode.Message{Type: "idle", Outcome: "succeeded"}
+	idle.Time.Created = 3
+	final := opencode.Message{Type: "assistant", Finish: "stop", Content: []map[string]any{{"type": "text", "text": "done"}}}
+	final.Time.Created = 2
+	msgs := []opencode.Message{idle, final}
+	for range steps {
+		tool := executedToolMessage()
+		tool.Time.Created = 1
+		msgs = append(msgs, tool)
+	}
+	return msgs
 }
 
 func executedToolMessage() opencode.Message {
@@ -404,7 +429,7 @@ func TestRuntimeToolStepBaselineExcludesPriorRun(t *testing.T) {
 	c := &controlFake{}
 	e := testEngine(t, f, c, openTestJournal(t))
 	prior := testClaim()
-	f.messages = []opencode.Message{executedToolMessage()}
+	f.messages = []opencode.Message{executedToolMessage(), executedToolMessage()}
 	if err := e.Process(testContext(t), prior); err != nil {
 		t.Fatal(err)
 	}
@@ -421,27 +446,54 @@ func TestRuntimeToolStepBaselineExcludesPriorRun(t *testing.T) {
 }
 
 func TestToolStepBudgetSurvivesRotationRecovery(t *testing.T) {
-	j := openTestJournal(t)
-	c := testClaim()
-	c.Budget.MaxToolSteps = 2
-	ctx := testContext(t)
-	if _, err := j.SaveClaim(ctx, c, RuntimeSpec{}, "claimed"); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name, reason  string
+		steps, aborts int
+	}{
+		{"exact cap", "completed", 1, 0},
+		{"over cap", "tool_step_limit", 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			j := openTestJournal(t)
+			c := testClaim()
+			c.Budget.MaxToolSteps = 2
+			ctx := testContext(t)
+			if _, err := j.SaveClaim(ctx, c, RuntimeSpec{}, "claimed"); err != nil {
+				t.Fatal(err)
+			}
+			if err := j.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, "session", "snapshot", 1, 1); err != nil {
+				t.Fatal(err)
+			}
+			if err := j.SetRotationSession(ctx, c.RunID, c.AttemptID, c.Fence, "session-2", "prompt_sent"); err != nil {
+				t.Fatal(err)
+			}
+			f := &runtimeFake{rotationMessages: completedToolRun(tc.steps)}
+			runtime := &toolStepPagingFake{runtimeFake: f}
+			control := &controlFake{}
+			engine := testEngine(t, f, control, j)
+			engine.Runtime = runtime
+			if err := engine.Process(ctx, c); err != nil {
+				t.Fatal(err)
+			}
+			if runtime.stopAt != 2 {
+				t.Fatalf("paging target=%d, want one beyond the remaining allowance", runtime.stopAt)
+			}
+			if f.aborts != tc.aborts || f.creates != 0 || f.terminates != 1 || control.observations[len(control.observations)-1].Error != tc.reason {
+				t.Fatalf("aborts=%d creates=%d terminates=%d observations=%s", f.aborts, f.creates, f.terminates, kinds(control))
+			}
+		})
 	}
-	if err := j.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, "session", "snapshot", 1, 1); err != nil {
-		t.Fatal(err)
-	}
-	if err := j.SetRotationSession(ctx, c.RunID, c.AttemptID, c.Fence, "session-2", "prompt_sent"); err != nil {
-		t.Fatal(err)
-	}
-	f := &runtimeFake{rotationMessages: []opencode.Message{executedToolMessage()}}
-	control := &controlFake{}
-	if err := testEngine(t, f, control, j).Process(ctx, c); err != nil {
-		t.Fatal(err)
-	}
-	if f.aborts != 1 || f.creates != 0 || control.observations[len(control.observations)-1].Error != "tool_step_limit" {
-		t.Fatalf("aborts=%d creates=%d observations=%s", f.aborts, f.creates, kinds(control))
-	}
+}
+
+type toolStepPagingFake struct {
+	*runtimeFake
+	stopAt int64
+}
+
+func (f *toolStepPagingFake) MessagesWithToolSteps(ctx context.Context, b RuntimeBinding, stopAt int64) ([]opencode.Message, int64, error) {
+	f.stopAt = stopAt
+	msgs, err := f.Messages(ctx, b)
+	return msgs, opencode.ToolSteps(msgs), err
 }
 
 func assistantUsage(input, output, read, write int64) opencode.Message {

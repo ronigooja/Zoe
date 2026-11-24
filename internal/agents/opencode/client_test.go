@@ -32,6 +32,7 @@ func TestMessagesWithToolStepsFollowsSessionCursor(t *testing.T) {
 	if got := ToolSteps(fixture.Data); got != 2 {
 		t.Fatalf("captured tool calls=%d, want 2", got)
 	}
+	over := decodedMessage(t, `{"id":"msg_over","type":"assistant","content":[{"type":"tool","time":{"ran":1}}]}`)
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -48,6 +49,9 @@ func TestMessagesWithToolStepsFollowsSessionCursor(t *testing.T) {
 		case "opaque+/=":
 			page.Data = fixture.Data[3:]
 			page.Cursor.Next = "older"
+		case "older":
+			page.Data = []Message{over}
+			page.Cursor.Next = "unneeded"
 		default:
 			t.Errorf("unnecessary message page")
 			http.NotFound(w, r)
@@ -60,8 +64,9 @@ func TestMessagesWithToolStepsFollowsSessionCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages, count, err := c.MessagesWithToolSteps(t.Context(), "session-own", 2)
-	if err != nil || len(messages) != 3 || count != 2 || requests != 2 {
+	const cap = 2
+	messages, count, err := c.MessagesWithToolSteps(t.Context(), "session-own", cap+1)
+	if err != nil || len(messages) != 3 || count != cap+1 || requests != 3 {
 		t.Fatalf("first page=%d steps=%d requests=%d err=%v", len(messages), count, requests, err)
 	}
 }

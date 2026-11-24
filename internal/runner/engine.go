@@ -308,13 +308,13 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			// even cross-run continuations pass prior context as text, not tool history.
 			var current int64
 			if runtime, ok := e.Runtime.(toolStepRuntime); ok {
-				msgs, current, messageErr = runtime.MessagesWithToolSteps(ctx, b, cap-steps)
+				msgs, current, messageErr = runtime.MessagesWithToolSteps(ctx, b, cap-steps+1)
 			} else {
 				msgs, messageErr = e.Runtime.Messages(ctx, b)
 				current = opencode.ToolSteps(msgs)
 			}
 			steps += current
-			if messageErr == nil && steps >= cap {
+			if messageErr == nil && steps > cap {
 				_ = e.Runtime.Abort(ctx, b)
 				return e.terminate(ctx, claim, b, "tool_step_limit", false)
 			}
