@@ -54,6 +54,7 @@
   "prompt_file_max_bytes": [16000, 1, 1048576],
   "profile_max_external_directories": [8, 1, 32],
   "max_concurrent_runs": [12, 1, 64],
+  "run_max_tool_steps": [128, 1, 10000],
   "client_mcp_call_timeout_seconds": [120, 1, 3600],
   "client_ws_heartbeat_seconds": [30, 5, 300],
   "client_ws_frame_max_bytes": [8388608, 4096, 33554432],

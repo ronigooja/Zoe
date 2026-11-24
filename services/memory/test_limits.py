@@ -28,6 +28,10 @@ class LimitsTests(unittest.TestCase):
                     data = bytes.fromhex(case['hex'])
                 if 'size' in case:
                     data = b' ' * case['size']
+                if 'omit' in case:
+                    fields = json.loads(source)
+                    del fields[case['omit']]
+                    data = json.dumps(fields).encode()
                 if 'value' in case:
                     fields = json.loads(source)
                     fields[case.get('key', 'opening_context_runes')] = 'replacement'

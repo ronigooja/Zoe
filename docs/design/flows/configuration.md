@@ -144,6 +144,7 @@ the path and byte size, not the contents.
 | `prompt_file_max_bytes` | 16000 | 1–1048576 | Each prompt file, bytes |
 | `profile_max_external_directories` | 8 | 1–32 | External directory rules per profile |
 | `max_concurrent_runs` | 12 | 1–64 | Concurrent runs including uncertain runs |
+| `run_max_tool_steps` | 128 | 1–10000 | Tool calls that reach execution in a run's OpenCode sessions, including calls that subsequently fail; the runner stops the run with `tool_step_limit` at the cap. |
 | `client_mcp_call_timeout_seconds` | 120 | 1–3600 | Client MCP call before `mcp_timeout`, seconds |
 | `client_ws_heartbeat_seconds` | 30 | 5–300 | Client WebSocket silence before close, seconds |
 | `client_ws_frame_max_bytes` | 8388608 | 4096–33554432 | Client WebSocket frame, bytes |
@@ -206,7 +207,7 @@ Cross-limit checks:
 | Text and result chunks | 8,000 UTF-8 bytes | Gateway advertised result capability |
 | Opening context | 32 KiB per item, 128 items | Gateway silent opening receiver |
 | Digests and keys | SHA-256 and 32-byte key widths | Storage schema and credential contracts |
-| Per-run budget | 32 model calls, 500,000 input units, 100,000 output units, 128 steps, 16 MiB artifacts | Runner claim snapshot |
+| Per-run budget | 32 model calls, 500,000 input units, 100,000 output units, 16 MiB artifacts; the tool-step cap is set by `run_max_tool_steps` | Runner claim snapshot |
 
 Transport probe and diagnostic client field widths, A2UI shape and identifiers,
 archive compatibility ceilings, and exact-cardinality queries are protocol
