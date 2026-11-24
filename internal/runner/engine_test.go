@@ -389,6 +389,22 @@ func TestRuntimeCompletesAtToolStepLimit(t *testing.T) {
 	}
 }
 
+func TestMonitorJournalReadFailureDoesNotTerminate(t *testing.T) {
+	j := openTestJournal(t)
+	claim := seedRuntimePhase(t, j, "waiting_question")
+	claim.Budget.HardDeadline = time.Now().Add(-time.Minute)
+	f := &runtimeFake{done: true, messages: completedToolRun(1), onStatus: func() { _ = j.db.Close() }}
+	c := &controlFake{}
+	engine := testEngine(t, f, c, j)
+	engine.Runtime = struct{ Runtime }{f}
+	if err := engine.monitor(testContext(t), claim, RuntimeBinding{SessionID: "session"}); err == nil {
+		t.Fatal("monitor did not return the journal read failure")
+	}
+	if f.aborts != 0 || f.terminates != 0 || len(c.observations) != 0 {
+		t.Fatalf("aborts=%d terminates=%d observations=%s", f.aborts, f.terminates, kinds(c))
+	}
+}
+
 func completedToolRun(steps int) []opencode.Message {
 	idle := opencode.Message{Type: "idle", Outcome: "succeeded"}
 	idle.Time.Created = 3

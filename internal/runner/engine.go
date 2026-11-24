@@ -327,7 +327,10 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			}
 			if reqErr == nil && len(requests) > 0 {
 				r := requests[0]
-				entry, _, _ := e.Journal.Entry(ctx, claim.RunID)
+				entry, _, err := e.Journal.Entry(ctx, claim.RunID)
+				if err != nil {
+					return err
+				}
 				if authc, ok := e.Control.(runtimeAuthorizationControl); ok {
 					if authorization, authErr := authc.RuntimeAuthorization(ctx, claim.RunID, r.ID, claim.Fence); authErr == nil && authorization != nil {
 						decision := opencode.PermissionDecision(authorization.Decision)
@@ -367,7 +370,10 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			}
 			if reqErr == nil && len(forms) > 0 {
 				f := forms[0]
-				entry, _, _ := e.Journal.Entry(ctx, claim.RunID)
+				entry, _, err := e.Journal.Entry(ctx, claim.RunID)
+				if err != nil {
+					return err
+				}
 				if authc, ok := e.Control.(runtimeAuthorizationControl); ok {
 					if authorization, authErr := authc.RuntimeAuthorization(ctx, claim.RunID, f.ID, claim.Fence); authErr == nil && authorization != nil {
 						if authorization.RunID != claim.RunID || authorization.RequestID != f.ID || authorization.Fence != claim.Fence {
@@ -415,7 +421,10 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 				continue
 			}
 		}
-		entry, _, _ = e.Journal.Entry(ctx, claim.RunID)
+		entry, _, err = e.Journal.Entry(ctx, claim.RunID)
+		if err != nil {
+			return err
+		}
 		waiting = entry.Phase == "waiting_permission" || entry.Phase == "waiting_question"
 		if !waiting && !claim.Budget.HardDeadline.IsZero() && e.now().After(claim.Budget.HardDeadline) {
 			_ = e.Runtime.Abort(ctx, b)
