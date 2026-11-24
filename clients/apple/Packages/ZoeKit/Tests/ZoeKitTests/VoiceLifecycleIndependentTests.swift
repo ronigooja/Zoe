@@ -123,6 +123,28 @@ final class VoiceLifecycleIndependentTests: XCTestCase {
     }
 
     @MainActor
+    func testHangupCallbacksDoNotRecordMediaLossOrAnotherEnd() async throws {
+        let installationID = "voice-ending-" + UUID().uuidString
+        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let api = try voiceAPI(installationID: installationID)
+        let epoch = model.installVoiceSessionForTesting(try voiceDialFixture("ending", generation: 1), api: api)
+        var hangups = 0
+        model.voiceHangupOverrideForTesting = { _ in
+            hangups += 1
+            await model.handleVoiceMediaLossForTesting(.dataChannel(.closed), mediaEpoch: epoch)
+            await model.handleVoiceMediaLossForTesting(.connection(.failed), mediaEpoch: epoch)
+            await model.receiveVoiceDataForTesting(Data(#"{"type":"voice.end"}"#.utf8), mediaEpoch: epoch)
+        }
+        await model.endVoiceSession()
+        for _ in 0..<100 { await Task.yield() }
+        let queue = try XCTUnwrap(EncryptedDiagnosticQueue(serverURL: api.serverURL, installationID: installationID))
+        let events = await queue.take(limit: 50)
+        XCTAssertEqual(hangups, 1)
+        XCTAssertTrue(events.filter { $0.phase == "voice_media_loss" }.isEmpty)
+        XCTAssertEqual(events.filter { $0.phase == "voice_end" }.count, 1)
+    }
+
+    @MainActor
     func testClosedDataChannelEntersMediaLossPathOnceAndRecordsDiagnostic() async throws {
         let installationID = "voice-closed-" + UUID().uuidString
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
