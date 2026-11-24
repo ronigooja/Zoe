@@ -121,7 +121,7 @@ func TestStoppedAnswerNewClaimPromptReceipt(t *testing.T) {
 	}
 }
 
-func TestClaimBudgetUsesConfiguredToolStepLimit(t *testing.T) {
+func TestClaimBudgetUsesConfiguredRunLimits(t *testing.T) {
 	store, _, _ := instanceAuthFixture(t)
 	ctx := t.Context()
 	data, err := os.ReadFile("../../deploy/limits.json")
@@ -133,6 +133,11 @@ func TestClaimBudgetUsesConfiguredToolStepLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	values["run_max_tool_steps"] = 7
+	values["run_max_model_calls"] = 11
+	values["run_max_input_units"] = 1234
+	values["run_max_output_units"] = 567
+	values["run_max_artifact_bytes"] = 3 << 20
+	values["run_hard_deadline_seconds"] = 91
 	data, err = json.Marshal(values)
 	if err != nil {
 		t.Fatal(err)
@@ -164,11 +169,17 @@ func TestClaimBudgetUsesConfiguredToolStepLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeClaim := time.Now()
 	claim, err := client.Claim(ctx)
+	afterClaim := time.Now()
 	if err != nil || claim == nil {
 		t.Fatalf("configured claim missing: %v", err)
 	}
-	if claim.Budget.MaxToolSteps != 7 {
-		t.Fatalf("claim max tool steps=%d, want 7", claim.Budget.MaxToolSteps)
+	b := claim.Budget
+	if b.MaxToolSteps != 7 || b.MaxModelCalls != 11 || b.MaxArtifactBytes != 3<<20 || b.MaxInputUnits != 1234 || b.MaxOutputUnits != 567 {
+		t.Fatalf("unexpected limits in budget: %+v", b)
+	}
+	if b.HardDeadline.Before(beforeClaim.Add(91*time.Second)) || b.HardDeadline.After(afterClaim.Add(91*time.Second)) {
+		t.Fatalf("deadline %v outside the expected claim-time window", b.HardDeadline)
 	}
 }

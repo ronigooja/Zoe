@@ -70,19 +70,19 @@ func (l *DeploymentHostLock) Close() error {
 }
 
 type JournalEntry struct {
-	Claim              contracts.JobClaim
-	Spec               RuntimeSpec
-	Session            string
-	Container          string
-	Password           string
-	InstanceID         string
-	Epoch              int64
-	Phase              string
-	Updated            time.Time
-	RotationSummary    string
-	RotationCount      int
-	RotationOldSession string
-	RotationNewSession string
+	Claim                 contracts.JobClaim
+	Spec                  RuntimeSpec
+	Session               string
+	Container             string
+	Password              string
+	InstanceID            string
+	Epoch                 int64
+	Phase                 string
+	Updated               time.Time
+	RotationSummary       string
+	RotationCount         int
+	RotationOldSession    string
+	RotationNewSession    string
 	PriorSessionToolSteps int64
 }
 

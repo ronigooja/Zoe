@@ -31,7 +31,7 @@ func TestSharedLoaderCases(t *testing.T) {
 	}
 	var cases []struct {
 		Name, Key, Raw, Hex, Append, Value, Omit, Error string
-		Size                                          int
+		Size                                            int
 	}
 	if err := json.Unmarshal(fixtures, &cases); err != nil {
 		t.Fatal(err)

@@ -611,7 +611,10 @@ shutil.copy(repo/'deploy/limits.json', root/'limits.json')
 if case in ('prompt-keep', 'prompt-overwrite', 'prompt-identical', 'prompt-dry', 'limits-invalid', 'limits-old-schema', 'runner-unchanged-error'):
     limits = json.loads((root/'limits.json').read_text())
     limits['voice_recall_workers'] = 0 if case == 'limits-invalid' else 5
-    if case == 'limits-old-schema': del limits['run_max_tool_steps']
+    if case == 'limits-old-schema':
+        for key in ('run_max_tool_steps', 'run_max_model_calls', 'run_max_input_units', 'run_max_output_units',
+                    'run_max_artifact_bytes', 'run_hard_deadline_seconds'):
+            del limits[key]
     (p/'host-limits.json').write_text(json.dumps(limits))
 if case == 'limits-absent-release': (root/'limits.json').unlink()
 if case == 'limits-legacy-env':

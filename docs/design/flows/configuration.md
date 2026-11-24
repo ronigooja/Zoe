@@ -87,6 +87,8 @@ the same absolute override in `zoe-stack.env` and `zoe-runner.env` for systemd
 deployments. Mount it read-only in both Compose services. `zoe status` reports
 the path and byte size, not the contents.
 
+Each claim snapshots the six `run_*` budget limits below; changes affect new claims only.
+
 | Key | Default | Range | Bounds |
 |---|---:|---:|---|
 | `opening_context_runes` | 8000 | 1–100000 | Opening context, runes |
@@ -145,6 +147,11 @@ the path and byte size, not the contents.
 | `profile_max_external_directories` | 8 | 1–32 | External directory rules per profile |
 | `max_concurrent_runs` | 12 | 1–64 | Concurrent runs including uncertain runs |
 | `run_max_tool_steps` | 128 | 1–10000 | Tool calls that reach execution in a run's OpenCode sessions, including calls that subsequently fail; the runner stops the run with `tool_step_limit` at the cap. |
+| `run_max_model_calls` | 32 | 1–10000 | Model calls chargeable to one run |
+| `run_max_input_units` | 500000 | 1–100000000 | Upstream provider-native input usage units chargeable to one run |
+| `run_max_output_units` | 100000 | 1–100000000 | Upstream provider-native output usage units chargeable to one run |
+| `run_max_artifact_bytes` | 16777216 | 1048576–1073741824 | Artifact bytes chargeable to one run |
+| `run_hard_deadline_seconds` | 14400 | 60–604800 | Seconds from claim issuance to the run budget deadline; interactive waits use their separate wait limit |
 | `client_mcp_call_timeout_seconds` | 120 | 1–3600 | Client MCP call before `mcp_timeout`, seconds |
 | `client_ws_heartbeat_seconds` | 30 | 5–300 | Client WebSocket silence before close, seconds |
 | `client_ws_frame_max_bytes` | 8388608 | 4096–33554432 | Client WebSocket frame, bytes |
@@ -207,12 +214,12 @@ Cross-limit checks:
 | Text and result chunks | 8,000 UTF-8 bytes | Gateway advertised result capability |
 | Opening context | 32 KiB per item, 128 items | Gateway silent opening receiver |
 | Digests and keys | SHA-256 and 32-byte key widths | Storage schema and credential contracts |
-| Per-run budget | 32 model calls, 500,000 input units, 100,000 output units, 16 MiB artifacts; the tool-step cap is set by `run_max_tool_steps` | Runner claim snapshot |
 
 Transport probe and diagnostic client field widths, A2UI shape and identifiers,
 archive compatibility ceilings, and exact-cardinality queries are protocol
-or structural constraints, not model budgets. Timeouts, intervals, ports and
-ratios remain in their existing configuration.
+or structural constraints, not model budgets. Except for the per-run budget
+deadline above, timeouts, intervals, ports and ratios remain in their existing
+configuration.
 
 ### Voice configuration
 

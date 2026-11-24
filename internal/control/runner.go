@@ -155,7 +155,14 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profile := s.cfg.Profiles[chosen.profile]
-	budget := contracts.RunBudgetSnapshot{HardDeadline: time.Now().UTC().Add(4 * time.Hour), MaxModelCalls: 32, MaxInputUnits: 500_000, MaxOutputUnits: 100_000, MaxToolSteps: s.cfg.Limits.Int64("run_max_tool_steps"), MaxArtifactBytes: 16 << 20}
+	budget := contracts.RunBudgetSnapshot{
+		HardDeadline:     time.Now().UTC().Add(time.Second * time.Duration(s.cfg.Limits.Int64("run_hard_deadline_seconds"))),
+		MaxModelCalls:    s.cfg.Limits.Int64("run_max_model_calls"),
+		MaxInputUnits:    s.cfg.Limits.Int64("run_max_input_units"),
+		MaxOutputUnits:   s.cfg.Limits.Int64("run_max_output_units"),
+		MaxToolSteps:     s.cfg.Limits.Int64("run_max_tool_steps"),
+		MaxArtifactBytes: s.cfg.Limits.Int64("run_max_artifact_bytes"),
+	}
 	budgetJSON, err := json.Marshal(budget)
 	if err != nil {
 		writeError(w, err)
