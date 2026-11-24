@@ -71,6 +71,12 @@ jobs:
           echo "$status" > "$RUNNER_TEMP/zoe-release/logs/runner-build.exit"
           test "$status" -eq 0 || exit "$status"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w' \
+            -o "$RUNNER_TEMP/zoe-release/artifacts/bin/zoe-client-mcp" ./cmd/zoe-client-mcp \
+            2>&1 | tee "$RUNNER_TEMP/zoe-release/logs/client-mcp-build.log"
+          status=$?
+          echo "$status" > "$RUNNER_TEMP/zoe-release/logs/client-mcp-build.exit"
+          test "$status" -eq 0 || exit "$status"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w' \
             -o "$RUNNER_TEMP/zoe-release/artifacts/bin/zoe-secret-entrypoint" ./deploy/linux/secret-entrypoint.go \
             2>&1 | tee "$RUNNER_TEMP/zoe-release/logs/secret-entrypoint-build.log"
           status=$?
@@ -116,7 +122,7 @@ jobs:
           cd "$RUNNER_TEMP/zoe-release/artifacts"
           printf '%s\n' "$GITHUB_SHA" > SOURCE_REVISION
           chmod 0755 bin/*
-          for executable in zoe zoe-server zoe-runner zoe-secret-entrypoint; do
+          for executable in zoe zoe-server zoe-runner zoe-client-mcp zoe-secret-entrypoint; do
             test -f "bin/$executable" && test ! -L "bin/$executable" && test -x "bin/$executable"
           done
           test "$(bin/zoe --source-revision)" = "$GITHUB_SHA"

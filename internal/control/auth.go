@@ -214,6 +214,10 @@ func requiredCoreDeviceScope(r *http.Request) string {
 	switch r.URL.Path {
 	case "/v1/snapshot", "/v1/recovery", "/v1/events", "/v1/notifications":
 		return "client:read"
+	case "/v1/ws":
+		if r.Method == http.MethodGet {
+			return "client:command"
+		}
 	case "/v1/commands":
 		if r.Method == http.MethodGet {
 			return "client:read"

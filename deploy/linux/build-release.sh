@@ -38,7 +38,7 @@ export GOCACHE="$task/go-cache" GOMODCACHE="$task/go-mod" CGO_ENABLED=0 GOOS=lin
 docker buildx create --name "$builder" --driver docker-container >/dev/null
 mkdir -p "$task/server/bin" "$task/server/deploy-linux" "$task/cli/bin" "$task/cli/deploy-linux" "$task/artifacts"
 log="$task/build.log"
-for name in zoe-server zoe zoe-runner zoe-secret-entrypoint; do
+for name in zoe-server zoe zoe-runner zoe-client-mcp zoe-secret-entrypoint; do
   package="./cmd/$name"; flags='-s -w'
   if [[ "$name" == zoe ]]; then flags+=" -X main.sourceRevision=$sha"; fi
   if [[ "$name" == zoe-secret-entrypoint ]]; then package=./deploy/linux/secret-entrypoint.go; fi

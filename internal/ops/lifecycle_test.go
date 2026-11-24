@@ -462,6 +462,7 @@ func newUpdateFixture(t *testing.T) updateFixture {
 		"bin/zoe-secret-entrypoint":         []byte("entrypoint\n"),
 		"bin/zoe-server":                    []byte("server\n"),
 		"bin/zoe-runner":                    []byte("runner\n"),
+		"bin/zoe-client-mcp":                []byte("client MCP\n"),
 		"bin/zoe":                           []byte("#!/bin/sh\nif [ \"$1\" = --source-revision ]; then printf '%s\\n' '" + strings.Repeat("b", 40) + "'; fi\n"),
 		"deploy-linux/docker-compose.yml":   []byte("services: {}\n"),
 		"deploy-linux/zoe-compose.service":  []byte("[Service]\n"),

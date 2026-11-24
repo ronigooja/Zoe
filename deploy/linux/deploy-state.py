@@ -243,7 +243,7 @@ def validate(release, env, units, current_prefix, prompt_dir, limit_file=None):
     prompt_path = Path(prompt_dir)
     if not prompt_path.is_absolute() or '..' in prompt_path.parts:
         fail('prompt directory must be absolute without parent traversal')
-    for name in ('zoe', 'zoe-server', 'zoe-runner', 'zoe-secret-entrypoint'):
+    for name in ('zoe', 'zoe-server', 'zoe-runner', 'zoe-client-mcp', 'zoe-secret-entrypoint'):
         path = root / 'bin' / name
         if not path.is_file() or path.is_symlink() or not os.access(path, os.X_OK):
             fail('missing executable bin/' + name)

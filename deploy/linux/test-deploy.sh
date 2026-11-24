@@ -325,7 +325,7 @@ with tempfile.TemporaryDirectory() as directory:
     (release/'deploy-linux/docker-compose.yml').write_text('services: {}\n')
     (release/'release-manifest.json').write_text(json.dumps({'images': {
         'zoe-server': {'digest': 'sha256:'+'1'*64, 'ref': 'test/server:test'}}}))
-    for name in ['zoe', 'zoe-server', 'zoe-runner', 'zoe-secret-entrypoint']:
+    for name in ['zoe', 'zoe-server', 'zoe-runner', 'zoe-client-mcp', 'zoe-secret-entrypoint']:
         executable = release/'bin'/name
         executable.touch()
         executable.chmod(0o700)
@@ -570,7 +570,7 @@ for service in ['zoe-server', 'zoe-memory-worker']:
 for revision in [old, new]:
     root = p/'releases'/revision if revision == old else p/'source'
     (root/'bin').mkdir(parents=True); (root/'deploy-linux').mkdir()
-    for name in ['zoe-server', 'zoe-runner', 'zoe-secret-entrypoint', 'zoe']:
+    for name in ['zoe-server', 'zoe-runner', 'zoe-client-mcp', 'zoe-secret-entrypoint', 'zoe']:
         text = '#!/bin/sh\nexit 0\n# '+revision+'\n'
         if name == 'zoe-server':
             text = '#!/bin/sh\nif [ "$1" = validate-limits ]; then exec python3 -c \'from services.memory.limits import load_limits; import sys; load_limits(sys.argv[1])\' "$2"; fi\n'

@@ -208,6 +208,7 @@ func NewAPIError(status int, code, message string, details any) *APIError {
 type Server struct {
 	store              *storage.Store
 	diagnostics        diagnosticLimiter
+	clientSockets      clientSockets
 	cfg                Config
 	commands           map[string]CommandHandler
 	commandPreflights  map[string]func(context.Context, contracts.Principal, contracts.CommandRequest) error
@@ -360,6 +361,8 @@ func NewServer(store *storage.Store, cfg Config) (*Server, error) {
 	s.registerCoreRoutes()
 	s.registerDiagnosticsRoute()
 	s.registerClientPolicyRoutes()
+	s.registerClientSocketRoutes()
+	s.registerClientMCPRoutes()
 	return s, nil
 }
 
@@ -637,6 +640,10 @@ func requestLimit(config limits.Set, next http.Handler) http.Handler {
 				// The voice limit is on the decoded SDP; JSON can use six bytes
 				// per escaped character. The handler enforces the decoded limit.
 				limit = config.Int64("http_call_start_max_bytes")
+			}
+			if r.Method == http.MethodPost && r.URL.Path == "/runner/v1/client-mcp/call" {
+				// Admit a full transport-sized call and its runner envelope.
+				limit = config.Int64("client_ws_frame_max_bytes") + 4096
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}

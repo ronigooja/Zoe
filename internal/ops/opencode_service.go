@@ -99,7 +99,11 @@ func renderOpenCodeConfig(o LifecycleOptions) error {
 	if err != nil {
 		return err
 	}
-	mcp := map[string]any{}
+	mcp := map[string]any{"zoe-client": map[string]any{
+		"type":        "local",
+		"command":     []string{filepath.Join(o.OptRoot, "releases", "current", "bin", "zoe-client-mcp")},
+		"environment": map[string]string{"ZOE_CONTROL_URL": v["ZOE_CONTROL_URL"]},
+	}}
 	if enabled {
 		mcp["scrapling"] = entry
 	}

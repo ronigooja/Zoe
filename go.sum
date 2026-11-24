@@ -1,3 +1,5 @@
+github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
+github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/compose-spec/compose-go/v2 v2.4.9 h1:2K4TDw+1ba2idiR6empXHKRXvWYpnvAKoNQy93/sSOs=
 github.com/compose-spec/compose-go/v2 v2.4.9/go.mod h1:6k5l/0TxCg0/2uLEhRVEsoBWBprS2uvZi32J7xub3lo=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

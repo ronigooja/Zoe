@@ -922,7 +922,7 @@ func (m Manager) stageRelease(o LifecycleOptions, manifest ReleaseManifest) erro
 		for _, a := range manifest.Artifacts {
 			src := filepath.Join(o.Release, filepath.FromSlash(a.Path))
 			name := filepath.Base(a.Path)
-			if name == "zoe-server" || name == "zoe-runner" || name == "zoe" || name == "zoe-secret-entrypoint" {
+			if name == "zoe-server" || name == "zoe-runner" || name == "zoe-client-mcp" || name == "zoe" || name == "zoe-secret-entrypoint" {
 				data, e := os.ReadFile(src)
 				if e != nil {
 					return e
@@ -948,9 +948,9 @@ func (m Manager) stageRelease(o LifecycleOptions, manifest ReleaseManifest) erro
 			_ = os.WriteFile(filepath.Join(target, "SOURCE_REVISION"), b, 0644)
 		}
 	}
-	for _, path := range []string{filepath.Join(target, "bin", "zoe-secret-entrypoint"), filepath.Join(target, "deploy-linux", "docker-compose.yml"), filepath.Join(target, "deploy-linux", "zoe-opencode.service")} {
+	for _, path := range []string{filepath.Join(target, "bin", "zoe-secret-entrypoint"), filepath.Join(target, "bin", "zoe-client-mcp"), filepath.Join(target, "deploy-linux", "docker-compose.yml"), filepath.Join(target, "deploy-linux", "zoe-opencode.service")} {
 		if _, e := os.Stat(path); e != nil {
-			return fmt.Errorf("release staging incomplete: required artifact %s is missing; release must contain bin/zoe-secret-entrypoint and deploy-linux/docker-compose.yml", path)
+			return fmt.Errorf("release staging incomplete: required artifact %s is missing", path)
 		}
 	}
 	return nil

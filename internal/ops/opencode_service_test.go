@@ -235,6 +235,9 @@ func TestRenderedScraplingLocalStdioAndOff(t *testing.T) {
 	if !strings.Contains(string(b), "scrapling-mcp") {
 		t.Fatalf("local MCP missing: %s", b)
 	}
+	if !strings.Contains(string(b), `"zoe-client"`) || !strings.Contains(string(b), filepath.Join(opt, "releases", "current", "bin", "zoe-client-mcp")) {
+		t.Fatal("fixed local zoe-client MCP is missing")
+	}
 	if err := os.WriteFile(filepath.Join(root, "zoe-runner.env"), []byte("ZOE_OPENCODE_MODEL=provider/model\nZOE_SCRAPLING_MODE=off\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -244,6 +247,9 @@ func TestRenderedScraplingLocalStdioAndOff(t *testing.T) {
 	b, _ = os.ReadFile(filepath.Join(d, "opencode", "xdg-config", "opencode", "opencode.json"))
 	if strings.Contains(string(b), "scrapling") {
 		t.Fatalf("off still rendered: %s", b)
+	}
+	if !strings.Contains(string(b), `"zoe-client"`) {
+		t.Fatal("disabling Scrapling removed zoe-client")
 	}
 }
 

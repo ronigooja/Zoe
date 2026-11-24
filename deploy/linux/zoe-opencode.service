@@ -9,6 +9,8 @@ Type=simple
 User=root
 Group=root
 EnvironmentFile=/etc/zoe/zoe-opencode.env
+LoadCredential=runner-token:/etc/zoe/runner-secrets/runner-token
+Environment=ZOE_RUNNER_TOKEN_FILE=/run/credentials/zoe-opencode.service/runner-token
 Environment=HOME=/var/lib/zoe/opencode
 Environment=XDG_CONFIG_HOME=/var/lib/zoe/opencode/xdg-config
 Environment=XDG_DATA_HOME=/var/lib/zoe/opencode/xdg-data
