@@ -179,6 +179,10 @@ reports `call.ended` with the close result. Zoe no longer calls gateway
 or `POST /v1/voice/account-leases/{lease_id}/release`. The DELETE is not a Zoe
 operator or reconciliation path. Zoe does not end calls on a context budget.
 
+For client-initiated hangup with live media, the client requests gateway hangup
+before closing local media; on media loss or gateway-initiated ending it closes
+local media first.
+
 The gateway selects the account and is authoritative for media admission,
 account occupancy and quarantine. It must keep an unresolved lease unavailable
 for reuse. `accounts` is the gateway inventory; `voice_creation_outcomes`,

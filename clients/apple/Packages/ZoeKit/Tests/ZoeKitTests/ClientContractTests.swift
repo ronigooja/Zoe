@@ -96,7 +96,7 @@ final class ClientContractTests: XCTestCase {
         return model
     }
 
-    @MainActor func testSilenceTimeoutClosesLocalMediaBeforeGatewayHangup() async throws {
+    @MainActor func testSilenceTimeoutRequestsGatewayHangupBeforeClosingLocalMedia() async throws {
         let clock = VoiceContractSilenceClock()
         let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!, silenceClock: clock)
         let api = try voiceContractAPI()
@@ -118,7 +118,7 @@ final class ClientContractTests: XCTestCase {
         clock.date = Date(timeIntervalSince1970: 60)
         await model.tickVoiceSilenceForTesting()
         await model.tickVoiceSilenceForTesting()
-        XCTAssertEqual(events, ["local_close", "gateway_hangup"])
+        XCTAssertEqual(events, ["gateway_hangup", "local_close"])
         XCTAssertEqual(model.voiceStatus, .idle)
     }
 
@@ -177,6 +177,7 @@ final class ClientContractTests: XCTestCase {
         }
         defer { model.voiceAnswerOverrideForTesting = nil }
         await model.startVoice()
+        await model.voicePoolRefreshTaskForTesting?.value
         XCTAssertEqual(model.voiceStatus, .idle)
         XCTAssertFalse(model.canEndVoiceSession)
         XCTAssertFalse(model.hasPendingVoiceHangupForTesting)
@@ -353,6 +354,7 @@ final class ClientContractTests: XCTestCase {
         model.installVoiceSessionForTesting(replacement, api: api)
         await gate.resume()
         await dial.value
+        await model.voicePoolRefreshTaskForTesting?.value
         XCTAssertEqual(hangups, 1)
         XCTAssertEqual(model.voiceStatus, .active(sessionID: "new-call", mediaGeneration: 5))
         XCTAssertFalse(model.hasPendingVoiceHangupForTesting)
@@ -401,6 +403,7 @@ final class ClientContractTests: XCTestCase {
             model.configureVoiceCoordinatorForTesting(api: api, journal: journal)
             await model.receiveVoiceDataForTesting(Data(#"{"type":"user_audio_turn.final","turn_id":"obsolete","revision":1,"transcript":"ignored"}"#.utf8))
             await model.endVoiceSession()
+            await model.voicePoolRefreshTaskForTesting?.value
             XCTAssertEqual(model.voiceStatus, .idle)
             XCTAssertTrue(model.voicePoolStatus?.blocked == true, "204 alone says nothing about pool reuse")
         }
@@ -520,6 +523,7 @@ final class ClientContractTests: XCTestCase {
             if request.url?.path == "/v1/ui/snapshot" {
                 return (200, ["Content-Type": "application/json"], Data(#"{"cursor":99,"surfaces":[]}"#.utf8))
             }
+            XCTAssertEqual(request.url?.path, "/v1/events")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Last-Event-ID"), "10")
             return (200, ["Content-Type": "text/event-stream"], Data("event: snapshot_required\ndata: {\"reason\":\"cursor_expired\"}\n\n".utf8))
         }
@@ -1209,7 +1213,7 @@ final class ClientContractTests: XCTestCase {
 
         XCTAssertGreaterThan(currentEpoch, oldEpoch)
         XCTAssertTrue(model.canEndVoiceSession)
-        XCTAssertEqual(localStopCount, 1)
+        XCTAssertEqual(localStopCount, 0, "the old acknowledgement must not close the replacement media")
         guard case let .active(sessionID, generation) = model.voiceStatus else { return XCTFail("the newer voice session must remain active") }
         XCTAssertEqual(sessionID, current.voiceSessionId)
         XCTAssertEqual(generation, current.generation)
@@ -1236,6 +1240,85 @@ final class ClientContractTests: XCTestCase {
         await first.value
         XCTAssertEqual(hangupCount, 1)
         XCTAssertFalse(model.canEndVoiceSession)
+    }
+
+    @MainActor
+    func testUserHangupWaitsForGatewayAndIgnoresCallbacks() async throws {
+        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let api = try voiceContractAPI()
+        let call = try voiceDialFixture("user-hangup", generation: 1)
+        let epoch = model.installVoiceSessionForTesting(call, api: api)
+        let gate = AsyncTestGate()
+        var events: [String] = []
+        model.voiceLocalMediaStopObserverForTesting = { events.append("local_close") }
+        model.voiceHangupOverrideForTesting = { _ in
+            events.append("gateway_hangup")
+            await gate.pause()
+        }
+        let end = Task { await model.endVoiceSession() }
+        await gate.waitUntilStarted()
+        addTeardownBlock {
+            await gate.resume()
+            await end.value
+        }
+        XCTAssertEqual(events, ["gateway_hangup"])
+        XCTAssertFalse(model.canEndVoiceSession)
+        guard case .interrupted = model.voiceStatus else { return XCTFail("call must show ending") }
+        await model.handleVoiceMediaLossForTesting(.dataChannel(.closed), mediaEpoch: epoch)
+        await model.handleVoiceMediaLossForTesting(.connection(.failed), mediaEpoch: epoch)
+        await model.receiveVoiceDataForTesting(Data(#"{"type":"voice.end"}"#.utf8), mediaEpoch: epoch)
+        await model.endVoiceSession()
+        await model.startVoice()
+        XCTAssertEqual(events, ["gateway_hangup"])
+        guard case .interrupted = model.voiceStatus else { return XCTFail("callbacks must not change ending status") }
+        await gate.resume()
+        await end.value
+        XCTAssertEqual(events, ["gateway_hangup", "local_close"])
+        XCTAssertEqual(model.voiceStatus, .idle)
+    }
+
+    @MainActor
+    func testHungUserHangupClosesMediaAtDeadline() async throws {
+        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let api = try voiceContractAPI()
+        _ = model.installVoiceSessionForTesting(try voiceDialFixture("hung", generation: 1), api: api)
+        model.voiceHangupTimeoutForTesting = .milliseconds(50)
+        let gate = AsyncTestGate()
+        var events: [String] = []
+        model.voiceLocalMediaStopObserverForTesting = { events.append("local_close") }
+        model.voiceHangupOverrideForTesting = { _ in
+            events.append("gateway_hangup")
+            await gate.pause()
+        }
+        let end = Task { await model.endVoiceSession() }
+        await gate.waitUntilStarted()
+        await end.value
+        XCTAssertEqual(events, ["gateway_hangup", "local_close"])
+        XCTAssertTrue(model.hasPendingVoiceHangupForTesting)
+        if case let .interrupted(reason) = model.voiceStatus {
+            XCTAssertTrue(reason.contains("gateway hangup is unconfirmed"))
+        } else {
+            XCTFail("expected unconfirmed hangup")
+        }
+        await gate.resume()
+    }
+
+    @MainActor
+    func testFailedUserHangupStillClosesMedia() async throws {
+        let model = ZoeAppModel(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let api = try voiceContractAPI()
+        _ = model.installVoiceSessionForTesting(try voiceDialFixture("failed", generation: 1), api: api)
+        var events: [String] = []
+        model.voiceLocalMediaStopObserverForTesting = { events.append("local_close") }
+        model.voiceHangupOverrideForTesting = { _ in
+            events.append("gateway_hangup")
+            throw ZoeError.invalidResponse
+        }
+        await model.endVoiceSession()
+        XCTAssertEqual(events, ["gateway_hangup", "local_close"])
+        XCTAssertTrue(model.hasPendingVoiceHangupForTesting)
+        guard case let .interrupted(reason) = model.voiceStatus else { return XCTFail("expected unconfirmed hangup") }
+        XCTAssertTrue(reason.contains("gateway hangup is unconfirmed"))
     }
 
     private static func commandReceipt(key: String, kind: String, resourceID: String, resourceType: String = "task") -> Data {
