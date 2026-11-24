@@ -77,7 +77,7 @@ func TestRotationCrashBeforeCreateReusesStoredPromptWithoutRefetch(t *testing.T)
 	if err := j.SetSession(context.Background(), c.RunID, c.AttemptID, c.Fence, "session", "prompt_sent"); err != nil {
 		t.Fatal(err)
 	}
-	if err := j.BeginRotation(context.Background(), c.RunID, c.AttemptID, c.Fence, "session", stored, 1); err != nil {
+	if err := j.BeginRotation(context.Background(), c.RunID, c.AttemptID, c.Fence, "session", stored, 1, 0); err != nil {
 		t.Fatal(err)
 	}
 	newControl := &rotationContextControlFake{context: contracts.RotationContext{Instructions: []string{"must not fetch"}}}

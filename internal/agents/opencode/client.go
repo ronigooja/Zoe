@@ -292,11 +292,71 @@ func (c *Client) Active(ctx context.Context) (map[string]Status, error) {
 }
 func (c *Client) Status(ctx context.Context) (map[string]Status, error) { return c.Active(ctx) }
 func (c *Client) Messages(ctx context.Context, id string) ([]Message, error) {
-	var out struct {
-		Data []Message `json:"data"`
+	page, err := c.messagesPage(ctx, id, "")
+	return page.Data, err
+}
+
+type messagePage struct {
+	Data   []Message `json:"data"`
+	Cursor struct {
+		Next string `json:"next"`
+	} `json:"cursor"`
+}
+
+func (c *Client) messagesPage(ctx context.Context, id, cursor string) (messagePage, error) {
+	endpoint := "/api/session/" + url.PathEscape(id) + "/message"
+	if cursor != "" {
+		endpoint += "?cursor=" + url.QueryEscape(cursor)
 	}
-	_, err := c.do(ctx, http.MethodGet, "/api/session/"+url.PathEscape(id)+"/message", nil, &out)
-	return out.Data, err
+	var out messagePage
+	_, err := c.do(ctx, http.MethodGet, endpoint, nil, &out)
+	return out, err
+}
+
+// MessagesWithToolSteps also checks older pages for the budget. Only the first
+// page goes to the existing completion and context-rotation logic.
+func (c *Client) MessagesWithToolSteps(ctx context.Context, id string, cap int64) ([]Message, int64, error) {
+	first, err := c.messagesPage(ctx, id, "")
+	if err != nil {
+		return nil, 0, err
+	}
+	page := first
+	steps := ToolSteps(page.Data)
+	seen := map[string]bool{}
+	for steps < cap && page.Cursor.Next != "" {
+		cursor := page.Cursor.Next
+		if seen[cursor] {
+			return first.Data, 0, errors.New("repeated OpenCode message cursor")
+		}
+		seen[cursor] = true
+		page, err = c.messagesPage(ctx, id, cursor)
+		if err != nil {
+			return first.Data, 0, err
+		}
+		steps += ToolSteps(page.Data)
+	}
+	return first.Data, steps, nil
+}
+
+func ToolSteps(messages []Message) int64 {
+	var steps int64
+	for _, m := range messages {
+		if m.Type != "assistant" {
+			continue
+		}
+		for _, part := range m.Content {
+			if part["type"] != "tool" {
+				continue
+			}
+			// OpenCode sets time.ran on tool.called; executed means the provider ran it,
+			// not whether it ran. Count calls that later fail, but not uncalled inputs.
+			times, _ := part["time"].(map[string]any)
+			if ran, ok := times["ran"].(float64); ok && ran > 0 {
+				steps++
+			}
+		}
+	}
+	return steps
 }
 func (c *Client) PendingPermissions(ctx context.Context, id string) ([]PermissionRequest, error) {
 	var out struct {
@@ -474,6 +534,7 @@ func (c *Client) request(ctx context.Context, method, endpoint string, body []by
 		return nil, err
 	}
 	u.Path = path.Join(c.base.Path, p.Path)
+	u.RawQuery = p.RawQuery
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err

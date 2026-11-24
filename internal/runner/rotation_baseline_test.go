@@ -45,7 +45,7 @@ func baselineIdle(created int64) opencode.Message {
 
 func baselineEngine(t *testing.T, replacement [][]opencode.Message) (*Engine, *baselineRuntime, *controlFake, contracts.JobClaim) {
 	t.Helper()
-	f := &baselineRuntime{runtimeFake: runtimeFake{events: make(chan opencode.Event), done: true}, replaced: replacement}
+	f := &baselineRuntime{runtimeFake: runtimeFake{done: true}, replaced: replacement}
 	f.initial = []opencode.Message{baselineAssistant("original", 1, 11), baselineIdle(2)}
 	c := &controlFake{}
 	e := testEngine(t, &f.runtimeFake, c, openTestJournal(t))

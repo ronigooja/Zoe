@@ -1187,7 +1187,7 @@ func (s *Server) handleObservation(w http.ResponseWriter, r *http.Request) {
 		if desired == "stop" {
 			nextRunStatus = "stopped"
 			nextTaskStatus = "canceled"
-		} else if failureCount > 0 {
+		} else if failureCount > 0 || observation.Error == "tool_step_limit" {
 			nextRunStatus, nextTaskStatus = "failed", "failed"
 		} else if pendingCount > 0 {
 			// A final-looking output cannot answer a pending runtime question

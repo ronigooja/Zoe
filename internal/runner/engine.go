@@ -277,40 +277,19 @@ func (e *Engine) acknowledgeHistoricalAnswers(ctx context.Context, claim contrac
 }
 
 func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b RuntimeBinding) error {
-	steps := int64(0)
-	events, errs := e.Runtime.Events(ctx, b)
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case err, ok := <-errs:
-			if !ok {
-				errs = nil
-				continue
-			}
-			if err != nil {
-				return e.markUnknown(ctx, claim)
-			}
-		case ev, ok := <-events:
-			if !ok {
-				events = nil
-				continue
-			}
-			if ev.Type == "message.part.updated" || ev.Type == "message.updated" {
-				steps++
-			}
-			if claim.Budget.MaxToolSteps > 0 && steps > claim.Budget.MaxToolSteps {
-				_ = e.Runtime.Abort(ctx, b)
-				return e.terminate(ctx, claim, b, "tool_step_limit", false)
-			}
-		default:
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		control, err := e.Control.Control(ctx, claim.RunID)
 		if err == nil && control.DesiredControl == "stop" {
 			_ = e.Runtime.Abort(ctx, b)
 			return e.terminate(ctx, claim, b, "stop_confirmed", true)
 		}
-		entry, _, _ := e.Journal.Entry(ctx, claim.RunID)
+		entry, _, err := e.Journal.Entry(ctx, claim.RunID)
+		if err != nil {
+			return err
+		}
 		waiting := entry.Phase == "waiting_permission" || entry.Phase == "waiting_question"
 		if waiting && e.WaitLimit > 0 && !entry.Updated.IsZero() && e.now().After(entry.Updated.Add(e.WaitLimit)) {
 			_ = e.Runtime.Abort(ctx, b)
@@ -320,6 +299,25 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 		if err != nil {
 			time.Sleep(e.interval())
 			continue
+		}
+		var msgs []opencode.Message
+		var messageErr error
+		steps := entry.PriorSessionToolSteps
+		if cap := claim.Budget.MaxToolSteps; cap > 0 {
+			// Dispatch and context rotation create fresh sessions before prompting;
+			// even cross-run continuations pass prior context as text, not tool history.
+			var current int64
+			if runtime, ok := e.Runtime.(toolStepRuntime); ok {
+				msgs, current, messageErr = runtime.MessagesWithToolSteps(ctx, b, cap-steps)
+			} else {
+				msgs, messageErr = e.Runtime.Messages(ctx, b)
+				current = opencode.ToolSteps(msgs)
+			}
+			steps += current
+			if messageErr == nil && steps >= cap {
+				_ = e.Runtime.Abort(ctx, b)
+				return e.terminate(ctx, claim, b, "tool_step_limit", false)
+			}
 		}
 		pendingKnown := true
 		if pending, ok := e.Runtime.(PendingRequests); ok {
@@ -423,8 +421,10 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			_ = e.Runtime.Abort(ctx, b)
 			return e.terminate(ctx, claim, b, "run_deadline_exceeded", false)
 		}
-		msgs, err := e.Runtime.Messages(ctx, b)
-		if err != nil {
+		if claim.Budget.MaxToolSteps <= 0 {
+			msgs, messageErr = e.Runtime.Messages(ctx, b)
+		}
+		if messageErr != nil {
 			time.Sleep(e.interval())
 			continue
 		}
@@ -433,7 +433,7 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 				_ = e.Runtime.Abort(ctx, b)
 				return e.terminate(ctx, claim, b, "context_threshold_below_baseline", false)
 			}
-			return e.rotate(ctx, claim, b, msgs)
+			return e.rotate(ctx, claim, b, msgs, steps)
 		}
 		if !waiting && pendingKnown && control.DesiredControl == "run" && len(control.Entries) > 0 {
 			if e.deliverEntries(ctx, claim, b, control.Entries) {
@@ -747,7 +747,7 @@ func messageParts(m opencode.Message) []map[string]any {
 	return m.Content
 }
 
-func (e *Engine) rotate(ctx context.Context, c contracts.JobClaim, old RuntimeBinding, msgs []opencode.Message) error {
+func (e *Engine) rotate(ctx context.Context, c contracts.JobClaim, old RuntimeBinding, msgs []opencode.Message, steps int64) error {
 	entry, _, err := e.Journal.Entry(ctx, c.RunID)
 	if err != nil {
 		return err
@@ -758,14 +758,14 @@ func (e *Engine) rotate(ctx context.Context, c contracts.JobClaim, old RuntimeBi
 		_ = e.Runtime.Abort(ctx, old)
 		return e.terminate(ctx, c, old, "context_rotation_limit_exceeded", false)
 	}
-	if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, old.SessionID, "", count); err != nil {
+	if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, old.SessionID, "", count, steps); err != nil {
 		return err
 	}
 	rotation := e.buildRotationPrompt(ctx, c, msgs)
 	if rotation == "" {
 		return fmt.Errorf("%w: rotation snapshot unavailable", ErrOutcomePending)
 	}
-	if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, old.SessionID, rotation, count); err != nil {
+	if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, old.SessionID, rotation, count, steps); err != nil {
 		return err
 	}
 	if err := e.Journal.SetPhase(ctx, c.RunID, c.AttemptID, c.Fence, "rotation_create_attempted"); err != nil {
@@ -886,7 +886,7 @@ func (e *Engine) recoverRotation(ctx context.Context, c contracts.JobClaim, entr
 			if entry.RotationSummary == "" {
 				return fmt.Errorf("%w: rotation snapshot unavailable", ErrOutcomePending)
 			}
-			if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, entry.RotationOldSession, entry.RotationSummary, entry.RotationCount); err != nil {
+			if err := e.Journal.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, entry.RotationOldSession, entry.RotationSummary, entry.RotationCount, entry.PriorSessionToolSteps); err != nil {
 				return err
 			}
 		}

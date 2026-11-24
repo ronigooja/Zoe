@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,65 @@ func decodedMessage(t *testing.T, raw string) Message {
 		t.Fatal(err)
 	}
 	return message
+}
+
+func TestMessagesWithToolStepsFollowsSessionCursor(t *testing.T) {
+	data, err := os.ReadFile("testdata/tool_step_messages.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture messagePage
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if got := ToolSteps(fixture.Data); got != 2 {
+		t.Fatalf("captured tool calls=%d, want 2", got)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/api/session/session-own/message" {
+			t.Errorf("unexpected session path %q", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		page := fixture
+		switch r.URL.Query().Get("cursor") {
+		case "":
+			page.Data = fixture.Data[:3]
+			page.Cursor.Next = "opaque+/="
+		case "opaque+/=":
+			page.Data = fixture.Data[3:]
+			page.Cursor.Next = "older"
+		default:
+			t.Errorf("unnecessary message page")
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(page)
+	}))
+	defer server.Close()
+	c, err := New(Config{BaseURL: server.URL, Password: "test", Client: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, count, err := c.MessagesWithToolSteps(t.Context(), "session-own", 2)
+	if err != nil || len(messages) != 3 || count != 2 || requests != 2 {
+		t.Fatalf("first page=%d steps=%d requests=%d err=%v", len(messages), count, requests, err)
+	}
+}
+
+func TestToolStepsCountsCalledFailuresNotUncalledInputs(t *testing.T) {
+	m := decodedMessage(t, `{"type":"assistant","content":[
+		{"type":"tool","executed":false,"state":{"status":"running"},"time":{"ran":1}},
+		{"type":"tool","executed":false,"state":{"status":"error"},"time":{"ran":2}},
+		{"type":"tool","executed":true,"state":{"status":"completed"},"time":{"ran":3}},
+		{"type":"tool","executed":false,"state":{"status":"error"},"time":{"completed":4}},
+		{"type":"tool","state":{"status":"streaming"},"time":{"created":5}}
+	]}`)
+	if got := ToolSteps([]Message{m}); got != 3 {
+		t.Fatalf("tool calls=%d, want 3", got)
+	}
 }
 
 func TestCompletionNewestFirstIdleSucceeded(t *testing.T) {

@@ -1,0 +1,10 @@
+{
+  "cursor": {"next": "", "previous": ""},
+  "data": [
+    {"id": "msg_idle", "outcome": "succeeded", "time": {"created": 20}, "type": "idle"},
+    {"agent": "", "content": [{"text": "", "type": "text"}], "cost": 0, "finish": "stop", "id": "msg_final", "model": {}, "rawFinish": "", "time": {"completed": 18, "created": 15, "firstToken": 16, "streamed": 17}, "tokens": {}, "type": "assistant"},
+    {"agent": "", "content": [{"executed": false, "id": "tool_two", "name": "", "state": {"content": [], "input": {}, "metadata": {}, "status": "completed"}, "time": {"completed": 14, "created": 12, "ran": 13}, "type": "tool"}], "cost": 0, "finish": "tool-calls", "id": "msg_two", "model": {}, "rawFinish": "", "time": {"completed": 14, "created": 10, "firstToken": 11, "streamed": 13}, "tokens": {}, "type": "assistant"},
+    {"agent": "", "content": [{"executed": false, "id": "tool_one", "name": "", "state": {"content": [], "input": {}, "metadata": {}, "status": "completed"}, "time": {"completed": 9, "created": 6, "ran": 8}, "type": "tool"}], "cost": 0, "finish": "tool-calls", "id": "msg_one", "model": {}, "rawFinish": "", "time": {"completed": 9, "created": 4, "firstToken": 5, "streamed": 7}, "tokens": {}, "type": "assistant"},
+    {"id": "msg_user", "text": "", "time": {"created": 3}, "type": "user"}
+  ]
+}

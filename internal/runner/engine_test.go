@@ -29,7 +29,7 @@ var realModelsJSON []byte
 
 type runtimeFake struct {
 	aborts, creates, terminates int
-	prompts, eventCalls         int
+	prompts                     int
 	calls                       []string
 	promptText                  string
 	promptBinding               RuntimeBinding
@@ -38,7 +38,8 @@ type runtimeFake struct {
 	liveAtBoundary              []string
 	createErr                   error
 	promptErr                   error
-	events                      chan opencode.Event
+	messageErrors               int
+	messageBindings             []string
 	done                        bool
 	result                      opencode.Message
 	messages                    []opencode.Message
@@ -121,6 +122,12 @@ func (f *runtimeFake) Status(context.Context, RuntimeBinding) (map[string]openco
 	return map[string]opencode.Status{"session": {Type: "busy"}}, nil
 }
 func (f *runtimeFake) Messages(_ context.Context, b RuntimeBinding) ([]opencode.Message, error) {
+	f.calls = append(f.calls, "Messages")
+	f.messageBindings = append(f.messageBindings, b.SessionID)
+	if f.messageErrors > 0 {
+		f.messageErrors--
+		return nil, errors.New("message polling unavailable")
+	}
 	if b.SessionID != "session" && f.rotationMessages != nil {
 		return f.rotationMessages, nil
 	}
@@ -134,11 +141,6 @@ func (f *runtimeFake) Messages(_ context.Context, b RuntimeBinding) ([]opencode.
 		return f.messages, nil
 	}
 	return nil, nil
-}
-func (f *runtimeFake) Events(context.Context, RuntimeBinding) (<-chan opencode.Event, <-chan error) {
-	f.eventCalls++
-	f.calls = append(f.calls, "Events")
-	return f.events, make(chan error)
 }
 func (f *runtimeFake) Abort(context.Context, RuntimeBinding) error { f.aborts++; return nil }
 func (f *runtimeFake) Terminate(_ context.Context, b RuntimeBinding) (string, error) {
@@ -237,7 +239,7 @@ func TestEmitMessageTruncatesAssistantOutputToCapAndKeepsJSONValid(t *testing.T)
 }
 
 func TestRuntimeProcessUsesHostSessionInterruptionProof(t *testing.T) {
-	f := &runtimeFake{events: make(chan opencode.Event, 1), done: true}
+	f := &runtimeFake{done: true}
 	m := opencode.Message{}
 	m.Info.Role = "assistant"
 	m.Info.Time.Completed = 1
@@ -365,17 +367,79 @@ func TestRuntimeProcessNewestFirstMessagesReachesResultAndTermination(t *testing
 	}
 }
 func TestRuntimeAbortOnToolStepLimit(t *testing.T) {
-	f := &runtimeFake{events: make(chan opencode.Event, 2)}
-	f.events <- opencode.Event{Type: "message.part.updated"}
-	f.events <- opencode.Event{Type: "message.part.updated"}
+	f := &runtimeFake{messages: []opencode.Message{executedToolMessage()}}
 	c := &controlFake{}
-	j := openTestJournal(t)
-	e := &Engine{Control: c, Runtime: f, Journal: j, Routes: map[string]Route{"profile": {ProfileID: "profile", Harness: "opencode", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Model: "model"}}, PollInterval: time.Millisecond}
+	e := testEngine(t, f, c, openTestJournal(t))
 	if err := e.Process(testContext(t), testClaim()); err != nil {
 		t.Fatal(err)
 	}
-	if f.aborts == 0 {
-		t.Fatal("tool-step limit did not abort")
+	if f.aborts != 1 || f.terminates != 1 || c.observations[len(c.observations)-1].Error != "tool_step_limit" {
+		t.Fatalf("aborts=%d terminates=%d observations=%s", f.aborts, f.terminates, kinds(c))
+	}
+}
+
+func executedToolMessage() opencode.Message {
+	return opencode.Message{Type: "assistant", Content: []map[string]any{{"type": "tool", "time": map[string]any{"ran": float64(1)}}}}
+}
+
+func TestRuntimeBelowToolStepLimitRecoversFromPollError(t *testing.T) {
+	f := completingRuntimeFake()
+	f.messageErrors = 1
+	f.messages = []opencode.Message{executedToolMessage(), f.result}
+	c := &controlFake{}
+	e := testEngine(t, f, c, openTestJournal(t))
+	claim := testClaim()
+	claim.Budget.MaxToolSteps = 2
+	if err := e.Process(testContext(t), claim); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.messageBindings) != 2 || f.aborts != 0 || kinds(c) != "dispatch_started,dispatch_bound,result,runtime_terminated" {
+		t.Fatalf("polls=%d aborts=%d observations=%s", len(f.messageBindings), f.aborts, kinds(c))
+	}
+}
+
+func TestRuntimeToolStepBaselineExcludesPriorRun(t *testing.T) {
+	f := completingRuntimeFake()
+	c := &controlFake{}
+	e := testEngine(t, f, c, openTestJournal(t))
+	prior := testClaim()
+	f.messages = []opencode.Message{executedToolMessage()}
+	if err := e.Process(testContext(t), prior); err != nil {
+		t.Fatal(err)
+	}
+	next := prior
+	next.RunID = "continued-run"
+	next.RuntimeSessionID = "session"
+	f.rotationMessages = []opencode.Message{f.result}
+	if err := e.Process(testContext(t), next); err != nil {
+		t.Fatal(err)
+	}
+	if f.aborts != 1 || !reflect.DeepEqual(f.messageBindings, []string{"session", "session-2"}) || c.observations[len(c.observations)-1].Error != "completed" {
+		t.Fatalf("bindings=%v aborts=%d observations=%s", f.messageBindings, f.aborts, kinds(c))
+	}
+}
+
+func TestToolStepBudgetSurvivesRotationRecovery(t *testing.T) {
+	j := openTestJournal(t)
+	c := testClaim()
+	c.Budget.MaxToolSteps = 2
+	ctx := testContext(t)
+	if _, err := j.SaveClaim(ctx, c, RuntimeSpec{}, "claimed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.BeginRotation(ctx, c.RunID, c.AttemptID, c.Fence, "session", "snapshot", 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.SetRotationSession(ctx, c.RunID, c.AttemptID, c.Fence, "session-2", "prompt_sent"); err != nil {
+		t.Fatal(err)
+	}
+	f := &runtimeFake{rotationMessages: []opencode.Message{executedToolMessage()}}
+	control := &controlFake{}
+	if err := testEngine(t, f, control, j).Process(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	if f.aborts != 1 || f.creates != 0 || control.observations[len(control.observations)-1].Error != "tool_step_limit" {
+		t.Fatalf("aborts=%d creates=%d observations=%s", f.aborts, f.creates, kinds(control))
 	}
 }
 
@@ -544,7 +608,7 @@ func seedRotation(t *testing.T, j *Journal, phase, summary, old, replacement str
 	if err := j.SetSession(context.Background(), c.RunID, c.AttemptID, c.Fence, old, "prompt_sent"); err != nil {
 		t.Fatal(err)
 	}
-	if err := j.BeginRotation(context.Background(), c.RunID, c.AttemptID, c.Fence, old, summary, 1); err != nil {
+	if err := j.BeginRotation(context.Background(), c.RunID, c.AttemptID, c.Fence, old, summary, 1, 0); err != nil {
 		t.Fatal(err)
 	}
 	if phase != "rotating" {
@@ -638,7 +702,7 @@ func TestRotationLimitTerminatesWithProofWithoutCreating(t *testing.T) {
 	if err := j.SetSession(context.Background(), c.RunID, c.AttemptID, c.Fence, "session", "prompt_sent"); err != nil {
 		t.Fatal(err)
 	}
-	if err := j.BeginRotation(context.Background(), c.RunID, c.AttemptID, c.Fence, "session", "already rotated", 1); err != nil {
+	if err := j.BeginRotation(context.Background(), c.RunID, c.AttemptID, c.Fence, "session", "already rotated", 1, 0); err != nil {
 		t.Fatal(err)
 	}
 	e := testEngine(t, f, cntl, j)
@@ -728,7 +792,7 @@ func testEngine(t *testing.T, f *runtimeFake, c *controlFake, j *Journal) *Engin
 }
 
 func completingRuntimeFake() *runtimeFake {
-	f := &runtimeFake{events: make(chan opencode.Event), done: true}
+	f := &runtimeFake{done: true}
 	f.result.Info.Role = "assistant"
 	f.result.Info.Time.Completed = 1
 	f.result.Info.Finish = "stop"
@@ -772,22 +836,22 @@ func TestRuntimeProcessPromptsBeforeMonitoring(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPrompt := buildPrompt(claim)
-	if strings.Join(f.calls, ",") != "Create,Prompt,Events" || f.prompts != 1 || f.promptText != wantPrompt || f.promptBinding.SessionID != "session" {
+	if strings.Join(f.calls, ",") != "Create,Prompt,Messages" || f.prompts != 1 || f.promptText != wantPrompt || f.promptBinding.SessionID != "session" {
 		t.Fatalf("runtime calls=%v prompts=%d text=%q binding=%+v", f.calls, f.prompts, f.promptText, f.promptBinding)
 	}
 }
 
 // Catches replay of a failed prompt: the session exists but the prompt outcome is fenced unknown.
 func TestRuntimePromptErrorIsUnknownAndNotMonitored(t *testing.T) {
-	f := &runtimeFake{events: make(chan opencode.Event), promptErr: errors.New("request failed")}
+	f := &runtimeFake{promptErr: errors.New("request failed")}
 	c := &controlFake{}
 	j := openTestJournal(t)
 	e := testEngine(t, f, c, j)
 	if err := e.Process(testContext(t), testClaim()); !errors.Is(err, ErrOutcomePending) {
 		t.Fatalf("error=%v, want ErrOutcomePending", err)
 	}
-	if f.prompts != 1 || f.eventCalls != 0 || kinds(c) != "dispatch_started,dispatch_bound,effect_unknown" {
-		t.Fatalf("prompts=%d events=%d observations=%s", f.prompts, f.eventCalls, kinds(c))
+	if f.prompts != 1 || len(f.messageBindings) != 0 || kinds(c) != "dispatch_started,dispatch_bound,effect_unknown" {
+		t.Fatalf("prompts=%d message polls=%d observations=%s", f.prompts, len(f.messageBindings), kinds(c))
 	}
 }
 
@@ -800,22 +864,22 @@ func TestRuntimeRecoveryFromBoundSendsPrompt(t *testing.T) {
 	if err := e.Process(testContext(t), seedRuntimePhase(t, j, "bound")); err != nil {
 		t.Fatal(err)
 	}
-	if f.prompts != 1 || f.eventCalls != 1 || strings.Join(f.calls, ",") != "Prompt,Events" {
-		t.Fatalf("runtime calls=%v prompts=%d events=%d", f.calls, f.prompts, f.eventCalls)
+	if f.prompts != 1 || strings.Join(f.calls, ",") != "Prompt,Messages" {
+		t.Fatalf("runtime calls=%v prompts=%d", f.calls, f.prompts)
 	}
 }
 
 // Catches unsafe replay after a crash with an in-flight prompt request.
 func TestRuntimeRecoveryFromPromptAttemptedDoesNotResend(t *testing.T) {
-	f := &runtimeFake{events: make(chan opencode.Event)}
+	f := &runtimeFake{}
 	c := &controlFake{}
 	j := openTestJournal(t)
 	e := testEngine(t, f, c, j)
 	if err := e.Process(testContext(t), seedRuntimePhase(t, j, "prompt_attempted")); !errors.Is(err, ErrOutcomePending) {
 		t.Fatalf("error=%v, want ErrOutcomePending", err)
 	}
-	if f.prompts != 0 || f.eventCalls != 0 {
-		t.Fatalf("prompt was replayed or monitoring started: prompts=%d events=%d", f.prompts, f.eventCalls)
+	if f.prompts != 0 || len(f.messageBindings) != 0 {
+		t.Fatalf("prompt was replayed or monitoring started: prompts=%d message polls=%d", f.prompts, len(f.messageBindings))
 	}
 }
 
@@ -828,8 +892,8 @@ func TestRuntimeRecoveryFromPromptSentOnlyMonitors(t *testing.T) {
 	if err := e.Process(testContext(t), seedRuntimePhase(t, j, "prompt_sent")); err != nil {
 		t.Fatal(err)
 	}
-	if f.prompts != 0 || f.eventCalls != 1 || strings.Join(f.calls, ",") != "Events" {
-		t.Fatalf("runtime calls=%v prompts=%d events=%d", f.calls, f.prompts, f.eventCalls)
+	if f.prompts != 0 || strings.Join(f.calls, ",") != "Messages" {
+		t.Fatalf("runtime calls=%v prompts=%d", f.calls, f.prompts)
 	}
 }
 
@@ -875,7 +939,7 @@ func TestAllowlistedCreateRejectionIsReportedAndNotReplayed(t *testing.T) {
 }
 
 func TestServerStopAbortsAndConfirmsAfterContainerRemoval(t *testing.T) {
-	f := &runtimeFake{events: make(chan opencode.Event)}
+	f := &runtimeFake{}
 	c := &stoppingControl{}
 	j := openTestJournal(t)
 	e := &Engine{Control: c, Runtime: f, Journal: j, Routes: map[string]Route{"profile": {ProfileID: "profile", Harness: "opencode", IsolationPolicy: OpenCodeWorkspaceWritePolicy, Model: "model"}}, PollInterval: time.Millisecond}
