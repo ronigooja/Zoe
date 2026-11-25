@@ -55,7 +55,7 @@ func TestGatewayCreateResolutionGenerationStateFences(t *testing.T) {
 			} else {
 				state = "quarantined"
 			}
-			if err := svc.resolveGatewayCreateOutcome(context.Background(), "A", generation, state, "A-request", gatewayCreationOutcome{Outcome: "released", EvidenceID: testCreationEvidenceID}); err != nil {
+			if err := svc.resolveGatewayCreateOutcome(context.Background(), "A", generation, state, "A-request", gatewayCreationOutcome{Outcome: "released", EvidenceID: testCreationEvidenceID}, ""); err != nil {
 				t.Fatal(err)
 			}
 			var actual string

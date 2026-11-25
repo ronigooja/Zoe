@@ -11,10 +11,10 @@ Implementation entry points:
 - [Deployment implementation](../deploy/linux/)
 
 Deploy the gateway with request fencing before enabling the Zoe build that
-uses it. After five minutes an unresolved unbound call can clear its matching
-Zoe pool hold only on definitive gateway attestation. A missing fence endpoint
-or an indeterminate response leaves the hold in place; fencing does not free an
-unresolved gateway account reservation.
+uses it. After five minutes from creation or from an unknown-outcome quarantine,
+an unbound call can clear its matching Zoe pool hold only on definitive gateway
+attestation. A missing fence endpoint, an unresolved gateway account reservation,
+or an indeterminate response leaves the hold in place.
 
 Implementation locations do not establish conformance. Record any verification under the
 [acceptance boundary](development.md#evidence-and-acceptance).

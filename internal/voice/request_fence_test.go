@@ -109,7 +109,7 @@ func TestUnknownCreateTimeoutReleasesOnlyMatchingSource(t *testing.T) {
 }
 
 func TestCreateTimeoutDoesNotTreatOpenOrLookupFailureAsUnknown(t *testing.T) {
-	for _, name := range []string{"lookup_open", "lookup_transport", "lookup_malformed", "missing_then_404", "fence_transport", "fence_malformed", "duplicate_result", "wrong_request", "busy", "open", "unknown", "released_without_evidence"} {
+	for _, name := range []string{"lookup_open", "lookup_transport", "lookup_malformed", "lookup_duplicate_outcome", "lookup_duplicate_request", "lookup_trailing", "lookup_wrong_type", "lookup_null", "lookup_unknown_field", "missing_then_404", "fence_transport", "fence_malformed", "duplicate_result", "wrong_request", "busy", "open", "unknown", "released_without_evidence"} {
 		t.Run(name, func(t *testing.T) {
 			now := time.Date(2026, 11, 26, 1, 2, 3, 0, time.UTC)
 			var start callStartResponse
@@ -128,6 +128,18 @@ func TestCreateTimeoutDoesNotTreatOpenOrLookupFailureAsUnknown(t *testing.T) {
 						return nil, errors.New("private synthetic transport failure")
 					case "lookup_malformed":
 						return gatewayFixture(`{`), nil
+					case "lookup_duplicate_outcome":
+						return gatewayFixture(fmt.Sprintf(`{"request_id":%q,"outcome":"open","outcome":"unknown"}`, start.GatewayRequestID)), nil
+					case "lookup_duplicate_request":
+						return gatewayFixture(fmt.Sprintf(`{"request_id":"different","request_id":%q,"outcome":"unknown"}`, start.GatewayRequestID)), nil
+					case "lookup_trailing":
+						return gatewayFixture(fmt.Sprintf(`{"request_id":%q,"outcome":"unknown"} {}`, start.GatewayRequestID)), nil
+					case "lookup_wrong_type":
+						return gatewayFixture(fmt.Sprintf(`{"request_id":%q,"outcome":42}`, start.GatewayRequestID)), nil
+					case "lookup_null":
+						return gatewayFixture(fmt.Sprintf(`{"request_id":%q,"outcome":"unknown","evidence_id":null}`, start.GatewayRequestID)), nil
+					case "lookup_unknown_field":
+						return gatewayFixture(fmt.Sprintf(`{"request_id":%q,"outcome":"unknown","extra":true}`, start.GatewayRequestID)), nil
 					case "missing_then_404":
 						return notFound()
 					default:
@@ -159,6 +171,70 @@ func TestCreateTimeoutDoesNotTreatOpenOrLookupFailureAsUnknown(t *testing.T) {
 			if (fences == 0) != strings.HasPrefix(name, "lookup_") || fences > 1 {
 				t.Fatalf("unexpected fence call count: %d", fences)
 			}
+		})
+	}
+}
+
+func TestQuarantinedCreateTimeoutRequiresExactUnboundSource(t *testing.T) {
+	for _, mode := range []string{"release", "busy", "transport", "source_changed", "quarantine_renewed", "bound"} {
+		t.Run(mode, func(t *testing.T) {
+			now := time.Date(2026, 11, 26, 1, 2, 3, 0, time.UTC)
+			var h callHarness
+			var start callStartResponse
+			lookups, fences := 0, 0
+			h = fencedCalls(t, &now, func(r *http.Request) (*http.Response, error) {
+				if r.Method == http.MethodGet {
+					lookups++
+					return creationLookup(start.GatewayRequestID, "unknown")
+				}
+				fences++
+				switch mode {
+				case "busy":
+					return fenceReply(start.GatewayRequestID, "busy")
+				case "transport":
+					return nil, errors.New("fixture transport error")
+				case "source_changed":
+					reserveRecoveryPool(t, h.store, "next-source", "negotiation_in_progress")
+				case "quarantine_renewed":
+					if _, err := h.store.DB().Exec(`UPDATE voice_sessions SET updated_at=? WHERE id=?`, now.Format(time.RFC3339Nano), start.SessionID); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return fenceReply(start.GatewayRequestID, fencedNoLiveMedia)
+			})
+			start, _ = h.open(201)
+			now = now.Add(time.Hour) // The age of the allocation is not the age of the quarantine.
+			binding := ""
+			if mode == "bound" {
+				binding = "existing-binding"
+			}
+			if _, err := h.store.DB().Exec(`UPDATE voice_sessions SET state='quarantined',last_error_code='gateway_outcome_unknown',updated_at=?,gateway_session_id=? WHERE id=?`, now.Format(time.RFC3339Nano), binding, start.SessionID); err != nil {
+				t.Fatal(err)
+			}
+			reserveRecoveryPool(t, h.store, start.SessionID, "gateway_outcome_unknown")
+			now = now.Add(unresolvedCreateTimeout - time.Nanosecond)
+			h.svc.attestStaleCreates(context.Background())
+			if fences != 0 {
+				t.Fatal("fenced a quarantine before five minutes")
+			}
+			now = now.Add(time.Nanosecond)
+			h.svc.attestStaleCreates(context.Background())
+			if mode == "bound" {
+				if lookups != 0 || fences != 0 {
+					t.Fatal("bound row entered pre-bind attestation")
+				}
+			} else if fences != 1 {
+				t.Fatalf("fence count at timeout=%d", fences)
+			}
+			if mode == "release" {
+				assertCreateHold(t, h.store, start.SessionID, "failed", "unresolved_timeout", "", 1)
+				return
+			}
+			source := start.SessionID
+			if mode == "source_changed" {
+				source = "next-source"
+			}
+			assertCreateHold(t, h.store, start.SessionID, "quarantined", "gateway_outcome_unknown", source, 0)
 		})
 	}
 }
