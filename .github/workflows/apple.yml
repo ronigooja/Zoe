@@ -14,7 +14,7 @@ on:
       release:
         description: Package the locally signed macOS app after all checks pass
         type: boolean
-        default: false
+        default: true
       platform:
         description: Platform to build and publish
         type: choice
