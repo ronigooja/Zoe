@@ -337,7 +337,7 @@ func (s *Service) queryGatewayOutcome(ctx context.Context, requestID string) gat
 				cancel()
 				return gatewayCreationOutcome{lookupMissing: true}
 			}
-			if response.StatusCode >= 200 && response.StatusCode < 300 {
+			if response.StatusCode == http.StatusOK {
 				const maxOutcomeBytes = 64 << 10
 				body, decodeErr := io.ReadAll(io.LimitReader(response.Body, maxOutcomeBytes+1))
 				response.Body.Close()
@@ -347,6 +347,10 @@ func (s *Service) queryGatewayOutcome(ctx context.Context, requestID string) gat
 						return outcome
 					}
 				}
+				// Do not let a second reply in this sweep turn a malformed
+				// success into authorization to issue a fence.
+				cancel()
+				return gatewayCreationOutcome{}
 			} else {
 				response.Body.Close()
 			}

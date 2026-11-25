@@ -113,7 +113,7 @@ func TestCreateTimeoutDoesNotTreatOpenOrLookupFailureAsUnknown(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			now := time.Date(2026, 11, 26, 1, 2, 3, 0, time.UTC)
 			var start callStartResponse
-			fences := 0
+			fences, lookups := 0, 0
 			notFound := func() (*http.Response, error) {
 				resp := gatewayFixture(`{}`)
 				resp.StatusCode = 404
@@ -121,6 +121,7 @@ func TestCreateTimeoutDoesNotTreatOpenOrLookupFailureAsUnknown(t *testing.T) {
 			}
 			h := fencedCalls(t, &now, func(r *http.Request) (*http.Response, error) {
 				if r.Method == http.MethodGet {
+					lookups++
 					switch name {
 					case "lookup_open":
 						return creationLookup(start.GatewayRequestID, "open")
@@ -129,6 +130,9 @@ func TestCreateTimeoutDoesNotTreatOpenOrLookupFailureAsUnknown(t *testing.T) {
 					case "lookup_malformed":
 						return gatewayFixture(`{`), nil
 					case "lookup_duplicate_outcome":
+						if lookups > 1 {
+							return creationLookup(start.GatewayRequestID, "unknown")
+						}
 						return gatewayFixture(fmt.Sprintf(`{"request_id":%q,"outcome":"open","outcome":"unknown"}`, start.GatewayRequestID)), nil
 					case "lookup_duplicate_request":
 						return gatewayFixture(fmt.Sprintf(`{"request_id":"different","request_id":%q,"outcome":"unknown"}`, start.GatewayRequestID)), nil
