@@ -35,6 +35,7 @@ public final class ZoeAppModel: ObservableObject {
     private var remoteControlLastURL: URL?
     private var remoteControlSubscription: AnyCancellable?
     private var remoteControlCleanup: Task<Void, Never>?
+    private var remoteControlCleanupID: UUID?
     private var remoteControlCredentialsChanged = false
     private var remoteControlTerminating = false
     #endif
@@ -637,6 +638,10 @@ public final class ZoeAppModel: ObservableObject {
     }
 
     #if os(macOS)
+    public var remoteControlNeedsShutdown: Bool {
+        remoteControl?.needsShutdown == true || remoteControlCleanup != nil
+    }
+
     private func detachRemoteControl() {
         let relay = remoteControl?.detach()
         remoteControlSubscription = nil
@@ -646,9 +651,15 @@ public final class ZoeAppModel: ObservableObject {
         remoteControlError = nil
         guard let relay else { return }
         let prior = remoteControlCleanup
-        remoteControlCleanup = Task {
+        let cleanupID = UUID()
+        remoteControlCleanupID = cleanupID
+        remoteControlCleanup = Task { [weak self] in
             await prior?.value
             await relay.shutdown()
+            if self?.remoteControlCleanupID == cleanupID {
+                self?.remoteControlCleanup = nil
+                self?.remoteControlCleanupID = nil
+            }
         }
     }
 

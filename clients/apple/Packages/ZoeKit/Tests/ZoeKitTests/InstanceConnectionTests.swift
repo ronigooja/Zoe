@@ -441,12 +441,16 @@ final class InstanceConnectionTests: XCTestCase {
         XCTAssertTrue(connectedBeforeExit)
         let exitingRelay = try XCTUnwrap(relays.last)
         let exitingControl = try XCTUnwrap(model.remoteControl)
+        XCTAssertFalse(model.remoteControlNeedsShutdown)
         await exitingControl.setEnabled(true, id: "agent-desktop")
+        XCTAssertTrue(model.remoteControlNeedsShutdown)
+        await model.shutdownRemoteControlForAppExit()
         await model.shutdownRemoteControlForAppExit()
         let exitShutdowns = await exitingRelay.shutdowns
         XCTAssertEqual(exitShutdowns, 1)
         XCTAssertNil(model.remoteControl)
         XCTAssertFalse(model.remoteControlActive)
+        XCTAssertFalse(model.remoteControlNeedsShutdown)
     }
     #endif
 

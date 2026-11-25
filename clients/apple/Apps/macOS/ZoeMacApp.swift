@@ -16,6 +16,7 @@ struct ZoeMacApp {
 
 @MainActor final class ZoeAppDelegate: NSObject, NSApplicationDelegate {
     private let model = ZoeAppModel()
+    private let terminationGate = AppTerminationGate()
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var textInputWindow: NSWindow?
@@ -120,6 +121,15 @@ struct ZoeMacApp {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        switch terminationGate.request(active: model.remoteControlNeedsShutdown, shutdown: { [model] in
+            await model.shutdownRemoteControlForAppExit()
+        }, reply: { sender.reply(toApplicationShouldTerminate: true) }) {
+        case .terminateNow: return .terminateNow
+        case .terminateLater: return .terminateLater
+        }
+    }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls { model.receiveInstallationLink(url) }

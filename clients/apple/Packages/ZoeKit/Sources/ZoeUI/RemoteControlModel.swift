@@ -34,6 +34,9 @@ public final class RemoteControlModel: ObservableObject {
 
     @Published public private(set) var rows: [Row] = []
     @Published public private(set) var anyEnabled = false
+    // Track process changes before the first status-stream update can reach the UI.
+    private var processChangesInFlight = 0
+    var needsShutdown: Bool { anyEnabled || processChangesInFlight > 0 }
     private var relay: (any RemoteControlRelaying)?
     private var observation: Task<Void, Never>?
     private var actionErrors: [String: String] = [:]
@@ -58,7 +61,7 @@ public final class RemoteControlModel: ObservableObject {
     }
 
     public func setEnabled(_ enabled: Bool, id: String) async {
-        await perform(id: id) { try await $0.setEnabled(enabled, id: id) }
+        await perform(id: id, changesProcess: true) { try await $0.setEnabled(enabled, id: id) }
     }
 
     public func setIdleTimeout(_ seconds: TimeInterval, id: String) async {
@@ -66,7 +69,7 @@ public final class RemoteControlModel: ObservableObject {
     }
 
     public func setLaunchOption(_ key: String, value: Bool, id: String) async {
-        await perform(id: id) { try await $0.setLaunchOption(key, value: value, id: id) }
+        await perform(id: id, changesProcess: true) { try await $0.setLaunchOption(key, value: value, id: id) }
     }
 
     func detach() -> (any RemoteControlRelaying)? {
@@ -79,8 +82,10 @@ public final class RemoteControlModel: ObservableObject {
         return previous
     }
 
-    private func perform(id: String, action: (any RemoteControlRelaying) async throws -> Void) async {
+    private func perform(id: String, changesProcess: Bool = false, action: (any RemoteControlRelaying) async throws -> Void) async {
         guard let relay, !Task.isCancelled else { return }
+        if changesProcess { processChangesInFlight += 1 }
+        defer { if changesProcess { processChangesInFlight -= 1 } }
         let token = UUID()
         actionTokens[id] = token
         actionErrors[id] = nil

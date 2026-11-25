@@ -13,6 +13,7 @@ public protocol MCPChildProcess: Sendable {
 }
 
 public actor FoundationMCPChildProcess: MCPChildProcess {
+    private static let terminationGrace: Duration = .milliseconds(250)
     private let executable: URL
     private let arguments: [String]
     private let environment: [String: String]
@@ -28,6 +29,8 @@ public actor FoundationMCPChildProcess: MCPChildProcess {
     private var callIDs: [JSONValueKey: JSONValue] = [:]
     private var nextID: Int64 = 0
     private var stopping = false
+    private var terminationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var killTask: Task<Void, Never>?
 
     public init(executable: URL, arguments: [String], environment: [String: String] = ProcessInfo.processInfo.environment, onExit: @escaping @Sendable () -> Void = {}) {
         self.executable = executable
@@ -138,11 +141,30 @@ public actor FoundationMCPChildProcess: MCPChildProcess {
     }
 
     public func terminate() async {
-        stopping = true
-        // A child that ignores SIGTERM must not survive an off switch or restart.
+        await withCheckedContinuation { continuation in
+            terminationWaiters.append(continuation)
+            guard !stopping else {
+                if process == nil { finishTermination() }
+                return
+            }
+            stopping = true
+            closeInput()
+            failPending()
+            guard let process, process.isRunning else { exited(); return }
+            process.terminate()
+
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: Self.terminationGrace)
+            killTask = Task { [weak self] in
+                do { try await clock.sleep(until: deadline) } catch { return }
+                await self?.forceStop()
+            }
+            // The Process termination handler resumes the waiters once the child exits.
+        }
+    }
+
+    private func forceStop() {
         if let process, process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
-        failPending()
-        cleanup()
     }
 
     private func request(method: String, params: JSONValue) async throws -> JSONValue {
@@ -157,6 +179,7 @@ public actor FoundationMCPChildProcess: MCPChildProcess {
 
     private func sendRequest(_ request: JSONValue, id: JSONValue) async throws -> JSONValue {
         try Task.checkCancellation()
+        guard !stopping else { throw MCPChildError.exited }
         let key = JSONValueKey(id)
         guard pending[key] == nil else { throw MCPChildError.invalidResponse }
         return try await withCheckedThrowingContinuation { continuation in
@@ -226,7 +249,16 @@ public actor FoundationMCPChildProcess: MCPChildProcess {
         stopping = true
         failPending()
         cleanup()
+        finishTermination()
         if notify { onExit() }
+    }
+
+    private func finishTermination() {
+        killTask?.cancel()
+        killTask = nil
+        let waiters = terminationWaiters
+        terminationWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
     }
 
     private func failPending() {
@@ -235,16 +267,20 @@ public actor FoundationMCPChildProcess: MCPChildProcess {
         for continuation in waiting { continuation.resume(throwing: MCPChildError.exited) }
     }
 
+    private func closeInput() {
+        writer?.close(flags: .stop)
+        writer = nil
+        try? input?.close()
+        input = nil
+    }
+
     private func cleanup() {
         reader?.cancel()
         self.reader = nil
-        writer?.close(flags: .stop)
-        writer = nil
+        closeInput()
         stderr?.readabilityHandler = nil
-        try? input?.close()
         output?.close()
         try? stderr?.close()
-        input = nil
         output = nil
         stderr = nil
         process = nil

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import ZoeKit
@@ -75,6 +76,44 @@ for line in sys.stdin:
         let result = try await process.call(call("two"))
         XCTAssertEqual(result, .object(["cancelled": .bool(true), "different": .bool(true)]))
         await process.terminate()
+    }
+
+    func testTerminateClosesStdinAndEscalatesWhenRealChildSurvivesSIGTERM() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = #"""
+import json, os, pathlib, signal, sys
+state = pathlib.Path(sys.argv[1])
+def terminated(sig, frame):
+    (state / 'term').touch()
+signal.signal(signal.SIGTERM, terminated)
+for line in sys.stdin:
+    req = json.loads(line)
+    if 'id' not in req: continue
+    result = {'tools': [{'name': str(os.getpid())}]} if req['method'] == 'tools/list' else {}
+    print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}))
+(state / 'eof').touch()
+while True: signal.pause()
+"""#
+        let process = child(script, args: [directory.path])
+        let tools = try await process.start()
+        guard case let .string(name)? = tools.first?[mcp: "name"], let pid = Int32(name), pid > 0 else {
+            await process.terminate()
+            return XCTFail("Missing fixture PID")
+        }
+        XCTAssertEqual(kill(pid, 0), 0)
+
+        // Concurrent callers should both wait for exit, including during escalation.
+        async let first: Void = process.terminate()
+        async let second: Void = process.terminate()
+        _ = await (first, second)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("term").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("eof").path))
+        let status = kill(pid, 0)
+        let error = errno
+        XCTAssertEqual(status, -1)
+        XCTAssertEqual(error, ESRCH)
     }
 
     func testRealStdioInitializationPaginationAndCall() async throws {
