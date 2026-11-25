@@ -138,7 +138,7 @@ const (
 	staleCreateAttestationAge = 2 * time.Minute
 	unresolvedCreateTimeout   = 5 * time.Minute
 	requestFenceTimeout       = 2 * time.Second
-	fencedNoLiveMedia          = "fenced_no_live_media"
+	fencedNoLiveMedia         = "fenced_no_live_media"
 )
 
 var gatewayEvidenceIDPattern = regexp.MustCompile(`^ev_[0-9a-f]{32}$`)
