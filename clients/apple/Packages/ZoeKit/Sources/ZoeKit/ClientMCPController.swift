@@ -8,6 +8,11 @@ public enum ClientMCPFailure: Equatable, Sendable { case exited, startupTimedOut
 
 public protocol MCPPermissionChecking: Sendable {
     func missingPermission(for entry: ClientMCPEntry) -> MCPPermissionReason?
+    func requestPermission(_ reason: MCPPermissionReason)
+}
+
+public extension MCPPermissionChecking {
+    func requestPermission(_ reason: MCPPermissionReason) {}
 }
 
 public protocol MCPTimerClock: Sendable {
@@ -138,8 +143,11 @@ public actor ClientMCPController {
     public func enable(_ id: String) async throws {
         guard !shuttingDown, let entry = registry.entries.first(where: { $0.id == id }), children[id] == nil else { return }
         if let reason = permissions.missingPermission(for: entry) {
-            setStatus(.permissionNeeded(reason), for: id)
-            return
+            permissions.requestPermission(reason)
+            if let remaining = permissions.missingPermission(for: entry) {
+                setStatus(.permissionNeeded(remaining), for: id)
+                return
+            }
         }
         setStatus(.starting, for: id)
         let generation = UUID()

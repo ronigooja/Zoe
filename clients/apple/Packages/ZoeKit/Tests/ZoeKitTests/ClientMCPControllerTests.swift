@@ -9,6 +9,23 @@ private struct DeniedPermissions: MCPPermissionChecking {
     let reason: MCPPermissionReason
     func missingPermission(for entry: ClientMCPEntry) -> MCPPermissionReason? { reason }
 }
+private final class RequestPermissions: MCPPermissionChecking, @unchecked Sendable {
+    private let lock = NSLock()
+    private var granted = false
+    private var requests: [MCPPermissionReason] = []
+    let reason: MCPPermissionReason
+    init(_ reason: MCPPermissionReason) { self.reason = reason }
+    func missingPermission(for entry: ClientMCPEntry) -> MCPPermissionReason? {
+        lock.lock(); defer { lock.unlock() }
+        return granted ? nil : reason
+    }
+    func requestPermission(_ reason: MCPPermissionReason) {
+        lock.lock(); defer { lock.unlock() }
+        requests.append(reason)
+    }
+    func grant() { lock.lock(); defer { lock.unlock() }; granted = true }
+    var requested: [MCPPermissionReason] { lock.lock(); defer { lock.unlock() }; return requests }
+}
 
 private final class ChildHarness: @unchecked Sendable {
     private let lock = NSLock()
@@ -211,6 +228,24 @@ final class ClientMCPControllerTests: XCTestCase {
 
     func testAccessibilityDenialPreventsSpawn() async throws { try await assertPermissionBlocksFactory(.accessibility) }
     func testScreenRecordingNotePreventsSpawn() async throws { try await assertPermissionBlocksFactory(.screenRecording) }
+
+    func testPermissionRequestedOnceThenEnableAfterGrant() async throws {
+        for reason in [MCPPermissionReason.accessibility, .screenRecording] {
+            let permissions = RequestPermissions(reason), harness = ChildHarness()
+            let controller = ClientMCPController(registry: try ClientMCPRegistry(store: InMemoryMCPRegistryStore()), permissions: permissions, transport: RecordingTransport()) { harness.make($0, exit: $1) }
+            try await controller.enable("agent-desktop")
+            let denied = await controller.statuses
+            XCTAssertEqual(denied["agent-desktop"], .permissionNeeded(reason))
+            XCTAssertEqual(permissions.requested, [reason])
+            XCTAssertTrue(harness.arguments("agent-desktop").isEmpty)
+            permissions.grant()
+            try await controller.enable("agent-desktop")
+            let granted = await controller.statuses
+            XCTAssertEqual(granted["agent-desktop"], .on)
+            XCTAssertEqual(permissions.requested, [reason])
+            await controller.disable("agent-desktop")
+        }
+    }
 
     private func assertPermissionBlocksFactory(_ reason: MCPPermissionReason) async throws {
         let harness = ChildHarness(), transport = RecordingTransport()

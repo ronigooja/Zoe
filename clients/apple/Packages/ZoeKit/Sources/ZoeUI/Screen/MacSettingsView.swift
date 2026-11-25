@@ -70,18 +70,25 @@ public struct MacSettingsView: View {
                 } header: {
                     Text("Screen")
                 }
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("General", systemImage: "gearshape") }
+
+            Form {
                 Section {
                     if let remoteControl = model.remoteControl {
                         MacRemoteControlRows(model: remoteControl)
                     } else if let error = model.remoteControlError {
                         Text(error).font(.caption).foregroundStyle(.red)
+                    } else {
+                        Text("Connect to Zoe to use remote control.", bundle: .module).foregroundStyle(.secondary)
                     }
                 } header: {
                     Text("Remote control", bundle: .module)
                 }
             }
             .formStyle(.grouped)
-            .tabItem { Label("General", systemImage: "gearshape") }
+            .tabItem { Label { Text("Remote control", bundle: .module) } icon: { Image(systemName: "dot.radiowaves.left.and.right") } }
 
             Form {
                 Section("Server") {

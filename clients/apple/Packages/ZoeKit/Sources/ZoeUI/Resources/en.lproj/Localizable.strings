@@ -27,7 +27,6 @@
 "This saved action belongs to a different instance and was not retried." = "This saved action belongs to a different instance and was not retried.";
 "Voice setup was stopped locally." = "Voice setup was stopped locally.";
 "unknown" = "unknown";
-
 "Remote control" = "Remote control";
 "Enable %@" = "Enable %@";
 "Auto-off after (minutes)" = "Auto-off after (minutes)";
@@ -38,8 +37,12 @@
 "On" = "On";
 "Permission needed" = "Permission needed";
 "Error" = "Error";
-"Grant Zoe Accessibility access in System Settings > Privacy & Security > Accessibility, then try again." = "Grant Zoe Accessibility access in System Settings > Privacy & Security > Accessibility, then try again.";
-"Grant Zoe screen recording access in System Settings > Privacy & Security > Screen & System Audio Recording, then try again." = "Grant Zoe screen recording access in System Settings > Privacy & Security > Screen & System Audio Recording, then try again.";
+"Turn on Zoe in System Settings > Privacy & Security > Device Control and Data Access, then try again." = "Turn on Zoe in System Settings > Privacy & Security > Device Control and Data Access, then try again.";
+"Turn on Zoe in System Settings > Privacy & Security > Accessibility, then try again." = "Turn on Zoe in System Settings > Privacy & Security > Accessibility, then try again.";
+"Turn on Zoe's screen recording access under System Settings > Privacy & Security. Look for Screen & System Audio Recording; the name may differ by language or macOS version. Then try again." = "Turn on Zoe's screen recording access under System Settings > Privacy & Security. Look for Screen & System Audio Recording; the name may differ by language or macOS version. Then try again.";
+"After granting access, if Zoe still shows permission needed, quit and reopen Zoe. A restart may be needed." = "After granting access, if Zoe still shows permission needed, quit and reopen Zoe. A restart may be needed.";
+"Open System Settings" = "Open System Settings";
+"Connect to Zoe to use remote control." = "Connect to Zoe to use remote control.";
 "agent-desktop not found. Install it and try again." = "agent-desktop not found. Install it and try again.";
 "The MCP server executable was not found." = "The MCP server executable was not found.";
 "The MCP server could not start or stopped unexpectedly." = "The MCP server could not start or stopped unexpectedly.";
@@ -47,8 +50,6 @@
 "Could not update remote control. Try again." = "Could not update remote control. Try again.";
 "Remote control settings could not be loaded." = "Remote control settings could not be loaded.";
 "Remote control is active" = "Remote control is active";
-
-
 "This installation link is invalid." = "This installation link is invalid.";
 "Clear the saved key before connecting to a different server." = "Clear the saved key before connecting to a different server.";
 "Saved key and local connection data cleared." = "Saved key and local connection data cleared.";

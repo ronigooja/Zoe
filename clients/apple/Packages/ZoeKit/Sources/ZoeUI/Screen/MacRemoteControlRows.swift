@@ -1,6 +1,28 @@
 #if os(macOS)
 import SwiftUI
+import AppKit
 import ZoeKit
+
+enum PermissionGuidance {
+    static func text(for reason: MCPPermissionReason, operatingSystemVersion: OperatingSystemVersion) -> String {
+        switch reason {
+        case .accessibility:
+            if operatingSystemVersion.majorVersion >= 27 {
+                return uiText("Turn on Zoe in System Settings > Privacy & Security > Device Control and Data Access, then try again.")
+            }
+            return uiText("Turn on Zoe in System Settings > Privacy & Security > Accessibility, then try again.")
+        case .screenRecording:
+            return uiText("Turn on Zoe's screen recording access under System Settings > Privacy & Security. Look for Screen & System Audio Recording; the name may differ by language or macOS version. Then try again.")
+        }
+    }
+
+    static func settingsURL(for reason: MCPPermissionReason) -> URL {
+        let anchor = reason == .accessibility ? "Privacy_Accessibility" : "Privacy_ScreenCapture"
+        return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)")!
+    }
+
+    static let settingsRootURL = URL(string: "x-apple.systempreferences:com.apple.preference.security")!
+}
 
 enum RemoteControlIdleTimeout {
     static let range = 1...1440
@@ -47,20 +69,44 @@ private struct MacRemoteControlRow: View {
                 }
                 .disabled(row.status == .starting)
                 Spacer()
-                TextField(uiText("Auto-off after (minutes)"), text: $idleMinutes)
-                    .frame(width: 150)
+                Text(statusText)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(minWidth: 130, alignment: .trailing)
+            }
+            HStack(spacing: 8) {
+                Text(uiText("Auto-off after (minutes)"))
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("", text: $idleMinutes)
+                    .labelsHidden()
+                    .accessibilityLabel(uiText("Auto-off after (minutes)"))
+                    .frame(width: 70)
                     .onSubmit { applyIdleMinutes() }
                     .onChange(of: minutesFocused) { _, focused in
                         if !focused { applyIdleMinutes() }
                     }
                     .focused($minutesFocused)
-                Text(statusText)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .frame(width: 110, alignment: .trailing)
+                Spacer()
             }
             if let reason = row.permissionNeeded {
-                Text(permissionText(reason))
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(PermissionGuidance.text(for: reason, operatingSystemVersion: ProcessInfo.processInfo.operatingSystemVersion))
+                        Text("After granting access, if Zoe still shows permission needed, quit and reopen Zoe. A restart may be needed.", bundle: .module)
+                    }
                     .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        if !NSWorkspace.shared.open(PermissionGuidance.settingsURL(for: reason)) {
+                            NSWorkspace.shared.open(PermissionGuidance.settingsRootURL)
+                        }
+                    } label: {
+                        Text("Open System Settings", bundle: .module)
+                    }
+                    .controlSize(.small)
+                    .accessibilityLabel(uiText("Open System Settings"))
+                }
             }
             if let error = row.lastError {
                 Text(error)
@@ -88,13 +134,6 @@ private struct MacRemoteControlRow: View {
         case .on: uiText("On")
         case .permissionNeeded: uiText("Permission needed")
         case .error: uiText("Error")
-        }
-    }
-
-    private func permissionText(_ reason: MCPPermissionReason) -> String {
-        switch reason {
-        case .accessibility: uiText("Grant Zoe Accessibility access in System Settings > Privacy & Security > Accessibility, then try again.")
-        case .screenRecording: uiText("Grant Zoe screen recording access in System Settings > Privacy & Security > Screen & System Audio Recording, then try again.")
         }
     }
 
