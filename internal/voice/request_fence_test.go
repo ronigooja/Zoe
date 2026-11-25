@@ -109,7 +109,7 @@ func TestUnknownCreateTimeoutReleasesOnlyMatchingSource(t *testing.T) {
 }
 
 func TestCreateTimeoutDoesNotTreatOpenOrLookupFailureAsUnknown(t *testing.T) {
-	for _, name := range []string{"lookup_open", "lookup_transport", "lookup_malformed", "missing_then_404", "fence_transport", "fence_malformed", "wrong_request", "busy", "open", "unknown", "released_without_evidence"} {
+	for _, name := range []string{"lookup_open", "lookup_transport", "lookup_malformed", "missing_then_404", "fence_transport", "fence_malformed", "duplicate_result", "wrong_request", "busy", "open", "unknown", "released_without_evidence"} {
 		t.Run(name, func(t *testing.T) {
 			now := time.Date(2026, 11, 26, 1, 2, 3, 0, time.UTC)
 			var start callStartResponse
@@ -142,6 +142,8 @@ func TestCreateTimeoutDoesNotTreatOpenOrLookupFailureAsUnknown(t *testing.T) {
 					return nil, errors.New("private synthetic fence failure")
 				case "fence_malformed":
 					return gatewayFixture(`{"result":"fenced_no_live_media"} trailing`), nil
+				case "duplicate_result":
+					return gatewayFixture(fmt.Sprintf(`{"request_id":%q,"result":"busy","result":"fenced_no_live_media"}`, start.GatewayRequestID)), nil
 				case "wrong_request":
 					return fenceReply("different-request", fencedNoLiveMedia)
 				case "released_without_evidence":

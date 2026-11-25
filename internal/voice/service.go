@@ -398,24 +398,34 @@ func (s *Service) fenceGatewayCreate(ctx context.Context, requestID string) (gat
 	if err != nil || len(data) > maxFenceBytes || ctx.Err() != nil {
 		return gatewayCreationOutcome{}, "fence_malformed"
 	}
-	var body struct {
-		RequestID  string `json:"request_id"`
-		Result     string `json:"result"`
-		EvidenceID string `json:"evidence_id"`
-	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&body) != nil || decoder.Decode(new(any)) != io.EOF || body.RequestID != requestID {
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return gatewayCreationOutcome{}, "fence_malformed"
 	}
-	outcome := gatewayCreationOutcome{Outcome: body.Result, EvidenceID: body.EvidenceID}
-	switch body.Result {
+	fields := make(map[string]string, 3)
+	for decoder.More() {
+		key, err := decoder.Token()
+		name, ok := key.(string)
+		if err != nil || !ok || (name != "request_id" && name != "result" && name != "evidence_id") {
+			return gatewayCreationOutcome{}, "fence_malformed"
+		}
+		var value *string
+		if _, duplicate := fields[name]; duplicate || decoder.Decode(&value) != nil || value == nil {
+			return gatewayCreationOutcome{}, "fence_malformed"
+		}
+		fields[name] = *value
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') || decoder.Decode(new(any)) != io.EOF || fields["request_id"] != requestID {
+		return gatewayCreationOutcome{}, "fence_malformed"
+	}
+	outcome := gatewayCreationOutcome{Outcome: fields["result"], EvidenceID: fields["evidence_id"]}
+	switch outcome.Outcome {
 	case "released":
 		if outcome.recoverable() {
 			return outcome, ""
 		}
 	case fencedNoLiveMedia, "never_established", "open", "busy", "unknown":
-		if body.EvidenceID == "" {
+		if _, evidencePresent := fields["evidence_id"]; !evidencePresent {
 			return outcome, ""
 		}
 	}
