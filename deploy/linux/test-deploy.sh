@@ -608,9 +608,13 @@ root = p/'source'
 case = os.environ['CASE']
 (root/'prompts').mkdir()
 shutil.copy(repo/'deploy/limits.json', root/'limits.json')
-if case in ('prompt-keep', 'prompt-overwrite', 'prompt-identical', 'prompt-dry', 'limits-invalid', 'runner-unchanged-error'):
+if case in ('prompt-keep', 'prompt-overwrite', 'prompt-identical', 'prompt-dry', 'limits-invalid', 'limits-old-schema', 'runner-unchanged-error'):
     limits = json.loads((root/'limits.json').read_text())
     limits['voice_recall_workers'] = 0 if case == 'limits-invalid' else 5
+    if case == 'limits-old-schema':
+        for key in ('run_max_tool_steps', 'run_max_model_calls', 'run_max_input_units', 'run_max_output_units',
+                    'run_max_artifact_bytes', 'run_hard_deadline_seconds'):
+            del limits[key]
     (p/'host-limits.json').write_text(json.dumps(limits))
 if case == 'limits-absent-release': (root/'limits.json').unlink()
 if case == 'limits-legacy-env':
@@ -928,6 +932,13 @@ for failure in limits-legacy-env limits-absent-release; do
   if deploy --dry-run; then echo "expected refusal: $failure"; exit 1; fi
   unchanged
 done
+fixture limits-old-schema
+if deploy --dry-run; then echo 'expected refusal: limits-old-schema'; exit 1; fi
+unchanged
+grep -q 'deploy step=prompts status=failed' "$FIXTURE/logs/$new.log"
+deploy --dry-run --prompts overwrite
+unchanged
+grep -q 'limits name=limits.json .*action=overwrite' "$FIXTURE/logs/$new.log"
 fixture prompt-dry
 deploy --dry-run --prompts overwrite
 unchanged

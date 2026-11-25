@@ -30,8 +30,8 @@ func TestSharedLoaderCases(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cases []struct {
-		Name, Key, Raw, Hex, Append, Value, Error string
-		Size                                      int
+		Name, Key, Raw, Hex, Append, Value, Omit, Error string
+		Size                                            int
 	}
 	if err := json.Unmarshal(fixtures, &cases); err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestSharedLoaderCases(t *testing.T) {
 			if tc.Size > 0 {
 				data = bytes.Repeat([]byte{' '}, tc.Size)
 			}
-			if tc.Value != "" {
+			if tc.Value != "" || tc.Omit != "" {
 				key := tc.Key
 				if key == "" {
 					key = "opening_context_runes"
@@ -57,7 +57,11 @@ func TestSharedLoaderCases(t *testing.T) {
 				if err := json.Unmarshal(source, &fields); err != nil {
 					t.Fatal(err)
 				}
-				fields[key] = json.RawMessage(tc.Value)
+				if tc.Omit != "" {
+					delete(fields, tc.Omit)
+				} else {
+					fields[key] = json.RawMessage(tc.Value)
+				}
 				data, err = json.Marshal(fields)
 				if err != nil {
 					t.Fatal(err)

@@ -51,9 +51,11 @@ type Runtime interface {
 	Prompt(context.Context, RuntimeBinding, string) error
 	Status(context.Context, RuntimeBinding) (map[string]opencode.Status, error)
 	Messages(context.Context, RuntimeBinding) ([]opencode.Message, error)
-	Events(context.Context, RuntimeBinding) (<-chan opencode.Event, <-chan error)
 	Abort(context.Context, RuntimeBinding) error
 	Terminate(context.Context, RuntimeBinding) (string, error)
+}
+type toolStepRuntime interface {
+	MessagesWithToolSteps(context.Context, RuntimeBinding, int64) ([]opencode.Message, int64, error)
 }
 type ContextWindowProvider interface {
 	ContextWindow(context.Context, string) (int64, error)
@@ -260,12 +262,12 @@ func (r OpenCodeRuntime) ReplyForm(ctx context.Context, b RuntimeBinding, formID
 	}
 	return c.ReplyForm(ctx, b.SessionID, formID, answer)
 }
-func (r OpenCodeRuntime) Events(context.Context, RuntimeBinding) (<-chan opencode.Event, <-chan error) {
-	events := make(chan opencode.Event)
-	errs := make(chan error)
-	close(events)
-	close(errs)
-	return events, errs
+func (r OpenCodeRuntime) MessagesWithToolSteps(ctx context.Context, b RuntimeBinding, stopAt int64) ([]opencode.Message, int64, error) {
+	c, err := r.client()
+	if err != nil {
+		return nil, 0, err
+	}
+	return c.MessagesWithToolSteps(ctx, b.SessionID, stopAt)
 }
 func (r OpenCodeRuntime) Abort(ctx context.Context, b RuntimeBinding) error {
 	c, e := r.client()

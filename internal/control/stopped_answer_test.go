@@ -2,8 +2,10 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"github.com/ronigooja/Zoe/internal/runner"
 )
 
@@ -30,11 +33,8 @@ func (r *stoppedAnswerRuntime) Status(context.Context, runner.RuntimeBinding) (m
 	return nil, nil
 }
 func (r *stoppedAnswerRuntime) Messages(context.Context, runner.RuntimeBinding) ([]opencode.Message, error) {
-	return nil, nil
-}
-func (r *stoppedAnswerRuntime) Events(context.Context, runner.RuntimeBinding) (<-chan opencode.Event, <-chan error) {
 	r.cancel()
-	return make(chan opencode.Event), make(chan error)
+	return nil, nil
 }
 func (r *stoppedAnswerRuntime) Abort(context.Context, runner.RuntimeBinding) error { return nil }
 func (r *stoppedAnswerRuntime) Terminate(context.Context, runner.RuntimeBinding) (string, error) {
@@ -115,5 +115,68 @@ func TestStoppedAnswerNewClaimPromptReceipt(t *testing.T) {
 	}
 	if state != "acknowledged" || used != 1 {
 		t.Fatalf("receipt=%s used=%d", state, used)
+	}
+}
+
+func TestClaimBudgetUsesConfiguredRunLimits(t *testing.T) {
+	store, _, _ := instanceAuthFixture(t)
+	ctx := t.Context()
+	data, err := os.ReadFile("../../deploy/limits.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]int64
+	if err := json.Unmarshal(data, &values); err != nil {
+		t.Fatal(err)
+	}
+	values["run_max_tool_steps"] = 7
+	values["run_max_model_calls"] = 11
+	values["run_max_input_units"] = 1234
+	values["run_max_output_units"] = 567
+	values["run_max_artifact_bytes"] = 3 << 20
+	values["run_hard_deadline_seconds"] = 91
+	data, err = json.Marshal(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "limits.json")
+	if err := os.WriteFile(file, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := limits.Load(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := RuntimeProfile{ID: "worker", Harness: "opencode", RuntimeRouteID: "runtime", ModelRouteID: "model", Role: "worker", IsolationPolicy: runner.OpenCodeWorkspaceWritePolicy, PermissionTier: "read_only_research"}
+	server, err := NewServer(store, Config{Limits: loaded, DefaultProfileID: "worker", Profiles: map[string]RuntimeProfile{"worker": profile}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.DB().Exec(`INSERT INTO tasks(id,title,goal,source,profile_id,status,version,created_at,updated_at,created_by_device_id,command_id,owner_subject_id,harness) VALUES('task','title','goal','user','worker','queued',1,?,?,'instance','cmd','owner','opencode')`, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	token := "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA"
+	if err := server.RegisterRunnerCredential(ctx, token, "runner", []string{"runner:claim", "runner:control:read"}); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+	client, err := runner.NewControlClient(ts.URL, token, ts.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeClaim := time.Now()
+	claim, err := client.Claim(ctx)
+	afterClaim := time.Now()
+	if err != nil || claim == nil {
+		t.Fatalf("configured claim missing: %v", err)
+	}
+	b := claim.Budget
+	if b.MaxToolSteps != 7 || b.MaxModelCalls != 11 || b.MaxArtifactBytes != 3<<20 || b.MaxInputUnits != 1234 || b.MaxOutputUnits != 567 {
+		t.Fatalf("unexpected limits in budget: %+v", b)
+	}
+	if b.HardDeadline.Before(beforeClaim.Add(91*time.Second)) || b.HardDeadline.After(afterClaim.Add(91*time.Second)) {
+		t.Fatalf("deadline %v outside the expected claim-time window", b.HardDeadline)
 	}
 }

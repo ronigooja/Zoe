@@ -70,19 +70,20 @@ func (l *DeploymentHostLock) Close() error {
 }
 
 type JournalEntry struct {
-	Claim              contracts.JobClaim
-	Spec               RuntimeSpec
-	Session            string
-	Container          string
-	Password           string
-	InstanceID         string
-	Epoch              int64
-	Phase              string
-	Updated            time.Time
-	RotationSummary    string
-	RotationCount      int
-	RotationOldSession string
-	RotationNewSession string
+	Claim                 contracts.JobClaim
+	Spec                  RuntimeSpec
+	Session               string
+	Container             string
+	Password              string
+	InstanceID            string
+	Epoch                 int64
+	Phase                 string
+	Updated               time.Time
+	RotationSummary       string
+	RotationCount         int
+	RotationOldSession    string
+	RotationNewSession    string
+	PriorSessionToolSteps int64
 }
 
 type QueuedObservation struct {
@@ -234,6 +235,7 @@ CREATE TABLE IF NOT EXISTS journal_deployments (
 		{"rotation_count", "INTEGER NOT NULL DEFAULT 0"},
 		{"rotation_old_session", "TEXT NOT NULL DEFAULT ''"},
 		{"rotation_new_session", "TEXT NOT NULL DEFAULT ''"},
+		{"prior_session_tool_steps", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := ensureJournalColumn(ctx, db, column.name, column.definition); err != nil {
 			_ = db.Close()
@@ -484,7 +486,7 @@ func (j *Journal) Entry(ctx context.Context, runID string) (JournalEntry, bool, 
 	var claimJSON, specJSON []byte
 	var entry JournalEntry
 	var updated string
-	err := j.db.QueryRowContext(ctx, `SELECT claim_json,runtime_spec_json,runtime_session_id,runtime_container_id,runtime_password,instance_id,instance_epoch,phase,updated_at,rotation_summary,rotation_count,rotation_old_session,rotation_new_session FROM journal_runs WHERE run_id=?`, runID).Scan(&claimJSON, &specJSON, &entry.Session, &entry.Container, &entry.Password, &entry.InstanceID, &entry.Epoch, &entry.Phase, &updated, &entry.RotationSummary, &entry.RotationCount, &entry.RotationOldSession, &entry.RotationNewSession)
+	err := j.db.QueryRowContext(ctx, `SELECT claim_json,runtime_spec_json,runtime_session_id,runtime_container_id,runtime_password,instance_id,instance_epoch,phase,updated_at,rotation_summary,rotation_count,rotation_old_session,rotation_new_session,prior_session_tool_steps FROM journal_runs WHERE run_id=?`, runID).Scan(&claimJSON, &specJSON, &entry.Session, &entry.Container, &entry.Password, &entry.InstanceID, &entry.Epoch, &entry.Phase, &updated, &entry.RotationSummary, &entry.RotationCount, &entry.RotationOldSession, &entry.RotationNewSession, &entry.PriorSessionToolSteps)
 	if errors.Is(err, sql.ErrNoRows) {
 		return JournalEntry{}, false, nil
 	}
@@ -502,8 +504,8 @@ func (j *Journal) Entry(ctx context.Context, runID string) (JournalEntry, bool, 
 }
 
 // BeginRotation durably records the bounded summary before creating its replacement.
-func (j *Journal) BeginRotation(ctx context.Context, runID, attemptID string, fence uint64, oldSession, summary string, count int) error {
-	result, err := j.db.ExecContext(ctx, `UPDATE journal_runs SET phase='rotating',rotation_summary=?,rotation_count=?,rotation_old_session=?,rotation_new_session='',updated_at=? WHERE run_id=? AND attempt_id=? AND fence=?`, summary, count, oldSession, time.Now().UTC().Format(time.RFC3339Nano), runID, attemptID, fence)
+func (j *Journal) BeginRotation(ctx context.Context, runID, attemptID string, fence uint64, oldSession, summary string, count int, steps int64) error {
+	result, err := j.db.ExecContext(ctx, `UPDATE journal_runs SET phase='rotating',rotation_summary=?,rotation_count=?,rotation_old_session=?,rotation_new_session='',prior_session_tool_steps=?,updated_at=? WHERE run_id=? AND attempt_id=? AND fence=?`, summary, count, oldSession, steps, time.Now().UTC().Format(time.RFC3339Nano), runID, attemptID, fence)
 	if err != nil {
 		return err
 	}
