@@ -70,6 +70,15 @@ public struct MacSettingsView: View {
                 } header: {
                     Text("Screen")
                 }
+                Section {
+                    if let remoteControl = model.remoteControl {
+                        MacRemoteControlRows(model: remoteControl)
+                    } else if let error = model.remoteControlError {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Remote control", bundle: .module)
+                }
             }
             .formStyle(.grouped)
             .tabItem { Label("General", systemImage: "gearshape") }
