@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -156,12 +155,10 @@ func TestPoolStatusPollRecoversAndRateLimitsConcurrentRequests(t *testing.T) {
 	var released atomic.Bool
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls.Add(1)
-		outcome := "unknown"
 		if released.Load() {
-			outcome = "released"
+			return gatewayFixture(fmt.Sprintf(`{"request_id":"poll-request","outcome":"released","evidence_id":%q}`, testCreationEvidenceID)), nil
 		}
-		body := fmt.Sprintf(`{"request_id":"poll-request","outcome":%q,"evidence_id":%q}`, outcome, testCreationEvidenceID)
-		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+		return creationLookup("poll-request", "unknown")
 	})}
 	server, store, key := handoffHTTPServerWithConfig(t, Config{GatewayURL: "https://gateway.test", GatewayAPIKey: "key", HTTPClient: client, Now: func() time.Time { return time.Unix(0, clock.Load()) }})
 	seedRecoverySession(t, store, "poll", "quarantined")
