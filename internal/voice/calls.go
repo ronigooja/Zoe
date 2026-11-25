@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"github.com/ronigooja/Zoe/internal/limits"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/control"
+	"github.com/ronigooja/Zoe/internal/limits"
 	"github.com/ronigooja/Zoe/internal/logging"
 )
 
@@ -122,8 +122,8 @@ func (s *Service) startCall(ctx context.Context, p contracts.Principal, runner c
 			return result, false, err
 		}
 		var existingHash, saved []byte
-		var runnerID string
-		err = tx.QueryRowContext(ctx, `SELECT request_hash,call_start_response,lifecycle_runner_id FROM voice_sessions WHERE owner_id=? AND request_id=?`, p.SubjectID, req.RequestID).Scan(&existingHash, &saved, &runnerID)
+		var runnerID, state string
+		err = tx.QueryRowContext(ctx, `SELECT request_hash,call_start_response,lifecycle_runner_id,state FROM voice_sessions WHERE owner_id=? AND request_id=?`, p.SubjectID, req.RequestID).Scan(&existingHash, &saved, &runnerID, &state)
 		if !errors.Is(err, sql.ErrNoRows) {
 			tx.Rollback()
 			switch {
@@ -133,6 +133,8 @@ func (s *Service) startCall(ctx context.Context, p contracts.Principal, runner c
 				return result, false, callForbidden()
 			case !bytes.Equal(existingHash, hash[:]):
 				return result, false, callReplayConflict()
+			case state != "allocating" && state != "active" && state != "ending":
+				return result, false, apiError(http.StatusConflict, "voice_request_terminal", "voice request has already reached a terminal state", nil)
 			}
 			err := json.Unmarshal(saved, &result)
 			return result, true, err
