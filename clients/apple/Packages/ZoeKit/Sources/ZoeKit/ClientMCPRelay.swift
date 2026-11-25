@@ -54,6 +54,8 @@ public actor ClientMCPRelay {
     public func setIdleTimeout(_ seconds: TimeInterval, id: String) async throws { try await controller.setIdleTimeout(seconds, for: id) }
     public func setLaunchOption(_ key: String, value: Bool, id: String) async throws { try await controller.setLaunchOption(key, value: value, for: id) }
     public func credentialsChanged() async { await transport.credentialsChanged() }
+    /// Permanently stop this relay before dropping or replacing its authenticated connection.
+    public func shutdown() async { await controller.shutdown() }
     public func entries() async -> [ClientMCPEntry] { await controller.entries() }
     public func statuses() async -> [String: ClientMCPStatus] { await controller.statuses }
     public func statusUpdates() async -> AsyncStream<[String: ClientMCPStatus]> { await controller.statusUpdates() }

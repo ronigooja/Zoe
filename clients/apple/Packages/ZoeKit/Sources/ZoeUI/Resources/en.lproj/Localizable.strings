@@ -28,6 +28,26 @@
 "Voice setup was stopped locally." = "Voice setup was stopped locally.";
 "unknown" = "unknown";
 
+"Remote control" = "Remote control";
+"Enable %@" = "Enable %@";
+"Auto-off after (minutes)" = "Auto-off after (minutes)";
+"Use real mouse and keyboard (headed)" = "Use real mouse and keyboard (headed)";
+"Headed mode moves your real mouse and takes keyboard focus." = "Headed mode moves your real mouse and takes keyboard focus.";
+"Off" = "Off";
+"Starting" = "Starting";
+"On" = "On";
+"Permission needed" = "Permission needed";
+"Error" = "Error";
+"Grant Zoe Accessibility access in System Settings > Privacy & Security > Accessibility, then try again." = "Grant Zoe Accessibility access in System Settings > Privacy & Security > Accessibility, then try again.";
+"Grant Zoe screen recording access in System Settings > Privacy & Security > Screen & System Audio Recording, then try again." = "Grant Zoe screen recording access in System Settings > Privacy & Security > Screen & System Audio Recording, then try again.";
+"agent-desktop not found. Install it and try again." = "agent-desktop not found. Install it and try again.";
+"The MCP server executable was not found." = "The MCP server executable was not found.";
+"The MCP server could not start or stopped unexpectedly." = "The MCP server could not start or stopped unexpectedly.";
+"The MCP server took too long to start." = "The MCP server took too long to start.";
+"Could not update remote control. Try again." = "Could not update remote control. Try again.";
+"Remote control settings could not be loaded." = "Remote control settings could not be loaded.";
+"Remote control is active" = "Remote control is active";
+
 
 "This installation link is invalid." = "This installation link is invalid.";
 "Clear the saved key before connecting to a different server." = "Clear the saved key before connecting to a different server.";

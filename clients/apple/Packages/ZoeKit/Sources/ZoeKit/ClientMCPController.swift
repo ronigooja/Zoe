@@ -36,7 +36,7 @@ public actor ClientMCPController {
     public typealias ChildFactory = @Sendable (ClientMCPEntry, @escaping @Sendable () -> Void) throws -> any MCPChildProcess
     public static func processFactory(resolver: any MCPExecutableResolving = PATHMCPExecutableResolver()) -> ChildFactory {
         { entry, onExit in
-            guard let executable = resolver.resolve(entry.command) else { throw MCPChildError.notStarted }
+            guard let executable = resolver.resolve(entry.command) else { throw MCPChildError.executableNotFound }
             let inherited = ProcessInfo.processInfo.environment
             var environment = inherited
             for (name, reference) in entry.environmentReferences {
@@ -75,6 +75,7 @@ public actor ClientMCPController {
     private var outcomes: [String: ClientMCPResult] = [:]
     private var seen = Set<String>()
     private var connection: UUID?
+    private var shuttingDown = false
     public private(set) var statuses: [String: ClientMCPStatus] = [:]
     private var statusObservers: [UUID: AsyncStream<[String: ClientMCPStatus]>.Continuation] = [:]
 
@@ -128,14 +129,14 @@ public actor ClientMCPController {
     }
 
     public func setIdleTimeout(_ seconds: TimeInterval, for id: String) throws {
-        guard seconds > 0, seconds.isFinite, var entry = registry.entries.first(where: { $0.id == id }) else { return }
+        guard !shuttingDown, seconds > 0, seconds.isFinite, var entry = registry.entries.first(where: { $0.id == id }) else { return }
         entry.idleTimeoutSeconds = seconds
         try save(entry)
         if children[id] != nil { resetTimer(entry) }
     }
 
     public func enable(_ id: String) async throws {
-        guard let entry = registry.entries.first(where: { $0.id == id }), children[id] == nil else { return }
+        guard !shuttingDown, let entry = registry.entries.first(where: { $0.id == id }), children[id] == nil else { return }
         if let reason = permissions.missingPermission(for: entry) {
             setStatus(.permissionNeeded(reason), for: id)
             return
@@ -202,8 +203,16 @@ public actor ClientMCPController {
 
     public func disable(_ id: String) async { await disable(id, code: "mcp_disabled", status: .off) }
 
+    func shutdown() async {
+        shuttingDown = true
+        // Fence new enables and remove every child before awaiting any retirements.
+        let cleanup = Array(statuses.keys).compactMap { stop($0, code: "mcp_disabled", status: .off) }
+        for task in cleanup { await task.value }
+        await transport.setNeeded(false)
+    }
+
     public func setLaunchOption(_ key: String, value: Bool, for id: String) async throws {
-        guard var entry = registry.entries.first(where: { $0.id == id }), entry.optionArguments[key] != nil,
+        guard !shuttingDown, var entry = registry.entries.first(where: { $0.id == id }), entry.optionArguments[key] != nil,
               entry.launchOptions[key] != value else { return }
         entry.launchOptions[key] = value
         try save(entry)

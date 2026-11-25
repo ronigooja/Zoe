@@ -362,6 +362,94 @@ final class InstanceConnectionTests: XCTestCase {
         XCTAssertNil(try store.load())
     }
 
+    #if os(macOS)
+    @MainActor
+    func testRemoteControlFollowsValidatedConnectionAndCredentialLifecycle() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        let model = ZoeAppModel(defaults: defaults)
+        let store = MemoryInstanceKeyStore()
+        model.keyStoreOverrideForTesting = { _ in store }
+        model.connectionAPIOverrideForTesting = { url, credential, installation in
+            try APIClient(serverURL: url, credentials: credential, session: self.session(), installationID: installation)
+        }
+        model.suppressConnectionFollowupsForTesting = true
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        model.journalFactoryForTesting = { _ in try CommandJournal(fileURL: directory.appendingPathComponent("commands.json")) }
+        let body = snapshotData
+        InstanceURLProtocol.handle = { _ in (200, body) }
+        var relays: [FakeRemoteControlRelay] = []
+        model.remoteControlRelayFactoryForTesting = { api in
+            XCTAssertTrue(api.hasCredentials)
+            XCTAssertEqual(api.serverURL.absoluteString, model.serverAddress)
+            let relay = FakeRemoteControlRelay()
+            relays.append(relay)
+            return relay
+        }
+        defer { model.remoteControlRelayFactoryForTesting = nil }
+
+        XCTAssertNil(model.remoteControl)
+        let connected = await model.connect(serverAddress: "https://zoe.example", key: key())
+        XCTAssertTrue(connected)
+        let initialRelay = try XCTUnwrap(relays.first)
+        let initialControl = try XCTUnwrap(model.remoteControl)
+        XCTAssertFalse(model.remoteControlActive)
+        await initialControl.setEnabled(true, id: "agent-desktop")
+        XCTAssertTrue(model.remoteControlActive)
+
+        await model.reconnect()
+        XCTAssertEqual(relays.count, 1)
+        XCTAssertTrue(model.remoteControl === initialControl)
+        XCTAssertTrue(model.remoteControlActive)
+
+        let changed = await model.connect(serverAddress: model.serverAddress, key: key(2))
+        XCTAssertTrue(changed)
+        XCTAssertEqual(relays.count, 2)
+        let rotatedRelay = try XCTUnwrap(relays.last)
+        let rotatedControl = try XCTUnwrap(model.remoteControl)
+        XCTAssertFalse(rotatedControl === initialControl)
+        let initialShutdowns = await initialRelay.shutdowns
+        let credentialChanges = await rotatedRelay.credentialChanges
+        XCTAssertEqual(initialShutdowns, 1)
+        XCTAssertEqual(credentialChanges, 1)
+        XCTAssertFalse(model.remoteControlActive)
+
+        await rotatedControl.setEnabled(true, id: "agent-desktop")
+        await model.clearCredential()
+        XCTAssertNil(model.remoteControl)
+        XCTAssertFalse(model.remoteControlActive)
+        let rotatedShutdowns = await rotatedRelay.shutdowns
+        XCTAssertEqual(rotatedShutdowns, 1)
+        await rotatedControl.setEnabled(true, id: "agent-desktop")
+        let finalStatuses = await rotatedRelay.statuses()
+        XCTAssertEqual(finalStatuses["agent-desktop"], .off)
+
+        let switched = await model.connect(serverAddress: "https://other.example", key: key(3))
+        XCTAssertTrue(switched)
+        XCTAssertEqual(relays.count, 3)
+        let differentURLRelay = try XCTUnwrap(relays.last)
+        let differentURLCredentialChanges = await differentURLRelay.credentialChanges
+        XCTAssertEqual(differentURLCredentialChanges, 1)
+        try store.reset() // Removal outside Zoe must be detected on reconnect too.
+        await model.reconnect()
+        let missingCredentialShutdowns = await differentURLRelay.shutdowns
+        XCTAssertEqual(missingCredentialShutdowns, 1)
+        XCTAssertNil(model.remoteControl)
+        XCTAssertFalse(model.remoteControlActive)
+
+        let connectedBeforeExit = await model.connect(serverAddress: model.serverAddress, key: key(4))
+        XCTAssertTrue(connectedBeforeExit)
+        let exitingRelay = try XCTUnwrap(relays.last)
+        let exitingControl = try XCTUnwrap(model.remoteControl)
+        await exitingControl.setEnabled(true, id: "agent-desktop")
+        await model.shutdownRemoteControlForAppExit()
+        let exitShutdowns = await exitingRelay.shutdowns
+        XCTAssertEqual(exitShutdowns, 1)
+        XCTAssertNil(model.remoteControl)
+        XCTAssertFalse(model.remoteControlActive)
+    }
+    #endif
+
     @MainActor
     func testSavedServerRemainsLockedAfterKeyRejectionOrUnavailableConnection() async throws {
         for state in [InstanceConnectionState.disconnected, .unavailable] {

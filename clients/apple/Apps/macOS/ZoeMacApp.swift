@@ -47,6 +47,12 @@ struct ZoeMacApp {
         menu.addItem(quit)
         item.menu = menu
         statusItem = item
+        model.$remoteControlActive.removeDuplicates().sink { [weak self] active in
+            guard let self else { return }
+            self.statusItem?.button?.image = active
+                ? NSImage(systemSymbolName: "dot.radiowaves.left.and.right", accessibilityDescription: self.model.remoteControlActiveDescription) ?? MenuBarIcon.image()
+                : MenuBarIcon.image()
+        }.store(in: &subscriptions)
         model.screenVisibleSize = { [weak self] in
             (self?.statusItem?.button?.window?.screen ?? NSScreen.main)?.visibleFrame.size
         }

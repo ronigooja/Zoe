@@ -51,4 +51,19 @@ final class ClientMCPRelayTests: XCTestCase {
         let entries = await relay.entries()
         return try XCTUnwrap(entries.first { $0.id == "agent-desktop" })
     }
+
+    func testShutdownTurnsOffAllEntriesAndClosesSocket() async throws {
+        let socket = FixtureMCPSocket()
+        let store = InMemoryMCPRegistryStore(entries: [.agentDesktop, .init(id: "other", command: "other")])
+        let relay = try await ClientMCPRelay.make(api: mcpTestAPI(), store: store, permissions: RelayPermissions(), childFactory: { _, _ in RelayChild() }, socketFactory: { _ in socket })
+        try await relay.setEnabled(true, id: "agent-desktop")
+        try await relay.setEnabled(true, id: "other")
+        try await mcpEventually { await socket.opened }
+        await relay.shutdown()
+        try await relay.setEnabled(true, id: "other") // An old model cannot bring this connection back.
+        let statuses = await relay.statuses()
+        let closed = await socket.closeCount
+        XCTAssertEqual(statuses, ["agent-desktop": .off, "other": .off])
+        XCTAssertGreaterThan(closed, 0)
+    }
 }

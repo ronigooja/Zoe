@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 public enum MCPChildError: Error, Equatable {
-    case exited, invalidResponse, remoteError, notStarted, startupTimedOut, frameTooLarge
+    case exited, invalidResponse, remoteError, notStarted, executableNotFound, startupTimedOut, frameTooLarge
 }
 
 public protocol MCPChildProcess: Sendable {

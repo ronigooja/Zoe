@@ -27,6 +27,16 @@ public final class ZoeAppModel: ObservableObject {
     #if os(macOS)
     public var screenVisibleSize: () -> NSSize? = { NSScreen.main?.visibleFrame.size }
     private var lastReportedScreenSize: SurfaceSize?
+    @Published public private(set) var remoteControl: RemoteControlModel?
+    @Published public private(set) var remoteControlActive = false
+    public var remoteControlActiveDescription: String { uiText("Remote control is active") }
+    @Published public private(set) var remoteControlError: String?
+    private var remoteControlIdentity: String?
+    private var remoteControlLastURL: URL?
+    private var remoteControlSubscription: AnyCancellable?
+    private var remoteControlCleanup: Task<Void, Never>?
+    private var remoteControlCredentialsChanged = false
+    private var remoteControlTerminating = false
     #endif
     @Published public internal(set) var serverAddress: String
     @Published public private(set) var isConnecting = false
@@ -57,7 +67,7 @@ public final class ZoeAppModel: ObservableObject {
     private var voiceReadinessRevision: UInt64 = 0
     private let pendingVoiceHangupKey = "zoe.voice.pendingGatewayHangups"
     private var api: APIClient?
-    private var identity: (any InstanceKeyStoring)?
+    private var configuredKeyDigest: SHA256.Digest?
     private var journal: CommandJournal?
     private var coordinator: CommandCoordinator?
     private var eventTask: Task<Void, Never>?
@@ -70,6 +80,9 @@ public final class ZoeAppModel: ObservableObject {
     var connectionAPIOverrideForTesting: ((URL, InstanceKey, String) throws -> APIClient)?
     var keyStoreOverrideForTesting: ((URL) throws -> any InstanceKeyStoring)?
     var suppressConnectionFollowupsForTesting = false
+    #if os(macOS)
+    var remoteControlRelayFactoryForTesting: ((APIClient) async throws -> any RemoteControlRelaying)?
+    #endif
     var voiceDiagnosticObserverForTesting: ((String, String) -> Void)?
     var voiceEndDiagnosticsTaskObserverForTesting: ((Task<Void, Never>) -> Void)?
     var voicePoolRefreshTaskForTesting: Task<Void, Never>?
@@ -245,6 +258,7 @@ public final class ZoeAppModel: ObservableObject {
         terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 (self?.api ?? self?.voiceAPI)?.triggerDiagnosticUpload(timeout: 1)
+                await self?.shutdownRemoteControlForAppExit()
                 await self?.terminateVoiceForAppExit()
             }
         }
@@ -265,7 +279,14 @@ public final class ZoeAppModel: ObservableObject {
     public func start() async {
         guard !eventRecoveryRequired else { return }
         guard !isConnecting, !isBusy else { return }
-        guard !serverAddress.isEmpty else { authentication = .disconnected; return }
+        guard !serverAddress.isEmpty else {
+            if api != nil { lockInstance() }
+            authentication = .disconnected
+            #if os(macOS)
+            await remoteControlCleanup?.value
+            #endif
+            return
+        }
         isConnecting = true
         defer { isConnecting = false }
         notice = nil
@@ -282,6 +303,10 @@ public final class ZoeAppModel: ObservableObject {
             try await validateConnection()
             guard generation == connectionGeneration.value else { return }
             authentication = .connected
+            #if os(macOS)
+            await configureRemoteControl(using: configuredAPI, generation: generation)
+            guard isCurrentConnection(generation, sourceAPI: configuredAPI) else { return }
+            #endif
             if let syncLoop { await syncLoop.cancel() }
             let syncLoop = ClientSyncLoop(api: configuredAPI)
             self.syncLoop = syncLoop
@@ -306,6 +331,9 @@ public final class ZoeAppModel: ObservableObject {
             if Self.isAccessDenied(error) || (error as? ZoeError).map({ if case .missingCredential = $0 { true } else { false } }) == true {
                 lockInstance()
                 authentication = .disconnected
+                #if os(macOS)
+                await remoteControlCleanup?.value
+                #endif
             } else if !authentication.isConnected { authentication = .unavailable }
             setOffline(error)
         }
@@ -486,6 +514,9 @@ public final class ZoeAppModel: ObservableObject {
                 await endVoiceSession(reason: .connectionCleared)
                 // Keep instance-scoped pending commands across key rotation.
                 try await removeLocalConnection(preservingCredential: true)
+                #if os(macOS)
+                if let previousKey, previousKey != candidate.key { remoteControlCredentialsChanged = true }
+                #endif
             } catch {
                 do {
                     if let previousKey { try store.replace(previousKey) }
@@ -535,6 +566,10 @@ public final class ZoeAppModel: ObservableObject {
         let oldJournal = journal
         lockInstance()
         authentication = .disconnected
+        #if os(macOS)
+        if !preservingCredential { remoteControlCredentialsChanged = false }
+        await remoteControlCleanup?.value
+        #endif
         if !preservingCredential { try await oldJournal?.discard() }
         if let url = try? ServerAddress.normalize(serverAddress) {
             let store = try keyStore(url: url)
@@ -551,6 +586,9 @@ public final class ZoeAppModel: ObservableObject {
         closeUISurfaces()
         connectionGeneration.advance()
         connectionEpoch = connectionGeneration.value
+        #if os(macOS)
+        detachRemoteControl()
+        #endif
         eventTask?.cancel()
         eventTask = nil
         if let syncLoop { Task { await syncLoop.cancel() } }
@@ -563,7 +601,7 @@ public final class ZoeAppModel: ObservableObject {
         voiceConfig = nil
         voicePoolStatus = nil
         api = nil
-        identity = nil
+        configuredKeyDigest = nil
         journal = nil
         coordinator = nil
         // Capture and detach old resources synchronously. Later cleanup cannot target a new session.
@@ -597,6 +635,73 @@ public final class ZoeAppModel: ObservableObject {
             _ = await self.requestVoiceHangup(oldSession, api: oldAPI, phase: "instance_lock")
         }
     }
+
+    #if os(macOS)
+    private func detachRemoteControl() {
+        let relay = remoteControl?.detach()
+        remoteControlSubscription = nil
+        remoteControl = nil
+        remoteControlIdentity = nil
+        remoteControlActive = false
+        remoteControlError = nil
+        guard let relay else { return }
+        let prior = remoteControlCleanup
+        remoteControlCleanup = Task {
+            await prior?.value
+            await relay.shutdown()
+        }
+    }
+
+    public func shutdownRemoteControlForAppExit() async {
+        remoteControlTerminating = true
+        detachRemoteControl()
+        await remoteControlCleanup?.value
+    }
+
+    private func configureRemoteControl(using api: APIClient, generation: UInt64) async {
+        guard !remoteControlTerminating, isCurrentConnection(generation, sourceAPI: api),
+              let identity = instanceLineageID else { return }
+        if remoteControlIdentity == identity, remoteControl != nil { return }
+        if remoteControl != nil { detachRemoteControl() }
+        await remoteControlCleanup?.value
+        guard !remoteControlTerminating, isCurrentConnection(generation, sourceAPI: api),
+              instanceLineageID == identity else { return }
+        do {
+            let relay: any RemoteControlRelaying
+            #if DEBUG
+            if let factory = remoteControlRelayFactoryForTesting {
+                relay = try await factory(api)
+            } else {
+                relay = try await ClientMCPRelay.make(api: api, store: UserDefaultsMCPRegistryStore(defaults: defaults))
+            }
+            #else
+            relay = try await ClientMCPRelay.make(api: api, store: UserDefaultsMCPRegistryStore(defaults: defaults))
+            #endif
+            // The previous relay was bound to the old API. Re-arm only the replacement.
+            if remoteControlCredentialsChanged || remoteControlLastURL.map({ $0 != api.serverURL }) == true {
+                await relay.credentialsChanged()
+            }
+            guard !remoteControlTerminating, isCurrentConnection(generation, sourceAPI: api),
+                  instanceLineageID == identity, remoteControl == nil else {
+                await relay.shutdown()
+                return
+            }
+            remoteControlCredentialsChanged = false
+            remoteControlLastURL = api.serverURL
+            let model = RemoteControlModel(relay: relay)
+            remoteControl = model
+            remoteControlIdentity = identity
+            remoteControlError = nil
+            remoteControlSubscription = model.$anyEnabled.removeDuplicates().sink { [weak self] in
+                self?.remoteControlActive = $0
+            }
+        } catch {
+            guard !remoteControlTerminating, isCurrentConnection(generation, sourceAPI: api),
+                  instanceLineageID == identity, remoteControl == nil else { return }
+            remoteControlError = uiText("Remote control settings could not be loaded.")
+        }
+    }
+    #endif
     public func refreshVoiceReadiness() async {
         guard let api = try? configure() else { return }
         let generation = connectionGeneration.value
@@ -1250,11 +1355,21 @@ public final class ZoeAppModel: ObservableObject {
 
     private func configure() throws -> APIClient {
         let url = try ServerAddress.normalize(serverAddress)
-        if let api, api.serverURL == url { return api }
         let store = try keyStore(url: url)
-        guard let key = try store.load() else { throw ZoeError.missingCredential }
-        if configuredServerURL != url {
+        guard let key = try store.load() else {
+            if api != nil { lockInstance(); authentication = .disconnected }
+            throw ZoeError.missingCredential
+        }
+        let digest = SHA256.hash(data: Data(try key.bearerToken().utf8))
+        if let api, api.serverURL == url, configuredKeyDigest == digest { return api }
+        if configuredServerURL != url || api != nil {
+            #if os(macOS)
+            if let configuredServerURL, configuredServerURL != url || configuredKeyDigest != nil {
+                remoteControlCredentialsChanged = true
+            }
+            #endif
             lockInstance()
+            if authentication.isConnected { authentication = .checking }
             connectionGeneration.switchOrigin(to: url)
             connectionEpoch = connectionGeneration.value
             configuredServerURL = url
@@ -1263,7 +1378,7 @@ public final class ZoeAppModel: ObservableObject {
             voicePoolStatus = nil
         }
         let api = try connectionAPI(url: url, key: key)
-        self.identity = store
+        configuredKeyDigest = digest
         self.api = api
         // Journals are opened only after an authenticated snapshot establishes instance identity.
         return api
@@ -1346,6 +1461,9 @@ public final class ZoeAppModel: ObservableObject {
         journal = try CommandJournal(instanceLineageID: identity)
         #endif
         if instanceLineageID != identity {
+            #if os(macOS)
+            if remoteControlIdentity != nil { detachRemoteControl() }
+            #endif
             closeUISurfaces()
             eventCursor = nil
             authoritativeControlSnapshot = nil
@@ -1522,6 +1640,12 @@ public final class ZoeAppModel: ObservableObject {
         eventRecoveryRequired = false
         authentication = .connected
         onUISurfacesClosed?(removed)
+        #if os(macOS)
+        if self.api === api, remoteControl == nil {
+            await configureRemoteControl(using: api, generation: generation)
+            guard !Task.isCancelled, isCurrentConnection(generation, sourceAPI: api) else { throw CancellationError() }
+        }
+        #endif
         let events = recovery.ui.surfaces.map(\.event).filter { staged.outcomes[$0.binding] == true }
         let instance = identity
         let coordinator = coordinator
