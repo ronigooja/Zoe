@@ -4,7 +4,8 @@ import XCTest
 
 final class ModelMonitorChannelTests: XCTestCase {
     private func next(_ updates: inout AsyncStream<ModelMonitorUpdate>.Iterator) async throws -> ModelMonitorUpdate {
-        try XCTUnwrap(await updates.next())
+        let update = await updates.next()
+        return try XCTUnwrap(update)
     }
 
     private func subscriptionID(in data: Data, type: String) throws -> String {
