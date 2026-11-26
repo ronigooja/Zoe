@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
-	"time"
 
 	"github.com/ronigooja/Zoe/internal/modelmonitor"
 )
@@ -30,9 +29,7 @@ func (c *clientSocket) stopMonitor() {
 }
 
 func (c *clientSocket) monitorWrite(value any) error {
-	ctx, cancel := context.WithTimeout(c.ctx, time.Second)
-	defer cancel()
-	return c.write(ctx, value)
+	return c.write(c.ctx, value)
 }
 
 func (c *clientSocket) handleMonitorFrame(data []byte) {
@@ -117,9 +114,20 @@ func (c *clientSocket) runMonitor(ctx context.Context, m *monitorSubscription) {
 		case <-m.source.Gap:
 			gap()
 			return
-		case event := <-m.source.Events:
+		case item := <-m.source.Events:
+			if item.Gap {
+				if c.monitorWrite(map[string]any{"channel": "model_monitor", "type": "gap", "subscription_id": m.id}) != nil {
+					c.cancel()
+					return
+				}
+				continue
+			}
 			sequence++
-			err := c.monitorWrite(map[string]any{"channel": "model_monitor", "type": "event", "subscription_id": m.id, "sequence": sequence, "event": event})
+			admitted, err := c.tryMonitorWrite(map[string]any{"channel": "model_monitor", "type": "event", "subscription_id": m.id, "sequence": sequence, "event": item.Event})
+			if !admitted {
+				gap()
+				return
+			}
 			if err == errClientFrameTooLarge {
 				gap()
 				return

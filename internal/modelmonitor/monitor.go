@@ -22,8 +22,14 @@ const maxPayload = 32 * 1024
 const queueSize = 32
 
 type Subscription struct {
-	Events chan Event
+	Events chan Item
 	Gap    chan struct{}
+}
+
+// Item is either an event or an in-band source-loss notice.
+type Item struct {
+	Event Event
+	Gap   bool
 }
 
 var registry = struct {
@@ -53,7 +59,7 @@ func advanceGeneration() {
 }
 
 func Subscribe() *Subscription {
-	s := &Subscription{Events: make(chan Event, queueSize), Gap: make(chan struct{})}
+	s := &Subscription{Events: make(chan Item, queueSize), Gap: make(chan struct{})}
 	registry.Lock()
 	registry.subs[s] = struct{}{}
 	advanceGeneration()
@@ -84,6 +90,19 @@ func PublishFor(generation uint64, e Event) {
 	publish(generation, true, e)
 }
 
+// GapFor reports source loss to the membership identified by generation.
+func GapFor(generation uint64) {
+	if generation == 0 {
+		return
+	}
+	registry.Lock()
+	defer registry.Unlock()
+	if generation != registry.generation {
+		return
+	}
+	enqueue(Item{Gap: true})
+}
+
 func publish(generation uint64, fenced bool, e Event) {
 	if !Enabled() {
 		return
@@ -107,9 +126,14 @@ func publish(generation uint64, fenced bool, e Event) {
 	if fenced && generation != registry.generation {
 		return
 	}
+	enqueue(Item{Event: e})
+}
+
+// enqueue runs under registry's lock, preserving event and gap ordering.
+func enqueue(item Item) {
 	for s := range registry.subs {
 		select {
-		case s.Events <- e:
+		case s.Events <- item:
 		default:
 			delete(registry.subs, s)
 			advanceGeneration()
