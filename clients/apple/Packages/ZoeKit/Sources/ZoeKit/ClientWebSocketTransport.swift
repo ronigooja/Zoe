@@ -76,8 +76,14 @@ public actor ClientWebSocketTransport: ClientMCPTransport {
         if wantsConnection { startIfNeeded() } else { await interrupt() }
     }
 
-    public func register(channel: String, handler: any ClientWebSocketChannel) {
+    /// A handler that joins an already open or rejected socket receives that state at once, since it missed the original callback.
+    public func register(channel: String, handler: any ClientWebSocketChannel) async {
         channels[channel] = handler
+        if openConnection != nil {
+            await handler.opened()
+        } else if rejected {
+            await handler.rejected()
+        }
     }
 
     public var isOpen: Bool { openConnection != nil }

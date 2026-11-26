@@ -58,8 +58,9 @@ public actor ClientMCPRelay {
         let bridge = MCPRelayBridge()
         let registry = try ClientMCPRegistry(store: store)
         let controller = ClientMCPController(registry: registry, permissions: permissions, transport: bridge, factory: childFactory)
-        await transport.register(channel: ClientWebSocketTransport.mcpChannel, handler: bridge)
+        // Install before registering: registering into an open socket calls `opened()` immediately.
         await bridge.install(controller: controller, transport: transport)
+        await transport.register(channel: ClientWebSocketTransport.mcpChannel, handler: bridge)
         return ClientMCPRelay(controller: controller, transport: transport, bridge: bridge)
     }
 
