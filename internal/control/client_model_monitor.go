@@ -118,6 +118,14 @@ func (c *clientSocket) runMonitor(ctx context.Context, m *monitorSubscription) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-m.source.Gap:
+			terminal()
+			return
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
 			if pendingGap {
 				admitted, err := c.tryMonitorWrite(gapFrame)
@@ -129,14 +137,6 @@ func (c *clientSocket) runMonitor(ctx context.Context, m *monitorSubscription) {
 					pendingGap = false
 				}
 			}
-		case <-m.source.Gap:
-			terminal()
-			return
-		default:
-		}
-		select {
-		case <-ctx.Done():
-			return
 		case <-m.source.Gap:
 			terminal()
 			return
