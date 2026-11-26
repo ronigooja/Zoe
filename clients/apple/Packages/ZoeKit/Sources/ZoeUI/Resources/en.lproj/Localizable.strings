@@ -49,7 +49,6 @@
 "The MCP server took too long to start." = "The MCP server took too long to start.";
 "Could not update remote control. Try again." = "Could not update remote control. Try again.";
 "Remote control settings could not be loaded." = "Remote control settings could not be loaded.";
-"Remote control is active" = "Remote control is active";
 "This installation link is invalid." = "This installation link is invalid.";
 "Clear the saved key before connecting to a different server." = "Clear the saved key before connecting to a different server.";
 "Saved key and local connection data cleared." = "Saved key and local connection data cleared.";

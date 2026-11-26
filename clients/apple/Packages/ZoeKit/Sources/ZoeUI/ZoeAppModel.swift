@@ -28,12 +28,9 @@ public final class ZoeAppModel: ObservableObject {
     public var screenVisibleSize: () -> NSSize? = { NSScreen.main?.visibleFrame.size }
     private var lastReportedScreenSize: SurfaceSize?
     @Published public private(set) var remoteControl: RemoteControlModel?
-    @Published public private(set) var remoteControlActive = false
-    public var remoteControlActiveDescription: String { uiText("Remote control is active") }
     @Published public private(set) var remoteControlError: String?
     private var remoteControlIdentity: String?
     private var remoteControlLastURL: URL?
-    private var remoteControlSubscription: AnyCancellable?
     private var remoteControlCleanup: Task<Void, Never>?
     private var remoteControlCleanupID: UUID?
     private var remoteControlCredentialsChanged = false
@@ -651,10 +648,8 @@ public final class ZoeAppModel: ObservableObject {
 
     private func detachRemoteControl() {
         let relay = remoteControl?.detach()
-        remoteControlSubscription = nil
         remoteControl = nil
         remoteControlIdentity = nil
-        remoteControlActive = false
         remoteControlError = nil
         guard let relay else { return }
         let prior = remoteControlCleanup
@@ -744,9 +739,6 @@ public final class ZoeAppModel: ObservableObject {
             remoteControl = model
             remoteControlIdentity = identity
             remoteControlError = nil
-            remoteControlSubscription = model.$anyEnabled.removeDuplicates().sink { [weak self] in
-                self?.remoteControlActive = $0
-            }
         } catch {
             guard !remoteControlTerminating, isCurrentConnection(generation, sourceAPI: api),
                   instanceLineageID == identity, remoteControl == nil else { return }

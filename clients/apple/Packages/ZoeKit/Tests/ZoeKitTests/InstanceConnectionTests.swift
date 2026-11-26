@@ -393,14 +393,11 @@ final class InstanceConnectionTests: XCTestCase {
         XCTAssertTrue(connected)
         let initialRelay = try XCTUnwrap(relays.first)
         let initialControl = try XCTUnwrap(model.remoteControl)
-        XCTAssertFalse(model.remoteControlActive)
         await initialControl.setEnabled(true, id: "agent-desktop")
-        XCTAssertTrue(model.remoteControlActive)
 
         await model.reconnect()
         XCTAssertEqual(relays.count, 1)
         XCTAssertTrue(model.remoteControl === initialControl)
-        XCTAssertTrue(model.remoteControlActive)
 
         let changed = await model.connect(serverAddress: model.serverAddress, key: key(2))
         XCTAssertTrue(changed)
@@ -412,12 +409,10 @@ final class InstanceConnectionTests: XCTestCase {
         let credentialChanges = await rotatedRelay.credentialChanges
         XCTAssertEqual(initialShutdowns, 1)
         XCTAssertEqual(credentialChanges, 1)
-        XCTAssertFalse(model.remoteControlActive)
 
         await rotatedControl.setEnabled(true, id: "agent-desktop")
         await model.clearCredential()
         XCTAssertNil(model.remoteControl)
-        XCTAssertFalse(model.remoteControlActive)
         let rotatedShutdowns = await rotatedRelay.shutdowns
         XCTAssertEqual(rotatedShutdowns, 1)
         await rotatedControl.setEnabled(true, id: "agent-desktop")
@@ -435,7 +430,6 @@ final class InstanceConnectionTests: XCTestCase {
         let missingCredentialShutdowns = await differentURLRelay.shutdowns
         XCTAssertEqual(missingCredentialShutdowns, 1)
         XCTAssertNil(model.remoteControl)
-        XCTAssertFalse(model.remoteControlActive)
 
         let connectedBeforeExit = await model.connect(serverAddress: model.serverAddress, key: key(4))
         XCTAssertTrue(connectedBeforeExit)
@@ -449,7 +443,6 @@ final class InstanceConnectionTests: XCTestCase {
         let exitShutdowns = await exitingRelay.shutdowns
         XCTAssertEqual(exitShutdowns, 1)
         XCTAssertNil(model.remoteControl)
-        XCTAssertFalse(model.remoteControlActive)
         XCTAssertFalse(model.remoteControlNeedsShutdown)
     }
     #endif
