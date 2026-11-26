@@ -20,6 +20,7 @@ import (
 type Client struct {
 	limits                                    limits.Set
 	base, model, effort, thinking, key, style string
+	component                                 string
 	http                                      *http.Client
 	mu                                        sync.Mutex
 }
@@ -99,7 +100,7 @@ func FromEnv(prefix string, getenv func(string) string, readFile func(string) ([
 	if err != nil {
 		return nil, err
 	}
-	return &Client{limits: limits.Resolve(sets), base: base, model: model, effort: effort, thinking: thinking, key: key, http: &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}, Timeout: timeout}}, nil
+	return &Client{limits: limits.Resolve(sets), base: base, model: model, effort: effort, thinking: thinking, key: key, component: observationComponent(prefix), http: &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}, Timeout: timeout}}, nil
 }
 
 func (c *Client) Style() string {
@@ -201,6 +202,7 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (stri
 }
 
 func (c *Client) call(ctx context.Context, style, instructions, input string) ([]byte, int, error) {
+	obs := c.observeAttempt(ctx, style, instructions, input)
 	request := map[string]any{"model": c.model}
 	path := "/responses"
 	if style == "chat" {
@@ -236,30 +238,37 @@ func (c *Client) call(ctx context.Context, style, instructions, input string) ([
 	}
 	b, err := json.Marshal(request)
 	if err != nil {
+		obs.endError("request_encoding", 0)
 		return nil, 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(b))
 	if err != nil {
+		obs.endError("request_creation", 0)
 		return nil, 0, errors.New("could not create model request")
 	}
 	req.Header.Set("Authorization", "Bearer "+c.key)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
+		obs.endError("transport", 0)
 		return nil, 0, &transportError{cause: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		obs.endError("http_status", resp.StatusCode)
 		return nil, resp.StatusCode, &HTTPError{StatusCode: resp.StatusCode}
 	}
 	limit := c.limits.Int64("model_api_response_max_bytes")
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
+		obs.endError("response_read", resp.StatusCode)
 		return nil, resp.StatusCode, errors.New("could not read model response")
 	}
 	if int64(len(body)) > limit {
+		obs.endError("response_limit", resp.StatusCode)
 		return nil, resp.StatusCode, errors.New("model response exceeds byte limit")
 	}
+	obs.endResponse(resp.StatusCode, body, style)
 	return body, resp.StatusCode, nil
 }
 

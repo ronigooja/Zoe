@@ -12,6 +12,7 @@ import (
 
 	"github.com/ronigooja/Zoe/internal/backoff"
 	"github.com/ronigooja/Zoe/internal/logging"
+	"github.com/ronigooja/Zoe/internal/modelclient"
 )
 
 // runTaskSummaries sweeps durable completion state, including tasks completed
@@ -115,7 +116,7 @@ FROM tasks t WHERE t.id=? AND t.status='complete' AND t.summary_result IS NULL`,
 	}
 	callCtx, cancel := context.WithTimeout(ctx, r.compactTimeout)
 	defer cancel()
-	output, err := r.compactModel.Complete(callCtx, r.taskSummaryInstruction, string(data))
+	output, err := r.compactModel.Complete(modelclient.WithObservationComponent(callCtx, "task_summary"), r.taskSummaryInstruction, string(data))
 	if err != nil {
 		return err
 	}
