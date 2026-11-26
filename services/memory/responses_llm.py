@@ -92,10 +92,13 @@ class ResponsesLLM(OpenAILLM):
         reasoning_effort = getattr(self.config, "reasoning_effort", None)
         if reasoning_model:
             request["reasoning"] = {"effort": reasoning_effort or "medium"}
+        from .model_observation import begin, finish
+        observation = begin(messages, self.config.model)
         try:
             response = self.client.with_options(max_retries=0).responses.create(**request)
         except (AuthenticationError, PermissionDeniedError):
             reject_auth(self)
+        finish(observation, response.output_text or "")
         if not tools:
             return response.output_text or ""
         calls: list[dict[str, Any]] = []
