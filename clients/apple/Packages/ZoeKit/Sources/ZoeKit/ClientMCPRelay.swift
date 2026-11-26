@@ -1,14 +1,18 @@
 import Foundation
 
-private actor MCPRelayBridge: ClientMCPTransport {
+private actor MCPRelayBridge: ClientWebSocketChannel, ClientMCPTransport {
     weak var transport: ClientWebSocketTransport?
     weak var controller: ClientMCPController?
+    // Each relay holds its own demand, so releasing an old relay cannot drop a replacement's demand on a shared socket.
+    let demand = "\(ClientWebSocketTransport.mcpChannel)-\(UUID().uuidString)"
 
     func install(controller: ClientMCPController, transport: ClientWebSocketTransport) {
         self.controller = controller
         self.transport = transport
     }
-    func setNeeded(_ needed: Bool) async { await transport?.setNeeded(needed) }
+    func setNeeded(_ needed: Bool) async {
+        await transport?.setNeeded(needed, demand: demand)
+    }
     func send(_ data: Data) async throws {
         guard let transport else { throw ClientWebSocketError.disconnected }
         try await transport.send(data)
@@ -21,30 +25,42 @@ private actor MCPRelayBridge: ClientMCPTransport {
 public actor ClientMCPRelay {
     public let controller: ClientMCPController
     private let transport: ClientWebSocketTransport
+    private let bridge: MCPRelayBridge
 
-    private init(controller: ClientMCPController, transport: ClientWebSocketTransport) {
+    private init(controller: ClientMCPController, transport: ClientWebSocketTransport, bridge: MCPRelayBridge) {
         self.controller = controller
         self.transport = transport
+        self.bridge = bridge
     }
 
     deinit {
-        let transport = transport
-        Task { await transport.setNeeded(false) }
+        let bridge = bridge
+        Task { await bridge.setNeeded(false) }
     }
 
     public static func make(api: APIClient, store: any ClientMCPRegistryStore = UserDefaultsMCPRegistryStore(), permissions: any MCPPermissionChecking = MCPMacPermissions(), resolver: any MCPExecutableResolving = PATHMCPExecutableResolver(), diagnostic: @escaping @Sendable (String) -> Void = { _ in }) async throws -> ClientMCPRelay {
-        try await make(api: api, store: store, permissions: permissions, childFactory: ClientMCPController.processFactory(resolver: resolver), diagnostic: diagnostic)
+        try await make(transport: ClientWebSocketTransport(api: api, diagnostic: diagnostic), store: store, permissions: permissions, resolver: resolver)
+    }
+
+    /// Relay on a socket the caller owns. The socket may be shared with other channels.
+    public static func make(transport: ClientWebSocketTransport, store: any ClientMCPRegistryStore = UserDefaultsMCPRegistryStore(), permissions: any MCPPermissionChecking = MCPMacPermissions(), resolver: any MCPExecutableResolving = PATHMCPExecutableResolver()) async throws -> ClientMCPRelay {
+        try await make(transport: transport, store: store, permissions: permissions, childFactory: ClientMCPController.processFactory(resolver: resolver))
     }
 
     static func make(api: APIClient, store: any ClientMCPRegistryStore, permissions: any MCPPermissionChecking,
                      childFactory: @escaping ClientMCPController.ChildFactory, socketFactory: ClientWebSocketTransport.SocketFactory? = nil,
                      diagnostic: @escaping @Sendable (String) -> Void = { _ in }) async throws -> ClientMCPRelay {
+        try await make(transport: ClientWebSocketTransport(api: api, factory: socketFactory, diagnostic: diagnostic), store: store, permissions: permissions, childFactory: childFactory)
+    }
+
+    static func make(transport: ClientWebSocketTransport, store: any ClientMCPRegistryStore, permissions: any MCPPermissionChecking,
+                     childFactory: @escaping ClientMCPController.ChildFactory) async throws -> ClientMCPRelay {
         let bridge = MCPRelayBridge()
         let registry = try ClientMCPRegistry(store: store)
         let controller = ClientMCPController(registry: registry, permissions: permissions, transport: bridge, factory: childFactory)
-        let transport = ClientWebSocketTransport(api: api, factory: socketFactory, onOpen: { await bridge.opened() }, onClose: { await bridge.closed() }, onMCPFrame: { await bridge.received($0) }, diagnostic: diagnostic)
+        await transport.register(channel: ClientWebSocketTransport.mcpChannel, handler: bridge)
         await bridge.install(controller: controller, transport: transport)
-        return ClientMCPRelay(controller: controller, transport: transport)
+        return ClientMCPRelay(controller: controller, transport: transport, bridge: bridge)
     }
 
     public func setEnabled(_ enabled: Bool, id: String) async throws {

@@ -10,7 +10,12 @@ public struct MacSettingsView: View {
     @State private var confirmingClearKey = false
     @FocusState private var secondsFocused: Bool
 
-    public init(model: ZoeAppModel) { self.model = model }
+    var openModelMonitor: () -> Void
+
+    public init(model: ZoeAppModel, openModelMonitor: @escaping () -> Void = {}) {
+        self.model = model
+        self.openModelMonitor = openModelMonitor
+    }
 
     public var body: some View {
         TabView {
@@ -136,6 +141,14 @@ public struct MacSettingsView: View {
                         Text(error).font(.caption).foregroundStyle(.red)
                         Button("Dismiss") { model.dismissConnectionImportError() }
                     }
+                }
+                Section {
+                    Button(uiText("Model conversation monitor…"), action: openModelMonitor)
+                        .disabled(model.modelMonitorChannel == nil)
+                    Text(uiText("Shows live model requests and replies for this instance. Nothing is stored."))
+                        .font(.caption).foregroundStyle(.secondary)
+                } header: {
+                    Text(uiText("Diagnostics"))
                 }
             }
             .formStyle(.grouped)

@@ -19,6 +19,9 @@ struct ZoeMacApp {
     private let terminationGate = AppTerminationGate()
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
+    private var modelMonitorWindow: NSWindow?
+    private var modelMonitorCloseObserver: NSObjectProtocol?
+    private let modelMonitor = ModelMonitorModel()
     private var textInputWindow: NSWindow?
     private var historyWindow: NSWindow?
     private let historyStore = UISurfaceHistoryStore(root: UISurfaceHistoryStore.defaultRoot())
@@ -85,6 +88,11 @@ struct ZoeMacApp {
         model.onUISurfaceDisplayed = { event, scope in
             try await store.append(scope: scope, id: event.renderedIdempotencyKey, container: event.container, messages: event.messages)
         }
+        // Instance, owner, or credential changes replace the channel; an open monitor follows it or clears.
+        model.$modelMonitorChannel.sink { [weak self] channel in
+            guard let self else { return }
+            Task { await self.modelMonitor.follow(channel) }
+        }.store(in: &subscriptions)
         model.$continuousVoiceEnabled.combineLatest(model.$voiceStatus).sink { enabled, status in
             voice.state = enabled ? .on : .off
             switch status {
@@ -173,11 +181,29 @@ struct ZoeMacApp {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 540), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "Settings"
             window.isReleasedWhenClosed = false
-            window.contentViewController = NSHostingController(rootView: MacSettingsView(model: model))
+            window.contentViewController = NSHostingController(rootView: MacSettingsView(model: model, openModelMonitor: { [weak self] in self?.showModelMonitor() }))
             window.center()
             settingsWindow = window
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Independent of the status menu and the MCP switches. It exists only while the instance has a monitor channel.
+    @objc private func showModelMonitor() {
+        if modelMonitorWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 480), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.title = "Model Monitor"
+            window.isReleasedWhenClosed = false
+            window.contentViewController = NSHostingController(rootView: ModelMonitorView(model: modelMonitor))
+            window.center()
+            modelMonitorWindow = window
+            modelMonitorCloseObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in await self?.modelMonitor.dismiss() }
+            }
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        modelMonitorWindow?.makeKeyAndOrderFront(nil)
+        Task { await modelMonitor.present(model.modelMonitorChannel) }
     }
 }
