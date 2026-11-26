@@ -66,6 +66,7 @@ persistence, and recovery.
 | Client WebSocket endpoint, channels, heartbeat, frame limit, and reconnection | [Client WebSocket](flows/client-ws.md) |
 | Worker calls to MCP servers running on the Mac client, per-MCP switches, and relay failures | [Client MCP](flows/client-mcp.md) |
 | Independent model consumers, atomic configuration, and retained deployment state | [Configuration](flows/configuration.md) |
+| Live-only model activity monitor in the Mac client | [Model monitor](flows/model-monitor.md) |
 
 Use [development](../development.md) for documentation checks and the acceptance
 boundary, and [operations](../operations.md) for configuration and deployment
