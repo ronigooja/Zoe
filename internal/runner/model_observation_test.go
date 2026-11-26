@@ -2,9 +2,13 @@ package runner
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
 )
 
@@ -19,7 +23,9 @@ func TestModelObservationDedupAndToolBoundary(t *testing.T) {
 	s := &observationSender{queue: make(chan observationItem, 8), seen: make(map[string]bool)}
 	s.lease.Store(&observationLease{Boot: "boot", Generation: 1})
 	ctx := context.WithValue(context.Background(), observationKey{}, s)
+	observeMessages(ctx, "session", nil)
 	m := opencode.Message{ID: "message", Type: "assistant", Parts: []map[string]any{{"type": "tool", "tool": "read", "input": "secret input", "output": "secret output"}}}
+	m.Time.Created = time.Now().Add(time.Second).UnixMilli()
 	observeMessages(ctx, "session", []opencode.Message{m, m})
 	if len(s.queue) != 1 {
 		t.Fatalf("got %d observations", len(s.queue))
@@ -41,12 +47,72 @@ func TestRotationObservationContextAndContentFallback(t *testing.T) {
 	ctx := context.WithValue(context.Background(), observationKey{}, s)
 	ctx = context.WithValue(ctx, rotationObservationKey{}, true)
 	observeModel(ctx, "rotation-session", "request", "prompt", "summary prompt")
-	observeMessages(ctx, "rotation-session", []opencode.Message{{ID: "reply", Type: "assistant", Content: []map[string]any{{"type": "text", "text": "summary reply"}}}})
+	observeMessages(ctx, "rotation-session", nil)
+	m := opencode.Message{ID: "reply", Type: "assistant", Content: []map[string]any{{"type": "text", "text": "summary reply"}}}
+	m.Time.Created = time.Now().Add(time.Second).UnixMilli()
+	observeMessages(ctx, "rotation-session", []opencode.Message{m})
 	for _, want := range []string{"request", "response"} {
 		item := <-s.queue
 		if item.source != "worker_rotation" || item.typ != want {
 			t.Fatalf("unexpected event: %+v", item)
 		}
+	}
+}
+
+func TestPollingBaselinesPreventHistoryReplay(t *testing.T) {
+	s := &observationSender{queue: make(chan observationItem, 8), seen: make(map[string]bool)}
+	ctx := context.WithValue(context.Background(), observationKey{}, s)
+	old := opencode.Message{ID: "old", Type: "assistant", Text: "private history"}
+	old.Time.Created = time.Now().Add(-time.Hour).UnixMilli()
+	observeMessages(ctx, "session", []opencode.Message{old})
+	s.lease.Store(&observationLease{Boot: "boot", Generation: 1})
+	observeMessages(ctx, "session", []opencode.Message{old})
+	old.Text = "changed historical message"
+	observeMessages(ctx, "session", []opencode.Message{old})
+	s.lease.Store(&observationLease{Boot: "boot", Generation: 2})
+	observeMessages(ctx, "session", []opencode.Message{old})
+	observeMessages(ctx, "session", []opencode.Message{old})
+	if len(s.queue) != 0 {
+		t.Fatal("historical message replayed")
+	}
+	if s.gap.Load() == nil {
+		t.Fatal("baseline loss not signalled")
+	}
+}
+
+func TestGapRetryAndGenerationFence(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(503)
+		} else {
+			w.WriteHeader(204)
+		}
+	}))
+	defer server.Close()
+	c, err := NewControlClient(server.URL, "token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &observationSender{}
+	lease := &observationLease{Boot: "boot", Generation: 1, expires: time.Now().Add(time.Minute)}
+	s.lease.Store(lease)
+	s.gap.Store(lease)
+	claim := contracts.JobClaim{RunID: "r", AttemptID: "a", Fence: 1}
+	s.flushGap(context.Background(), c, claim, "/gap")
+	if s.gap.Load() == nil {
+		t.Fatal("failed gap lost")
+	}
+	s.flushGap(context.Background(), c, claim, "/gap")
+	if s.gap.Load() != nil || attempts != 2 {
+		t.Fatal("gap not retried")
+	}
+	s.gap.Store(lease)
+	s.lease.Store(&observationLease{Boot: "boot", Generation: 2, expires: time.Now().Add(time.Minute)})
+	s.flushGap(context.Background(), c, claim, "/gap")
+	if attempts != 2 || s.gap.Load() != nil {
+		t.Fatal("stale gap retried")
 	}
 }
 

@@ -32,11 +32,23 @@ type observationItem struct {
 	truncated               bool
 }
 type observationSender struct {
-	lease   atomic.Pointer[observationLease]
-	queue   chan observationItem
-	secrets []string
-	seen    map[string]bool
-	gap     atomic.Pointer[observationLease]
+	lease     atomic.Pointer[observationLease]
+	queue     chan observationItem
+	secrets   []string
+	seen      map[string]bool
+	gap       atomic.Pointer[observationLease]
+	baselines map[string]pollBaseline
+}
+
+type pollBaseline struct {
+	boot       string
+	generation uint64
+	since      time.Time
+	blocked    map[string]bool
+}
+
+func sameLease(a, b *observationLease) bool {
+	return a != nil && b != nil && a.Boot == b.Boot && a.Generation == b.Generation
 }
 
 var credentialPattern = regexp.MustCompile(`(?i)(bearer\s+|(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|authorization)\s*[:=]\s*["']?)[^\s"',;]+|\b(?:sk|ghp|github_pat)_[A-Za-z0-9_-]{8,}\b|\bsk-[A-Za-z0-9_-]{8,}\b`)
@@ -103,6 +115,7 @@ func (s *observationSender) run(ctx context.Context, c *ControlClient, claim con
 			return
 		case <-ticker.C:
 			refresh()
+			s.flushGap(ctx, c, claim, path)
 		case item := <-s.queue:
 			body, err := json.Marshal(map[string]any{"boot": item.lease.Boot, "generation": item.lease.Generation, "attempt_id": claim.AttemptID, "fence": claim.Fence, "call_id": item.call, "source": item.source, "type": item.typ, "text": item.text, "truncated": item.truncated})
 			if err != nil {
@@ -118,16 +131,30 @@ func (s *observationSender) run(ctx context.Context, c *ControlClient, claim con
 			}
 			cancel()
 		}
-		if gap := s.gap.Swap(nil); gap != nil {
-			body, _ := json.Marshal(map[string]any{"boot": gap.Boot, "generation": gap.Generation, "attempt_id": claim.AttemptID, "fence": claim.Fence, "call_id": fmt.Sprintf("%064x", 0), "source": "worker", "type": "gap"})
-			requestCtx, cancel := context.WithTimeout(ctx, time.Second)
-			r, err := c.request(requestCtx, http.MethodPost, path, body, "")
-			if err == nil {
-				r.Body.Close()
-			}
-			cancel()
+	}
+}
+
+// Retry at most once per loop iteration, and only while the same checked lease is valid.
+func (s *observationSender) flushGap(ctx context.Context, c *ControlClient, claim contracts.JobClaim, path string) {
+	gap := s.gap.Load()
+	if gap == nil {
+		return
+	}
+	current := s.lease.Load()
+	if !sameLease(gap, current) || time.Now().After(current.expires) {
+		s.gap.CompareAndSwap(gap, nil)
+		return
+	}
+	body, _ := json.Marshal(map[string]any{"boot": gap.Boot, "generation": gap.Generation, "attempt_id": claim.AttemptID, "fence": claim.Fence, "call_id": fmt.Sprintf("%064x", 0), "source": "worker", "type": "gap"})
+	requestCtx, cancel := context.WithTimeout(ctx, time.Second)
+	r, err := c.request(requestCtx, http.MethodPost, path, body, "")
+	if err == nil {
+		r.Body.Close()
+		if r.StatusCode >= 200 && r.StatusCode < 300 {
+			s.gap.CompareAndSwap(gap, nil)
 		}
 	}
+	cancel()
 }
 
 func observeModel(ctx context.Context, session, typ, key, text string) {
@@ -160,6 +187,33 @@ func observeModel(ctx context.Context, session, typ, key, text string) {
 }
 
 func observeMessages(ctx context.Context, session string, messages []opencode.Message) {
+	s, ok := ctx.Value(observationKey{}).(*observationSender)
+	if !ok {
+		return
+	}
+	lease := s.lease.Load()
+	if lease == nil || (!lease.expires.IsZero() && time.Now().After(lease.expires)) {
+		return
+	}
+	if s.baselines == nil {
+		s.baselines = make(map[string]pollBaseline)
+	}
+	baseline, exists := s.baselines[session]
+	if !exists || baseline.boot != lease.Boot || baseline.generation != lease.Generation {
+		baseline = pollBaseline{boot: lease.Boot, generation: lease.Generation, since: time.Now(), blocked: make(map[string]bool)}
+		for _, m := range messages {
+			id := m.ID
+			if id == "" {
+				id = m.Info.ID
+			}
+			if id != "" {
+				baseline.blocked[id] = true
+			}
+		}
+		s.baselines[session] = baseline
+		s.gap.Store(lease)
+		return
+	}
 	for _, m := range messages {
 		role := m.Type
 		if role == "" {
@@ -173,6 +227,14 @@ func observeMessages(ctx context.Context, session string, messages []opencode.Me
 			id = m.Info.ID
 		}
 		if id == "" {
+			continue
+		}
+		created := m.Time.Created
+		if created == 0 {
+			created = m.Info.Time.Created
+		}
+		createdAt := time.UnixMilli(created)
+		if baseline.blocked[id] || created <= 0 || !createdAt.After(baseline.since) || createdAt.After(time.Now().Add(time.Second)) {
 			continue
 		}
 		if m.Text != "" {
