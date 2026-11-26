@@ -47,6 +47,8 @@ class MemoryAPIServer(ThreadingHTTPServer):
         self.limits = limits if limits is not None else defaults()
         self.backend = backend
         self.token = token.encode("utf-8")
+        from .model_observation import set_api_token
+        set_api_token(token)
         self.request_timeout = timeout
         self.slots = threading.BoundedSemaphore(16)
         super().__init__(address, MemoryAPIHandler)
@@ -124,7 +126,8 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
             if set(body) != {"lease"}:
                 raise MemoryAPIError(400, "request_invalid")
             try:
-                return {"events": drain(body["lease"])}
+                events, overflow = drain(body["lease"])
+                return {"events": events, "overflow": overflow}
             except ValueError:
                 raise MemoryAPIError(400, "request_invalid") from None
         if self.path.endswith("/config"):

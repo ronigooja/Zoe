@@ -16,6 +16,8 @@ _lease = ""
 _epoch = 0
 _expiry = 0.0
 _events = []
+_overflow = False
+_api_token = ""
 _timer = None
 LEASE_SECONDS = 10
 MAX_EVENTS = 64
@@ -30,23 +32,30 @@ def reset_component(token):
     _component.reset(token)
 
 
+def set_api_token(token):
+    global _api_token
+    _api_token = token
+
+
 def _expire(expected):
-    global _lease, _expiry, _timer
+    global _lease, _expiry, _timer, _overflow
     with _lock:
         if _lease == expected and time.monotonic() >= _expiry:
             _events.clear()
+            _overflow = False
             _lease, _expiry, _timer = "", 0.0, None
 
 
 def drain(lease):
     """Renew this generation and atomically drain its bounded queue."""
-    global _lease, _expiry, _timer, _epoch
+    global _lease, _expiry, _timer, _epoch, _overflow
     if not isinstance(lease, str) or not re.fullmatch(r"[a-f0-9]{32}", lease):
         raise ValueError("invalid lease")
     with _lock:
         now = time.monotonic()
         if _lease != lease or now >= _expiry:
             _events.clear()
+            _overflow = False
             _epoch += 1
         _lease, _expiry = lease, now + LEASE_SECONDS
         if _timer is not None:
@@ -55,14 +64,18 @@ def drain(lease):
         _timer.daemon = True
         _timer.start()
         result = list(_events)
+        overflow = _overflow
         _events.clear()
-        return result
+        _overflow = False
+        return result, overflow
 
 
 def _redact(text):
     key = os.environ.get("ZOE_MEM0_LLM_API_KEY", "")
     if key:
         text = text.replace(key, "[REDACTED]")
+    if _api_token:
+        text = text.replace(_api_token, "[REDACTED]")
     text = re.sub(r"(?i)\b(bearer\s+)[a-z0-9._~+/=-]+", r"\1[REDACTED]", text)
     text = re.sub(r"(?i)\b(sk|pk|api|key|token)[-_][a-z0-9_-]{12,}\b", "[REDACTED]", text)
     text = re.sub(r'''(?i)(["']?(?:api[_-]?key|authorization|access[_-]?token|password|secret)["']?\s*[:=]\s*["']?)[^\s,;"'}]+''', r"\1[REDACTED]", text)
@@ -101,6 +114,7 @@ def finish(call, text):
 
 
 def _publish(call, kind, payload, truncated=False):
+    global _overflow
     try:
         def clean(value):
             if isinstance(value, str):
@@ -117,7 +131,10 @@ def _publish(call, kind, payload, truncated=False):
         event = {"component": call[1], "call_id": call[2], "time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                  "type": kind, "payload": json.loads(encoded), "truncated": truncated}
         with _lock:
-            if call[0] == (_lease, _epoch) and time.monotonic() < _expiry and len(_events) < MAX_EVENTS:
-                _events.append(event)
+            if call[0] == (_lease, _epoch) and time.monotonic() < _expiry:
+                if len(_events) < MAX_EVENTS:
+                    _events.append(event)
+                else:
+                    _overflow = True
     except Exception:
         pass  # Observation is strictly best effort.
