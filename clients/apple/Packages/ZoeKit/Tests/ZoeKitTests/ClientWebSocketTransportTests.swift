@@ -21,10 +21,43 @@ actor FixtureMCPSocket: ClientWebSocket {
     private var reader: CheckedContinuation<Data, Error>?
     private var pinger: CheckedContinuation<Void, Error>?
 
+    /// Events a test can await deterministically instead of polling the counters above.
+    enum Event: Equatable { case opened, sent(Int), closed }
+    private var eventWaiters: [(Event, CheckedContinuation<Void, Never>)] = []
+    private var recordedEvents: Set<Event> = []
+
     init(openError: ClientWebSocketError? = nil) { self.openError = openError }
+
+    /// Suspends until `event` has occurred. Occurrence is recorded, so a wait after the event returns immediately.
+    /// The bounded timeout is enforced by `awaitEvent`, which fails the test instead of hanging.
+    func waitFor(_ event: Event) async -> Bool {
+        if recordedEvents.contains(event) || matches(event) { return true }
+        return await withCheckedContinuation { continuation in
+            eventWaiters.append((event, continuation))
+        }
+    }
+
+    private func matches(_ event: Event) -> Bool {
+        switch event {
+        case .opened: opened
+        case let .sent(count): sent.count >= count
+        case .closed: closeCount > 0
+        }
+    }
+
+    private func record(_ event: Event) {
+        recordedEvents.insert(event)
+        var remaining: [(Event, CheckedContinuation<Void, Never>)] = []
+        for (waited, continuation) in eventWaiters {
+            if waited == event || matches(waited) { continuation.resume() } else { remaining.append((waited, continuation)) }
+        }
+        eventWaiters = remaining
+    }
+
     func open() async throws {
         if let openError { throw openError }
         opened = true
+        record(.opened)
     }
     func receive() async throws -> Data {
         guard closeCount == 0 else { throw ClientWebSocketError.disconnected }
@@ -35,7 +68,10 @@ actor FixtureMCPSocket: ClientWebSocket {
         if let reader { self.reader = nil; reader.resume(returning: data) }
         else { inbound.append(data) }
     }
-    func send(_ data: Data) async throws { sent.append(data) }
+    func send(_ data: Data) async throws {
+        sent.append(data)
+        record(.sent(sent.count))
+    }
     func ping() async throws {
         guard closeCount == 0 else { throw ClientWebSocketError.disconnected }
         pingCount += 1
@@ -48,8 +84,26 @@ actor FixtureMCPSocket: ClientWebSocket {
         closeCount += 1
         reader?.resume(throwing: ClientWebSocketError.disconnected); reader = nil
         pinger?.resume(throwing: ClientWebSocketError.disconnected); pinger = nil
+        record(.closed)
     }
 }
+
+/// Waits for a named fixture event with a bounded timeout. Fails the test with the event name instead of hanging.
+func awaitFixture(_ socket: FixtureMCPSocket, _ event: FixtureMCPSocket.Event, timeout: Duration = .seconds(5), file: StaticString = #filePath, line: UInt = #line) async throws {
+    let finished = try await withThrowingTaskGroup(of: Bool.self) { group in
+        group.addTask { await socket.waitFor(event) }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            return false
+        }
+        let first = try await group.next() ?? false
+        group.cancelAll()
+        return first
+    }
+    if !finished { XCTFail("Fixture event \(event) did not occur within \(timeout)", file: file, line: line); throw FixtureTimeout() }
+}
+
+private struct FixtureTimeout: Error {}
 
 final class SocketPlan: @unchecked Sendable {
     private let lock = NSLock()
