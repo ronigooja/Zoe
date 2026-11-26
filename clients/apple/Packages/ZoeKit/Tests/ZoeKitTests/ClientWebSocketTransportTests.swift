@@ -51,7 +51,7 @@ actor FixtureMCPSocket: ClientWebSocket {
     }
 }
 
-private final class SocketPlan: @unchecked Sendable {
+final class SocketPlan: @unchecked Sendable {
     private let lock = NSLock()
     private let sockets: [FixtureMCPSocket]
     private var requests: [URLRequest] = []

@@ -17,19 +17,33 @@ public extension ClientWebSocket {
     func closeTooLarge() async { await close() }
 }
 
+/// A consumer of one channel on the shared client socket. Each channel owns its own demand and state.
+public protocol ClientWebSocketChannel: Sendable {
+    func opened() async
+    func closed() async
+    /// The upgrade was refused with 401; the socket stays stopped until credentials change.
+    func rejected() async
+    func received(_ data: Data) async
+}
+
+public extension ClientWebSocketChannel {
+    func rejected() async {}
+}
+
 public actor ClientWebSocketTransport: ClientMCPTransport {
     public typealias SocketFactory = @Sendable (URLRequest) -> any ClientWebSocket
     public typealias FrameHandler = @Sendable (Data) async -> Void
+    public static let mcpChannel = "mcp"
     private let api: APIClient
     private let factory: SocketFactory
     private let clock: any MCPTimerClock
-    private let onOpen: @Sendable () async -> Void
-    private let onClose: @Sendable () async -> Void
-    private let onMCPFrame: FrameHandler
     private let diagnostic: @Sendable (String) -> Void
+    private var channels: [String: any ClientWebSocketChannel]
+    // Demand is held per channel. The socket stays open while any channel still demands it.
+    private var demands = Set<String>()
+    private var shutDown = false
     private var task: Task<Void, Never>?
     private var socket: (any ClientWebSocket)?
-    private var needed = false
     private var rejected = false
     private var generation = UUID()
     private var openConnection: UUID?
@@ -37,28 +51,54 @@ public actor ClientWebSocketTransport: ClientMCPTransport {
     private(set) var lastActivity: TimeInterval = 0
     private var pingTask: Task<Void, Never>?
 
-    public init(api: APIClient, clock: any MCPTimerClock = SystemMCPTimerClock(), factory: SocketFactory? = nil, onOpen: @escaping @Sendable () async -> Void, onClose: @escaping @Sendable () async -> Void, onMCPFrame: @escaping FrameHandler, diagnostic: @escaping @Sendable (String) -> Void = { _ in }) {
+    public init(api: APIClient, clock: any MCPTimerClock = SystemMCPTimerClock(), factory: SocketFactory? = nil, diagnostic: @escaping @Sendable (String) -> Void = { _ in }, channels: [String: any ClientWebSocketChannel] = [:]) {
         self.api = api
         self.clock = clock
         self.factory = factory ?? { URLSessionClientWebSocket(request: $0) }
-        self.onOpen = onOpen
-        self.onClose = onClose
-        self.onMCPFrame = onMCPFrame
         self.diagnostic = diagnostic
+        self.channels = channels
+    }
+
+    /// Single-channel form that registers the MCP channel with closures.
+    public convenience init(api: APIClient, clock: any MCPTimerClock = SystemMCPTimerClock(), factory: SocketFactory? = nil, onOpen: @escaping @Sendable () async -> Void, onClose: @escaping @Sendable () async -> Void, onMCPFrame: @escaping FrameHandler, diagnostic: @escaping @Sendable (String) -> Void = { _ in }) {
+        self.init(api: api, clock: clock, factory: factory, diagnostic: diagnostic, channels: [ClientWebSocketTransport.mcpChannel: ClosureChannel(onOpen: onOpen, onClose: onClose, onFrame: onMCPFrame)])
     }
 
     public func setNeeded(_ needed: Bool) async {
-        self.needed = needed
-        if !needed {
-            await interrupt()
-        } else { startIfNeeded() }
+        await setNeeded(needed, demand: Self.mcpChannel)
     }
+
+    /// `demand` names one holder of demand. The socket stays open while any demand remains.
+
+    public func setNeeded(_ needed: Bool, demand: String) async {
+        guard !shutDown else { return }
+        if needed { demands.insert(demand) } else { demands.remove(demand) }
+        if wantsConnection { startIfNeeded() } else { await interrupt() }
+    }
+
+    public func register(channel: String, handler: any ClientWebSocketChannel) {
+        channels[channel] = handler
+    }
+
+    public var isOpen: Bool { openConnection != nil }
+
+    public var isRejected: Bool { rejected }
 
     public func credentialsChanged() async {
         rejected = false
         await interrupt()
         startIfNeeded()
     }
+
+    /// Ends the transport permanently: drops demand and channels, then closes the socket.
+    public func shutdown() async {
+        shutDown = true
+        demands.removeAll()
+        channels.removeAll()
+        await interrupt()
+    }
+
+    private var wantsConnection: Bool { !shutDown && !demands.isEmpty }
 
     private func interrupt() async {
         generation = UUID()
@@ -74,7 +114,7 @@ public actor ClientWebSocketTransport: ClientMCPTransport {
     }
 
     private func startIfNeeded() {
-        guard needed, !rejected, task == nil else { return }
+        guard wantsConnection, !rejected, task == nil else { return }
         let generation = generation
         task = Task { await self.run(generation) }
     }
@@ -85,7 +125,7 @@ public actor ClientWebSocketTransport: ClientMCPTransport {
             if self.generation != generation { startIfNeeded() }
         }
         var delay: TimeInterval = 1
-        while needed && !rejected && self.generation == generation && !Task.isCancelled {
+        while wantsConnection && !rejected && self.generation == generation && !Task.isCancelled {
             var heartbeat: Task<Void, Never>?
             let connection = UUID()
             do {
@@ -93,13 +133,13 @@ public actor ClientWebSocketTransport: ClientMCPTransport {
                 self.socket = socket
                 try await socket.open()
                 let now = await clock.now
-                guard self.generation == generation, needed else { throw ClientWebSocketError.disconnected }
+                guard self.generation == generation, wantsConnection else { throw ClientWebSocketError.disconnected }
                 closing = false
                 openConnection = connection
                 delay = 1
                 lastActivity = now
                 heartbeat = Task { await self.heartbeat(socket, connection: connection, openedAt: now) }
-                await onOpen()
+                await notifyOpened()
                 while !Task.isCancelled && self.generation == generation {
                     let data = try await socket.receive()
                     let now = await clock.now
@@ -109,7 +149,10 @@ public actor ClientWebSocketTransport: ClientMCPTransport {
                     await route(data)
                 }
             } catch {
-                if self.generation == generation, case ClientWebSocketError.unauthorized = error { rejected = true }
+                if self.generation == generation, case ClientWebSocketError.unauthorized = error {
+                    rejected = true
+                    await notifyRejected()
+                }
                 if case ClientWebSocketError.frameTooLarge = error { closing = true; await socket?.closeTooLarge() }
             }
             heartbeat?.cancel()
@@ -119,12 +162,24 @@ public actor ClientWebSocketTransport: ClientMCPTransport {
             openConnection = nil
             let old = socket
             socket = nil
-            if opened { await onClose() }
+            if opened { await notifyClosed() }
             await old?.close()
-            guard self.generation == generation, needed, !rejected, !Task.isCancelled else { break }
+            guard self.generation == generation, wantsConnection, !rejected, !Task.isCancelled else { break }
             do { try await clock.sleep(seconds: delay) } catch { break }
             delay = min(delay * 2, 30)
         }
+    }
+
+    private func notifyOpened() async {
+        for channel in Array(channels.values) { await channel.opened() }
+    }
+
+    private func notifyClosed() async {
+        for channel in Array(channels.values) { await channel.closed() }
+    }
+
+    private func notifyRejected() async {
+        for channel in Array(channels.values) { await channel.rejected() }
     }
 
     private func heartbeat(_ socket: any ClientWebSocket, connection: UUID, openedAt: TimeInterval) async {
@@ -163,14 +218,24 @@ public actor ClientWebSocketTransport: ClientMCPTransport {
     private func route(_ data: Data) async {
         guard let frame = try? JSONDecoder().decode(JSONValue.self, from: data), case let .object(object) = frame,
               case let .string(channel)? = object["channel"] else { return }
-        if channel == "mcp" { await onMCPFrame(data); return }
         if channel == "transport", object["type"] == .string("error") { diagnostic("client_ws_transport_error"); return }
+        if let handler = channels[channel] { await handler.received(data); return }
         let response: JSONValue = .object([
             "channel": .string("transport"), "type": .string("error"),
             "error": .object(["code": .string("unknown_channel"), "channel": .string(channel)])
         ])
         if let data = try? JSONEncoder().encode(response) { try? await send(data) }
     }
+}
+
+private struct ClosureChannel: ClientWebSocketChannel {
+    let onOpen: @Sendable () async -> Void
+    let onClose: @Sendable () async -> Void
+    let onFrame: ClientWebSocketTransport.FrameHandler
+
+    func opened() async { await onOpen() }
+    func closed() async { await onClose() }
+    func received(_ data: Data) async { await onFrame(data) }
 }
 
 private final class URLSessionClientWebSocket: NSObject, ClientWebSocket, URLSessionWebSocketDelegate, @unchecked Sendable {

@@ -38,6 +38,12 @@ public final class ZoeAppModel: ObservableObject {
     private var remoteControlCleanupID: UUID?
     private var remoteControlCredentialsChanged = false
     private var remoteControlTerminating = false
+    // One authenticated socket per instance and API; shared by the MCP relay and the model monitor.
+    private var clientSocket: ClientWebSocketTransport?
+    private var clientSocketAPI: APIClient?
+    private var clientSocketIdentity: String?
+    /// Non-nil while an authenticated instance is configured. Observers clear private state when it changes.
+    @Published public private(set) var modelMonitorChannel: ModelMonitorChannel?
     #endif
     @Published public internal(set) var serverAddress: String
     @Published public private(set) var isConnecting = false
@@ -589,6 +595,7 @@ public final class ZoeAppModel: ObservableObject {
         connectionEpoch = connectionGeneration.value
         #if os(macOS)
         detachRemoteControl()
+        detachClientSocket()
         #endif
         eventTask?.cancel()
         eventTask = nil
@@ -639,7 +646,7 @@ public final class ZoeAppModel: ObservableObject {
 
     #if os(macOS)
     public var remoteControlNeedsShutdown: Bool {
-        remoteControl?.needsShutdown == true || remoteControlCleanup != nil
+        remoteControl?.needsShutdown == true || remoteControlCleanup != nil || clientSocket != nil
     }
 
     private func detachRemoteControl() {
@@ -663,10 +670,43 @@ public final class ZoeAppModel: ObservableObject {
         }
     }
 
+    /// Closes the shared socket and resets the monitor. Monitor state is cleared; MCP children are stopped by the relay.
+    @discardableResult
+    private func detachClientSocket() -> Task<Void, Never>? {
+        guard let transport = clientSocket else { return nil }
+        let channel = modelMonitorChannel
+        clientSocket = nil
+        clientSocketAPI = nil
+        clientSocketIdentity = nil
+        modelMonitorChannel = nil
+        return Task {
+            await channel?.stop()
+            await transport.shutdown()
+        }
+    }
+
     public func shutdownRemoteControlForAppExit() async {
         remoteControlTerminating = true
         detachRemoteControl()
+        await detachClientSocket()?.value
         await remoteControlCleanup?.value
+    }
+
+    /// Reuses the socket for this instance and API; a different instance or API replaces it.
+    private func configureClientSocket(using api: APIClient, identity: String, generation: UInt64) async -> ClientWebSocketTransport? {
+        if let clientSocket, clientSocketAPI === api, clientSocketIdentity == identity { return clientSocket }
+        detachClientSocket()
+        let transport = ClientWebSocketTransport(api: api)
+        let channel = await ModelMonitorChannel.attach(to: transport)
+        guard isCurrentConnection(generation, sourceAPI: api), instanceLineageID == identity else {
+            await transport.shutdown()
+            return nil
+        }
+        clientSocket = transport
+        clientSocketAPI = api
+        clientSocketIdentity = identity
+        modelMonitorChannel = channel
+        return transport
     }
 
     private func configureRemoteControl(using api: APIClient, generation: UInt64) async {
@@ -677,16 +717,17 @@ public final class ZoeAppModel: ObservableObject {
         await remoteControlCleanup?.value
         guard !remoteControlTerminating, isCurrentConnection(generation, sourceAPI: api),
               instanceLineageID == identity else { return }
+        guard let socket = await configureClientSocket(using: api, identity: identity, generation: generation) else { return }
         do {
             let relay: any RemoteControlRelaying
             #if DEBUG
             if let factory = remoteControlRelayFactoryForTesting {
                 relay = try await factory(api)
             } else {
-                relay = try await ClientMCPRelay.make(api: api, store: UserDefaultsMCPRegistryStore(defaults: defaults))
+                relay = try await ClientMCPRelay.make(transport: socket, store: UserDefaultsMCPRegistryStore(defaults: defaults))
             }
             #else
-            relay = try await ClientMCPRelay.make(api: api, store: UserDefaultsMCPRegistryStore(defaults: defaults))
+            relay = try await ClientMCPRelay.make(transport: socket, store: UserDefaultsMCPRegistryStore(defaults: defaults))
             #endif
             // The previous relay was bound to the old API. Re-arm only the replacement.
             if remoteControlCredentialsChanged || remoteControlLastURL.map({ $0 != api.serverURL }) == true {
@@ -1474,6 +1515,7 @@ public final class ZoeAppModel: ObservableObject {
         if instanceLineageID != identity {
             #if os(macOS)
             if remoteControlIdentity != nil { detachRemoteControl() }
+            detachClientSocket()
             #endif
             closeUISurfaces()
             eventCursor = nil
