@@ -153,9 +153,10 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (resu
 	if err != nil {
 		return "", err
 	}
+	parseError := "invalid_response"
 	defer func() {
 		if resultErr != nil {
-			obs.endUnavailable(status)
+			obs.endError(parseError, status)
 		} else {
 			obs.endResponse(status, result)
 		}
@@ -175,6 +176,7 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (resu
 		}
 		choice := response.Choices[0]
 		if choice.FinishReason != "" && choice.FinishReason != "stop" && choice.FinishReason != "length" {
+			parseError = "incomplete_response"
 			return "", errors.New("model response was incomplete")
 		}
 		return choice.Message.Content, nil
@@ -194,6 +196,7 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (resu
 		return "", errors.New("invalid model response")
 	}
 	if response.Status == "incomplete" {
+		parseError = "incomplete_response"
 		return "", errors.New("model response was incomplete")
 	}
 	for _, item := range response.Output {
@@ -209,7 +212,6 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (resu
 }
 
 func (c *Client) call(ctx context.Context, style, instructions, input string) ([]byte, int, *attemptObservation, error) {
-	obs := c.observeAttempt(ctx, style, instructions, input)
 	request := map[string]any{"model": c.model}
 	path := "/responses"
 	if style == "chat" {
@@ -243,6 +245,7 @@ func (c *Client) call(ctx context.Context, style, instructions, input string) ([
 	} else {
 		request["temperature"] = 0
 	}
+	obs := c.observeAttempt(ctx, style, instructions, input, request)
 	b, err := json.Marshal(request)
 	if err != nil {
 		obs.endError("request_encoding", 0)

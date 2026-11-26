@@ -2,11 +2,14 @@ package modelclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ronigooja/Zoe/internal/modelmonitor"
 )
 
 func TestObservationTextFiltersAndBounds(t *testing.T) {
@@ -26,6 +29,8 @@ func TestObservationTextFiltersAndBounds(t *testing.T) {
 }
 
 func TestObservedClientFallbackRouting(t *testing.T) {
+	sub := modelmonitor.Subscribe()
+	defer sub.Close()
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
@@ -47,6 +52,29 @@ func TestObservedClientFallbackRouting(t *testing.T) {
 	}
 	if strings.Join(paths, ",") != "/responses,/chat/completions" || c.component != "register" {
 		t.Fatalf("paths=%v component=%q", paths, c.component)
+	}
+	events := make([]modelmonitor.Event, 4)
+	for i := range events {
+		select {
+		case events[i] = <-sub.Events:
+		default:
+			t.Fatalf("missing event %d", i)
+		}
+	}
+	for i, kind := range []string{"request", "error", "request", "response"} {
+		if events[i].Type != kind || events[i].Component != "register" {
+			t.Fatalf("event %d: %+v", i, events[i])
+		}
+	}
+	if events[0].CallID == "" || events[0].CallID != events[1].CallID || events[2].CallID != events[3].CallID || events[0].CallID == events[2].CallID {
+		t.Fatal("incorrect attempt correlation")
+	}
+	var payload struct {
+		Model   string         `json:"model"`
+		Options map[string]any `json:"options"`
+	}
+	if err := json.Unmarshal(events[2].Payload, &payload); err != nil || payload.Model != "fixture" || payload.Options["max_tokens"] != float64(1024) || payload.Options["stream"] != false {
+		t.Fatalf("request payload: %s", events[2].Payload)
 	}
 }
 

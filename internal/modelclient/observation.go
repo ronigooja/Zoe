@@ -67,7 +67,7 @@ type attemptObservation struct {
 	generation         uint64
 }
 
-func (c *Client) observeAttempt(ctx context.Context, style, instructions, input string) *attemptObservation {
+func (c *Client) observeAttempt(ctx context.Context, style, instructions, input string, request map[string]any) *attemptObservation {
 	component := c.component
 	if override, ok := ctx.Value(observationContextKey{}).(string); ok {
 		component = override
@@ -86,7 +86,24 @@ func (c *Client) observeAttempt(ctx context.Context, style, instructions, input 
 	o := &attemptObservation{component: component, id: hex.EncodeToString(id[:]), key: c.key, generation: generation}
 	i, ti := observationText(instructions, c.key)
 	v, tv := observationText(input, c.key)
-	o.publish("request", map[string]any{"style": style, "instructions": i, "input": v}, ti || tv)
+	model, tm := observationText(c.model, c.key)
+	options := make(map[string]any)
+	for _, name := range []string{"max_tokens", "max_output_tokens", "stream", "store", "temperature"} {
+		if value, ok := request[name]; ok {
+			options[name] = value
+		}
+	}
+	// These values are drawn from validated enums, not arbitrary configuration.
+	if value, ok := request["reasoning_effort"]; ok {
+		options["reasoning_effort"] = value
+	}
+	if value, ok := request["thinking"].(map[string]string); ok {
+		options["thinking"] = value["type"]
+	}
+	if value, ok := request["reasoning"].(map[string]string); ok {
+		options["reasoning_effort"] = value["effort"]
+	}
+	o.publish("request", map[string]any{"style": style, "model": model, "options": options, "instructions": i, "input": v}, ti || tv || tm)
 	return o
 }
 
@@ -106,13 +123,6 @@ func (o *attemptObservation) endError(kind string, status int) {
 		return
 	}
 	o.publish("error", map[string]any{"kind": kind, "status": status}, false)
-}
-
-func (o *attemptObservation) endUnavailable(status int) {
-	if o == nil {
-		return
-	}
-	o.publish("response", map[string]any{"status": status, "content_available": false}, false)
 }
 
 func (o *attemptObservation) endResponse(status int, content string) {
