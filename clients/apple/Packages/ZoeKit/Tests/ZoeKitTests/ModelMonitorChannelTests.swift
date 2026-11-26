@@ -192,32 +192,58 @@ final class ModelMonitorChannelTests: XCTestCase {
         try await mcpEventually { await socket.closeCount == 1 }
     }
 
-    /// Start and stop are unordered child tasks, so the final state depends on which the actor serializes last.
-    /// Assert the invariant for whichever state results, rather than one fixed order.
-    func testOverlappingStartAndStopEndInConsistentState() async throws {
+    /// Deterministic overlap: `begin()` is parked after demand is set and before subscribe, then `stop()` runs to completion.
+    /// The socket was created by demand, so it is discarded without `opened()`. No subscribe is sent, and nothing reconnects.
+    /// Proves true overlap without a circular wait: `begin()` is parked inside the lifecycle queue, `stop()` is launched
+    /// as a child task, and the test waits only for `stop()` to be chained behind `begin()` before releasing the gate.
+    func testStopEnqueuedBehindParkedStartLeavesIdleWithoutReconnect() async throws {
         let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
         let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
         let channel = await ModelMonitorChannel.attach(to: transport)
-        async let started = channel.begin()
-        async let stopped: Void = channel.stop()
-        _ = await started
-        _ = await stopped
-        let finalStatus = await channel.status
-        if finalStatus == .idle {
-            // Stop ran last: every subscribe is matched by an unsubscribe. Demand is gone, so no socket reconnects.
-            let types = try await sentTypes(socket)
-            XCTAssertEqual(types.filter { $0 == "subscribe" }.count, types.filter { $0 == "unsubscribe" }.count)
-            await clock.advance(100)
-            XCTAssertEqual(plan.count, types.isEmpty ? 0 : 1)
-        } else {
-            // Start ran last: the subscription is live, so exactly one subscribe is outstanding and nothing was unsubscribed.
-            try await mcpEventually { await socket.sent.count == 1 }
-            let types = try await sentTypes(socket)
-            XCTAssertEqual(types, ["subscribe"])
-            XCTAssertEqual(plan.count, 1)
-            await channel.stop()
-            try await mcpEventually { await socket.closeCount == 1 }
+        let parked = AsyncGate(), release = AsyncGate(), stopEnqueued = AsyncGate()
+        await channel.setStartGateForTesting {
+            await parked.open()
+            await release.wait()
         }
+        // Begin is the first queued operation; its enqueue is not the signal we wait for.
+        let begin = Task { await channel.begin() }
+        await parked.wait()
+        // Arm the enqueue signal only now, so the first observed enqueue is stop's.
+        await channel.setEnqueuedObserverForTesting { await stopEnqueued.open() }
+        let stop = Task { await channel.stop() }
+        await stopEnqueued.wait()
+        await channel.setEnqueuedObserverForTesting(nil)
+        // Stop is chained behind the parked begin and cannot run until release; releasing now cannot deadlock.
+        await release.open()
+        _ = await begin.value
+        await stop.value
+        await channel.setStartGateForTesting(nil)
+
+        let finalStatus = await channel.status
+        XCTAssertEqual(finalStatus, .idle)
+        // A subscribe may have been sent before stop. Any such subscribe must be matched by an unsubscribe, with no residue.
+        let types = try await sentTypes(socket)
+        XCTAssertEqual(types.filter { $0 == "subscribe" }.count, types.filter { $0 == "unsubscribe" }.count)
+        // Demand is gone, so no reconnect may happen after stop: the socket count must not grow across a backoff interval.
+        let createdAtStop = plan.count
+        await clock.advance(100)
+        XCTAssertEqual(plan.count, createdAtStop)
+        let sentAfter = try await sentTypes(socket)
+        XCTAssertEqual(sentAfter, types)
+    }
+
+    /// Stop after a parked start has subscribed: the unsubscribe matches the subscribe and demand is released.
+    func testStopAfterSubscribedStartSendsMatchingUnsubscribe() async throws {
+        let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
+        let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
+        let channel = await ModelMonitorChannel.attach(to: transport)
+        _ = await channel.begin()
+        try await mcpEventually { await socket.sent.count == 1 }
+        await channel.stop()
+        try await mcpEventually { await socket.closeCount == 1 }
+        let types = try await sentTypes(socket)
+        XCTAssertEqual(types, ["subscribe", "unsubscribe"])
+        XCTAssertEqual(plan.count, 1)
     }
 
     func testBufferIsBoundedAndKeepsGapsWhenFiltered() {
@@ -232,6 +258,23 @@ final class ModelMonitorChannelTests: XCTestCase {
         buffer.clear()
         XCTAssertTrue(buffer.entries.isEmpty)
         XCTAssertEqual(buffer.droppedCount, 0)
+    }
+}
+
+/// One-shot barrier: `wait()` suspends until `open()`; `open()` may run first.
+actor AsyncGate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func open() {
+        opened = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+    }
+
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
     }
 }
 
