@@ -28,6 +28,10 @@ can remain. Prompt and assistant text may contain private task data. Rotation
 replacement prompts are Worker submissions; the summarizer's prompt and polled
 assistant text are `worker_rotation` observations. Source and content are
 asserted by the assigned runner, not cryptographic proof of runtime provenance.
+Each session's first poll under a subscriber generation is a discarded baseline;
+subsequent messages need an OpenCode creation timestamp after that baseline.
+Baseline messages remain excluded even if later updated. Baselines and detected
+delivery loss signal a best-effort gap, retried only while the same lease holds.
 
 ## Required behavior
 
