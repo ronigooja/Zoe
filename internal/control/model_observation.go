@@ -5,8 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ronigooja/Zoe/internal/modelmonitor"
 )
@@ -27,9 +30,14 @@ type modelObservation struct {
 	Fence      uint64 `json:"fence"`
 	CallID     string `json:"call_id"`
 	Type       string `json:"type"`
+	Source     string `json:"source"`
 	Text       string `json:"text,omitempty"`
 	Truncated  bool   `json:"truncated,omitempty"`
 }
+
+var modelObservationID = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var modelObservationTool = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,64}$`)
+var modelObservationCredential = regexp.MustCompile(`(?i)(bearer\s+|(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|authorization)\s*[:=]\s*["']?)[^\s"',;]+|\b(?:sk|ghp|github_pat)_[A-Za-z0-9_-]{8,}\b|\bsk-[A-Za-z0-9_-]{8,}\b`)
 
 func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
@@ -68,11 +76,29 @@ func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, map[string]any{"boot": modelObservationBoot, "generation": generation})
 		return
 	}
-	if in.Boot == "" || in.Boot != modelObservationBoot || in.Generation == 0 || in.CallID == "" || len(in.CallID) > 128 || len(in.Text) > 16384 || (in.Type != "request" && in.Type != "response" && in.Type != "tool_call") {
+	if in.Boot == "" || in.Boot != modelObservationBoot || in.Generation == 0 || !modelObservationID.MatchString(in.CallID) || len(in.Text) > 16384 || (in.Source != "worker" && in.Source != "worker_rotation") || (in.Type != "request" && in.Type != "response" && in.Type != "tool_call" && in.Type != "gap") || (in.Source == "worker_rotation" && in.Type == "tool_call") || (in.Type == "tool_call" && !modelObservationTool.MatchString(in.Text)) || (in.Type == "gap" && (in.Text != "" || in.Truncated)) {
 		http.Error(w, "invalid request", 400)
 		return
 	}
+	if in.Type == "gap" {
+		modelmonitor.GapFor(in.Generation)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	for _, secret := range []string{s.cfg.RunnerToken, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")} {
+		if secret != "" {
+			in.Text = strings.ReplaceAll(in.Text, secret, "[redacted]")
+		}
+	}
+	in.Text = modelObservationCredential.ReplaceAllString(in.Text, "[redacted]")
+	if len(in.Text) > 8192 {
+		in.Text = in.Text[:8192]
+		for !utf8.ValidString(in.Text) {
+			in.Text = in.Text[:len(in.Text)-1]
+		}
+		in.Truncated = true
+	}
 	payload, _ := json.Marshal(map[string]any{"origin": "opencode_observed", "not_provider_request": true, "text": in.Text})
-	modelmonitor.PublishFor(in.Generation, modelmonitor.Event{Component: "worker", CallID: in.CallID, Time: time.Now().UTC(), Type: in.Type, Payload: payload, Truncated: in.Truncated})
+	modelmonitor.PublishFor(in.Generation, modelmonitor.Event{Component: in.Source, CallID: in.CallID, Time: time.Now().UTC(), Type: in.Type, Payload: payload, Truncated: in.Truncated})
 	w.WriteHeader(http.StatusNoContent)
 }

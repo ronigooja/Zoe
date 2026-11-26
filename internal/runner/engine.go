@@ -865,6 +865,7 @@ func (e *Engine) buildRotationPrompt(ctx context.Context, c contracts.JobClaim, 
 				timeout = 30 * time.Second
 			}
 			summaryCtx, cancel := context.WithTimeout(ctx, timeout)
+			summaryCtx = context.WithValue(summaryCtx, rotationObservationKey{}, true)
 			summary, err := summarizer.Summarize(summaryCtx, e.Routes[c.ProfileID].Model, rotationSummary(msgs, e.Limits))
 			cancel()
 			if err == nil && strings.TrimSpace(summary) != "" {
