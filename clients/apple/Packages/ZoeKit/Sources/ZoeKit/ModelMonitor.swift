@@ -146,8 +146,17 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
         setStatus(await transport.isRejected ? .unauthorized : .connecting)
         // Demand is held even when rejected, so a credential change can reconnect the socket for this channel.
         await transport.setNeeded(true, demand: Self.channel)
+        #if DEBUG
+        await startGateForTesting?()
+        #endif
         await subscribe()
     }
+
+    #if DEBUG
+    /// Test-only barrier between demand and subscribe, used to force the overlapping-stop interleaving deterministically.
+    var startGateForTesting: (@Sendable () async -> Void)?
+    func setStartGateForTesting(_ gate: (@Sendable () async -> Void)?) { startGateForTesting = gate }
+    #endif
 
     private func performStop() async {
         wanted = false
