@@ -309,6 +309,8 @@ class PersonMemory:
             timeout_token = set_request_timeout(check_deadline(deadline))
             started = time.monotonic()
             status, error_kind = "error", "backend_unavailable"
+            from .model_observation import set_component, reset_component
+            observation_token = set_component("memory_write")
             try:
                 raw = self.memory.llm.generate_response(messages, response_format={"type": "json_object"})
                 status, error_kind = "ok", "none"
@@ -316,6 +318,7 @@ class PersonMemory:
                 error_kind = "deadline_exceeded"
                 raise
             finally:
+                reset_component(observation_token)
                 reset_request_timeout(timeout_token)
                 LOG.info("memory_api llm_call component=memory_write status=%s error_kind=%s elapsed_ms=%d",
                          status, error_kind, (time.monotonic() - started) * 1000)
@@ -526,6 +529,8 @@ class PersonMemory:
             self._ingest_facts = None
             self._ingest_hashes = set()
             self._ingest_existing = []
+            from .model_observation import set_component, reset_component
+            observation_token = set_component("memory_ingestion")
             try:
                 try:
                     self.memory.add(text, user_id=user_id, infer=True)
@@ -542,6 +547,7 @@ class PersonMemory:
                 error_kind = exc.kind
                 raise
             finally:
+                reset_component(observation_token)
                 self._ingest_context = None
                 self._ingest_existing = []
                 self.memory.llm.generate_response = original_generate

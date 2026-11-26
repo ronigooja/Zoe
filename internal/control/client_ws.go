@@ -22,13 +22,17 @@ type clientSockets struct {
 }
 
 type clientSocket struct {
-	conn     *websocket.Conn
-	ctx      context.Context
-	cancel   context.CancelFunc
-	owner    string
-	maxBytes int64
-	catalog  clientMCPCatalog
-	pending  map[string]chan clientMCPResult
+	conn         *websocket.Conn
+	ctx          context.Context
+	cancel       context.CancelFunc
+	owner        string
+	device       string
+	maxBytes     int64
+	catalog      clientMCPCatalog
+	pending      map[string]chan clientMCPResult
+	monitor      *monitorSubscription
+	writeMu      sync.Mutex
+	writeWaiters atomic.Int64
 }
 
 func (s *Server) registerClientSocketRoutes() {
@@ -63,7 +67,8 @@ func (s *Server) handleClientSocket(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer conn.CloseNow()
-	socket := &clientSocket{conn: conn, ctx: ctx, cancel: cancel, owner: p.SubjectID, maxBytes: s.cfg.Limits.Int64("client_ws_frame_max_bytes"), pending: make(map[string]chan clientMCPResult)}
+	socket := &clientSocket{conn: conn, ctx: ctx, cancel: cancel, owner: p.SubjectID, device: p.DeviceID, maxBytes: s.cfg.Limits.Int64("client_ws_frame_max_bytes"), pending: make(map[string]chan clientMCPResult)}
+	defer socket.stopMonitor()
 	conn.SetReadLimit(socket.maxBytes)
 	if !s.clientSockets.replace(p.DeviceID, socket) {
 		return
@@ -162,6 +167,10 @@ func (s *clientSockets) handleFrame(c *clientSocket, frame json.RawMessage) {
 		s.handleMCPFrame(c, frame)
 		return
 	}
+	if *envelope.Channel == "model_monitor" {
+		c.handleMonitorFrame(frame)
+		return
+	}
 	_ = c.write(c.ctx, map[string]any{
 		"channel": "transport",
 		"type":    "error",
@@ -170,6 +179,27 @@ func (s *clientSockets) handleFrame(c *clientSocket, frame json.RawMessage) {
 }
 
 func (c *clientSocket) write(ctx context.Context, value any) error {
+	c.writeWaiters.Add(1)
+	c.writeMu.Lock()
+	c.writeWaiters.Add(-1)
+	defer c.writeMu.Unlock()
+	return c.writeLocked(ctx, value)
+}
+
+// A monitor event is admitted only when no other writer is active or waiting.
+// Once admitted it shares the socket: an in-progress frame cannot be preempted.
+func (c *clientSocket) tryMonitorWrite(value any) (bool, error) {
+	if c.writeWaiters.Load() != 0 || !c.writeMu.TryLock() {
+		return false, nil
+	}
+	defer c.writeMu.Unlock()
+	if c.writeWaiters.Load() != 0 {
+		return false, nil
+	}
+	return true, c.writeLocked(c.ctx, value)
+}
+
+func (c *clientSocket) writeLocked(ctx context.Context, value any) error {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)

@@ -18,6 +18,16 @@ Approved target, not a claim of current implementation, deployment or acceptance
 
 Worker prompt entries are JSON objects containing ID, content and optional question binding in claim array order. Entry creation time stays in the runner wire contract for bookkeeping.
 
+The optional live model monitor observes Worker submissions and polled OpenCode
+assistant text and tool names, not provider requests or complete model traffic.
+Delivery is best-effort and live-only. It omits tool arguments and output,
+configuration, headers and raw errors. It replaces the runner token, configured
+OpenCode password, and conventional bearer, credential-assignment and common
+token patterns in observable text; unknown secrets and unconventional formats
+can remain. Prompt and assistant text may contain private task data. Rotation
+replacement prompts are observed as Worker submissions; the separate rotation
+summarizer's request and response are not observed.
+
 ## Required behavior
 
 The existing voice ingest runner credential is sent as `Authorization: Bearer

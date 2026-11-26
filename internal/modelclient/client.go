@@ -20,6 +20,7 @@ import (
 type Client struct {
 	limits                                    limits.Set
 	base, model, effort, thinking, key, style string
+	component                                 string
 	http                                      *http.Client
 	mu                                        sync.Mutex
 }
@@ -99,7 +100,7 @@ func FromEnv(prefix string, getenv func(string) string, readFile func(string) ([
 	if err != nil {
 		return nil, err
 	}
-	return &Client{limits: limits.Resolve(sets), base: base, model: model, effort: effort, thinking: thinking, key: key, http: &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}, Timeout: timeout}}, nil
+	return &Client{limits: limits.Resolve(sets), base: base, model: model, effort: effort, thinking: thinking, key: key, component: observationComponent(prefix), http: &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}, Timeout: timeout}}, nil
 }
 
 func (c *Client) Style() string {
@@ -134,7 +135,7 @@ func (c *Client) SetHTTPClient(client *http.Client) {
 // Configured reports whether a client can make model calls.
 func (c *Client) Configured() bool { return c != nil && c.http != nil && c.base != "" && c.model != "" }
 
-func (c *Client) Complete(ctx context.Context, instructions, input string) (string, error) {
+func (c *Client) Complete(ctx context.Context, instructions, input string) (result string, resultErr error) {
 	if c == nil || c.http == nil {
 		return "", errors.New("model client is not configured")
 	}
@@ -144,14 +145,22 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (stri
 	if style == "" {
 		style = "responses"
 	}
-	body, status, err := c.call(ctx, style, instructions, input)
+	body, status, obs, err := c.call(ctx, style, instructions, input)
 	if err != nil && c.style == "" && (status == 404 || status == 405 || status == 501) {
 		style = "chat"
-		body, _, err = c.call(ctx, style, instructions, input)
+		body, status, obs, err = c.call(ctx, style, instructions, input)
 	}
 	if err != nil {
 		return "", err
 	}
+	parseError := "invalid_response"
+	defer func() {
+		if resultErr != nil {
+			obs.endError(parseError, status)
+		} else {
+			obs.endResponse(status, result)
+		}
+	}()
 	c.style = style
 	if style == "chat" {
 		var response struct {
@@ -167,6 +176,7 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (stri
 		}
 		choice := response.Choices[0]
 		if choice.FinishReason != "" && choice.FinishReason != "stop" && choice.FinishReason != "length" {
+			parseError = "incomplete_response"
 			return "", errors.New("model response was incomplete")
 		}
 		return choice.Message.Content, nil
@@ -186,6 +196,7 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (stri
 		return "", errors.New("invalid model response")
 	}
 	if response.Status == "incomplete" {
+		parseError = "incomplete_response"
 		return "", errors.New("model response was incomplete")
 	}
 	for _, item := range response.Output {
@@ -200,7 +211,7 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (stri
 	return response.OutputText, nil
 }
 
-func (c *Client) call(ctx context.Context, style, instructions, input string) ([]byte, int, error) {
+func (c *Client) call(ctx context.Context, style, instructions, input string) ([]byte, int, *attemptObservation, error) {
 	request := map[string]any{"model": c.model}
 	path := "/responses"
 	if style == "chat" {
@@ -234,33 +245,40 @@ func (c *Client) call(ctx context.Context, style, instructions, input string) ([
 	} else {
 		request["temperature"] = 0
 	}
+	obs := c.observeAttempt(ctx, style, instructions, input, request)
 	b, err := json.Marshal(request)
 	if err != nil {
-		return nil, 0, err
+		obs.endError("request_encoding", 0)
+		return nil, 0, nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(b))
 	if err != nil {
-		return nil, 0, errors.New("could not create model request")
+		obs.endError("request_creation", 0)
+		return nil, 0, nil, errors.New("could not create model request")
 	}
 	req.Header.Set("Authorization", "Bearer "+c.key)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, 0, &transportError{cause: err}
+		obs.endError("transport", 0)
+		return nil, 0, nil, &transportError{cause: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, resp.StatusCode, &HTTPError{StatusCode: resp.StatusCode}
+		obs.endError("http_status", resp.StatusCode)
+		return nil, resp.StatusCode, nil, &HTTPError{StatusCode: resp.StatusCode}
 	}
 	limit := c.limits.Int64("model_api_response_max_bytes")
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return nil, resp.StatusCode, errors.New("could not read model response")
+		obs.endError("response_read", resp.StatusCode)
+		return nil, resp.StatusCode, nil, errors.New("could not read model response")
 	}
 	if int64(len(body)) > limit {
-		return nil, resp.StatusCode, errors.New("model response exceeds byte limit")
+		obs.endError("response_limit", resp.StatusCode)
+		return nil, resp.StatusCode, nil, errors.New("model response exceeds byte limit")
 	}
-	return body, resp.StatusCode, nil
+	return body, resp.StatusCode, obs, nil
 }
 
 // Decode accepts exactly one JSON value with no unknown object fields.

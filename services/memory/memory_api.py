@@ -47,6 +47,8 @@ class MemoryAPIServer(ThreadingHTTPServer):
         self.limits = limits if limits is not None else defaults()
         self.backend = backend
         self.token = token.encode("utf-8")
+        from .model_observation import set_api_token
+        set_api_token(token)
         self.request_timeout = timeout
         self.slots = threading.BoundedSemaphore(16)
         super().__init__(address, MemoryAPIHandler)
@@ -115,10 +117,19 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
         if self.command == "GET" and self.path == "/healthz":
             return self.server.backend.health(self.deadline)
         if self.command != "POST" or self.path not in {
-            "/v1/memory/search", "/v1/memory/write", "/v1/memory/ingest", "/v1/memory/delete-all", "/v1/memory/config",
+            "/v1/memory/search", "/v1/memory/write", "/v1/memory/ingest", "/v1/memory/delete-all", "/v1/memory/config", "/v1/memory/observe",
         }:
             raise MemoryAPIError(404, "not_found")
         body = self._body()
+        if self.path.endswith("/observe"):
+            from .model_observation import drain
+            if set(body) != {"lease"}:
+                raise MemoryAPIError(400, "request_invalid")
+            try:
+                events, overflow = drain(body["lease"])
+                return {"events": events, "overflow": overflow}
+            except ValueError:
+                raise MemoryAPIError(400, "request_invalid") from None
         if self.path.endswith("/config"):
             if body:
                 raise MemoryAPIError(400, "request_invalid")
@@ -158,7 +169,7 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
         status = 500
         # Only fixed labels reach INFO, including for attacker-controlled URLs.
         kind = {"/healthz": "health", "/v1/memory/search": "search", "/v1/memory/write": "write",
-                "/v1/memory/ingest": "ingest", "/v1/memory/delete-all": "delete_all", "/v1/memory/config": "config"}.get(self.path, "unknown")
+                "/v1/memory/ingest": "ingest", "/v1/memory/delete-all": "delete_all", "/v1/memory/config": "config", "/v1/memory/observe": "observe"}.get(self.path, "unknown")
         try:
             authorization = self.headers.get("Authorization", "").encode("utf-8")
             if len(self.headers.get_all("Authorization", [])) != 1 or not hmac.compare_digest(
@@ -195,8 +206,9 @@ class MemoryAPIHandler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             pass
         finally:
-            LOG.info("memory_api request kind=%s status=%s elapsed_ms=%d", kind, status,
-                     (time.monotonic() - started) * 1000)
+            if kind != "observe":
+                LOG.info("memory_api request kind=%s status=%s elapsed_ms=%d", kind, status,
+                         (time.monotonic() - started) * 1000)
 
 
 def create_memory_api(controlled: Any, limits: Mapping[str, int] | None = None) -> MemoryAPIServer:

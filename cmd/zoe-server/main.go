@@ -147,7 +147,8 @@ func run() error {
 	}
 	ready := &voice.ReadyHandle{}
 	models := retryModelsFromLoaded(registerConfig, stewardClient, uiController)
-	server, err := composeControlServer(store, cfg, voice.Config{Ready: ready, RetryModels: models, DiscoverResultReceipts: true, MemoryAPI: memoryAPIFromEnv(), InstructionText: promptSet.VoiceInstruction(), UIControllerInstruction: promptSet.UIController(), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, Limits: loaded, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), GatewayDialOrigin: os.Getenv("ZOE_VOICE_GATEWAY_DIAL_ORIGIN")}, capabilities.Config{
+	memoryClient := memoryAPIFromEnv()
+	server, err := composeControlServer(store, cfg, voice.Config{Ready: ready, RetryModels: models, DiscoverResultReceipts: true, MemoryAPI: memoryClient, InstructionText: promptSet.VoiceInstruction(), UIControllerInstruction: promptSet.UIController(), RegisterConfig: registerConfig, ClassificationTimeout: classificationTimeout, IngestEnabled: voiceIngest.Enabled, Steward: taskSteward, UIController: uiController, Limits: loaded, RecallTimeout: 60 * time.Second, GatewayURL: os.Getenv("ZOE_VOICE_GATEWAY_URL"), GatewayAPIKey: os.Getenv("ZOE_VOICE_GATEWAY_API_KEY"), UpstreamRoute: os.Getenv("ZOE_VOICE_UPSTREAM_ROUTE"), GatewayDialOrigin: os.Getenv("ZOE_VOICE_GATEWAY_DIAL_ORIGIN")}, capabilities.Config{
 		AvailableCapabilityIDs: splitEnv("ZOE_AVAILABLE_CAPABILITY_IDS", ""),
 		RuntimeBackend:         strings.TrimSpace(os.Getenv("ZOE_CAPABILITY_RUNTIME_BACKEND")),
 	})
@@ -200,6 +201,7 @@ func run() error {
 		serveErr <- httpServer.Serve(listener)
 	}()
 	pushStop := make(chan struct{})
+	go runMemoryObservation(pushStop, memoryClient)
 	if pushSender != nil {
 		go runPushWorker(pushStop, server)
 	}

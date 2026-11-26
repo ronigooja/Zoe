@@ -33,7 +33,7 @@ While any channel needs the connection, the client reconnects with exponential b
 
 ## Implementation locations
 
-None yet.
+The existing endpoint, connection lifecycle and frame routing are in [client WebSocket control](../../../internal/control/client_ws.go); client MCP channel handling is in [client MCP control](../../../internal/control/client_mcp.go), with upgrade authentication in [control auth](../../../internal/control/auth.go). These are current transport/channel locations, not evidence that every approved channel is implemented. The [Model monitor](model-monitor.md) defines its own channel contract.
 
 ## Verification obligations
 
