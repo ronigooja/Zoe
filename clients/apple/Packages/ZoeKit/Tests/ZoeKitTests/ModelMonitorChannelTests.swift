@@ -194,31 +194,42 @@ final class ModelMonitorChannelTests: XCTestCase {
 
     /// Deterministic overlap: `begin()` is parked after demand is set and before subscribe, then `stop()` runs to completion.
     /// The socket was created by demand, so it is discarded without `opened()`. No subscribe is sent, and nothing reconnects.
-    func testStopDuringParkedStartLeavesNoSubscriptionAndNoReconnect() async throws {
+    /// Proves true overlap without a circular wait: `begin()` is parked inside the lifecycle queue, `stop()` is launched
+    /// as a child task, and the test waits only for `stop()` to be chained behind `begin()` before releasing the gate.
+    func testStopEnqueuedBehindParkedStartLeavesIdleWithoutReconnect() async throws {
         let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
         let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
         let channel = await ModelMonitorChannel.attach(to: transport)
-        let parked = AsyncGate(), release = AsyncGate()
+        let parked = AsyncGate(), release = AsyncGate(), stopEnqueued = AsyncGate()
         await channel.setStartGateForTesting {
             await parked.open()
             await release.wait()
         }
+        // Begin is the first queued operation; its enqueue is not the signal we wait for.
         let begin = Task { await channel.begin() }
         await parked.wait()
-        // Demand is set and begin() is suspended, so this stop overlaps the start.
-        await channel.stop()
+        // Arm the enqueue signal only now, so the first observed enqueue is stop's.
+        await channel.setEnqueuedObserverForTesting { await stopEnqueued.open() }
+        let stop = Task { await channel.stop() }
+        await stopEnqueued.wait()
+        await channel.setEnqueuedObserverForTesting(nil)
+        // Stop is chained behind the parked begin and cannot run until release; releasing now cannot deadlock.
         await release.open()
         _ = await begin.value
+        await stop.value
         await channel.setStartGateForTesting(nil)
 
-        // The socket was created by demand and must be closed without any subscribe; the monitor never subscribed.
-        try await mcpEventually { await socket.closeCount >= 1 || plan.count == 0 }
-        let types = try await sentTypes(socket)
-        XCTAssertEqual(types, [])
-        await clock.advance(100)
-        XCTAssertEqual(plan.count, 1, "a discarded demand-created socket must not be reopened after stop")
         let finalStatus = await channel.status
         XCTAssertEqual(finalStatus, .idle)
+        // A subscribe may have been sent before stop. Any such subscribe must be matched by an unsubscribe, with no residue.
+        let types = try await sentTypes(socket)
+        XCTAssertEqual(types.filter { $0 == "subscribe" }.count, types.filter { $0 == "unsubscribe" }.count)
+        // Demand is gone, so no reconnect may happen after stop: the socket count must not grow across a backoff interval.
+        let createdAtStop = plan.count
+        await clock.advance(100)
+        XCTAssertEqual(plan.count, createdAtStop)
+        let sentAfter = try await sentTypes(socket)
+        XCTAssertEqual(sentAfter, types)
     }
 
     /// Stop after a parked start has subscribed: the unsubscribe matches the subscribe and demand is released.

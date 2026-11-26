@@ -193,8 +193,18 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
             await operation()
         }
         lifecycle = task
+        #if DEBUG
+        // Fires after this operation is chained behind the previous one, before it awaits.
+        await enqueuedObserverForTesting?()
+        #endif
         await task.value
     }
+
+    #if DEBUG
+    /// Test-only: called after a lifecycle operation is chained onto the queue, so tests can detect the overlap without polling.
+    var enqueuedObserverForTesting: (@Sendable () async -> Void)?
+    func setEnqueuedObserverForTesting(_ observer: (@Sendable () async -> Void)?) { enqueuedObserverForTesting = observer }
+    #endif
 
     public func closed() async {
         linkOpen = false
