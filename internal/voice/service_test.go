@@ -351,7 +351,7 @@ func TestQueryGatewayOutcomeLeavesNonNeverEstablishedUnresolved(t *testing.T) {
 		want   string
 	}{
 		{name: "open", status: http.StatusOK, body: `{"request_id":"req","outcome":"open"}`, want: "open"},
-		{name: "released", status: http.StatusOK, body: `{"request_id":"req","outcome":"released"}`, want: "released"},
+		{name: "released without evidence", status: http.StatusOK, body: `{"request_id":"req","outcome":"released"}`, want: ""},
 		{name: "unknown", status: http.StatusOK, body: `{"request_id":"req","outcome":"unknown"}`, want: "unknown"},
 		{name: "not found", status: http.StatusNotFound, want: ""},
 		{name: "malformed", status: http.StatusOK, body: `{`, want: ""},
@@ -377,7 +377,7 @@ func TestQueryGatewayOutcomeLeavesNonNeverEstablishedUnresolved(t *testing.T) {
 			if _, err := store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,reason_code='gateway_outcome_unknown',source_session_id='query'`); err != nil {
 				t.Fatal(err)
 			}
-			if err := svc.resolveGatewayCreateOutcome(context.Background(), "query", 1, "quarantined", "req", got); err != nil {
+			if err := svc.resolveGatewayCreateOutcome(context.Background(), "query", 1, "quarantined", "req", got, ""); err != nil {
 				t.Fatal(err)
 			}
 			var state string
@@ -474,7 +474,7 @@ func TestGatewayAttestationRequiresMatchingPoolSource(t *testing.T) {
 	if _, err := store.DB().Exec(`UPDATE voice_pool_state SET blocked=1,reason_code='gateway_outcome_unknown',source_session_id='other' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.resolveGatewayCreateOutcome(context.Background(), "attested", 1, "quarantined", "attested-request", gatewayCreationOutcome{Outcome: "never_established"}); err != nil {
+	if err := svc.resolveGatewayCreateOutcome(context.Background(), "attested", 1, "quarantined", "attested-request", gatewayCreationOutcome{Outcome: "never_established"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	var state string

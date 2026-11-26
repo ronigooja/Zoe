@@ -569,7 +569,10 @@ func TestReconciliationLogsWithoutConfiguredGateway(t *testing.T) {
 	log.SetOutput(&logs)
 	defer log.SetOutput(previous)
 	pass := func() {
+		t.Helper()
+		reserveRecoveryPool(t, h.store, a.SessionID, "active_session")
 		svc.reconcileBoundCalls(context.Background())
+		reserveRecoveryPool(t, h.store, "allocating-call", "negotiation_in_progress")
 		svc.attestStaleCreates(context.Background())
 	}
 	pass()
@@ -578,7 +581,7 @@ func TestReconciliationLogsWithoutConfiguredGateway(t *testing.T) {
 		t.Helper()
 		got := logs.String()
 		if strings.Count(got, "level=error voice session "+a.SessionID+" termination unresolved: state=ending outcome=unknown") != want ||
-			strings.Count(got, "level=error voice session allocating-call establishment unresolved: outcome=unknown") != want ||
+			strings.Count(got, "level=error voice create unresolved: error_class=outcome_unavailable") != want ||
 			strings.Contains(got, "private-") || strings.Contains(got, "invalid.example") {
 			t.Fatal("missing, repeated or unsafe reconciliation logs:", got)
 		}

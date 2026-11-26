@@ -76,11 +76,11 @@ func (s *Service) probeResultCapability(ctx context.Context) bool {
 	if err != nil || len(data) > 65536 {
 		return false
 	}
-	health, valid := uniqueCapabilityObject(data)
+	health, valid := uniqueJSONObject(data)
 	if !valid {
 		return false
 	}
-	capability, valid := uniqueCapabilityObject(health["result_deliveries"])
+	capability, valid := uniqueJSONObject(health["result_deliveries"])
 	if !valid || len(capability) != 3 {
 		return false
 	}
@@ -91,9 +91,8 @@ func (s *Service) probeResultCapability(ctx context.Context) bool {
 		json.Unmarshal(capability["applied_evidence"], &evidence) == nil && evidence == "local_transport_writes_and_durable_receipt"
 }
 
-// uniqueCapabilityObject rejects ambiguous duplicate keys and trailing JSON at
-// either capability boundary; unrelated health fields remain forward-compatible.
-func uniqueCapabilityObject(data []byte) (map[string]json.RawMessage, bool) {
+// uniqueJSONObject rejects duplicate keys and trailing data in a JSON object.
+func uniqueJSONObject(data []byte) (map[string]json.RawMessage, bool) {
 	d := json.NewDecoder(bytes.NewReader(data))
 	token, err := d.Token()
 	if err != nil || token != json.Delim('{') {
