@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"time"
 
 	"github.com/ronigooja/Zoe/internal/modelmonitor"
 )
@@ -94,17 +95,42 @@ func (c *clientSocket) runMonitor(ctx context.Context, m *monitorSubscription) {
 	defer close(m.done)
 	defer m.source.Close()
 	var sequence uint64
-	gap := func() {
-		if c.monitorWrite(map[string]any{"channel": "model_monitor", "type": "gap", "subscription_id": m.id}) != nil {
+	gapFrame := map[string]any{"channel": "model_monitor", "type": "gap", "subscription_id": m.id}
+	terminal := func() {
+		if ctx.Err() != nil {
+			return
+		}
+		if c.monitorWrite(gapFrame) != nil {
+			c.cancel()
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if c.monitorWrite(map[string]any{"channel": "model_monitor", "type": "error", "subscription_id": m.id, "error": map[string]string{"code": "subscription_ended"}}) != nil {
 			c.cancel()
 		}
 	}
+	pendingGap := false
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			if pendingGap {
+				admitted, err := c.tryMonitorWrite(gapFrame)
+				if err != nil {
+					c.cancel()
+					return
+				}
+				if admitted {
+					pendingGap = false
+				}
+			}
 		case <-m.source.Gap:
-			gap()
+			terminal()
 			return
 		default:
 		}
@@ -112,24 +138,37 @@ func (c *clientSocket) runMonitor(ctx context.Context, m *monitorSubscription) {
 		case <-ctx.Done():
 			return
 		case <-m.source.Gap:
-			gap()
+			terminal()
 			return
 		case item := <-m.source.Events:
 			if item.Gap {
-				if c.monitorWrite(map[string]any{"channel": "model_monitor", "type": "gap", "subscription_id": m.id}) != nil {
+				pendingGap = true
+			}
+			if pendingGap {
+				admitted, err := c.tryMonitorWrite(gapFrame)
+				if err != nil {
 					c.cancel()
 					return
 				}
+				if !admitted {
+					if !item.Gap {
+						sequence++
+					}
+					continue
+				}
+				pendingGap = false
+			}
+			if item.Gap {
 				continue
 			}
 			sequence++
 			admitted, err := c.tryMonitorWrite(map[string]any{"channel": "model_monitor", "type": "event", "subscription_id": m.id, "sequence": sequence, "event": item.Event})
 			if !admitted {
-				gap()
-				return
+				pendingGap = true
+				continue
 			}
 			if err == errClientFrameTooLarge {
-				gap()
+				terminal()
 				return
 			}
 			if err != nil {

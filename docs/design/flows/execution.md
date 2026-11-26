@@ -25,8 +25,9 @@ configuration, headers and raw errors. It replaces the runner token, configured
 OpenCode password, and conventional bearer, credential-assignment and common
 token patterns in observable text; unknown secrets and unconventional formats
 can remain. Prompt and assistant text may contain private task data. Rotation
-replacement prompts are observed as Worker submissions; the separate rotation
-summarizer's request and response are not observed.
+replacement prompts are Worker submissions; the summarizer's prompt and polled
+assistant text are `worker_rotation` observations. Source and content are
+asserted by the assigned runner, not cryptographic proof of runtime provenance.
 
 ## Required behavior
 

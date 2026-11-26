@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,20 @@ func TestModelMonitorSubscription(t *testing.T) {
 	}
 }
 
+func TestModelMonitorOversizeEndsSubscription(t *testing.T) {
+	_, base, key := clientSocketFixture(t, nil)
+	c := dialClientSocket(t, base, key, "")
+	writeClientSocket(t, c, `{"channel":"model_monitor","type":"subscribe","subscription_id":"sub"}`)
+	_ = readClientSocket(t, c)
+	modelmonitor.Publish(modelmonitor.Event{Component: "worker", CallID: "call", Time: time.Now().UTC(), Type: "request", Payload: json.RawMessage(`"` + strings.Repeat("x", 5000) + `"`)})
+	if f := readClientSocket(t, c); string(f["type"]) != `"gap"` {
+		t.Fatalf("gap: %s", f)
+	}
+	if f := readClientSocket(t, c); string(f["type"]) != `"error"` || string(f["error"]) != `{"code":"subscription_ended"}` {
+		t.Fatalf("terminal: %s", f)
+	}
+}
+
 func TestModelMonitorContentionShedsWithoutClosingSocket(t *testing.T) {
 	s, base, key := clientSocketFixture(t, nil)
 	c := dialClientSocket(t, base, key, "")
@@ -49,15 +64,8 @@ func TestModelMonitorContentionShedsWithoutClosingSocket(t *testing.T) {
 	s.clientSockets.mu.Unlock()
 	socket.writeMu.Lock()
 	modelmonitor.Publish(modelmonitor.Event{Component: "worker", CallID: "call", Time: time.Now().UTC(), Type: "request"})
-	// The monitor goroutine must reach gap delivery while the shared writer is busy.
-	deadline := time.Now().Add(2 * time.Second)
-	for socket.writeWaiters.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if socket.writeWaiters.Load() == 0 {
-		socket.writeMu.Unlock()
-		t.Fatal("monitor did not shed")
-	}
+	// Wait for the monitor to consume the queued event while the writer is busy.
+	time.Sleep(100 * time.Millisecond)
 	done := make(chan error, 1)
 	go func() {
 		done <- socket.write(context.Background(), map[string]string{"channel": "mcp", "type": "call"})
@@ -73,6 +81,10 @@ func TestModelMonitorContentionShedsWithoutClosingSocket(t *testing.T) {
 	}
 	if !seen[`"model_monitor":"gap"`] || !seen[`"mcp":"call"`] {
 		t.Fatalf("frames: %v", seen)
+	}
+	modelmonitor.Publish(modelmonitor.Event{Component: "worker", CallID: "call", Time: time.Now().UTC(), Type: "response"})
+	if f := readClientSocket(t, c); string(f["type"]) != `"event"` || string(f["sequence"]) != "2" {
+		t.Fatalf("subscription did not survive: %s", f)
 	}
 	writeClientSocket(t, c, `{"channel":"unknown"}`)
 	if f := readClientSocket(t, c); string(f["channel"]) != `"transport"` {

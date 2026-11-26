@@ -34,3 +34,35 @@ func TestModelObservationDedupAndToolBoundary(t *testing.T) {
 		t.Fatal("new subscription replayed an old observation")
 	}
 }
+
+func TestRotationObservationContextAndContentFallback(t *testing.T) {
+	s := &observationSender{queue: make(chan observationItem, 8), seen: make(map[string]bool)}
+	s.lease.Store(&observationLease{Boot: "boot", Generation: 1})
+	ctx := context.WithValue(context.Background(), observationKey{}, s)
+	ctx = context.WithValue(ctx, rotationObservationKey{}, true)
+	observeModel(ctx, "rotation-session", "request", "prompt", "summary prompt")
+	observeMessages(ctx, "rotation-session", []opencode.Message{{ID: "reply", Type: "assistant", Content: []map[string]any{{"type": "text", "text": "summary reply"}}}})
+	for _, want := range []string{"request", "response"} {
+		item := <-s.queue
+		if item.source != "worker_rotation" || item.typ != want {
+			t.Fatalf("unexpected event: %+v", item)
+		}
+	}
+}
+
+func TestObservationDoesNotDedupBeforeLeaseOrQueue(t *testing.T) {
+	s := &observationSender{queue: make(chan observationItem, 1), seen: make(map[string]bool)}
+	ctx := context.WithValue(context.Background(), observationKey{}, s)
+	observeModel(ctx, "s", "response", "a", "a")
+	s.lease.Store(&observationLease{Boot: "boot", Generation: 1})
+	observeModel(ctx, "s", "response", "a", "a")
+	observeModel(ctx, "s", "response", "b", "b")
+	if s.gap.Load() == nil {
+		t.Fatal("overflow not reported")
+	}
+	<-s.queue
+	observeModel(ctx, "s", "response", "b", "b")
+	if len(s.queue) != 1 {
+		t.Fatal("overflow prematurely deduplicated")
+	}
+}
