@@ -62,21 +62,28 @@ func observationText(text, key string) (string, bool) {
 	return text, false
 }
 
-type attemptObservation struct{ component, id, key string }
+type attemptObservation struct {
+	component, id, key string
+	generation         uint64
+}
 
 func (c *Client) observeAttempt(ctx context.Context, style, instructions, input string) *attemptObservation {
 	component := c.component
 	if override, ok := ctx.Value(observationContextKey{}).(string); ok {
 		component = override
 	}
-	if component == "" || !modelmonitor.Enabled() {
+	if component == "" {
+		return nil
+	}
+	generation := modelmonitor.Generation()
+	if generation == 0 {
 		return nil
 	}
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil
 	}
-	o := &attemptObservation{component: component, id: hex.EncodeToString(id[:]), key: c.key}
+	o := &attemptObservation{component: component, id: hex.EncodeToString(id[:]), key: c.key, generation: generation}
 	i, ti := observationText(instructions, c.key)
 	v, tv := observationText(input, c.key)
 	o.publish("request", map[string]any{"style": style, "instructions": i, "input": v}, ti || tv)
@@ -84,14 +91,14 @@ func (c *Client) observeAttempt(ctx context.Context, style, instructions, input 
 }
 
 func (o *attemptObservation) publish(kind string, payload any, truncated bool) {
-	if o == nil || !modelmonitor.Enabled() {
+	if o == nil || modelmonitor.Generation() != o.generation {
 		return
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
 		return
 	}
-	modelmonitor.Publish(modelmonitor.Event{Component: o.component, CallID: o.id, Time: time.Now(), Type: kind, Payload: b, Truncated: truncated})
+	modelmonitor.PublishFor(o.generation, modelmonitor.Event{Component: o.component, CallID: o.id, Time: time.Now(), Type: kind, Payload: b, Truncated: truncated})
 }
 
 func (o *attemptObservation) endError(kind string, status int) {
@@ -101,55 +108,17 @@ func (o *attemptObservation) endError(kind string, status int) {
 	o.publish("error", map[string]any{"kind": kind, "status": status}, false)
 }
 
-func (o *attemptObservation) endResponse(status int, body []byte, style string) {
-	if o == nil || !modelmonitor.Enabled() {
+func (o *attemptObservation) endUnavailable(status int) {
+	if o == nil {
 		return
 	}
-	// Do not parse or copy arbitrarily large provider bodies for observation.
-	if len(body) > observationTextLimit {
-		o.publish("response", map[string]any{"status": status, "content": "[omitted: content too large]"}, true)
+	o.publish("response", map[string]any{"status": status, "content_available": false}, false)
+}
+
+func (o *attemptObservation) endResponse(status int, content string) {
+	if o == nil || modelmonitor.Generation() != o.generation {
 		return
-	}
-	var content string
-	if style == "chat" {
-		var response struct {
-			Choices []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
-		if json.Unmarshal(body, &response) == nil && len(response.Choices) > 0 {
-			content = response.Choices[0].Message.Content
-		}
-	} else {
-		var response struct {
-			OutputText string `json:"output_text"`
-			Output     []struct {
-				Type    string `json:"type"`
-				Content []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"content"`
-			} `json:"output"`
-		}
-		if json.Unmarshal(body, &response) == nil {
-			content = response.OutputText
-			for _, item := range response.Output {
-				if item.Type == "message" {
-					for _, part := range item.Content {
-						if part.Type == "output_text" && part.Text != "" {
-							content = part.Text
-							break
-						}
-					}
-					if content != response.OutputText {
-						break
-					}
-				}
-			}
-		}
 	}
 	content, truncated := observationText(content, o.key)
-	o.publish("response", map[string]any{"status": status, "content": content}, truncated)
+	o.publish("response", map[string]any{"status": status, "content_available": true, "content": content}, truncated)
 }
