@@ -26,9 +26,11 @@ type clientSocket struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	owner    string
+	device   string
 	maxBytes int64
 	catalog  clientMCPCatalog
 	pending  map[string]chan clientMCPResult
+	monitor  *monitorSubscription
 }
 
 func (s *Server) registerClientSocketRoutes() {
@@ -63,7 +65,8 @@ func (s *Server) handleClientSocket(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer conn.CloseNow()
-	socket := &clientSocket{conn: conn, ctx: ctx, cancel: cancel, owner: p.SubjectID, maxBytes: s.cfg.Limits.Int64("client_ws_frame_max_bytes"), pending: make(map[string]chan clientMCPResult)}
+	socket := &clientSocket{conn: conn, ctx: ctx, cancel: cancel, owner: p.SubjectID, device: p.DeviceID, maxBytes: s.cfg.Limits.Int64("client_ws_frame_max_bytes"), pending: make(map[string]chan clientMCPResult)}
+	defer socket.stopMonitor()
 	conn.SetReadLimit(socket.maxBytes)
 	if !s.clientSockets.replace(p.DeviceID, socket) {
 		return
@@ -160,6 +163,10 @@ func (s *clientSockets) handleFrame(c *clientSocket, frame json.RawMessage) {
 	}
 	if *envelope.Channel == "mcp" {
 		s.handleMCPFrame(c, frame)
+		return
+	}
+	if *envelope.Channel == "model_monitor" {
+		c.handleMonitorFrame(frame)
 		return
 	}
 	_ = c.write(c.ctx, map[string]any{
