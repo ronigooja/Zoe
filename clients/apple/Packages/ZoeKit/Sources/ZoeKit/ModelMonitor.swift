@@ -100,33 +100,56 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
     private var lastSequence: Int64 = 0
     private var nextEntryID = 0
     private var status: ModelMonitorStatus = .idle
+    private var lifecycle: Task<Void, Never>?
 
     public init(transport: ClientWebSocketTransport) {
         self.transport = transport
     }
 
-    /// Starts a new update stream. A previous stream is finished, so stale updates never reach a reopened consumer.
-    public func makeUpdates() -> AsyncStream<ModelMonitorUpdate> {
-        continuation?.finish()
+    /// Registers the channel on the shared socket. Registration delivers the current open or rejected state.
+    public static func attach(to transport: ClientWebSocketTransport) async -> ModelMonitorChannel {
+        let channel = ModelMonitorChannel(transport: transport)
+        await transport.register(channel: ModelMonitorChannel.channel, handler: channel)
+        return channel
+    }
+
+    /// Begins a monitoring session and returns its update stream. A previous stream is finished first, so stale updates never reach the new consumer.
+    /// Stream creation and start are one serialized step, so a queued stop cannot finish the new stream.
+    public func begin() async -> AsyncStream<ModelMonitorUpdate> {
         let stream = AsyncStream.makeStream(of: ModelMonitorUpdate.self)
-        continuation = stream.continuation
+        await serialized { await self.performBegin(stream.continuation) }
         return stream.stream
     }
 
-    /// Registers on the shared socket, opens demand, and subscribes once the link is open.
-    public func start() async {
+    private func performBegin(_ next: AsyncStream<ModelMonitorUpdate>.Continuation) async {
+        continuation?.finish()
+        continuation = next
+        await performStart()
+    }
+
+    /// Unsubscribes, drops this channel's demand, and finishes the update stream.
+    public func stop() async {
+        await serialized { await self.performStop() }
+    }
+
+    /// Explicit user retry after a terminal `subscription_ended`. Nothing resubscribes automatically after that.
+    public func retry() async {
+        await serialized { await self.performRetry() }
+    }
+
+    public func opened() async {
+        await serialized { await self.performOpened() }
+    }
+
+    private func performStart() async {
         wanted = true
-        await transport.register(channel: Self.channel, handler: self)
-        // The socket may already be open for another channel; `opened()` was not delivered to this one.
-        linkOpen = await transport.isOpen
         setStatus(await transport.isRejected ? .unauthorized : .connecting)
         // Demand is held even when rejected, so a credential change can reconnect the socket for this channel.
         await transport.setNeeded(true, demand: Self.channel)
         await subscribe()
     }
 
-    /// Unsubscribes, drops this channel's demand, and finishes the update stream.
-    public func stop() async {
+    private func performStop() async {
         wanted = false
         let id = subscriptionID
         clearSubscription()
@@ -138,19 +161,30 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
         await transport.setNeeded(false, demand: Self.channel)
     }
 
-    /// Explicit user retry after a terminal `subscription_ended`. Nothing resubscribes automatically after that.
-    public func retry() async {
+    private func performRetry() async {
         guard wanted, status == .ended else { return }
         setStatus(.connecting)
         await transport.setNeeded(true, demand: Self.channel)
         await subscribe()
     }
 
-    public func opened() async {
+    private func performOpened() async {
         linkOpen = true
         // Credentials changed after a 401 stop; the transport reconnected, so the monitor may resubscribe.
         if status == .unauthorized, wanted { setStatus(.connecting) }
         await subscribe()
+    }
+
+    /// Runs each operation after the previous one finishes, so a stop cannot interleave with a start.
+    private func serialized(_ operation: @escaping @Sendable () async -> Void) async {
+        // Operations are chained, so each one sees the state left by the previous operation.
+        let previous = lifecycle
+        let task = Task {
+            await previous?.value
+            await operation()
+        }
+        lifecycle = task
+        await task.value
     }
 
     public func closed() async {

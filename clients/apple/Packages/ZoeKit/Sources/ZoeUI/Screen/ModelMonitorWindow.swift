@@ -38,14 +38,13 @@ import ZoeKit
         await tearDown()
         guard presented, current == generation, let next else { return }
         channel = next
-        let updates = await next.makeUpdates()
+        let updates = await next.begin()
         consumer = Task { [weak self] in
             for await update in updates {
                 guard let self else { return }
                 self.apply(update)
             }
         }
-        await next.start()
     }
 
     public func retry() async {

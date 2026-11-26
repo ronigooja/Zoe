@@ -26,9 +26,8 @@ final class ModelMonitorChannelTests: XCTestCase {
         let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
         let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
         let channel = await ModelMonitorChannel.attach(to: transport)
-        var updates = await channel.makeUpdates().makeAsyncIterator()
+        var updates = await channel.begin().makeAsyncIterator()
 
-        await channel.start()
         let connecting = try await next(&updates)
         XCTAssertEqual(connecting, .status(.connecting))
         try await mcpEventually { await socket.sent.count == 1 }
@@ -81,9 +80,8 @@ final class ModelMonitorChannelTests: XCTestCase {
         let plan = SocketPlan([first, second]), clock = ManualMCPClock()
         let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
         let channel = await ModelMonitorChannel.attach(to: transport)
-        var updates = await channel.makeUpdates().makeAsyncIterator()
+        var updates = await channel.begin().makeAsyncIterator()
 
-        await channel.start()
         try await mcpEventually { await first.sent.count == 1 }
         let firstID = try subscriptionID(in: await first.sent[0], type: "subscribe")
         await first.push(Data(#"{"channel":"model_monitor","type":"subscribed","subscription_id":"\#(firstID)"}"#.utf8))
@@ -130,7 +128,7 @@ final class ModelMonitorChannelTests: XCTestCase {
         let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
         await transport.setNeeded(true)
         let channel = await ModelMonitorChannel.attach(to: transport)
-        await channel.start()
+        _ = await channel.begin()
         try await mcpEventually { await socket.sent.count == 1 }
         await channel.stop()
         try await mcpEventually { await socket.sent.count == 2 }
@@ -139,6 +137,38 @@ final class ModelMonitorChannelTests: XCTestCase {
         XCTAssertEqual(closes, 0)
         XCTAssertEqual(plan.count, 1)
         await transport.setNeeded(false)
+    }
+
+    func testLateRegistrationOnOpenSocketSubscribesWithoutMissedOpen() async throws {
+        let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
+        let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
+        // Another channel opens the shared socket first; the monitor joins later and never receives the original opened callback.
+        await transport.setNeeded(true)
+        try await mcpEventually { await socket.opened }
+        let channel = await ModelMonitorChannel.attach(to: transport)
+        _ = await channel.begin()
+        try await mcpEventually { await socket.sent.count == 1 }
+        _ = try subscriptionID(in: await socket.sent[0], type: "subscribe")
+        await transport.setNeeded(false)
+    }
+
+    func testStopBeforeQueuedStartLeavesNoSubscriptionOrDemand() async throws {
+        let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
+        let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
+        let channel = await ModelMonitorChannel.attach(to: transport)
+        // Rapid open/close: both lifecycle operations are queued before either runs.
+        async let started = channel.begin()
+        async let stopped: Void = channel.stop()
+        _ = await started
+        _ = await stopped
+        // Serialized order means the final state is stopped: demand is gone and every subscribe was matched by an unsubscribe.
+        let types = try await socket.sent.map { try JSONDecoder().decode(JSONValue.self, from: $0)[mcp: "type"] }
+        let subscribes = types.filter { $0 == .string("subscribe") }.count
+        let unsubscribes = types.filter { $0 == .string("unsubscribe") }.count
+        XCTAssertEqual(subscribes, unsubscribes)
+        try await mcpEventually { await socket.closeCount >= 1 || subscribes == 0 }
+        await clock.advance(100)
+        XCTAssertEqual(plan.count, subscribes > 0 ? 1 : 0)
     }
 
     func testBufferIsBoundedAndKeepsGapsWhenFiltered() {
