@@ -153,23 +153,71 @@ final class ModelMonitorChannelTests: XCTestCase {
         await transport.setNeeded(false)
     }
 
-    func testStopBeforeQueuedStartLeavesNoSubscriptionOrDemand() async throws {
+    private func sentTypes(_ socket: FixtureMCPSocket) async throws -> [String] {
+        try await socket.sent.map { data in
+            guard case let .string(type)? = try JSONDecoder().decode(JSONValue.self, from: data)[mcp: "type"] else {
+                XCTFail("frame without type")
+                return ""
+            }
+            return type
+        }
+    }
+
+    func testStopAfterStartLeavesNoSubscriptionOrReconnect() async throws {
         let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
         let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
         let channel = await ModelMonitorChannel.attach(to: transport)
-        // Rapid open/close: both lifecycle operations are queued before either runs.
+        _ = await channel.begin()
+        try await mcpEventually { await socket.sent.count == 1 }
+        await channel.stop()
+        try await mcpEventually { await socket.closeCount == 1 }
+        let types = try await sentTypes(socket)
+        XCTAssertEqual(types, ["subscribe", "unsubscribe"])
+        await clock.advance(100)
+        XCTAssertEqual(plan.count, 1)
+    }
+
+    func testStopBeforeBeginDoesNotCancelLaterStart() async throws {
+        let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
+        let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
+        let channel = await ModelMonitorChannel.attach(to: transport)
+        await channel.stop()
+        var updates = await channel.begin().makeAsyncIterator()
+        let first = try await next(&updates)
+        XCTAssertEqual(first, .status(.connecting))
+        try await mcpEventually { await socket.sent.count == 1 }
+        let types = try await sentTypes(socket)
+        XCTAssertEqual(types, ["subscribe"])
+        await channel.stop()
+        try await mcpEventually { await socket.closeCount == 1 }
+    }
+
+    /// Start and stop are unordered child tasks, so the final state depends on which the actor serializes last.
+    /// Assert the invariant for whichever state results, rather than one fixed order.
+    func testOverlappingStartAndStopEndInConsistentState() async throws {
+        let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
+        let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
+        let channel = await ModelMonitorChannel.attach(to: transport)
         async let started = channel.begin()
         async let stopped: Void = channel.stop()
         _ = await started
         _ = await stopped
-        // Serialized order means the final state is stopped: demand is gone and every subscribe was matched by an unsubscribe.
-        let types = try await socket.sent.map { try JSONDecoder().decode(JSONValue.self, from: $0)[mcp: "type"] }
-        let subscribes = types.filter { $0 == .string("subscribe") }.count
-        let unsubscribes = types.filter { $0 == .string("unsubscribe") }.count
-        XCTAssertEqual(subscribes, unsubscribes)
-        try await mcpEventually { await socket.closeCount >= 1 || subscribes == 0 }
-        await clock.advance(100)
-        XCTAssertEqual(plan.count, subscribes > 0 ? 1 : 0)
+        let finalStatus = await channel.status
+        if finalStatus == .idle {
+            // Stop ran last: every subscribe is matched by an unsubscribe. Demand is gone, so no socket reconnects.
+            let types = try await sentTypes(socket)
+            XCTAssertEqual(types.filter { $0 == "subscribe" }.count, types.filter { $0 == "unsubscribe" }.count)
+            await clock.advance(100)
+            XCTAssertEqual(plan.count, types.isEmpty ? 0 : 1)
+        } else {
+            // Start ran last: the subscription is live, so exactly one subscribe is outstanding and nothing was unsubscribed.
+            try await mcpEventually { await socket.sent.count == 1 }
+            let types = try await sentTypes(socket)
+            XCTAssertEqual(types, ["subscribe"])
+            XCTAssertEqual(plan.count, 1)
+            await channel.stop()
+            try await mcpEventually { await socket.closeCount == 1 }
+        }
     }
 
     func testBufferIsBoundedAndKeepsGapsWhenFiltered() {
