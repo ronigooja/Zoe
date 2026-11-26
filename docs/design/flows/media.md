@@ -65,6 +65,9 @@ Unexpected server errors are 5xx. `call.ended.reason` is exactly
 Reject `closed_at` more than five minutes ahead of Zoe's receive time with
 `400 invalid_request`.
 
+An exact `call.start` replay outside `allocating`, `active` or `ending`
+returns `409 voice_request_terminal` instead of the saved response.
+
 The opening manifest is the existing `kind: "full"`, owner-scoped `version`
 and ordered `items` array of `{role,text}` strings (empty array if none).
 Use [opening item selection](results.md#required-behavior).
@@ -78,7 +81,7 @@ boolean `applied`, `silent` when present (only JSON boolean `true` qualifies),
 integer `version` and lowercase hex `content_hash` when present. Omit the
 receipt if the create path produced none, including on an empty opening.
 
-### Zoe reconciliation reads from the gateway
+### Zoe reconciliation with the gateway
 
 Use `Authorization: Bearer <gateway API key>` (Zoe's existing
 `ZOE_VOICE_GATEWAY_API_KEY`). The gateway must make Apple-dialed sessions,
@@ -91,6 +94,7 @@ from deployment configuration, never from client input.
 |---|---|---|
 | Gateway `GET /v1/voice/sessions/{gateway_session_id}/termination-evidence` | Path handle plus query `media_generation`, `account_lease_id`, `account_lease_generation`; both generations are decimal integers. | `200 {outcome,termination_evidence?}`: `released` with a verified evidence record; `not_yet` for a matched active/closing row; `unknown` if no exact trusted observation exists (including unknown/unowned records). Omit evidence unless `released`. `400 invalid_request` for malformed keys, `401 invalid_api_key` for bad/missing bearer, `503 voice_unavailable` for a failed lookup. |
 | Gateway `GET /v1/voice/requests/{request_id}/outcome` (existing) | Path `request_id` is `gateway_request_id` from `call.start`, not the Apple `request_id`. | `200 {request_id,outcome,evidence_id?}`: `never_established`, `open`, `released` (requires `evidence_id`), or `unknown`; `404 not_found` if no visible attempt exists. |
+| Gateway `POST /v1/voice/requests/{request_id}/fence` | Same request ID; no body. | Idempotent `200 {request_id,result,evidence_id?}`: `busy`, `fenced_no_live_media`, or a decided `never_established` or `released` outcome (the latter requires `evidence_id`). |
 
 The evidence record is the same on the lookup and `call.ended`: the existing
 lease observation fields `voice_session_id` (the gateway handle),
@@ -193,6 +197,11 @@ quarantine in its session records and `voice_pool_state`, and surfaces
 `gateway_unbind_unknown` record unbinding knowledge, not proof of termination
 or authority to reuse an account.
 
+Gateway admin web voice (`POST /api/voice/session`) exchanges directly with
+`/realtime/wm`, without the relay or an owned reservation. In gateway-owned
+mode its account selection avoids unresolved owned reservations but does not
+reserve the selected account. Zoe calls use AVAS and the relay.
+
 ## Persistence and idempotency
 
 - `call.start` deduplicates by `(owner, request_id)` before admission.
@@ -201,13 +210,9 @@ or authority to reuse an account.
   `language_code`; omit empty optional strings and do not normalize/default
   field values before hashing. The first success atomically stores the hash,
   `allocating` row, opening reservations and complete replay response. Enforce
-  one active or unresolved attempt per owner. Exact replay returns that saved
-  response regardless of subsequent state, with no new allocation or reservation.
-  A row stranded in `allocating` by a lost `call.start` response is checked
-  after two minutes: unresolved outcomes produce an explicit error log;
-  only a matching gateway outcome can automatically release the hold.
-  Gateway reporting and evidence lookup resolve known bindings; the operator
-  path below requires the source to be `quarantined` or `ended`, not `allocating`.
+  one active or unresolved attempt per owner. Exact replay in `allocating`,
+  `active` or `ending` returns that saved response without a new allocation or
+  reservation; other states return the error above.
 - The gateway uses `gateway_request_id` to fence a single create attempt and
   record its durable outcome before upstream allocation. A duplicate dial
   may share in-flight completion or replay the original answer for a still-live
@@ -238,12 +243,28 @@ Zoe never infers termination from a missing report, silence or a timeout. Zoe
 reconciles bound active and unresolved calls through the required evidence
 lookup, including when no `call.ended` arrived; reconcile promptly on a report
 without evidence. `not_yet` does not end or quarantine a still-active call.
-Absent or conflicting evidence never clears a hold or quarantine. Only matching
-`never_established` or evidenced `released` outcomes can clear an unbound
-failed create, fenced by session, generation, request and pool source. An old
-failed attempt cannot clear a bound or replacement session. Log an explicit
-error for a stuck `ending` or unknown session; no automatic compensation
-beyond lookup.
+Absent or conflicting termination evidence never clears a bound hold or
+quarantine. Log an explicit error for a stuck `ending` or unknown session.
+
+An unbound pool source in `allocating` with `negotiation_in_progress`, or in
+`quarantined` with `gateway_outcome_unknown`, holds the pool. Zoe checks an
+allocating create after two minutes; a matching `never_established` or
+evidenced `released` outcome resolves either source. After five minutes from
+creation or quarantine, an `unknown` outcome or lookup `404` causes Zoe to
+request a gateway fence with a two-second deadline. A lookup `open`, malformed
+reply or transport failure keeps the hold and does not authorize a fence.
+Both lookup and fence replies are strictly decoded: duplicate keys, unknown
+fields and trailing data fail validation.
+
+The gateway returns `busy` for unresolved reservations or local create, media,
+cleanup or unverified activity; the hold remains. For an absent or unresolved
+claim with no such activity or reservation, `fenced_no_live_media` durably
+prevents later dialing (`409 voice_request_fenced`). The fence never frees a
+gateway reservation. On this result Zoe marks the source `failed` with
+`unresolved_timeout` and releases the pool in one transaction guarded by the
+exact source, state, generation, request, binding absence and timestamp.
+Fence errors, malformed or unknown replies keep the hold; decided outcomes are
+resolved as above. This path cannot clear a bound or replacement call.
 
 When the pool remains quarantined and neither the gateway report nor Zoe's
 evidence lookup resolves it, use the operator command `voice.pool.reconcile`.

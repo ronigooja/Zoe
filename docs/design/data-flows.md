@@ -62,7 +62,7 @@ persistence, and recovery.
 | Authoritative results, voice chunks, receipts, and next-call context | [Results](flows/results.md) |
 | UI_Controller, render ACKs, bound input, and event recovery | [Screen](flows/screen.md) |
 | Memory writes, recall, ingestion, and compact/raw coverage | [Memory](flows/memory.md) |
-| Gateway-owned dial and hangup, Zoe session binding, leases, and termination evidence | [Media](flows/media.md) |
+| Gateway-owned dial and hangup, unresolved-create fencing, Zoe session binding, leases, and termination evidence | [Media](flows/media.md) |
 | Client WebSocket endpoint, channels, heartbeat, frame limit, and reconnection | [Client WebSocket](flows/client-ws.md) |
 | Worker calls to MCP servers running on the Mac client, per-MCP switches, and relay failures | [Client MCP](flows/client-mcp.md) |
 | Independent model consumers, atomic configuration, and retained deployment state | [Configuration](flows/configuration.md) |
