@@ -23,6 +23,19 @@ final class ModelMonitorChannelTests: XCTestCase {
         Data(#"{"channel":"model_monitor","type":"event","subscription_id":"\#(id)","sequence":\#(sequence),"event":{"component":"worker","call_id":"\#(callID)","time":"2026-11-18T10:00:00Z","type":"\#(type)","payload":{"model":"m"},"truncated":false}}"#.utf8)
     }
 
+    private func sentTypes(_ socket: FixtureMCPSocket) async throws -> [String] {
+        var types: [String] = []
+        for data in await socket.sent {
+            let frame = try JSONDecoder().decode(JSONValue.self, from: data)
+            guard case let .string(type)? = frame[mcp: "type"] else {
+                XCTFail("frame without type")
+                continue
+            }
+            types.append(type)
+        }
+        return types
+    }
+
     func testSubscribesOnOpenSequencesGapsAndEndsWithoutReconnect() async throws {
         let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
         let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
@@ -31,7 +44,7 @@ final class ModelMonitorChannelTests: XCTestCase {
 
         let connecting = try await next(&updates)
         XCTAssertEqual(connecting, .status(.connecting))
-        try await mcpEventually { await socket.sent.count == 1 }
+        try await awaitFixture(socket, .sent(1))
         let id = try subscriptionID(in: await socket.sent[0], type: "subscribe")
         let subscribing = try await next(&updates)
         XCTAssertEqual(subscribing, .status(.subscribing))
@@ -69,7 +82,7 @@ final class ModelMonitorChannelTests: XCTestCase {
         await socket.push(Data(#"{"channel":"model_monitor","type":"error","subscription_id":"\#(id)","error":{"code":"subscription_ended"}}"#.utf8))
         let ended = try await next(&updates)
         XCTAssertEqual(ended, .status(.ended))
-        try await mcpEventually { await socket.closeCount == 1 }
+        try await awaitFixture(socket, .closed)
         await clock.advance(100)
         XCTAssertEqual(plan.count, 1)
         let sentCount = await socket.sent.count
@@ -83,7 +96,7 @@ final class ModelMonitorChannelTests: XCTestCase {
         let channel = await ModelMonitorChannel.attach(to: transport)
         var updates = await channel.begin().makeAsyncIterator()
 
-        try await mcpEventually { await first.sent.count == 1 }
+        try await awaitFixture(first, .sent(1))
         let firstID = try subscriptionID(in: await first.sent[0], type: "subscribe")
         await first.push(Data(#"{"channel":"model_monitor","type":"subscribed","subscription_id":"\#(firstID)"}"#.utf8))
         let connecting = try await next(&updates)
@@ -98,14 +111,15 @@ final class ModelMonitorChannelTests: XCTestCase {
         XCTAssertTrue(firstEvent.isEvent)
         await first.disconnect()
 
-        try await mcpEventually { await clock.sleepers == [1] }
+        // The reconnect backoff is the only clock sleep; it is observed directly, not by polling.
+        await clock.awaitSleeper(seconds: 1)
         await clock.advance(1)
-        try await mcpEventually { await second.sent.count == 1 }
+        try await awaitFixture(second, .sent(1))
         let secondID = try subscriptionID(in: await second.sent[0], type: "subscribe")
         XCTAssertNotEqual(firstID, secondID)
 
         await channel.stop()
-        try await mcpEventually { await second.closeCount == 1 }
+        try await awaitFixture(second, .closed)
         let sent = await second.sent
         XCTAssertEqual(sent.count, 2)
         XCTAssertEqual(try subscriptionID(in: sent[1], type: "unsubscribe"), secondID)
@@ -130,9 +144,9 @@ final class ModelMonitorChannelTests: XCTestCase {
         await transport.setNeeded(true)
         let channel = await ModelMonitorChannel.attach(to: transport)
         _ = await channel.begin()
-        try await mcpEventually { await socket.sent.count == 1 }
+        try await awaitFixture(socket, .sent(1))
         await channel.stop()
-        try await mcpEventually { await socket.sent.count == 2 }
+        try await awaitFixture(socket, .sent(2))
         // The MCP demand keeps the shared socket open after the monitor closes.
         let closes = await socket.closeCount
         XCTAssertEqual(closes, 0)
@@ -145,22 +159,12 @@ final class ModelMonitorChannelTests: XCTestCase {
         let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
         // Another channel opens the shared socket first; the monitor joins later and never receives the original opened callback.
         await transport.setNeeded(true)
-        try await mcpEventually { await socket.opened }
+        try await awaitFixture(socket, .opened)
         let channel = await ModelMonitorChannel.attach(to: transport)
         _ = await channel.begin()
-        try await mcpEventually { await socket.sent.count == 1 }
+        try await awaitFixture(socket, .sent(1))
         _ = try subscriptionID(in: await socket.sent[0], type: "subscribe")
         await transport.setNeeded(false)
-    }
-
-    private func sentTypes(_ socket: FixtureMCPSocket) async throws -> [String] {
-        try await socket.sent.map { data in
-            guard case let .string(type)? = try JSONDecoder().decode(JSONValue.self, from: data)[mcp: "type"] else {
-                XCTFail("frame without type")
-                return ""
-            }
-            return type
-        }
     }
 
     func testStopAfterStartLeavesNoSubscriptionOrReconnect() async throws {
@@ -168,9 +172,9 @@ final class ModelMonitorChannelTests: XCTestCase {
         let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
         let channel = await ModelMonitorChannel.attach(to: transport)
         _ = await channel.begin()
-        try await mcpEventually { await socket.sent.count == 1 }
+        try await awaitFixture(socket, .sent(1))
         await channel.stop()
-        try await mcpEventually { await socket.closeCount == 1 }
+        try await awaitFixture(socket, .closed)
         let types = try await sentTypes(socket)
         XCTAssertEqual(types, ["subscribe", "unsubscribe"])
         await clock.advance(100)
@@ -185,17 +189,16 @@ final class ModelMonitorChannelTests: XCTestCase {
         var updates = await channel.begin().makeAsyncIterator()
         let first = try await next(&updates)
         XCTAssertEqual(first, .status(.connecting))
-        try await mcpEventually { await socket.sent.count == 1 }
+        try await awaitFixture(socket, .sent(1))
         let types = try await sentTypes(socket)
         XCTAssertEqual(types, ["subscribe"])
         await channel.stop()
-        try await mcpEventually { await socket.closeCount == 1 }
+        try await awaitFixture(socket, .closed)
     }
 
-    /// Deterministic overlap: `begin()` is parked after demand is set and before subscribe, then `stop()` runs to completion.
-    /// The socket was created by demand, so it is discarded without `opened()`. No subscribe is sent, and nothing reconnects.
-    /// Proves true overlap without a circular wait: `begin()` is parked inside the lifecycle queue, `stop()` is launched
+    /// Overlap without a circular wait: `begin()` is parked inside the lifecycle queue after demand is set, `stop()` is launched
     /// as a child task, and the test waits only for `stop()` to be chained behind `begin()` before releasing the gate.
+    /// Demand created a socket that is discarded without `opened()` or any subscribe, so no reconnect may follow.
     func testStopEnqueuedBehindParkedStartLeavesIdleWithoutReconnect() async throws {
         let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
         let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
@@ -205,7 +208,6 @@ final class ModelMonitorChannelTests: XCTestCase {
             await parked.open()
             await release.wait()
         }
-        // Begin is the first queued operation; its enqueue is not the signal we wait for.
         let begin = Task { await channel.begin() }
         await parked.wait()
         // Arm the enqueue signal only now, so the first observed enqueue is stop's.
@@ -238,9 +240,9 @@ final class ModelMonitorChannelTests: XCTestCase {
         let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
         let channel = await ModelMonitorChannel.attach(to: transport)
         _ = await channel.begin()
-        try await mcpEventually { await socket.sent.count == 1 }
+        try await awaitFixture(socket, .sent(1))
         await channel.stop()
-        try await mcpEventually { await socket.closeCount == 1 }
+        try await awaitFixture(socket, .closed)
         let types = try await sentTypes(socket)
         XCTAssertEqual(types, ["subscribe", "unsubscribe"])
         XCTAssertEqual(plan.count, 1)

@@ -12,6 +12,13 @@ actor ManualMCPClock: MCPTimerClock {
     private(set) var now: TimeInterval = 0
     private(set) var requested: [TimeInterval] = []
     var sleepers: [TimeInterval] { pending.values.map(\.delay).sorted() }
+    private var sleepWaiters: [(TimeInterval, CheckedContinuation<Void, Never>)] = []
+
+    /// Suspends until a sleep with exactly `seconds` is pending. Unlike polling `sleepers`, this is resumed by the sleep itself.
+    func awaitSleeper(seconds: TimeInterval) async {
+        if pending.values.contains(where: { $0.delay == seconds }) { return }
+        await withCheckedContinuation { sleepWaiters.append((seconds, $0)) }
+    }
 
     func sleep(seconds: TimeInterval) async throws {
         let id = UUID()
@@ -20,6 +27,9 @@ actor ManualMCPClock: MCPTimerClock {
             try await withCheckedThrowingContinuation { continuation in
                 requested.append(seconds)
                 pending[id] = Sleep(delay: seconds, deadline: now + seconds, continuation: continuation)
+                let ready = sleepWaiters.filter { $0.0 == seconds }
+                sleepWaiters.removeAll { $0.0 == seconds }
+                for (_, waiter) in ready { waiter.resume() }
             }
         } onCancel: {
             Task { await self.cancel(id) }
