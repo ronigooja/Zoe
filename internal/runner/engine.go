@@ -106,6 +106,9 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err err
 	if e.Runtime == nil || e.Journal == nil {
 		return errors.New("runner runtime and journal are required")
 	}
+	ctx, stopObservation := context.WithCancel(ctx)
+	defer stopObservation()
+	ctx = startModelObservation(ctx, e, claim)
 	entry, ok, err := e.Journal.Entry(ctx, claim.RunID)
 	if err != nil {
 		return err
@@ -241,6 +244,7 @@ func (e *Engine) sendPrompt(ctx context.Context, claim contracts.JobClaim, spec 
 	if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_attempted"); err != nil {
 		return err
 	}
+	observeModel(ctx, binding.SessionID, "request", "initial", spec.Prompt)
 	if err := e.Runtime.Prompt(ctx, binding, spec.Prompt); err != nil {
 		// The session exists, but a failed request does not prove whether the
 		// prompt reached it. Fence the run rather than risking a duplicate.
@@ -437,6 +441,7 @@ func (e *Engine) monitor(ctx context.Context, claim contracts.JobClaim, b Runtim
 			time.Sleep(e.interval())
 			continue
 		}
+		observeMessages(ctx, b.SessionID, msgs)
 		if !waiting && e.contextExceeded(ctx, claim, msgs) {
 			if entry.RotationCount > 0 && e.rotationHasNoRoom(ctx, claim, msgs) {
 				_ = e.Runtime.Abort(ctx, b)
@@ -504,6 +509,7 @@ func (e *Engine) deliverEntries(ctx context.Context, c contracts.JobClaim, b Run
 		if !found {
 			return true
 		}
+		observeModel(ctx, b.SessionID, "request", "entry:"+entry.ID, entry.Content)
 		if err := runtime.PromptEntry(ctx, b, entry); err != nil {
 			return true
 		}
@@ -792,6 +798,7 @@ func (e *Engine) rotate(ctx context.Context, c contracts.JobClaim, old RuntimeBi
 	if _, err := e.Runtime.Terminate(ctx, old); err != nil {
 		return fmt.Errorf("%w: old session termination during rotation: %v", ErrOutcomePending, err)
 	}
+	observeModel(ctx, binding.SessionID, "request", "rotation", spec.Prompt)
 	if err := e.Runtime.Prompt(ctx, binding, spec.Prompt); err != nil {
 		return e.markUnknown(ctx, c)
 	}
@@ -932,6 +939,7 @@ func (e *Engine) recoverRotation(ctx context.Context, c contracts.JobClaim, entr
 				return fmt.Errorf("%w: old rotation session termination: %v", ErrOutcomePending, err)
 			}
 		}
+		observeModel(ctx, b.SessionID, "request", "rotation-recovery", entry.RotationSummary)
 		if err := e.Runtime.Prompt(ctx, b, entry.RotationSummary); err != nil {
 			return e.markUnknown(ctx, c)
 		}

@@ -34,6 +34,7 @@ func (e *Engine) deliverBoundAnswer(ctx context.Context, c contracts.JobClaim, b
 		if key == "" {
 			return errors.New("runtime question field missing")
 		}
+		observeModel(ctx, b.SessionID, "request", "answer:"+entry.ID, entry.Content)
 		return reply.ReplyForm(ctx, b, entry.Question.RequestID, map[string]any{key: entry.Content})
 	}, func() (bool, error) {
 		forms, err := pending.PendingForms(ctx, b)
