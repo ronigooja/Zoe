@@ -99,7 +99,7 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
     private var subscriptionID: String?
     private var lastSequence: Int64 = 0
     private var nextEntryID = 0
-    private var status: ModelMonitorStatus = .idle
+    private(set) var status: ModelMonitorStatus = .idle
     private var lifecycle: Task<Void, Never>?
 
     public init(transport: ClientWebSocketTransport) {

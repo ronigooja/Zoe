@@ -646,7 +646,7 @@ public final class ZoeAppModel: ObservableObject {
 
     #if os(macOS)
     public var remoteControlNeedsShutdown: Bool {
-        remoteControl?.needsShutdown == true || remoteControlCleanup != nil || clientSocket != nil
+        remoteControl?.needsShutdown == true || remoteControlCleanup != nil
     }
 
     private func detachRemoteControl() {
