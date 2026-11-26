@@ -22,19 +22,31 @@ actor FixtureMCPSocket: ClientWebSocket {
     private var pinger: CheckedContinuation<Void, Error>?
 
     /// Events a test can await deterministically instead of polling the counters above.
-    enum Event: Equatable { case opened, sent(Int), closed }
-    private var eventWaiters: [(Event, CheckedContinuation<Void, Never>)] = []
-    private var recordedEvents: Set<Event> = []
+    enum Event: Equatable, Sendable { case opened, sent(Int), closed }
+
+    /// A pending wait. It is resolved exactly once: by a matching event, or by its own timeout, whichever comes first.
+    private struct Waiter {
+        let event: Event
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+    private var waiters: [UUID: Waiter] = [:]
 
     init(openError: ClientWebSocketError? = nil) { self.openError = openError }
 
-    /// Suspends until `event` has occurred. Occurrence is recorded, so a wait after the event returns immediately.
-    /// The bounded timeout is enforced by `awaitEvent`, which fails the test instead of hanging.
-    func waitFor(_ event: Event) async -> Bool {
-        if recordedEvents.contains(event) || matches(event) { return true }
-        return await withCheckedContinuation { continuation in
-            eventWaiters.append((event, continuation))
+    /// Suspends until `event` has occurred (true) or `timeout` elapses (false). A reached event returns immediately.
+    /// The timeout is part of the wait, so a timed-out waiter is removed and never leaks.
+    func waitFor(_ event: Event, timeout: Duration) async -> Bool {
+        if matches(event) { return true }
+        let id = UUID()
+        let timer = Task {
+            try? await Task.sleep(for: timeout)
+            self.resolve(id, with: false)
         }
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            waiters[id] = Waiter(event: event, continuation: continuation)
+        }
+        timer.cancel()
+        return result
     }
 
     private func matches(_ event: Event) -> Bool {
@@ -45,13 +57,17 @@ actor FixtureMCPSocket: ClientWebSocket {
         }
     }
 
+    /// Resumes one waiter at most once. A waiter that already resolved is absent, so a late timer is a no-op.
+    private func resolve(_ id: UUID, with value: Bool) {
+        guard let waiter = waiters.removeValue(forKey: id) else { return }
+        waiter.continuation.resume(returning: value)
+    }
+
     private func record(_ event: Event) {
-        recordedEvents.insert(event)
-        var remaining: [(Event, CheckedContinuation<Void, Never>)] = []
-        for (waited, continuation) in eventWaiters {
-            if waited == event || matches(waited) { continuation.resume() } else { remaining.append((waited, continuation)) }
+        let snapshot = waiters
+        for (id, waiter) in snapshot where waiter.event == event || matches(waiter.event) {
+            resolve(id, with: true)
         }
-        eventWaiters = remaining
     }
 
     func open() async throws {
@@ -90,17 +106,10 @@ actor FixtureMCPSocket: ClientWebSocket {
 
 /// Waits for a named fixture event with a bounded timeout. Fails the test with the event name instead of hanging.
 func awaitFixture(_ socket: FixtureMCPSocket, _ event: FixtureMCPSocket.Event, timeout: Duration = .seconds(5), file: StaticString = #filePath, line: UInt = #line) async throws {
-    let finished = try await withThrowingTaskGroup(of: Bool.self) { group in
-        group.addTask { await socket.waitFor(event) }
-        group.addTask {
-            try await Task.sleep(for: timeout)
-            return false
-        }
-        let first = try await group.next() ?? false
-        group.cancelAll()
-        return first
+    guard await socket.waitFor(event, timeout: timeout) else {
+        XCTFail("Fixture event \(event) did not occur within \(timeout)", file: file, line: line)
+        throw FixtureTimeout()
     }
-    if !finished { XCTFail("Fixture event \(event) did not occur within \(timeout)", file: file, line: line); throw FixtureTimeout() }
 }
 
 private struct FixtureTimeout: Error {}
