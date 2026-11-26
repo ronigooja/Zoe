@@ -56,7 +56,11 @@ func TestObservedClientFallbackRouting(t *testing.T) {
 	events := make([]modelmonitor.Event, 4)
 	for i := range events {
 		select {
-		case events[i] = <-sub.Events:
+		case item := <-sub.Events:
+			if item.Gap {
+				t.Fatalf("unexpected gap at event %d", i)
+			}
+			events[i] = item.Event
 		default:
 			t.Fatalf("missing event %d", i)
 		}
