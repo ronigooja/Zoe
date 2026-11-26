@@ -91,6 +91,50 @@ func textTestRig(t *testing.T) (*deliveryRig, func(string) (bool, string)) {
 	}
 }
 
+func TestDurableTextSourceKindOnGatewayRequest(t *testing.T) {
+	for _, kind := range []string{"user_text", "ui_feedback", "task_result", "fast_reply", "ui_input_request", "ui_input_received", "future_kind"} {
+		t.Run(kind, func(t *testing.T) {
+			r := newReceiptDeliveryRig(t)
+			r.seedCall(t, "text-call", "user-1", 1)
+			ok, code := r.svc.deliverDurableText(context.Background(), "user-1", kind, "source", "text-call", 1, "hello")
+			if !ok {
+				t.Fatalf("delivery failed: %s", code)
+			}
+			if len(r.requests) != 1 {
+				t.Fatalf("requests=%d, want 1", len(r.requests))
+			}
+			for _, request := range r.requests {
+				if request.SourceKind != kind {
+					t.Fatalf("source_kind=%q, want %q", request.SourceKind, kind)
+				}
+			}
+		})
+	}
+}
+
+func TestDurableTextReconciliationPreservesSourceKind(t *testing.T) {
+	r, send := textTestRig(t)
+	var submitted ResultChunkRequest
+	r.svc.resultReceiptAdapter = textAdapterFuncs{
+		submit: func(p ResultChunkRequest) (ResultChunkReceipt, error) {
+			submitted = p
+			return ResultChunkReceipt{}, errors.New("response lost")
+		},
+		lookup: func(p ResultChunkRequest) (ResultChunkReceipt, error) {
+			if p != submitted || p.SourceKind != "fast_reply" {
+				t.Fatalf("reconciled request=%+v, submitted=%+v", p, submitted)
+			}
+			return textApplied(p)
+		},
+	}
+	if ok, code := send("hello"); ok || code != "receipt_transport_unknown" {
+		t.Fatalf("first attempt=%v %s", ok, code)
+	}
+	if ok, code := send("hello"); !ok {
+		t.Fatalf("reconciliation=%s", code)
+	}
+}
+
 func TestDurableTextConcurrentClaimExpiryBlockingSubmit(t *testing.T) {
 	r, send := textTestRig(t)
 	entered, release := make(chan struct{}), make(chan struct{})

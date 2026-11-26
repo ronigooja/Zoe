@@ -341,7 +341,7 @@ func TestResultCheckpointExpiredClaimCannotAdvance(t *testing.T) {
 }
 
 func TestResultCheckpointReceiptBinding(t *testing.T) {
-	p := ResultChunkRequest{42, "delivery", "hash", "text"}
+	p := ResultChunkRequest{MediaGeneration: 42, DeliveryID: "delivery", ContentHash: "hash", Text: "text"}
 	for _, r := range []ResultChunkReceipt{{43, "delivery", "hash", "applied"}, {42, "other", "hash", "applied"}, {42, "delivery", "other", "applied"}, {42, "delivery", "hash", "pending"}, {42, "delivery", "hash", "unknown"}} {
 		if receiptApplied(p, r) {
 			t.Fatalf("invalid receipt accepted: %+v", r)

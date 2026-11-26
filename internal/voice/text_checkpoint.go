@@ -134,6 +134,7 @@ func (s *Service) deliverDurableText(ctx context.Context, owner, kind, id, sessi
 		}
 		var request ResultChunkRequest
 		request.MediaGeneration = media
+		request.SourceKind = kind
 		var state string
 		err := s.db.QueryRowContext(ctx, `SELECT delivery_id,content_hash,text,state FROM voice_text_chunks WHERE owner_id=? AND source_kind=? AND source_id=? AND ordinal=?`, owner, kind, id, ordinal).Scan(&request.DeliveryID, &request.ContentHash, &request.Text, &state)
 		if err == sql.ErrNoRows {

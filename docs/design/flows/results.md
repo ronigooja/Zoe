@@ -45,6 +45,8 @@ After opening, upstream conversation writes use one of two checkpointed paths wi
 
 Both require an active call with a bound gateway session and the receipt capability above. Pending fast replies, including recall answers, follow the owner to the next active call if the previous call closes. A new conversation starts the full reply from the first chunk and preserves its source identity. Conversation-text source kinds are defined in [User text and input feedback](#user-text-and-input-feedback).
 
+Each gateway result-delivery request includes `source_kind`, an optional opaque informational string shown in the gateway viewer and never sent to the upstream model.
+
 ## User text and input feedback
 
 Instructions for the voice upstream list background tools only. Message formats and delivery rules are defined here and are not repeated in instructions.

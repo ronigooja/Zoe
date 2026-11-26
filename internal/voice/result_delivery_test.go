@@ -157,6 +157,11 @@ func TestResultDeliveryLiveCallSendsOneBoundedMessage(t *testing.T) {
 	if want := "Tokyo will be rainy today."; r.texts[0] != want {
 		t.Fatalf("text=%q want %q", r.texts[0], want)
 	}
+	for _, request := range r.requests {
+		if request.SourceKind != "task_result" {
+			t.Fatalf("source_kind=%q, want task_result", request.SourceKind)
+		}
+	}
 	if status, _, attempts := r.row(t, "entry-1"); status != "delivered" || attempts != 1 {
 		t.Fatalf("status=%s attempts=%d", status, attempts)
 	}

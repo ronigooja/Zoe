@@ -42,6 +42,7 @@ type ResultChunkRequest struct {
 	DeliveryID      string `json:"delivery_id"`
 	ContentHash     string `json:"content_hash"`
 	Text            string `json:"text"`
+	SourceKind      string `json:"source_kind,omitempty"`
 }
 type ResultChunkReceipt struct {
 	MediaGeneration int64  `json:"media_generation"`
@@ -228,6 +229,7 @@ func (s *Service) deliverCheckpointedResult(ctx context.Context, id, task, run, 
 	for ordinal := 0; ; ordinal++ {
 		var p ResultChunkRequest
 		p.MediaGeneration = media
+		p.SourceKind = "task_result"
 		var state string
 		err = s.db.QueryRowContext(ctx, `SELECT delivery_id,content_hash,text,state FROM voice_result_chunks WHERE entry_id=? AND ordinal=?`, id, ordinal).Scan(&p.DeliveryID, &p.ContentHash, &p.Text, &state)
 		if err == sql.ErrNoRows {
