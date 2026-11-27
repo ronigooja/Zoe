@@ -284,12 +284,15 @@ public struct ModelMonitorView: View {
         .padding(.horizontal, 8).padding(.vertical, Self.tabStripVerticalPadding)
     }
 
-    /// Icon-only because Overview is the square pinned beside the component rows. The label stays available to VoiceOver and as a tooltip.
+    /// Visible label in the square pinned beside the component rows. It stays on one line, shrinking slightly if the localized text is wide.
     private var overviewButton: some View {
         let selected = model.selectedTab == .overview
         return Button { model.select(.overview) } label: {
-            Image(systemName: "list.bullet")
-                .font(.system(size: 15, weight: .medium))
+            Text(uiText("Overview"))
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, 2)
                 .frame(width: Self.overviewSide, height: Self.overviewSide)
                 .background(selected ? Color.accentColor.opacity(0.2) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
         }
