@@ -93,6 +93,8 @@ public struct ModelMonitorFollow: Equatable, Sendable {
     /// Set by a programmatic jump: scroll-to-end animates through positions that are not user scrolls, so those are ignored until the end is reached.
     private var awaitingBottom = false
 
+    public init() {}
+
     /// Starts following from the end: tab switch or empty tab, and first visible entry.
     public mutating func reset() {
         isAtBottom = true
@@ -146,7 +148,7 @@ public enum ModelMonitorCallID {
     }
 
     private static func commonPrefixLength(_ a: String, _ b: String) -> Int {
-        zip(a, b).prefix { $0 == $1 }.count
+        zip(a, b).prefix(while: { $0 == $1 }).count
     }
 }
 
