@@ -1,8 +1,6 @@
 name: Scoped verification
 
 on:
-  push:
-    branches: [main, 'codex/**']
   pull_request:
   workflow_dispatch:
 
