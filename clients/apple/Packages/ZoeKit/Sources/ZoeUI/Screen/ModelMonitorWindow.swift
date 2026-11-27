@@ -209,46 +209,76 @@ public struct ModelMonitorView: View {
         uiFormat("Model Monitor · %@", statusLabel(status))
     }
 
-    public static let minimumContentSize = CGSize(width: 320, height: 360)
-    public static let preferredFirstOpenSize = CGSize(width: 900, height: 600)
+    /// Content sizes for the monitor window. Nonisolated so tests and the app can call them without the main actor.
+    public enum WindowSizing {
+        public static let minimumContentSize = CGSize(width: 320, height: 360)
+        public static let preferredFirstOpenSize = CGSize(width: 900, height: 600)
+        /// Space kept free around the window: screen edges, the title bar and the menu bar area.
+        public static let screenAllowance = CGSize(width: 40, height: 80)
 
-    /// First-open content size: the preferred size, limited to the visible screen area minus a margin, never below the minimum.
-    /// Applied only when the window is created; later opens keep the size and position the user left.
-    public static func firstOpenContentSize(visible: CGRect) -> CGSize {
-        let margin = CGSize(width: 40, height: 80)
-        let width = min(preferredFirstOpenSize.width, max(minimumContentSize.width, visible.width - margin.width))
-        let height = min(preferredFirstOpenSize.height, max(minimumContentSize.height, visible.height - margin.height))
-        return CGSize(width: width, height: height)
+        /// First-open content size: the preferred size limited to the area that fits on screen. Fitting on screen takes precedence
+        /// over the minimum, so on a screen smaller than the minimum the window is smaller than `minimumContentSize`.
+        /// Applied only when the window is created; later opens keep the size and position the user left.
+        public static func firstOpenContentSize(visible: CGRect) -> CGSize {
+            let available = fittingSize(visible: visible)
+            return CGSize(width: min(preferredFirstOpenSize.width, available.width),
+                          height: min(preferredFirstOpenSize.height, available.height))
+        }
+
+        /// Minimum content size the window may be resized to: never more than the area that fits on screen.
+        public static func effectiveMinimumSize(visible: CGRect) -> CGSize {
+            let available = fittingSize(visible: visible)
+            return CGSize(width: min(minimumContentSize.width, available.width),
+                          height: min(minimumContentSize.height, available.height))
+        }
+
+        /// Visible frame minus the allowance for chrome and margins, never negative.
+        private static func fittingSize(visible: CGRect) -> CGSize {
+            CGSize(width: max(0, visible.width - screenAllowance.width),
+                   height: max(0, visible.height - screenAllowance.height))
+        }
+
     }
 
+
+
     /// Overview is pinned and top-aligned with the first row; component tabs fill two rows in stable order and scroll horizontally on narrow windows.
-    /// The strip takes only the height of its two rows (`fixedSize`), so the timeline keeps the remaining height.
+    /// Height of one tab row: the control's text line plus its vertical padding. Two rows and the spacing between them make the strip height.
+    static let tabRowHeight: CGFloat = 24
+    static let tabRowSpacing: CGFloat = 4
+    static let tabStripVerticalPadding: CGFloat = 6
+    static var tabStripHeight: CGFloat { tabRowHeight * 2 + tabRowSpacing }
+
+    /// Overview is pinned and top-aligned with the first row; component tabs fill two rows in stable order and scroll horizontally on narrow windows.
+    /// The strip has an explicit height (two rows), so the timeline keeps the remaining height and no child's ideal size drives the layout.
     private var tabBar: some View {
         let components = ModelMonitorChannel.components
         let split = (components.count + 1) / 2
         return HStack(alignment: .top, spacing: 0) {
             tabButton(.overview, label: uiText("Overview"))
                 .padding(.trailing, 8)
-            // A 1-pt rectangle, not a Divider: a Divider in a row stretches to the full bar height.
-            Rectangle().fill(Color.secondary.opacity(0.3)).frame(width: 1)
+            Color.secondary.opacity(0.3).frame(width: 1, height: Self.tabStripHeight)
             ScrollView(.horizontal) {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Self.tabRowSpacing) {
                     HStack(spacing: 4) {
                         ForEach(Array(components.prefix(split)), id: \.self) { component in
                             tabButton(.component(component), label: componentLabel(component))
                         }
                     }
+                    .frame(height: Self.tabRowHeight, alignment: .leading)
                     HStack(spacing: 4) {
                         ForEach(Array(components.dropFirst(split)), id: \.self) { component in
                             tabButton(.component(component), label: componentLabel(component))
                         }
                     }
+                    .frame(height: Self.tabRowHeight, alignment: .leading)
                 }
                 .padding(.leading, 8)
             }
+            .frame(height: Self.tabStripHeight)
         }
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.horizontal, 8).padding(.vertical, 6)
+        .frame(height: Self.tabStripHeight)
+        .padding(.horizontal, 8).padding(.vertical, Self.tabStripVerticalPadding)
     }
 
     private func tabButton(_ tab: ModelMonitorTab, label: String) -> some View {
@@ -259,7 +289,9 @@ public struct ModelMonitorView: View {
                 .background(selected ? Color.accentColor.opacity(0.2) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
-        .fixedSize()
+        // Width follows the label so it is never clipped; height is the row height so the strip cannot grow with font metrics.
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(height: Self.tabRowHeight)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 

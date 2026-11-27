@@ -198,9 +198,9 @@ struct ZoeMacApp {
             window.isReleasedWhenClosed = false
             window.contentViewController = NSHostingController(rootView: ModelMonitorView(model: modelMonitor))
             // Attaching the hosting controller resizes the window to its fitted size, so the first-open size is set after attachment.
-            window.contentMinSize = ModelMonitorView.minimumContentSize
             let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
-            window.setContentSize(ModelMonitorView.firstOpenContentSize(visible: visible))
+            window.contentMinSize = ModelMonitorView.WindowSizing.effectiveMinimumSize(visible: visible)
+            window.setContentSize(ModelMonitorView.WindowSizing.firstOpenContentSize(visible: visible))
             modelMonitorTitleCancellable = modelMonitor.$status.sink { [weak window] status in
                 window?.title = ModelMonitorView.windowTitle(for: status)
             }
