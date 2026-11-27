@@ -83,6 +83,53 @@ public struct ModelMonitorBuffer: Equatable, Sendable {
     }
 }
 
+/// Auto-follow state for the selected tab. Pure so the rules can be unit-tested without a view.
+/// Only a measurement at a stable content height, not caused by an append, is treated as a user scroll.
+public struct ModelMonitorFollow: Equatable, Sendable {
+    public static let bottomThreshold = 8.0
+    public private(set) var isAtBottom = true
+    private var contentHeight: Double?
+    private var appendPending = false
+    /// Set by a programmatic jump: scroll-to-end animates through positions that are not user scrolls, so those are ignored until the end is reached.
+    private var awaitingBottom = false
+
+    /// Starts following from the end: tab switch or empty tab, and first visible entry.
+    public mutating func reset() {
+        isAtBottom = true
+        contentHeight = nil
+        appendPending = false
+        awaitingBottom = false
+    }
+
+    /// Programmatic jump to the end. Stays paused-free until a measurement reaches the bottom.
+    public mutating func jump() {
+        reset()
+        awaitingBottom = true
+    }
+
+    /// A visible entry was appended. The next layout change is content growth, not a user scroll.
+    public mutating func noteAppend() {
+        appendPending = true
+    }
+
+    /// `distance` is the gap between the viewport bottom and the content bottom; zero or less means at the end.
+    public mutating func measure(contentHeight height: Double, distanceFromBottom distance: Double) {
+        let changed = contentHeight != height
+        contentHeight = height
+        if changed || appendPending {
+            appendPending = false
+            return
+        }
+        let atEnd = distance <= Self.bottomThreshold
+        if awaitingBottom {
+            if atEnd { awaitingBottom = false }
+            isAtBottom = true
+            return
+        }
+        isAtBottom = atEnd
+    }
+}
+
 /// Display labels for call IDs. Labels are unique across the given IDs, so the same call shows the same label in every view.
 public enum ModelMonitorCallID {
     public static func shortLabels(for ids: [String], minimum: Int = 8) -> [String: String] {
