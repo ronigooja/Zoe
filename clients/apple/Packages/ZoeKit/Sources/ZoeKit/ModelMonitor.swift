@@ -18,14 +18,13 @@ public struct ModelMonitorEvent: Equatable, Sendable {
     public let payload: JSONValue?
     public let truncated: Bool
 
-    /// Pretty-printed payload clipped to `limit` characters for display.
-    public func payloadText(limit: Int) -> String? {
+    /// Complete pretty-printed payload. Display code decides what to preview; this value is never clipped.
+    public var formattedPayload: String? {
         guard let payload else { return nil }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(payload) else { return nil }
-        let text = String(decoding: data, as: UTF8.self)
-        return text.count > limit ? String(text.prefix(limit)) + "…" : text
+        return String(decoding: data, as: UTF8.self)
     }
 }
 
@@ -73,13 +72,34 @@ public struct ModelMonitorBuffer: Equatable, Sendable {
         droppedCount = 0
     }
 
-    public func visible(components: Set<String>) -> [ModelMonitorEntry] {
+    /// `nil` selects every event (Overview). Gaps are kept in every view.
+    public func visibleEntries(component: String?) -> [ModelMonitorEntry] {
         entries.filter { entry in
             switch entry.kind {
             case .gap: true
-            case let .event(event): components.contains(event.component)
+            case let .event(event): component == nil || event.component == component
             }
         }
+    }
+}
+
+/// Display labels for call IDs. Labels are unique across the given IDs, so the same call shows the same label in every view.
+public enum ModelMonitorCallID {
+    public static func shortLabels(for ids: [String], minimum: Int = 8) -> [String: String] {
+        let sorted = Array(Set(ids)).sorted()
+        var labels: [String: String] = [:]
+        for (index, id) in sorted.enumerated() {
+            // In sorted order, a prefix shared with any other ID is also shared with an adjacent ID.
+            let before = index > 0 ? commonPrefixLength(sorted[index - 1], id) : 0
+            let after = index + 1 < sorted.count ? commonPrefixLength(id, sorted[index + 1]) : 0
+            let length = max(minimum, max(before, after) + 1)
+            labels[id] = length >= id.count ? id : String(id.prefix(length))
+        }
+        return labels
+    }
+
+    private static func commonPrefixLength(_ a: String, _ b: String) -> Int {
+        zip(a, b).prefix { $0 == $1 }.count
     }
 }
 

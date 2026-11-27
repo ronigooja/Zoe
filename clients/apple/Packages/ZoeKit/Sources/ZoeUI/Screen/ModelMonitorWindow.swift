@@ -1,7 +1,14 @@
 #if os(macOS)
+import AppKit
 import Combine
 import SwiftUI
 import ZoeKit
+
+/// A monitor tab. Overview shows every event; a component tab shows only that Zoe component.
+public enum ModelMonitorTab: Hashable, Sendable {
+    case overview
+    case component(String)
+}
 
 /// Owns one reusable monitor subscription. It subscribes only while the window is presented and follows the instance's channel.
 @MainActor public final class ModelMonitorModel: ObservableObject {
@@ -9,7 +16,13 @@ import ZoeKit
     @Published public private(set) var visibleEntries: [ModelMonitorEntry] = []
     @Published public private(set) var droppedCount = 0
     @Published public private(set) var serverErrorSeen = false
-    @Published public private(set) var enabledComponents = Set(ModelMonitorChannel.components)
+    @Published public private(set) var selectedTab: ModelMonitorTab = .overview
+    /// False while the user has scrolled away from the end of the selected tab. New entries do not move the list then.
+    @Published public private(set) var isAtBottom = true
+    /// Entries that arrived in each tab while it was not followed. Cleared when the user returns to the end of that tab.
+    @Published public private(set) var unseenCounts: [ModelMonitorTab: Int] = [:]
+    /// Short label per call ID, unique across the whole buffer so one call has the same label in every tab.
+    @Published public private(set) var callLabels: [String: String] = [:]
 
     private var buffer = ModelMonitorBuffer()
     private var presented = false
@@ -51,9 +64,23 @@ import ZoeKit
         await channel?.retry()
     }
 
-    public func setComponent(_ component: String, enabled: Bool) {
-        if enabled { enabledComponents.insert(component) } else { enabledComponents.remove(component) }
+    /// Switching tabs returns the new tab to the end, so its latest entries are visible.
+    public func select(_ tab: ModelMonitorTab) {
+        selectedTab = tab
+        isAtBottom = true
+        unseenCounts[tab] = nil
         publish()
+    }
+
+    /// Reports whether the end of the selected tab is in view. Returning to the end clears that tab's unseen count.
+    public func setAtBottom(_ atBottom: Bool) {
+        if isAtBottom != atBottom { isAtBottom = atBottom }
+        if atBottom { unseenCounts[selectedTab] = nil }
+    }
+
+    /// Count for the Jump control. Clamped because buffer trimming can remove entries that were already counted.
+    public var unseenInSelectedTab: Int {
+        min(unseenCounts[selectedTab] ?? 0, visibleEntries.count)
     }
 
     private func tearDown() async {
@@ -62,6 +89,8 @@ import ZoeKit
         let old = channel
         channel = nil
         buffer.clear()
+        unseenCounts = [:]
+        isAtBottom = true
         droppedCount = 0
         serverErrorSeen = false
         status = .idle
@@ -75,22 +104,45 @@ import ZoeKit
             status = next
         case let .entry(entry):
             buffer.append(entry)
+            countUnseen(entry)
         case .serverError:
             serverErrorSeen = true
         case .reset:
             buffer.clear()
+            unseenCounts = [:]
         }
         droppedCount = buffer.droppedCount
         publish()
     }
 
+    private func countUnseen(_ entry: ModelMonitorEntry) {
+        let tabs: [ModelMonitorTab]
+        switch entry.kind {
+        case .gap:
+            tabs = [.overview] + ModelMonitorChannel.components.map { ModelMonitorTab.component($0) }
+        case let .event(event):
+            tabs = [.overview, .component(event.component)]
+        }
+        for tab in tabs where !(tab == selectedTab && isAtBottom) {
+            unseenCounts[tab, default: 0] += 1
+        }
+    }
+
+    private var selectedComponent: String? {
+        if case let .component(component) = selectedTab { component } else { nil }
+    }
+
     private func publish() {
-        visibleEntries = buffer.visible(components: enabledComponents)
+        visibleEntries = buffer.visibleEntries(component: selectedComponent)
+        callLabels = ModelMonitorCallID.shortLabels(for: buffer.entries.compactMap { entry in
+            if case let .event(event) = entry.kind { event.callID } else { nil }
+        })
     }
 }
 
 public struct ModelMonitorView: View {
     @ObservedObject var model: ModelMonitorModel
+    private static let bottomID = "model-monitor-bottom"
 
     public init(model: ModelMonitorModel) { self.model = model }
 
@@ -102,35 +154,14 @@ public struct ModelMonitorView: View {
                 if model.status == .ended {
                     Button(uiText("Retry")) { Task { await model.retry() } }
                 }
-                Menu(uiText("Components")) {
-                    ForEach(ModelMonitorChannel.components, id: \.self) { component in
-                        Toggle(componentLabel(component), isOn: Binding(
-                            get: { model.enabledComponents.contains(component) },
-                            set: { model.setComponent(component, enabled: $0) }
-                        ))
-                    }
-                }
-                .fixedSize()
             }
             .padding(8)
             Text(uiText("Worker and OpenCode entries show what Zoe observed, not raw provider payloads. Memory entries appear only when Zoe publishes them."))
                 .font(.caption).foregroundStyle(.secondary)
                 .padding(.horizontal, 8).padding(.bottom, 6)
+            tabBar
             Divider()
-            if model.visibleEntries.isEmpty {
-                Text(uiText("No events yet.")).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(model.visibleEntries) { entry in
-                            row(entry)
-                            Divider()
-                        }
-                    }
-                    .padding(8)
-                }
-            }
+            timeline
             if model.serverErrorSeen {
                 Text(uiText("Zoe reported a monitor error. The subscription continues."))
                     .font(.caption).foregroundStyle(.red).padding(4)
@@ -140,7 +171,83 @@ public struct ModelMonitorView: View {
                     .font(.caption).foregroundStyle(.secondary).padding(4)
             }
         }
-        .frame(minWidth: 480, minHeight: 360)
+        .frame(minWidth: 320, minHeight: 360)
+    }
+
+    /// Overview is pinned; component tabs scroll horizontally so narrow windows keep every tab reachable.
+    private var tabBar: some View {
+        HStack(spacing: 4) {
+            tabButton(.overview, label: uiText("Overview"))
+            Divider().frame(height: 18)
+            ScrollView(.horizontal) {
+                HStack(spacing: 4) {
+                    ForEach(ModelMonitorChannel.components, id: \.self) { component in
+                        tabButton(.component(component), label: componentLabel(component))
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 8).padding(.bottom, 4)
+    }
+
+    private func tabButton(_ tab: ModelMonitorTab, label: String) -> some View {
+        let selected = model.selectedTab == tab
+        return Button { model.select(tab) } label: {
+            Text(label).font(.callout)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(selected ? Color.accentColor.opacity(0.2) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    @ViewBuilder private var timeline: some View {
+        if model.visibleEntries.isEmpty {
+            Text(uiText("No events yet.")).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(model.visibleEntries) { entry in
+                            row(entry)
+                        }
+                        // Visible only when the end of the list is in view. Follow state is derived from it.
+                        Color.clear.frame(height: 1).id(Self.bottomID)
+                            .onAppear { model.setAtBottom(true) }
+                            .onDisappear { model.setAtBottom(false) }
+                    }
+                    .padding(8)
+                }
+                .defaultScrollAnchor(.bottom)
+                .onAppear { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+                .onChange(of: model.visibleEntries.last?.id) {
+                    if model.isAtBottom { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+                }
+                .onChange(of: model.selectedTab) {
+                    proxy.scrollTo(Self.bottomID, anchor: .bottom)
+                }
+                .overlay(alignment: .bottom) {
+                    if !model.isAtBottom {
+                        Button {
+                            model.setAtBottom(true)
+                            proxy.scrollTo(Self.bottomID, anchor: .bottom)
+                        } label: {
+                            Label(jumpTitle, systemImage: "arrow.down.circle.fill").font(.callout)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .padding(8)
+                    }
+                }
+            }
+        }
+    }
+
+    private var jumpTitle: String {
+        let count = model.unseenInSelectedTab
+        return count > 0 ? uiFormat("%d new · Jump to latest", count) : uiText("Jump to latest")
     }
 
     @ViewBuilder private func row(_ entry: ModelMonitorEntry) -> some View {
@@ -148,27 +255,35 @@ public struct ModelMonitorView: View {
         case .gap:
             Label(uiText("Events may be missing here."), systemImage: "exclamationmark.triangle")
                 .font(.caption).foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
         case let .event(event):
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(kindLabel(event.kind)).font(.headline)
-                    Text(componentLabel(event.component)).font(.caption).foregroundStyle(.secondary)
-                    if let time = event.time {
-                        Text(time.formatted(date: .omitted, time: .standard)).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if event.truncated {
-                        Text(uiText("Truncated")).font(.caption).foregroundStyle(.orange)
-                    }
-                }
-                Text(event.callID).font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
-                if let text = event.payloadText(limit: 4000) {
-                    Text(text).font(.caption.monospaced()).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            .padding(.vertical, 6)
+            ModelMonitorEventRow(
+                event: event,
+                placement: placement(event.kind),
+                componentLabel: componentLabel(event.component),
+                kindLabel: kindLabel(event.kind),
+                callLabel: model.callLabels[event.callID] ?? event.callID
+            )
+        }
+    }
+
+    /// Model replies sit left, Zoe requests right, and errors and tool activity span the full width.
+    private func placement(_ kind: ModelMonitorEventKind) -> ModelMonitorEventRow.Placement {
+        switch kind {
+        case .response: .leading
+        case .request: .trailing
+        case .error, .toolCall, .toolResult: .fullWidth
+        }
+    }
+
+    private func kindLabel(_ kind: ModelMonitorEventKind) -> String {
+        switch kind {
+        case .request: uiText("Request")
+        case .response: uiText("Reply")
+        case .error: uiText("Error")
+        case .toolCall: uiText("Tool call")
+        case .toolResult: uiText("Tool result")
         }
     }
 
@@ -181,16 +296,6 @@ public struct ModelMonitorView: View {
         case .reconnecting: uiText("Reconnecting. Events during the gap were not received.")
         case .ended: uiText("Monitoring ended. Retry to resume.")
         case .unauthorized: uiText("The instance key was rejected. Replace it in Settings to monitor.")
-        }
-    }
-
-    private func kindLabel(_ kind: ModelMonitorEventKind) -> String {
-        switch kind {
-        case .request: uiText("Request")
-        case .response: uiText("Reply")
-        case .error: uiText("Error")
-        case .toolCall: uiText("Tool call")
-        case .toolResult: uiText("Tool result")
         }
     }
 
@@ -207,6 +312,110 @@ public struct ModelMonitorView: View {
         case "memory_ingestion": uiText("Memory ingestion")
         default: component
         }
+    }
+}
+
+/// One event card. The payload is collapsed to a preview; the preview states how much is hidden, and expansion shows the full text.
+private struct ModelMonitorEventRow: View {
+    enum Placement { case leading, trailing, fullWidth }
+
+    let event: ModelMonitorEvent
+    let placement: Placement
+    let componentLabel: String
+    let kindLabel: String
+    let callLabel: String
+    @State private var expanded = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if placement == .trailing { Spacer(minLength: 40) }
+            card
+            if placement == .leading { Spacer(minLength: 40) }
+        }
+    }
+
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(kindLabel).font(.headline)
+                    .foregroundStyle(event.kind == .error ? Color.red : Color.primary)
+                Text(componentLabel).font(.caption).foregroundStyle(.secondary)
+                if let time = event.time {
+                    Text(time.formatted(date: .omitted, time: .standard)).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 6) {
+                Text(callLabel).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    .help(event.callID)
+                if event.truncated {
+                    // Server truncation: Zoe shortened the payload before it reached the client.
+                    Label(uiText("Truncated by Zoe"), systemImage: "scissors")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+            payload
+        }
+        .padding(8)
+        .frame(maxWidth: placement == .fullWidth ? .infinity : nil, alignment: .leading)
+        .background(background, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder private var payload: some View {
+        if let full = event.formattedPayload {
+            let preview = ModelMonitorPreview(full)
+            Text(expanded || !preview.isCut ? full : preview.text)
+                .font(.caption.monospaced()).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if preview.isCut && !expanded {
+                // UI preview: this is not a server truncation.
+                Text(uiFormat("Preview shows the first %d of %d characters.", preview.shownCount, preview.totalCount))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 12) {
+                if preview.isCut {
+                    Button(expanded ? uiText("Show less") : uiFormat("Show full payload (%d characters)", preview.totalCount)) {
+                        expanded.toggle()
+                    }
+                }
+                Button(uiText("Copy")) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(full, forType: .string)
+                }
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+        }
+    }
+
+    private var background: Color {
+        switch event.kind {
+        case .request: Color.accentColor.opacity(0.12)
+        case .response: Color.secondary.opacity(0.12)
+        case .error: Color.red.opacity(0.12)
+        case .toolCall, .toolResult: Color.primary.opacity(0.05)
+        }
+    }
+}
+
+/// Collapsed view of a payload. `text` is a display preview only; `isCut` tells the reader that more text exists.
+private struct ModelMonitorPreview {
+    static let maxLines = 12
+    static let maxCharacters = 600
+
+    let text: String
+    let totalCount: Int
+
+    var shownCount: Int { text.count }
+    var isCut: Bool { text.count < totalCount }
+
+    init(_ full: String) {
+        totalCount = full.count
+        var head = String(full.prefix(Self.maxCharacters))
+        let lines = head.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.count > Self.maxLines {
+            head = lines.prefix(Self.maxLines).joined(separator: "\n")
+        }
+        text = head
     }
 }
 #endif

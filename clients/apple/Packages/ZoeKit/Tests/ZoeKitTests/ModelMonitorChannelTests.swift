@@ -256,10 +256,27 @@ final class ModelMonitorChannelTests: XCTestCase {
         buffer.append(ModelMonitorEntry(id: 3, kind: .event(ModelMonitorEvent(component: "worker", callID: "d", time: nil, kind: .response, payload: nil, truncated: false))))
         XCTAssertEqual(buffer.entries.map(\.id), [2, 3])
         XCTAssertEqual(buffer.droppedCount, 1)
-        XCTAssertEqual(buffer.visible(components: ["steward"]).map(\.id), [2])
+        XCTAssertEqual(buffer.visibleEntries(component: "steward").map(\.id), [2])
+        XCTAssertEqual(buffer.visibleEntries(component: nil).map(\.id), [2, 3])
         buffer.clear()
         XCTAssertTrue(buffer.entries.isEmpty)
         XCTAssertEqual(buffer.droppedCount, 0)
+    }
+
+    func testShortCallLabelsAreUniqueAndKeepFullIDForShortInputs() {
+        let ids = ["abcdef12-0000", "abcdef12-0001", "fedcba98-0000"]
+        let labels = ModelMonitorCallID.shortLabels(for: ids)
+        XCTAssertEqual(Set(labels.values).count, ids.count)
+        XCTAssertEqual(labels["fedcba98-0000"], "fedcba98")
+        // The two colliding IDs share a 12-character prefix, so their labels need the full 13 characters.
+        XCTAssertEqual(labels["abcdef12-0000"], "abcdef12-0000")
+        XCTAssertEqual(ModelMonitorCallID.shortLabels(for: ["c-1"])["c-1"], "c-1")
+    }
+
+    func testFormattedPayloadIsNeverClipped() {
+        let long = String(repeating: "x", count: 5000)
+        let event = ModelMonitorEvent(component: "worker", callID: "c", time: nil, kind: .response, payload: .string(long), truncated: false)
+        XCTAssertEqual(event.formattedPayload?.count, long.count + 2)
     }
 }
 
