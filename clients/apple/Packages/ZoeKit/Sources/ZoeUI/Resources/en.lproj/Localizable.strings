@@ -92,7 +92,7 @@
 "Preview shows the first %d of %d characters." = "Preview shows the first %d of %d characters.";
 "%d new · Jump to latest" = "%d new · Jump to latest";
 "Jump to latest" = "Jump to latest";
-"Worker and OpenCode entries show what Zoe observed, not raw provider payloads. Memory entries appear only when Zoe publishes them." = "Worker and OpenCode entries show what Zoe observed, not raw provider payloads. Memory entries appear only when Zoe publishes them.";
+"Model Monitor · %@" = "Model Monitor · %@";
 "No events yet." = "No events yet.";
 "%d older entries were removed from this view." = "%d older entries were removed from this view.";
 "Events may be missing here." = "Events may be missing here.";

@@ -179,17 +179,17 @@ public struct ModelMonitorView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text(statusText).font(.callout)
-                Spacer()
-                if model.status == .ended {
-                    Button(uiText("Retry")) { Task { await model.retry() } }
+            // Only actionable states stay in the body; the live state is shown in the window title.
+            if let actionText = actionableStatusText {
+                HStack(spacing: 8) {
+                    Text(actionText).font(.callout)
+                    Spacer()
+                    if model.status == .ended {
+                        Button(uiText("Retry")) { Task { await model.retry() } }
+                    }
                 }
+                .padding(8)
             }
-            .padding(8)
-            Text(uiText("Worker and OpenCode entries show what Zoe observed, not raw provider payloads. Memory entries appear only when Zoe publishes them."))
-                .font(.caption).foregroundStyle(.secondary)
-                .padding(.horizontal, 8).padding(.bottom, 6)
             tabBar
             Divider()
             timeline
@@ -205,15 +205,29 @@ public struct ModelMonitorView: View {
         .frame(minWidth: 320, minHeight: 360)
     }
 
-    /// Overview is pinned; component tabs scroll horizontally so narrow windows keep every tab reachable.
+    /// Window title for the host window. The live state is shown here, not in the body.
+    public static func windowTitle(for status: ModelMonitorStatus) -> String {
+        uiFormat("Model Monitor · %@", statusLabel(status))
+    }
+
+    /// Overview is pinned; component tabs fill two rows in stable order and scroll horizontally on narrow windows.
     private var tabBar: some View {
-        HStack(spacing: 4) {
+        let components = ModelMonitorChannel.components
+        let split = (components.count + 1) / 2
+        return HStack(spacing: 4) {
             tabButton(.overview, label: uiText("Overview"))
-            Divider().frame(height: 18)
+            Divider()
             ScrollView(.horizontal) {
-                HStack(spacing: 4) {
-                    ForEach(ModelMonitorChannel.components, id: \.self) { component in
-                        tabButton(.component(component), label: componentLabel(component))
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(components.prefix(split)), id: \.self) { component in
+                            tabButton(.component(component), label: componentLabel(component))
+                        }
+                    }
+                    HStack(spacing: 4) {
+                        ForEach(Array(components.dropFirst(split)), id: \.self) { component in
+                            tabButton(.component(component), label: componentLabel(component))
+                        }
                     }
                 }
             }
@@ -309,8 +323,7 @@ public struct ModelMonitorView: View {
                 event: event,
                 placement: placement(event.kind),
                 componentLabel: componentLabel(event.component),
-                kindLabel: kindLabel(event.kind),
-                callLabel: model.callLabels[event.callID] ?? event.callID
+                kindLabel: kindLabel(event.kind)
             )
         }
     }
@@ -334,8 +347,16 @@ public struct ModelMonitorView: View {
         }
     }
 
-    private var statusText: String {
+    /// Only states the user must act on or that explain missing data stay in the body.
+    private var actionableStatusText: String? {
         switch model.status {
+        case .reconnecting, .ended, .unauthorized: Self.statusLabel(model.status)
+        case .idle, .connecting, .subscribing, .live: nil
+        }
+    }
+
+    static func statusLabel(_ status: ModelMonitorStatus) -> String {
+        switch status {
         case .idle: uiText("Not monitoring")
         case .connecting: uiText("Connecting…")
         case .subscribing: uiText("Subscribing…")
@@ -370,7 +391,6 @@ private struct ModelMonitorEventRow: View {
     let placement: Placement
     let componentLabel: String
     let kindLabel: String
-    let callLabel: String
     @State private var expanded = false
 
     var body: some View {
@@ -383,16 +403,24 @@ private struct ModelMonitorEventRow: View {
 
     private var card: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // Metadata is selectable text, so standard Cmd+C copies it; it has no copy button.
             HStack(spacing: 6) {
-                Text(kindLabel).font(.headline)
-                    .foregroundStyle(event.kind == .error ? Color.red : Color.primary)
-                Text(componentLabel).font(.caption).foregroundStyle(.secondary)
+                Text(kindLabel).font(.caption.weight(.semibold))
+                    .foregroundStyle(event.kind == .error ? Color.red : Color.secondary)
+                    .textSelection(.enabled)
+                Text(componentLabel).font(.caption2)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+                    .textSelection(.enabled)
                 if let time = event.time {
-                    Text(time.formatted(date: .omitted, time: .standard)).font(.caption).foregroundStyle(.secondary)
+                    Text(time.formatted(date: .omitted, time: .standard)).font(.caption2).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
             }
             HStack(spacing: 6) {
-                Text(callLabel).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                Text(event.callID).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .textSelection(.enabled)
                     .help(event.callID)
                 if event.truncated {
                     // Server truncation: Zoe shortened the payload before it reached the client.
@@ -408,9 +436,11 @@ private struct ModelMonitorEventRow: View {
     }
 
     @ViewBuilder private var payload: some View {
-        if let full = event.formattedPayload {
-            let preview = ModelMonitorPreview(full)
-            Text(expanded || !preview.isCut ? full : preview.text)
+        // Display shows readable text; Copy still copies the complete formatted JSON.
+        if let payload = event.payload, let full = event.formattedPayload {
+            let shown = ModelMonitorPayloadText.render(payload)
+            let preview = ModelMonitorPreview(shown)
+            Text(expanded || !preview.isCut ? shown : preview.text)
                 .font(.caption.monospaced()).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if preview.isCut && !expanded {

@@ -21,6 +21,7 @@ struct ZoeMacApp {
     private var settingsWindow: NSWindow?
     private var modelMonitorWindow: NSWindow?
     private var modelMonitorCloseObserver: NSObjectProtocol?
+    private var modelMonitorTitleCancellable: AnyCancellable?
     private let modelMonitor = ModelMonitorModel()
     private var textInputWindow: NSWindow?
     private var historyWindow: NSWindow?
@@ -193,9 +194,12 @@ struct ZoeMacApp {
     @objc private func showModelMonitor() {
         if modelMonitorWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 480), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-            window.title = "Model Monitor"
+            window.title = ModelMonitorView.windowTitle(for: modelMonitor.status)
             window.isReleasedWhenClosed = false
             window.contentViewController = NSHostingController(rootView: ModelMonitorView(model: modelMonitor))
+            modelMonitorTitleCancellable = modelMonitor.$status.sink { [weak window] status in
+                window?.title = ModelMonitorView.windowTitle(for: status)
+            }
             window.center()
             modelMonitorWindow = window
             modelMonitorCloseObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
