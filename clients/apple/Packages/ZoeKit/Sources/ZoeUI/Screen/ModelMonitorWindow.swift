@@ -29,7 +29,7 @@ public enum ModelMonitorTab: Hashable, Sendable {
     private var channel: ModelMonitorChannel?
     private var consumer: Task<Void, Never>?
     private var generation = 0
-    private var follow = ModelMonitorFollow()
+    private var scrollFollow = ModelMonitorFollow()
     private static let knownTabs: [ModelMonitorTab] = [.overview] + ModelMonitorChannel.components.map { .component($0) }
 
     public init() {}
@@ -69,7 +69,7 @@ public enum ModelMonitorTab: Hashable, Sendable {
     /// Switching tabs returns the new tab to the end, so its latest entries are visible.
     public func select(_ tab: ModelMonitorTab) {
         selectedTab = tab
-        follow.reset()
+        scrollFollow.reset()
         isAtBottom = true
         unseenCounts[tab] = nil
         publish()
@@ -77,7 +77,7 @@ public enum ModelMonitorTab: Hashable, Sendable {
 
     /// Jump control: returns the selected tab to the end and clears its unseen count.
     public func jumpToLatest() {
-        follow.jump()
+        scrollFollow.jump()
         isAtBottom = true
         unseenCounts[selectedTab] = nil
     }
@@ -85,8 +85,8 @@ public enum ModelMonitorTab: Hashable, Sendable {
     /// Geometry from the timeline. Ignored when it belongs to a tab other than the selected one.
     public func measure(tab: ModelMonitorTab, contentHeight: Double, distanceFromBottom: Double) {
         guard tab == selectedTab else { return }
-        follow.measure(contentHeight: contentHeight, distanceFromBottom: distanceFromBottom)
-        isAtBottom = follow.isAtBottom
+        scrollFollow.measure(contentHeight: contentHeight, distanceFromBottom: distanceFromBottom)
+        isAtBottom = scrollFollow.isAtBottom
         if isAtBottom { unseenCounts[selectedTab] = nil }
     }
 
@@ -102,7 +102,7 @@ public enum ModelMonitorTab: Hashable, Sendable {
         channel = nil
         buffer.clear()
         unseenCounts = [:]
-        follow.reset()
+        scrollFollow.reset()
         isAtBottom = true
         droppedCount = 0
         serverErrorSeen = false
@@ -120,8 +120,8 @@ public enum ModelMonitorTab: Hashable, Sendable {
             countUnseen(entry)
             if isVisible(entry) {
                 // Empty tab and first entry: a visible append starts following from the end.
-                if visibleEntries.isEmpty { follow.reset() }
-                follow.noteAppend()
+                if visibleEntries.isEmpty { scrollFollow.reset() }
+                scrollFollow.noteAppend()
             }
         case .serverError:
             serverErrorSeen = true
@@ -147,8 +147,11 @@ public enum ModelMonitorTab: Hashable, Sendable {
         case .gap:
             tabs = Self.knownTabs
         case let .event(event):
-            tabs = [.overview]
-                + (ModelMonitorChannel.components.contains(event.component) ? [.component(event.component)] : [])
+            var known: [ModelMonitorTab] = [ModelMonitorTab.overview]
+            if ModelMonitorChannel.components.contains(event.component) {
+                known.append(ModelMonitorTab.component(event.component))
+            }
+            tabs = known
         }
         for tab in tabs where !(tab == selectedTab && isAtBottom) {
             unseenCounts[tab, default: 0] += 1
@@ -254,12 +257,13 @@ public struct ModelMonitorView: View {
                 .padding(8)
                 .background(GeometryReader { geometry in
                     Color.clear.preference(key: ScrollMetricsKey.self, value: ScrollMetrics(
-                        contentHeight: geometry.size.height, contentBottom: geometry.frame(in: .named(Self.scrollSpace)).maxY))
+                        contentHeight: Double(geometry.size.height),
+                        contentBottom: Double(geometry.frame(in: .named(Self.scrollSpace)).maxY)))
                 })
             }
             .coordinateSpace(name: Self.scrollSpace)
             .background(GeometryReader { geometry in
-                Color.clear.preference(key: ScrollMetricsKey.self, value: ScrollMetrics(viewportHeight: geometry.size.height))
+                Color.clear.preference(key: ScrollMetricsKey.self, value: ScrollMetrics(viewportHeight: Double(geometry.size.height)))
             })
             .onPreferenceChange(ScrollMetricsKey.self) { metrics in
                 // Both values come from the same layout pass, so the distance is never computed from a stale viewport.
