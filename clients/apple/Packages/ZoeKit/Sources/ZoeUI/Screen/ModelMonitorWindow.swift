@@ -202,7 +202,6 @@ public struct ModelMonitorView: View {
                     .font(.caption).foregroundStyle(.secondary).padding(4)
             }
         }
-        .frame(minWidth: 320, minHeight: 360)
     }
 
     /// Window title for the host window. The live state is shown here, not in the body.
@@ -210,13 +209,28 @@ public struct ModelMonitorView: View {
         uiFormat("Model Monitor · %@", statusLabel(status))
     }
 
-    /// Overview is pinned; component tabs fill two rows in stable order and scroll horizontally on narrow windows.
+    public static let minimumContentSize = CGSize(width: 320, height: 360)
+    public static let preferredFirstOpenSize = CGSize(width: 900, height: 600)
+
+    /// First-open content size: the preferred size, limited to the visible screen area minus a margin, never below the minimum.
+    /// Applied only when the window is created; later opens keep the size and position the user left.
+    public static func firstOpenContentSize(visible: CGRect) -> CGSize {
+        let margin = CGSize(width: 40, height: 80)
+        let width = min(preferredFirstOpenSize.width, max(minimumContentSize.width, visible.width - margin.width))
+        let height = min(preferredFirstOpenSize.height, max(minimumContentSize.height, visible.height - margin.height))
+        return CGSize(width: width, height: height)
+    }
+
+    /// Overview is pinned and top-aligned with the first row; component tabs fill two rows in stable order and scroll horizontally on narrow windows.
+    /// The strip takes only the height of its two rows (`fixedSize`), so the timeline keeps the remaining height.
     private var tabBar: some View {
         let components = ModelMonitorChannel.components
         let split = (components.count + 1) / 2
-        return HStack(spacing: 4) {
+        return HStack(alignment: .top, spacing: 0) {
             tabButton(.overview, label: uiText("Overview"))
-            Divider()
+                .padding(.trailing, 8)
+            // A 1-pt rectangle, not a Divider: a Divider in a row stretches to the full bar height.
+            Rectangle().fill(Color.secondary.opacity(0.3)).frame(width: 1)
             ScrollView(.horizontal) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
@@ -230,9 +244,11 @@ public struct ModelMonitorView: View {
                         }
                     }
                 }
+                .padding(.leading, 8)
             }
         }
-        .padding(.horizontal, 8).padding(.bottom, 4)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 8).padding(.vertical, 6)
     }
 
     private func tabButton(_ tab: ModelMonitorTab, label: String) -> some View {
