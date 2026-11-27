@@ -152,6 +152,82 @@ public enum ModelMonitorCallID {
     }
 }
 
+/// Readable display text for an event payload. Display only: copy keeps `ModelMonitorEvent.formattedPayload`.
+/// Strings keep their decoded characters, so quotes and newlines show as text and backslashes are not unescaped.
+/// A string that is entirely a JSON object or array is shown as structure, up to `maxNestedDepth` levels and `maxNestedBytes` each.
+public enum ModelMonitorPayloadText {
+    public static let maxNestedDepth = 2
+    public static let maxNestedBytes = 65_536
+    private static let indent = "  "
+
+    public static func render(_ payload: JSONValue) -> String {
+        let (value, depth) = resolve(payload, depth: 0)
+        return lines(value, depth: depth).joined(separator: "\n")
+    }
+
+    /// Decodes a string that holds encoded JSON containers, within the depth limit. Returns the value and the depth reached.
+    private static func resolve(_ value: JSONValue, depth: Int) -> (JSONValue, Int) {
+        guard case let .string(text) = value, depth < maxNestedDepth, let nested = decodedNested(text) else {
+            return (value, depth)
+        }
+        return resolve(nested, depth: depth + 1)
+    }
+
+    /// `value` is already resolved. Non-empty containers always start a block; scalars and empty containers may share a line with their key.
+    private static func lines(_ value: JSONValue, depth: Int) -> [String] {
+        switch value {
+        case let .string(text):
+            return text.components(separatedBy: .newlines)
+        case let .object(object):
+            if object.isEmpty { return ["{}"] }
+            var result: [String] = []
+            for (key, child) in object.sorted(by: { $0.key < $1.key }) {
+                let (resolved, childDepth) = resolve(child, depth: depth)
+                let childLines = lines(resolved, depth: childDepth)
+                if childLines.count == 1 && !isNonEmptyContainer(resolved) {
+                    result.append("\(key): \(childLines[0])")
+                } else {
+                    result.append("\(key):")
+                    result += childLines.map { indent + $0 }
+                }
+            }
+            return result
+        case let .array(items):
+            if items.isEmpty { return ["[]"] }
+            var result: [String] = []
+            for item in items {
+                let (resolved, itemDepth) = resolve(item, depth: depth)
+                let itemLines = lines(resolved, depth: itemDepth)
+                result += itemLines.enumerated().map { index, line in (index == 0 ? "- " : indent) + line }
+            }
+            return result
+        case let .integer(number): return [String(number)]
+        case let .number(number): return [String(number)]
+        case let .bool(flag): return [flag ? "true" : "false"]
+        case .null: return ["null"]
+        }
+    }
+
+    private static func isNonEmptyContainer(_ value: JSONValue) -> Bool {
+        switch value {
+        case let .object(object): !object.isEmpty
+        case let .array(items): !items.isEmpty
+        default: false
+        }
+    }
+
+    /// Only text that is wholly a JSON object or array is decoded; other text stays as written.
+    private static func decodedNested(_ text: String) -> JSONValue? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.utf8.count <= maxNestedBytes, trimmed.hasPrefix("{") || trimmed.hasPrefix("[") else { return nil }
+        guard let decoded = try? JSONDecoder().decode(JSONValue.self, from: Data(trimmed.utf8)) else { return nil }
+        switch decoded {
+        case .object, .array: return decoded
+        default: return nil
+        }
+    }
+}
+
 /// Live-only model conversation monitor on the shared client socket.
 /// Its demand exists only while subscribed, and it never affects other channels' demand.
 public actor ModelMonitorChannel: ClientWebSocketChannel {
