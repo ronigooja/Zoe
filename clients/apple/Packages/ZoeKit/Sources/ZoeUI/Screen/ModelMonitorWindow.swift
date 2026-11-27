@@ -19,7 +19,7 @@ public enum ModelMonitorTab: Hashable, Sendable {
     @Published public private(set) var selectedTab: ModelMonitorTab = .overview
     /// False while the user has scrolled away from the end of the selected tab. New entries do not move the list then.
     @Published public private(set) var isAtBottom = true
-    /// Entries that arrived in each tab while it was not followed. Cleared when the user returns to the end of that tab.
+    /// Entries that arrived in each known tab while it was not followed. Cleared when the user returns to the end of that tab.
     @Published public private(set) var unseenCounts: [ModelMonitorTab: Int] = [:]
     /// Short label per call ID, unique across the whole buffer so one call has the same label in every tab.
     @Published public private(set) var callLabels: [String: String] = [:]
@@ -29,6 +29,8 @@ public enum ModelMonitorTab: Hashable, Sendable {
     private var channel: ModelMonitorChannel?
     private var consumer: Task<Void, Never>?
     private var generation = 0
+    private var follow = ModelMonitorFollow()
+    private static let knownTabs: [ModelMonitorTab] = [.overview] + ModelMonitorChannel.components.map { .component($0) }
 
     public init() {}
 
@@ -67,15 +69,25 @@ public enum ModelMonitorTab: Hashable, Sendable {
     /// Switching tabs returns the new tab to the end, so its latest entries are visible.
     public func select(_ tab: ModelMonitorTab) {
         selectedTab = tab
+        follow.reset()
         isAtBottom = true
         unseenCounts[tab] = nil
         publish()
     }
 
-    /// Reports whether the end of the selected tab is in view. Returning to the end clears that tab's unseen count.
-    public func setAtBottom(_ atBottom: Bool) {
-        if isAtBottom != atBottom { isAtBottom = atBottom }
-        if atBottom { unseenCounts[selectedTab] = nil }
+    /// Jump control: returns the selected tab to the end and clears its unseen count.
+    public func jumpToLatest() {
+        follow.jump()
+        isAtBottom = true
+        unseenCounts[selectedTab] = nil
+    }
+
+    /// Geometry from the timeline. Ignored when it belongs to a tab other than the selected one.
+    public func measure(tab: ModelMonitorTab, contentHeight: Double, distanceFromBottom: Double) {
+        guard tab == selectedTab else { return }
+        follow.measure(contentHeight: contentHeight, distanceFromBottom: distanceFromBottom)
+        isAtBottom = follow.isAtBottom
+        if isAtBottom { unseenCounts[selectedTab] = nil }
     }
 
     /// Count for the Jump control. Clamped because buffer trimming can remove entries that were already counted.
@@ -90,6 +102,7 @@ public enum ModelMonitorTab: Hashable, Sendable {
         channel = nil
         buffer.clear()
         unseenCounts = [:]
+        follow.reset()
         isAtBottom = true
         droppedCount = 0
         serverErrorSeen = false
@@ -105,6 +118,11 @@ public enum ModelMonitorTab: Hashable, Sendable {
         case let .entry(entry):
             buffer.append(entry)
             countUnseen(entry)
+            if isVisible(entry) {
+                // Empty tab and first entry: a visible append starts following from the end.
+                if visibleEntries.isEmpty { follow.reset() }
+                follow.noteAppend()
+            }
         case .serverError:
             serverErrorSeen = true
         case .reset:
@@ -115,13 +133,22 @@ public enum ModelMonitorTab: Hashable, Sendable {
         publish()
     }
 
+    private func isVisible(_ entry: ModelMonitorEntry) -> Bool {
+        switch entry.kind {
+        case .gap: true
+        case let .event(event): selectedComponent == nil || event.component == selectedComponent
+        }
+    }
+
+    /// Bounded: only known tabs are counted. Unknown components stay visible in Overview but get no tab count.
     private func countUnseen(_ entry: ModelMonitorEntry) {
         let tabs: [ModelMonitorTab]
         switch entry.kind {
         case .gap:
-            tabs = [.overview] + ModelMonitorChannel.components.map { ModelMonitorTab.component($0) }
+            tabs = Self.knownTabs
         case let .event(event):
-            tabs = [.overview, .component(event.component)]
+            tabs = [.overview]
+                + (ModelMonitorChannel.components.contains(event.component) ? [.component(event.component)] : [])
         }
         for tab in tabs where !(tab == selectedTab && isAtBottom) {
             unseenCounts[tab, default: 0] += 1
@@ -143,6 +170,7 @@ public enum ModelMonitorTab: Hashable, Sendable {
 public struct ModelMonitorView: View {
     @ObservedObject var model: ModelMonitorModel
     private static let bottomID = "model-monitor-bottom"
+    private static let scrollSpace = "model-monitor-scroll"
 
     public init(model: ModelMonitorModel) { self.model = model }
 
@@ -207,39 +235,54 @@ public struct ModelMonitorView: View {
             Text(uiText("No events yet.")).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(model.visibleEntries) { entry in
-                            row(entry)
-                        }
-                        // Visible only when the end of the list is in view. Follow state is derived from it.
-                        Color.clear.frame(height: 1).id(Self.bottomID)
-                            .onAppear { model.setAtBottom(true) }
-                            .onDisappear { model.setAtBottom(false) }
+            monitorList
+                // A new view per tab: geometry from the outgoing tab's list cannot reach the new tab.
+                .id(model.selectedTab)
+        }
+    }
+
+    private var monitorList: some View {
+        let tab = model.selectedTab
+        return ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(model.visibleEntries) { entry in
+                        row(entry)
                     }
+                    Color.clear.frame(height: 1).id(Self.bottomID)
+                }
+                .padding(8)
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: ScrollMetricsKey.self, value: ScrollMetrics(
+                        contentHeight: geometry.size.height, contentBottom: geometry.frame(in: .named(Self.scrollSpace)).maxY))
+                })
+            }
+            .coordinateSpace(name: Self.scrollSpace)
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: ScrollMetricsKey.self, value: ScrollMetrics(viewportHeight: geometry.size.height))
+            })
+            .onPreferenceChange(ScrollMetricsKey.self) { metrics in
+                // Both values come from the same layout pass, so the distance is never computed from a stale viewport.
+                guard let viewportHeight = metrics.viewportHeight, let contentHeight = metrics.contentHeight,
+                      let contentBottom = metrics.contentBottom else { return }
+                model.measure(tab: tab, contentHeight: contentHeight, distanceFromBottom: contentBottom - viewportHeight)
+            }
+            .defaultScrollAnchor(.bottom)
+            .onAppear { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+            .onChange(of: model.visibleEntries.last?.id) { _, _ in
+                if model.isAtBottom { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+            }
+            .overlay(alignment: .bottom) {
+                if !model.isAtBottom {
+                    Button {
+                        model.jumpToLatest()
+                        proxy.scrollTo(Self.bottomID, anchor: .bottom)
+                    } label: {
+                        Label(jumpTitle, systemImage: "arrow.down.circle.fill").font(.callout)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
                     .padding(8)
-                }
-                .defaultScrollAnchor(.bottom)
-                .onAppear { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
-                .onChange(of: model.visibleEntries.last?.id) {
-                    if model.isAtBottom { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
-                }
-                .onChange(of: model.selectedTab) {
-                    proxy.scrollTo(Self.bottomID, anchor: .bottom)
-                }
-                .overlay(alignment: .bottom) {
-                    if !model.isAtBottom {
-                        Button {
-                            model.setAtBottom(true)
-                            proxy.scrollTo(Self.bottomID, anchor: .bottom)
-                        } label: {
-                            Label(jumpTitle, systemImage: "arrow.down.circle.fill").font(.callout)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .padding(8)
-                    }
                 }
             }
         }
@@ -394,6 +437,31 @@ private struct ModelMonitorEventRow: View {
         case .error: Color.red.opacity(0.12)
         case .toolCall, .toolResult: Color.primary.opacity(0.05)
         }
+    }
+}
+
+/// Timeline geometry from one layout pass. Each field is set only by its own source view; `reduce` merges them.
+private struct ScrollMetrics: Equatable {
+    var viewportHeight: Double?
+    var contentHeight: Double?
+    /// Content bottom edge in the scroll view's coordinates; the viewport bottom is `viewportHeight`.
+    var contentBottom: Double?
+
+    init(viewportHeight: Double? = nil) { self.viewportHeight = viewportHeight }
+
+    init(contentHeight: Double, contentBottom: Double) {
+        self.contentHeight = contentHeight
+        self.contentBottom = contentBottom
+    }
+}
+
+private struct ScrollMetricsKey: PreferenceKey {
+    static let defaultValue = ScrollMetrics()
+    static func reduce(value: inout ScrollMetrics, nextValue: () -> ScrollMetrics) {
+        let next = nextValue()
+        value.viewportHeight = next.viewportHeight ?? value.viewportHeight
+        value.contentHeight = next.contentHeight ?? value.contentHeight
+        value.contentBottom = next.contentBottom ?? value.contentBottom
     }
 }
 
