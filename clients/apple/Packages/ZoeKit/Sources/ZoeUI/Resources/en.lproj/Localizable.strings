@@ -89,6 +89,8 @@
 "Show less" = "Show less";
 "Show full payload (%d characters)" = "Show full payload (%d characters)";
 "Copy" = "Copy";
+"Copied" = "Copied";
+"Call ID %@" = "Call ID %@";
 "Preview shows the first %d of %d characters." = "Preview shows the first %d of %d characters.";
 "%d new · Jump to latest" = "%d new · Jump to latest";
 "Jump to latest" = "Jump to latest";

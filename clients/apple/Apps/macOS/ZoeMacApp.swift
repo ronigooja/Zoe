@@ -193,7 +193,7 @@ struct ZoeMacApp {
     /// Independent of the status menu and the MCP switches. It exists only while the instance has a monitor channel.
     @objc private func showModelMonitor() {
         if modelMonitorWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 480), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 480), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
             window.title = ModelMonitorView.windowTitle(for: modelMonitor.status)
             window.isReleasedWhenClosed = false
             window.contentViewController = NSHostingController(rootView: ModelMonitorView(model: modelMonitor))
@@ -210,6 +210,8 @@ struct ZoeMacApp {
                 Task { @MainActor [weak self] in await self?.modelMonitor.dismiss() }
             }
         }
+        // A minimized monitor must be restored before it is brought forward. Minimizing posts no willClose, so the subscription is kept.
+        if modelMonitorWindow?.isMiniaturized == true { modelMonitorWindow?.deminiaturize(nil) }
         NSApp.activate(ignoringOtherApps: true)
         modelMonitorWindow?.makeKeyAndOrderFront(nil)
         Task { await modelMonitor.present(model.modelMonitorChannel) }

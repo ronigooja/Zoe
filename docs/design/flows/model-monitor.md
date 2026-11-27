@@ -25,7 +25,7 @@ Fields not applicable to a frame type are omitted. `event.payload` is optional J
 
 ## Required behavior
 
-Opening the monitor subscribes; closing its window unsubscribes. Authorization is limited to the authenticated owner's existing WebSocket upgrade scope; no additional scope or credential is introduced. Channel failure does not change voice or the durable event stream.
+Opening the monitor subscribes; closing its window unsubscribes. Minimizing the window does not unsubscribe. Authorization is limited to the authenticated owner's existing WebSocket upgrade scope; no additional scope or credential is introduced. Channel failure does not change voice or the durable event stream.
 
 ## Presentation
 
@@ -33,7 +33,7 @@ Overview is the first tab; component tabs follow in a stable order, in two rows,
 
 The live state (connecting, subscribing, live, idle) is shown in the native window title. The window body shows only states the user must act on or that explain missing data: reconnecting with a gap, ended with Retry, and rejected instance key. Gap markers, server-truncation markers, and the monitor-error and dropped-entry notices remain visible.
 
-Each event card shows a metadata bar: the component name as a pill, `Request` or `Reply` as words (replies left, requests right), the time, and the full call ID on a single line. Metadata text is selectable for standard copy; the metadata has no copy action. The payload has its own copy action, which copies the complete formatted JSON.
+Each event card shows one metadata row: `Request` or `Reply` as words (replies left, requests right), the component name as a pill, the time, and a short call ID that is unique among the displayed call IDs; the full call ID is available on hover and to accessibility. Metadata text is selectable for standard copy; the metadata has no copy action. The payload has its own copy action, which copies the complete formatted JSON and shows a brief confirmation only after the copy succeeds.
 
 Payload display is readable text, not a copy format. Decoded strings keep their characters: quotes and newlines appear as written and literal backslashes are not unescaped. A string whose entire content is a JSON object or array is shown as structure, decoding at most two levels and only texts up to 64 KiB. Other strings are shown as written. Display previews are bounded; the copy action always uses the complete payload.
 

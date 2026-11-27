@@ -248,6 +248,8 @@ public struct ModelMonitorView: View {
     static let tabRowSpacing: CGFloat = 4
     static let tabStripVerticalPadding: CGFloat = 6
     static var tabStripHeight: CGFloat { tabRowHeight * 2 + tabRowSpacing }
+    /// Overview is a square as tall as the two-row strip, so it sits beside both rows.
+    static var overviewSide: CGFloat { tabStripHeight }
 
     /// Overview is pinned and top-aligned with the first row; component tabs fill two rows in stable order and scroll horizontally on narrow windows.
     /// The strip has an explicit height (two rows), so the timeline keeps the remaining height and no child's ideal size drives the layout.
@@ -255,7 +257,7 @@ public struct ModelMonitorView: View {
         let components = ModelMonitorChannel.components
         let split = (components.count + 1) / 2
         return HStack(alignment: .top, spacing: 0) {
-            tabButton(.overview, label: uiText("Overview"))
+            overviewButton
                 .padding(.trailing, 8)
             Color.secondary.opacity(0.3).frame(width: 1, height: Self.tabStripHeight)
             ScrollView(.horizontal) {
@@ -279,6 +281,21 @@ public struct ModelMonitorView: View {
         }
         .frame(height: Self.tabStripHeight)
         .padding(.horizontal, 8).padding(.vertical, Self.tabStripVerticalPadding)
+    }
+
+    /// Icon-only because Overview is the square pinned beside the component rows. The label stays available to VoiceOver and as a tooltip.
+    private var overviewButton: some View {
+        let selected = model.selectedTab == .overview
+        return Button { model.select(.overview) } label: {
+            Image(systemName: "list.bullet")
+                .font(.system(size: 15, weight: .medium))
+                .frame(width: Self.overviewSide, height: Self.overviewSide)
+                .background(selected ? Color.accentColor.opacity(0.2) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .help(uiText("Overview"))
+        .accessibilityLabel(uiText("Overview"))
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func tabButton(_ tab: ModelMonitorTab, label: String) -> some View {
@@ -369,6 +386,7 @@ public struct ModelMonitorView: View {
         case let .event(event):
             ModelMonitorEventRow(
                 event: event,
+                shortCallID: model.callLabels[event.callID] ?? event.callID,
                 placement: placement(event.kind),
                 componentLabel: componentLabel(event.component),
                 kindLabel: kindLabel(event.kind)
@@ -436,10 +454,14 @@ private struct ModelMonitorEventRow: View {
     enum Placement { case leading, trailing, fullWidth }
 
     let event: ModelMonitorEvent
+    /// Collision-aware label from the model; the full call ID stays in the tooltip and accessibility label.
+    let shortCallID: String
     let placement: Placement
     let componentLabel: String
     let kindLabel: String
     @State private var expanded = false
+    @State private var copied = false
+    @State private var copyReset: Task<Void, Never>?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -451,36 +473,41 @@ private struct ModelMonitorEventRow: View {
 
     private var card: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Metadata is selectable text, so standard Cmd+C copies it; it has no copy button.
+            // One metadata row: kind, component, time and short call ID. Metadata is selectable text, so standard Cmd+C copies it; it has no copy button.
+            // Fixed items keep their width; the call ID is the first to shrink on narrow cards.
             HStack(spacing: 6) {
                 Text(kindLabel).font(.caption.weight(.semibold))
                     .foregroundStyle(event.kind == .error ? Color.red : Color.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
                     .textSelection(.enabled)
                 Text(componentLabel).font(.caption2)
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(Color.primary.opacity(0.08), in: Capsule())
+                    .fixedSize(horizontal: true, vertical: false)
                     .textSelection(.enabled)
                 if let time = event.time {
                     Text(time.formatted(date: .omitted, time: .standard)).font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: true, vertical: false)
                         .textSelection(.enabled)
                 }
-            }
-            HStack(spacing: 6) {
-                Text(event.callID).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                Text(shortCallID).font(.caption2.monospaced()).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
+                    .layoutPriority(-1)
                     .textSelection(.enabled)
                     .help(event.callID)
-                if event.truncated {
-                    // Server truncation: Zoe shortened the payload before it reached the client.
-                    Label(uiText("Truncated by Zoe"), systemImage: "scissors")
-                        .font(.caption).foregroundStyle(.orange)
-                }
+                    .accessibilityLabel(uiFormat("Call ID %@", event.callID))
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             payload
         }
         .padding(8)
         .frame(maxWidth: placement == .fullWidth ? .infinity : nil, alignment: .leading)
         .background(background, in: RoundedRectangle(cornerRadius: 8))
+        .onDisappear {
+            copyReset?.cancel()
+            copyReset = nil
+            copied = false
+        }
     }
 
     @ViewBuilder private var payload: some View {
@@ -488,6 +515,11 @@ private struct ModelMonitorEventRow: View {
         if let payload = event.payload, let full = event.formattedPayload {
             let shown = ModelMonitorPayloadText.render(payload)
             let preview = ModelMonitorPreview(shown)
+            if event.truncated {
+                // Server truncation: Zoe shortened the payload before it reached the client.
+                Label(uiText("Truncated by Zoe"), systemImage: "scissors")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             Text(expanded || !preview.isCut ? shown : preview.text)
                 .font(.caption.monospaced()).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -502,13 +534,27 @@ private struct ModelMonitorEventRow: View {
                         expanded.toggle()
                     }
                 }
-                Button(uiText("Copy")) {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(full, forType: .string)
-                }
+                Button(copied ? uiText("Copied") : uiText("Copy")) { copyPayload(full) }
             }
             .buttonStyle(.link)
             .font(.caption)
+        }
+    }
+
+    /// "Copied" shows only when the pasteboard accepted the write, and reverts after a short delay.
+    private func copyPayload(_ text: String) {
+        NSPasteboard.general.clearContents()
+        guard NSPasteboard.general.setString(text, forType: .string) else {
+            copyReset?.cancel()
+            copied = false
+            return
+        }
+        copied = true
+        copyReset?.cancel()
+        copyReset = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            copied = false
         }
     }
 
