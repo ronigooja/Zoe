@@ -4,7 +4,7 @@
 
 Approved target, not a claim of current implementation, deployment or acceptance. A Mac client Settings entry opens an independent live-only Zoe model monitor window. The monitor observes bounded model activity events; it does not provide voice, which remains gateway-owned. It uses the authenticated `/v1/ws` connection shared with [Client MCP](client-mcp.md), under the existing owner authorization of the WebSocket upgrade. Monitor and MCP have separate per-channel demand: opening or closing the monitor must not change MCP subscription/use or its connection demand. It sends no credentials in frames. The transport contract is [Client WebSocket](client-ws.md).
 
-The monitor is observational, not a complete trace. It does not promise true token streaming for models that do not stream, raw provider requests for Worker/OpenCode, or complete event coverage. It does not change the durable `GET /v1/events` contract. Events must not expose protocol or authorization material, configuration credentials, arbitrary tool arguments, or tool output. Prompt and model text can still contain sensitive information; redaction is best-effort and is not a guarantee that sensitive content is removed.
+The monitor is observational, not a complete trace. It does not promise true token streaming for models that do not stream, raw provider envelopes, or complete event coverage. It does not change the durable `GET /v1/events` contract. Events must not expose protocol or authorization material or configuration credentials. Existing components do not include arbitrary tool arguments or tool output. Prompt and model text can still contain sensitive information; redaction is best-effort and is not a guarantee that sensitive content is removed.
 
 ## Inputs and outputs
 
@@ -23,6 +23,8 @@ Server frames are:
 
 Fields not applicable to a frame type are omitted. `event.payload` is optional JSON and may be truncated; `event.truncated` indicates truncation when present. `error` carries a code. An accepted subscription is acknowledged with `subscribed` before its events. Event `sequence` starts at 1 for each subscription and increases within it. The client visibly highlights a `gap` and any sequence discontinuity; it must not imply missing events can be recovered.
 
+Subscriptions with `include_opencode_context: true` also receive `opencode_context` events. Older clients do not receive them. The host OpenCode plugin observes actual provider sends and replies for sessions bound to current Zoe runs. It publishes ordered instruction and message text, including tool-call and tool-result text only when part of the observed model input or output. It does not publish provider envelopes, tool schemas, credentials, transport headers, generation settings, usage, or binary attachments. Apply credential filtering and the existing Worker text limit. Unsupported or incomplete observations are marked rather than reconstructed from stored session history; a reference to previous context does not imply earlier context was resent.
+
 ## Required behavior
 
 Opening the monitor subscribes; closing its window unsubscribes. Minimizing the window does not unsubscribe. Authorization is limited to the authenticated owner's existing WebSocket upgrade scope; no additional scope or credential is introduced. Channel failure does not change voice or the durable event stream.
@@ -30,6 +32,8 @@ Opening the monitor subscribes; closing its window unsubscribes. Minimizing the 
 ## Presentation
 
 Overview is the first tab; component tabs follow in a stable order, in two rows, scrolling horizontally when the window is narrow. Selecting a tab does not change its contents.
+
+The OpenCode tab alone shows `opencode_context`, pairing `Request` and `Reply` by call ID. Its events do not appear in Overview or change the existing Worker view.
 
 The live state (connecting, subscribing, live, idle) is shown in the native window title. The window body shows only states the user must act on or that explain missing data: reconnecting with a gap, ended with Retry, and rejected instance key. Gap markers, server-truncation markers, and the monitor-error and dropped-entry notices remain visible.
 
