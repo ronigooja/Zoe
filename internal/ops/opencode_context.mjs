@@ -75,7 +75,9 @@ export function requestText(body) {
 
 function finalText(body) {
   if (Array.isArray(body?.output)) return sections(body.output)
-  if (Array.isArray(body?.choices)) return sections(body.choices.flatMap(choice => choice?.message ? [choice.message] : []))
+  if (Array.isArray(body?.choices) && body.choices.some(choice => choice?.message)) {
+    return sections(body.choices.flatMap(choice => choice?.message ? [choice.message] : []))
+  }
   return undefined
 }
 
