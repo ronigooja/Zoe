@@ -244,6 +244,30 @@ private struct ClosureChannel: ClientWebSocketChannel {
     func received(_ data: Data) async { await onFrame(data) }
 }
 
+// URLSession may invoke a ping completion more than once. Consume the
+// continuation under a lock, but resume it only after releasing the lock.
+private final class PingContinuation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    init(_ continuation: CheckedContinuation<Void, Error>) { self.continuation = continuation }
+
+    func finish(_ error: Error?) {
+        lock.lock()
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        if let error { continuation?.resume(throwing: error) } else { continuation?.resume() }
+    }
+}
+
+func awaitWebSocketPong(_ sendPing: (@escaping @Sendable (Error?) -> Void) -> Void) async throws {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let pending = PingContinuation(continuation)
+        sendPing { pending.finish($0) }
+    }
+}
+
 private final class URLSessionClientWebSocket: NSObject, ClientWebSocket, URLSessionWebSocketDelegate, @unchecked Sendable {
     private let request: URLRequest
     private let lock = NSLock()
@@ -293,11 +317,7 @@ private final class URLSessionClientWebSocket: NSObject, ClientWebSocket, URLSes
 
     func ping() async throws {
         guard let task = activeTask() else { throw ClientWebSocketError.disconnected }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            task.sendPing { error in
-                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
-            }
-        }
+        try await awaitWebSocketPong { task.sendPing(pongReceiveHandler: $0) }
     }
 
     func close() async {

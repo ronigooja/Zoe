@@ -135,6 +135,27 @@ private actor SocketEvents {
 }
 
 final class ClientWebSocketTransportTests: XCTestCase {
+    func testPingBridgeIgnoresErrorAfterSuccess() async throws {
+        try await awaitWebSocketPong { completion in
+            completion(nil)
+            completion(ClientWebSocketError.disconnected)
+        }
+    }
+
+    func testPingBridgeIgnoresSuccessAfterError() async {
+        do {
+            try await awaitWebSocketPong { completion in
+                completion(ClientWebSocketError.disconnected)
+                completion(nil)
+            }
+            XCTFail("expected the first ping error")
+        } catch let error as ClientWebSocketError {
+            XCTAssertEqual(error, .disconnected)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     func testAuthenticatedUpgradeRequestUsesWebSocketScheme() throws {
         let request = try mcpTestAPI().clientWebSocketRequest()
         XCTAssertEqual(request.url?.scheme, "wss")
