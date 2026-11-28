@@ -87,6 +87,59 @@ public struct ModelMonitorBuffer: Equatable, Sendable {
     }
 }
 
+/// Routes entries to separate bounded buffers. Isolated components (OpenCode context) cannot evict, count against, or relabel the shared
+/// Overview and component views. Gaps go to every buffer because a gap may hide events in any view.
+public struct ModelMonitorFeed: Equatable, Sendable {
+    private var shared: ModelMonitorBuffer
+    private var isolated: ModelMonitorBuffer
+
+    public init(capacity: Int = ModelMonitorBuffer.defaultCapacity) {
+        shared = ModelMonitorBuffer(capacity: capacity)
+        isolated = ModelMonitorBuffer(capacity: capacity)
+    }
+
+    public mutating func append(_ entry: ModelMonitorEntry) {
+        switch entry.kind {
+        case .gap:
+            shared.append(entry)
+            isolated.append(entry)
+        case let .event(event):
+            if ModelMonitorChannel.overviewExcludedComponents.contains(event.component) {
+                isolated.append(entry)
+            } else {
+                shared.append(entry)
+            }
+        }
+    }
+
+    public mutating func clear() {
+        shared.clear()
+        isolated.clear()
+    }
+
+    /// `component` is the selected tab: `nil` for Overview, otherwise the component name.
+    public func visibleEntries(component: String?) -> [ModelMonitorEntry] {
+        buffer(for: component).visibleEntries(component: component)
+    }
+
+    /// Trimmed-entry count for the selected view only.
+    public func droppedCount(component: String?) -> Int {
+        buffer(for: component).droppedCount
+    }
+
+    /// Labels come from the selected view's buffer, so another buffer's calls cannot change them.
+    public func callLabels(component: String?) -> [String: String] {
+        ModelMonitorCallID.shortLabels(for: buffer(for: component).entries.compactMap { entry in
+            if case let .event(event) = entry.kind { event.callID } else { nil }
+        })
+    }
+
+    private func buffer(for component: String?) -> ModelMonitorBuffer {
+        if let component, ModelMonitorChannel.overviewExcludedComponents.contains(component) { return isolated }
+        return shared
+    }
+}
+
 /// Auto-follow state for the selected tab. Pure so the rules can be unit-tested without a view.
 /// Only a measurement at a stable content height, not caused by an append, is treated as a user scroll.
 public struct ModelMonitorFollow: Equatable, Sendable {

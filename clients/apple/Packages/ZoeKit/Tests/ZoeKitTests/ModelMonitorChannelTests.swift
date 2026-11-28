@@ -304,6 +304,32 @@ final class ModelMonitorChannelTests: XCTestCase {
         XCTAssertEqual(buffer.visibleEntries(component: "worker").map(\.id), [2, 3])
     }
 
+    /// An OpenCode flood must not evict, count against, or relabel Overview or Worker. Gaps stay visible in every view.
+    func testOpenCodeFloodDoesNotEvictOrCountAgainstSharedViews() {
+        var feed = ModelMonitorFeed(capacity: 2)
+        func event(_ id: Int, _ component: String, _ callID: String) -> ModelMonitorEntry {
+            ModelMonitorEntry(id: id, kind: .event(ModelMonitorEvent(component: component, callID: callID, time: nil, kind: .request, payload: nil, truncated: false)))
+        }
+        feed.append(event(1, "worker", "worker-call"))
+        feed.append(ModelMonitorEntry(id: 2, kind: .gap))
+        for index in 0..<5 {
+            feed.append(event(3 + index, "opencode_context", "oc-\(index)"))
+        }
+
+        // Overview and Worker keep their entries and gap; the flood neither evicted them nor reported a drop.
+        XCTAssertEqual(feed.visibleEntries(component: nil).map(\.id), [1, 2])
+        XCTAssertEqual(feed.visibleEntries(component: "worker").map(\.id), [1, 2])
+        XCTAssertEqual(feed.droppedCount(component: nil), 0)
+        XCTAssertEqual(feed.droppedCount(component: "worker"), 0)
+        XCTAssertEqual(feed.callLabels(component: nil)["worker-call"], "worker-call")
+
+        // The OpenCode tab is bounded by its own buffer: its gap and oldest events are the ones trimmed.
+        XCTAssertEqual(feed.visibleEntries(component: "opencode_context").map(\.id), [6, 7])
+        XCTAssertEqual(feed.droppedCount(component: "opencode_context"), 4)
+        XCTAssertNotNil(feed.callLabels(component: "opencode_context")["oc-4"])
+        XCTAssertNil(feed.callLabels(component: "opencode_context")["worker-call"])
+    }
+
     func testShortCallLabelsAreUniqueAndKeepFullIDForShortInputs() {
         let ids = ["abcdef12-0000", "abcdef12-0001", "fedcba98-0000"]
         let labels = ModelMonitorCallID.shortLabels(for: ids)

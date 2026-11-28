@@ -24,7 +24,7 @@ public enum ModelMonitorTab: Hashable, Sendable {
     /// Short label per call ID, unique across the whole buffer so one call has the same label in every tab.
     @Published public private(set) var callLabels: [String: String] = [:]
 
-    private var buffer = ModelMonitorBuffer()
+    private var feed = ModelMonitorFeed()
     private var presented = false
     private var channel: ModelMonitorChannel?
     private var consumer: Task<Void, Never>?
@@ -100,7 +100,7 @@ public enum ModelMonitorTab: Hashable, Sendable {
         consumer = nil
         let old = channel
         channel = nil
-        buffer.clear()
+        feed.clear()
         unseenCounts = [:]
         scrollFollow.reset()
         isAtBottom = true
@@ -116,7 +116,7 @@ public enum ModelMonitorTab: Hashable, Sendable {
         case let .status(next):
             status = next
         case let .entry(entry):
-            buffer.append(entry)
+            feed.append(entry)
             countUnseen(entry)
             if isVisible(entry) {
                 // Empty tab and first entry: a visible append starts following from the end.
@@ -126,10 +126,9 @@ public enum ModelMonitorTab: Hashable, Sendable {
         case .serverError:
             serverErrorSeen = true
         case .reset:
-            buffer.clear()
+            feed.clear()
             unseenCounts = [:]
         }
-        droppedCount = buffer.droppedCount
         publish()
     }
 
@@ -164,10 +163,9 @@ public enum ModelMonitorTab: Hashable, Sendable {
     }
 
     private func publish() {
-        visibleEntries = buffer.visibleEntries(component: selectedComponent)
-        callLabels = ModelMonitorCallID.shortLabels(for: buffer.entries.compactMap { entry in
-            if case let .event(event) = entry.kind { event.callID } else { nil }
-        })
+        visibleEntries = feed.visibleEntries(component: selectedComponent)
+        droppedCount = feed.droppedCount(component: selectedComponent)
+        callLabels = feed.callLabels(component: selectedComponent)
     }
 }
 
