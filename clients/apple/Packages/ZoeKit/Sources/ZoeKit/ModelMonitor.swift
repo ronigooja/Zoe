@@ -67,6 +67,9 @@ public struct ModelMonitorEvent: Equatable, Sendable {
         guard let data = try? encoder.encode(payload) else { return nil }
         return String(decoding: data, as: UTF8.self)
     }
+
+    /// Only OpenCode context text shows JSON embedded in prose as structure; other components keep the generic display.
+    public var rendersEmbeddedJSON: Bool { component == "opencode_context" }
 }
 
 public struct ModelMonitorEntry: Identifiable, Equatable, Sendable {
@@ -355,9 +358,15 @@ public enum ModelMonitorPayloadText {
     public static let maxNestedBytes = 65_536
     private static let indent = "  "
 
-    public static func render(_ payload: JSONValue) -> String {
+    /// `embeddedJSON` also renders complete JSON objects and arrays found inside string leaves. The default is the generic renderer, unchanged.
+    public static func render(_ payload: JSONValue, embeddedJSON: Bool = false) -> String {
         let (value, depth) = resolve(payload, depth: 0)
-        return lines(value, depth: depth).joined(separator: "\n")
+        return lines(value, depth: depth, embeddedJSON: embeddedJSON).joined(separator: "\n")
+    }
+
+    /// Display text for one message. Without `embeddedJSON` the text is returned exactly as written.
+    public static func renderText(_ text: String, embeddedJSON: Bool) -> String {
+        embeddedJSON ? Embedded.expand(text) : text
     }
 
     /// Decodes a string that holds encoded JSON containers, within the depth limit. Returns the value and the depth reached.
@@ -369,16 +378,17 @@ public enum ModelMonitorPayloadText {
     }
 
     /// `value` is already resolved. Non-empty containers always start a block; scalars and empty containers may share a line with their key.
-    private static func lines(_ value: JSONValue, depth: Int) -> [String] {
+    private static func lines(_ value: JSONValue, depth: Int, embeddedJSON: Bool) -> [String] {
         switch value {
         case let .string(text):
-            return text.components(separatedBy: .newlines)
+            let shown = embeddedJSON ? Embedded.expand(text) : text
+            return shown.components(separatedBy: .newlines)
         case let .object(object):
             if object.isEmpty { return ["{}"] }
             var result: [String] = []
             for (key, child) in object.sorted(by: { $0.key < $1.key }) {
                 let (resolved, childDepth) = resolve(child, depth: depth)
-                let childLines = lines(resolved, depth: childDepth)
+                let childLines = lines(resolved, depth: childDepth, embeddedJSON: embeddedJSON)
                 if childLines.count == 1 && !isNonEmptyContainer(resolved) {
                     result.append("\(key): \(childLines[0])")
                 } else {
@@ -392,7 +402,7 @@ public enum ModelMonitorPayloadText {
             var result: [String] = []
             for item in items {
                 let (resolved, itemDepth) = resolve(item, depth: depth)
-                let itemLines = lines(resolved, depth: itemDepth)
+                let itemLines = lines(resolved, depth: itemDepth, embeddedJSON: embeddedJSON)
                 result += itemLines.enumerated().map { index, line in (index == 0 ? "- " : indent) + line }
             }
             return result
@@ -419,6 +429,94 @@ public enum ModelMonitorPayloadText {
         switch decoded {
         case .object, .array: return decoded
         default: return nil
+        }
+    }
+
+    /// OpenCode context text: finds complete JSON objects and arrays inside prose and renders each as structure.
+    /// Conservative: a span counts only if it decodes on its own, objects have members, and arrays hold an object or array.
+    /// Pairing is one linear, string-aware pass, so malformed candidates are never rescanned. Each candidate is decoded at most once,
+    /// and all work is capped by `maxInputBytes`, `maxCandidateBytes` and `maxDecodeBytes`; anything beyond a cap stays as written.
+    private enum Embedded {
+        static let maxInputBytes = 1_048_576
+        static let maxCandidateBytes = 65_536
+        static let maxDecodeBytes = 1_048_576
+
+        static func expand(_ text: String) -> String {
+            let bytes = Array(text.utf8)
+            guard bytes.count <= maxInputBytes, bytes.contains(where: isOpener) else { return text }
+            let closes = pairs(bytes)
+            var output: [UInt8] = []
+            output.reserveCapacity(bytes.count)
+            var decodeBudget = maxDecodeBytes
+            var index = 0
+            while index < bytes.count {
+                let end = closes[index]
+                if isOpener(bytes[index]), end >= 0, end - index < maxCandidateBytes, end - index + 1 <= decodeBudget {
+                    decodeBudget -= end - index + 1
+                    if let value = decode(bytes[index...end]) {
+                        let rendered = ModelMonitorPayloadText.lines(value, depth: 0, embeddedJSON: false).joined(separator: "\n")
+                        output += Array(rendered.utf8)
+                        index = end + 1
+                        continue
+                    }
+                }
+                output.append(bytes[index])
+                index += 1
+            }
+            // Cuts happen only at ASCII brackets, so the output remains valid UTF-8.
+            return String(decoding: output, as: UTF8.self)
+        }
+
+        private static func isOpener(_ byte: UInt8) -> Bool { byte == 0x7B || byte == 0x5B }
+
+        /// For each opener, the index of the bracket that closes it, or -1. Quotes and escapes inside strings are ignored; a mismatched closer is skipped.
+        static func pairs(_ bytes: [UInt8]) -> [Int] {
+            var closes = [Int](repeating: -1, count: bytes.count)
+            var open: [Int] = []
+            var inString = false
+            var escaped = false
+            for (index, byte) in bytes.enumerated() {
+                if inString {
+                    if escaped {
+                        escaped = false
+                    } else if byte == 0x5C {
+                        escaped = true
+                    } else if byte == 0x22 {
+                        inString = false
+                    }
+                    continue
+                }
+                switch byte {
+                case 0x22:
+                    inString = true
+                case 0x7B, 0x5B:
+                    open.append(index)
+                case 0x7D, 0x5D:
+                    guard let top = open.last, bytes[top] == (byte == 0x7D ? 0x7B : 0x5B) else { continue }
+                    open.removeLast()
+                    closes[top] = index
+                default:
+                    break
+                }
+            }
+            return closes
+        }
+
+        private static func decode(_ slice: ArraySlice<UInt8>) -> JSONValue? {
+            guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(slice)) else { return nil }
+            switch value {
+            case let .object(object):
+                return object.isEmpty ? nil : value
+            case let .array(items):
+                let holdsContainer = items.contains { item in
+                    if case .object = item { return true }
+                    if case .array = item { return true }
+                    return false
+                }
+                return holdsContainer ? value : nil
+            default:
+                return nil
+            }
         }
     }
 }

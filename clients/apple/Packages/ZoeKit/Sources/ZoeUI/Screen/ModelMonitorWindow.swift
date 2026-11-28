@@ -537,9 +537,10 @@ private struct ModelMonitorEventRow: View {
         }
         // Display shows readable text; Copy still copies the complete formatted JSON.
         if let payload = event.payload, let full = event.formattedPayload {
-            let whole = ModelMonitorPayloadText.render(payload)
+            let embedded = event.rendersEmbeddedJSON
+            let whole = ModelMonitorPayloadText.render(payload, embeddedJSON: embedded)
             // Exact appended messages are the default view of a request; expansion shows the original payload.
-            let delta = event.appendedMessages.map(Self.messagesText)
+            let delta = event.appendedMessages.map { Self.messagesText($0, embeddedJSON: embedded) }
             let collapsed = delta ?? whole
             let preview = ModelMonitorPreview(collapsed)
             let hasFullView = preview.isCut || delta != nil
@@ -550,11 +551,6 @@ private struct ModelMonitorEventRow: View {
             Text(expanded ? whole : (preview.isCut ? preview.text : collapsed))
                 .font(.caption.monospaced()).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if preview.isCut && !expanded {
-                // UI preview: this is not a server truncation.
-                Text(uiFormat("Preview shows the first %d of %d characters.", preview.shownCount, preview.totalCount))
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
             HStack(spacing: 12) {
                 if hasFullView {
                     Button(expanded ? uiText("Show less") : uiFormat("Show full payload (%d characters)", whole.count)) {
@@ -569,8 +565,8 @@ private struct ModelMonitorEventRow: View {
     }
 
     /// Readable "role: text" lines for appended messages. Display only; the copy action still uses the full payload.
-    private static func messagesText(_ messages: [ModelMonitorMessage]) -> String {
-        messages.map { "\($0.role):\n  \($0.text.replacingOccurrences(of: "\n", with: "\n  "))" }.joined(separator: "\n")
+    private static func messagesText(_ messages: [ModelMonitorMessage], embeddedJSON: Bool) -> String {
+        messages.map { "\($0.role):\n  \(ModelMonitorPayloadText.renderText($0.text, embeddedJSON: embeddedJSON).replacingOccurrences(of: "\n", with: "\n  "))" }.joined(separator: "\n")
     }
 
     /// "Copied" shows only when the pasteboard accepted the write, and reverts after a short delay.
@@ -633,7 +629,6 @@ private struct ModelMonitorPreview {
     let text: String
     let totalCount: Int
 
-    var shownCount: Int { text.count }
     var isCut: Bool { text.count < totalCount }
 
     init(_ full: String) {
