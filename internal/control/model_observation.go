@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ronigooja/Zoe/internal/modelmonitor"
+	"github.com/ronigooja/Zoe/internal/modelmonitor/diagnostics"
 )
 
 // A generation is meaningful only within the process which issued it.
@@ -42,6 +43,7 @@ var modelObservationCredential = regexp.MustCompile(`(?i)(bearer\s+|(?:api[_-]?k
 func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
 	if !ok || !HasRunnerScope(p, "runner:control:read") {
+		diagnostics.Record("ingress", "forbidden", "", "", 403)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -53,11 +55,13 @@ func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) 
 		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 20<<10))
 		d.DisallowUnknownFields()
 		if d.Decode(&in) != nil {
+			diagnostics.Record("ingress", "invalid_json", r.PathValue("run_id"), "", 400)
 			http.Error(w, "invalid request", 400)
 			return
 		}
 	}
 	if in.Attempt == "" || in.Fence == 0 {
+		diagnostics.Record("ingress", "invalid_assignment", r.PathValue("run_id"), in.Type, 400)
 		http.Error(w, "invalid request", 400)
 		return
 	}
@@ -65,6 +69,7 @@ func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) 
 	var fence uint64
 	err := s.store.DB().QueryRowContext(r.Context(), `SELECT runner_id,attempt_id,fence FROM runs WHERE id=? AND status IN ('dispatching','active','uncertain')`, r.PathValue("run_id")).Scan(&runner, &attempt, &fence)
 	if err != nil || runner != p.RunnerID || attempt != in.Attempt || fence != in.Fence {
+		diagnostics.Record("ingress", "assignment_mismatch", r.PathValue("run_id"), in.Type, 409)
 		http.Error(w, "assignment mismatch", 409)
 		return
 	}
@@ -77,6 +82,7 @@ func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if in.Boot == "" || in.Boot != modelObservationBoot || in.Generation == 0 || !modelObservationID.MatchString(in.CallID) || len(in.Text) > 16384 || (in.Source != "worker" && in.Source != "worker_rotation") || (in.Type != "request" && in.Type != "response" && in.Type != "tool_call" && in.Type != "gap") || (in.Source == "worker_rotation" && in.Type == "tool_call") || (in.Type == "tool_call" && !modelObservationTool.MatchString(in.Text)) || (in.Type == "gap" && (in.Text != "" || in.Truncated)) {
+		diagnostics.Record("ingress", "invalid_observation", r.PathValue("run_id"), in.Type, 400)
 		http.Error(w, "invalid request", 400)
 		return
 	}

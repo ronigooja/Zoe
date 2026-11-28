@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ronigooja/Zoe/internal/modelmonitor"
+	"github.com/ronigooja/Zoe/internal/modelmonitor/diagnostics"
 )
 
 var monitorID = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
@@ -98,6 +99,7 @@ func (c *clientSocket) handleMonitorFrame(data []byte) {
 }
 
 func (c *clientSocket) runMonitor(ctx context.Context, m *monitorSubscription) {
+	defer diagnostics.Flush()
 	defer close(m.done)
 	defer m.source.Close()
 	var sequence uint64
@@ -158,6 +160,7 @@ func (c *clientSocket) runMonitor(ctx context.Context, m *monitorSubscription) {
 				}
 				if !admitted {
 					if !item.Gap {
+						diagnostics.Record("writer", "queue_full", m.id, item.Event.Type, 0)
 						sequence++
 					}
 					continue
@@ -170,6 +173,7 @@ func (c *clientSocket) runMonitor(ctx context.Context, m *monitorSubscription) {
 			sequence++
 			admitted, err := c.tryMonitorWrite(map[string]any{"channel": "model_monitor", "type": "event", "subscription_id": m.id, "sequence": sequence, "event": item.Event})
 			if !admitted {
+				diagnostics.Record("writer", "queue_full", m.id, item.Event.Type, 0)
 				pendingGap = true
 				continue
 			}

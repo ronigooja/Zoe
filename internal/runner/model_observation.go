@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
+	"github.com/ronigooja/Zoe/internal/modelmonitor/diagnostics"
 )
 
 type observationKey struct{}
@@ -32,6 +34,7 @@ type observationItem struct {
 	truncated               bool
 }
 type observationSender struct {
+	runID     string
 	lease     atomic.Pointer[observationLease]
 	queue     chan observationItem
 	secrets   []string
@@ -75,7 +78,7 @@ func startModelObservation(ctx context.Context, e *Engine, c contracts.JobClaim)
 	if !ok {
 		return ctx
 	}
-	s := &observationSender{queue: make(chan observationItem, 32), secrets: []string{client.token}, seen: make(map[string]bool)}
+	s := &observationSender{runID: c.RunID, queue: make(chan observationItem, 32), secrets: []string{client.token}, seen: make(map[string]bool)}
 	if runtime, ok := e.Runtime.(OpenCodeRuntime); ok {
 		s.secrets = append(s.secrets, runtime.Password)
 	}
@@ -87,6 +90,7 @@ func startModelObservation(ctx context.Context, e *Engine, c contracts.JobClaim)
 }
 
 func (s *observationSender) run(ctx context.Context, c *ControlClient, claim contracts.JobClaim) {
+	defer diagnostics.Flush()
 	path := "/runner/v1/runs/" + url.PathEscape(claim.RunID) + "/model-observation"
 	refresh := func() {
 		requestCtx, cancel := context.WithTimeout(ctx, time.Second)
@@ -127,6 +131,16 @@ func (s *observationSender) run(ctx context.Context, c *ControlClient, claim con
 				r.Body.Close()
 			}
 			if err != nil || r.StatusCode != http.StatusNoContent {
+				reason, status := "http_rejected", 0
+				if err != nil {
+					reason = "network"
+					if errors.Is(requestCtx.Err(), context.DeadlineExceeded) {
+						reason = "upload_timeout"
+					}
+				} else {
+					status = r.StatusCode
+				}
+				diagnostics.Record("runner", reason, claim.RunID, item.typ, status)
 				s.gap.Store(&item.lease)
 			}
 			cancel()
@@ -182,6 +196,7 @@ func observeModel(ctx context.Context, session, typ, key, text string) {
 	case s.queue <- observationItem{lease: *lease, source: source, typ: typ, call: hex.EncodeToString(call[:]), text: text, truncated: truncated}:
 		s.seen[id] = true
 	default:
+		diagnostics.Record("runner", "queue_full", s.runID, typ, 0)
 		s.gap.Store(lease)
 	}
 }

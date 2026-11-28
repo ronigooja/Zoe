@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ronigooja/Zoe/internal/modelmonitor/diagnostics"
 )
 
 type Event struct {
@@ -159,6 +161,7 @@ func enqueue(item Item) {
 		select {
 		case s.Events <- item:
 		default:
+			diagnostics.Record("source", "queue_full", item.Event.CallID, item.Event.Type, 0)
 			delete(registry.subs, s)
 			advanceGeneration()
 			count.Add(-1)
