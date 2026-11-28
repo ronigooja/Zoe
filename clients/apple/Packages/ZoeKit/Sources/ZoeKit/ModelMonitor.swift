@@ -381,7 +381,7 @@ public enum ModelMonitorPayloadText {
     private static func lines(_ value: JSONValue, depth: Int, embeddedJSON: Bool) -> [String] {
         switch value {
         case let .string(text):
-            let shown = embeddedJSON ? Embedded.expand(text) : text
+            let shown = embeddedJSON && depth < maxNestedDepth ? Embedded.expand(text, depth: depth) : text
             return shown.components(separatedBy: .newlines)
         case let .object(object):
             if object.isEmpty { return ["{}"] }
@@ -433,7 +433,7 @@ public enum ModelMonitorPayloadText {
     }
 
     /// OpenCode context text: finds complete JSON objects and arrays inside prose and renders each as structure.
-    /// Conservative: a span counts only if it decodes on its own, objects have members, and arrays hold an object or array.
+    /// A span counts only if it decodes on its own; empty containers already have their readable form.
     /// Pairing is one linear, string-aware pass, so malformed candidates are never rescanned. Each candidate is decoded at most once,
     /// and all work is capped by `maxInputBytes`, `maxCandidateBytes` and `maxDecodeBytes`; anything beyond a cap stays as written.
     private enum Embedded {
@@ -441,7 +441,7 @@ public enum ModelMonitorPayloadText {
         static let maxCandidateBytes = 65_536
         static let maxDecodeBytes = 1_048_576
 
-        static func expand(_ text: String) -> String {
+        static func expand(_ text: String, depth: Int = 0) -> String {
             let bytes = Array(text.utf8)
             guard bytes.count <= maxInputBytes, bytes.contains(where: isOpener) else { return text }
             let closes = pairs(bytes)
@@ -454,7 +454,7 @@ public enum ModelMonitorPayloadText {
                 if isOpener(bytes[index]), end >= 0, end - index < maxCandidateBytes, end - index + 1 <= decodeBudget {
                     decodeBudget -= end - index + 1
                     if let value = decode(bytes[index...end]) {
-                        let rendered = ModelMonitorPayloadText.lines(value, depth: 0, embeddedJSON: false).joined(separator: "\n")
+                        let rendered = ModelMonitorPayloadText.lines(value, depth: depth + 1, embeddedJSON: false).joined(separator: "\n")
                         output += Array(rendered.utf8)
                         index = end + 1
                         continue
@@ -487,7 +487,7 @@ public enum ModelMonitorPayloadText {
                     continue
                 }
                 switch byte {
-                case 0x22:
+                case 0x22 where !open.isEmpty:
                     inString = true
                 case 0x7B, 0x5B:
                     open.append(index)
@@ -508,12 +508,7 @@ public enum ModelMonitorPayloadText {
             case let .object(object):
                 return object.isEmpty ? nil : value
             case let .array(items):
-                let holdsContainer = items.contains { item in
-                    if case .object = item { return true }
-                    if case .array = item { return true }
-                    return false
-                }
-                return holdsContainer ? value : nil
+                return items.isEmpty ? nil : value
             default:
                 return nil
             }

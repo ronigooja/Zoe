@@ -62,17 +62,22 @@ final class ModelMonitorPayloadTextTests: XCTestCase {
     }
 
     func testMalformedAndOrdinaryBracketProseStaysAsWritten() {
-        let prose = "see [note] and {draft: no quotes} and [1, 2] plus {\"open\":"
+        let prose = "see [note] and {draft: no quotes} plus {\"open\":"
         XCTAssertEqual(ModelMonitorPayloadText.render(.string(prose), embeddedJSON: true), prose)
     }
 
-    func testScalarArrayAndEmptyCandidatesStayAsWritten() {
-        let prose = "count [1, 2, 3] and {} and []"
-        XCTAssertEqual(ModelMonitorPayloadText.render(.string(prose), embeddedJSON: true), prose)
+    func testScalarArrayIsRenderedAndEmptyContainersStayAsWritten() {
+        let prose = "count:\n[1, 2, 3]\nEmpty: {} and []"
+        XCTAssertEqual(ModelMonitorPayloadText.render(.string(prose), embeddedJSON: true), "count:\n- 1\n- 2\n- 3\nEmpty: {} and []")
     }
 
     func testNonEmptyObjectCandidateInProseIsRendered() {
         XCTAssertEqual(ModelMonitorPayloadText.render(.string("and {\"n\":1}"), embeddedJSON: true), "and n: 1")
+    }
+
+    func testProseQuoteDoesNotHideFollowingJSON() {
+        let text = #"A 12" display returned {"n":1}"#
+        XCTAssertEqual(ModelMonitorPayloadText.render(.string(text), embeddedJSON: true), #"A 12" display returned n: 1"#)
     }
 
     func testEmbeddedRenderingDoesNotChangeMessageLiteralText() {
