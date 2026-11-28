@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { test } from "node:test"
-import { bounded, clean, readResponse, requestText, responseText } from "./opencode_context.mjs"
+import plugin, { bounded, clean, readResponse, requestText, responseText } from "./opencode_context.mjs"
 
 test("uses the actual request text in order without protocol fields", () => {
   const text = requestText({
@@ -49,4 +52,48 @@ test("redacts credential values before UTF-8 truncation", () => {
   assert.equal(payload.truncated, true)
   assert.ok(new TextEncoder().encode(payload.text).length <= 8192)
   assert.doesNotMatch(payload.text, /token123|value123|known-value|\uFFFD/)
+})
+
+test("HTTP hooks leave the bodies readable and publish one paired call", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zoe-opencode-context-"))
+  const token = join(dir, "token")
+  const oldFetch = globalThis.fetch
+  const saved = { ZOE_OPENCODE_OBSERVATION_URL: process.env.ZOE_OPENCODE_OBSERVATION_URL, ZOE_RUNNER_TOKEN_FILE: process.env.ZOE_RUNNER_TOKEN_FILE }
+  let cleanup, timer
+  try {
+    await writeFile(token, "fixture-only")
+    process.env.ZOE_OPENCODE_OBSERVATION_URL = "https://example.invalid"
+    process.env.ZOE_RUNNER_TOKEN_FILE = token
+    const hooks = new Map(), sent = []
+    let deliver
+    const result = new Promise(resolve => { deliver = resolve })
+    globalThis.fetch = async (_url, options) => {
+      if (options.method !== "POST") return Response.json({ boot: "boot", generation: 1, run_id: "run", attempt_id: "attempt", fence: 1 })
+      sent.push(JSON.parse(options.body))
+      if (sent.length === 2) deliver(sent)
+      return new Response(null, { status: 204 })
+    }
+    cleanup = await plugin.setup({ session: { hook: (name, callback) => hooks.set(name, callback) } })
+    const body = '{"messages":[{"role":"user","content":"question"}]}'
+    const output = '{"choices":[{"message":{"role":"assistant","content":"answer"}}]}'
+    const request = new Request("https://example.invalid/v1/chat/completions", { method: "POST", body })
+    const response = new Response(output)
+    const event = { request, sessionID: "session", kind: "primary", model: { providerID: "test", id: "model" } }
+    assert.equal(hooks.get("http.request")(event), undefined)
+    assert.equal(hooks.get("http.response")({ ...event, response }), undefined)
+    const [input, reply] = await Promise.race([result, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("observation timed out")), 2000) })])
+    assert.deepEqual([input.type, reply.type, input.text, reply.text], ["request", "response", "user:\nquestion", "assistant:\nanswer"])
+    assert.equal(input.call_id, reply.call_id)
+    assert.equal(await request.text(), body)
+    assert.equal(await response.text(), output)
+  } finally {
+    clearTimeout(timer)
+    cleanup?.()
+    globalThis.fetch = oldFetch
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    await rm(dir, { recursive: true, force: true })
+  }
 })

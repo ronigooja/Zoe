@@ -62,7 +62,7 @@ func (s *Server) handleOpenCodeObservation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if r.Method == http.MethodGet {
-		generation := modelmonitor.Generation()
+		generation := modelmonitor.OpenCodeGeneration()
 		if modelObservationBoot == "" {
 			generation = 0
 		}

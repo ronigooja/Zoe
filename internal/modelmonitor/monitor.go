@@ -52,6 +52,18 @@ func Generation() uint64 {
 	return registry.generation
 }
 
+// OpenCodeGeneration is zero unless a client has requested the dedicated feed.
+func OpenCodeGeneration() uint64 {
+	registry.Lock()
+	defer registry.Unlock()
+	for sub := range registry.subs {
+		if sub.includeOpenCodeContext {
+			return registry.generation
+		}
+	}
+	return 0
+}
+
 func advanceGeneration() {
 	registry.generation++
 	if registry.generation == 0 {

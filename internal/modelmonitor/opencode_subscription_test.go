@@ -8,8 +8,14 @@ import (
 func TestOpenCodeContextOptInDoesNotFillLegacyQueue(t *testing.T) {
 	legacy := Subscribe()
 	defer legacy.Close()
+	if OpenCodeGeneration() != 0 {
+		t.Fatal("legacy subscription activated OpenCode capture")
+	}
 	modern := SubscribeWithOpenCodeContext()
 	defer modern.Close()
+	if OpenCodeGeneration() == 0 {
+		t.Fatal("opt-in subscription did not activate OpenCode capture")
+	}
 	e := Event{Component: "opencode_context", CallID: "call", Time: time.Now(), Type: "request"}
 	for i := 0; i < queueSize+1; i++ {
 		Publish(e)

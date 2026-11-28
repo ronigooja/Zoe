@@ -257,50 +257,80 @@ export default {
       queue.push({ session: call.session, body: { ...call.lease, call_id: call.id, type, text: payload.text, truncated: payload.truncated || incomplete } })
       void drain()
     }
-    await ctx.session.hook("http.request", async event => {
+    let readers = 0
+    function observeRead(work) {
+      if (readers >= queueLimit) return
+      readers++
+      void Promise.resolve().then(work).catch(() => {}).finally(() => { readers-- })
+    }
+    await ctx.session.hook("http.request", event => {
       try {
-        const active = await lease(event.sessionID)
-        if (!active) return
-        const call = { id: id(), lease: active, session: event.sessionID }
-        let body = "", value
-        if (await readBody(event.request.clone().body, signal(), text => { body += text })) {
-          try { value = requestText(JSON.parse(body)) } catch {}
-        }
-        http.set(event.request, call)
-        publish(call, "request", value, value === undefined)
+        if (readers >= queueLimit) return
+        const { request, sessionID } = event
+        let resolve
+        const ready = new Promise(done => { resolve = done })
+        http.set(request, ready)
+        observeRead(async () => {
+          let call
+          try {
+            const active = await lease(sessionID)
+            if (!active) return
+            call = { id: id(), lease: active, session: sessionID }
+            let body = "", value
+            try {
+              if (await readBody(request.clone().body, signal(), text => { body += text })) value = requestText(JSON.parse(body))
+            } catch {}
+            publish(call, "request", value, value === undefined)
+          } finally { resolve(call) }
+        })
       } catch {} // Observation must not alter dispatch.
     })
     await ctx.session.hook("http.response", event => {
       try {
-        const call = http.get(event.request)
-        if (!call) return
+        const ready = http.get(event.request)
+        if (!ready) return
         http.delete(event.request)
-        if (event.response.status >= 400) { publish(call, "response", "[Model response unavailable]", true); return }
-        void readResponse(event.response.clone(), signal(600_000)).then(result => {
+        if (readers >= queueLimit || event.response.status >= 400) {
+          void ready.then(call => publish(call, "response", "[Model response unavailable]", true)).catch(() => {})
+          return
+        }
+        const response = event.response.clone()
+        observeRead(async () => {
+          const call = await ready
+          if (!call) { void response.body?.cancel().catch(() => {}); return }
+          const result = await readResponse(response, signal(600_000))
           publish(call, "response", result.text, result.incomplete)
-        }).catch(() => {})
+        })
       } catch {}
     })
-    await ctx.session.hook("experimental.ws.send", async event => {
+    function finishSocket(call, incomplete) {
+      const result = call.output.result()
+      void call.ready.then(active => publish(active, "response", result.text, incomplete || result.incomplete)).catch(() => {})
+    }
+    await ctx.session.hook("experimental.ws.send", event => {
       try {
         const key = socketKey(event)
         const previous = sockets.get(key)
-        if (previous) { publish(previous, "response", previous.output.result().text, true); sockets.delete(key) }
-        const active = await lease(event.sessionID)
-        if (!active) return
+        if (previous) { finishSocket(previous, true); sockets.delete(key) }
         if (sockets.size >= 32) {
           const oldest = sockets.keys().next().value
           const lost = sockets.get(oldest)
-          publish(lost, "response", lost.output.result().text, true)
+          finishSocket(lost, true)
           sockets.delete(oldest)
         }
-        const call = { id: id(), lease: active, session: event.sessionID, output: responseText(), bytes: 0 }
-        let value
-        if (encoder.encode(event.frame).length <= scanLimit) {
-          try { value = requestText(JSON.parse(event.frame)) } catch {}
-        }
-        sockets.set(key, call)
-        publish(call, "request", value, value === undefined)
+        const frame = event.frame.length <= scanLimit ? event.frame : undefined
+        const session = event.sessionID
+        const ready = lease(session).then(active => {
+          if (!active) return
+          const call = { id: id(), lease: active, session }
+          let value
+          if (frame !== undefined && encoder.encode(frame).length <= scanLimit) {
+            try { value = requestText(JSON.parse(frame)) } catch {}
+          }
+          publish(call, "request", value, value === undefined)
+          return call
+        }).catch(() => undefined)
+        sockets.set(key, { ready, output: responseText(), bytes: 0 })
       } catch {}
     })
     await ctx.session.hook("experimental.ws.receive", event => {
@@ -313,8 +343,7 @@ export default {
         if (!oversized) call.output.frame(event.frame)
         if (!oversized && !call.output.done()) return
         sockets.delete(key)
-        const result = call.output.result()
-        publish(call, "response", result.text, oversized || result.incomplete)
+        finishSocket(call, oversized)
       } catch {}
     })
     return () => { stop.abort(); queue.length = 0; leases.clear(); sockets.clear() }
