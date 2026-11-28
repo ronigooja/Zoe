@@ -131,21 +131,29 @@ func (s *observationSender) run(ctx context.Context, c *ControlClient, claim con
 				r.Body.Close()
 			}
 			if err != nil || r.StatusCode != http.StatusNoContent {
-				reason, status := "http_rejected", 0
-				if err != nil {
-					reason = "network"
-					if errors.Is(requestCtx.Err(), context.DeadlineExceeded) {
-						reason = "upload_timeout"
-					}
-				} else {
-					status = r.StatusCode
-				}
-				diagnostics.Record("runner", reason, claim.RunID, item.typ, status)
+				recordObservationUploadFailure(requestCtx, claim.RunID, item.typ, r, err)
 				s.gap.Store(&item.lease)
 			}
 			cancel()
 		}
 	}
+}
+
+func recordObservationUploadFailure(ctx context.Context, runID, typ string, response *http.Response, err error) {
+	if err == nil {
+		diagnostics.Record("runner", "http_rejected", runID, typ, response.StatusCode)
+		return
+	}
+	// Normal run shutdown is not a network failure.
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return
+	}
+	reason := "network"
+	var timeout interface{ Timeout() bool }
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+		reason = "upload_timeout"
+	}
+	diagnostics.Record("runner", reason, runID, typ, 0)
 }
 
 // Retry at most once per loop iteration, and only while the same checked lease is valid.
@@ -167,6 +175,9 @@ func (s *observationSender) flushGap(ctx context.Context, c *ControlClient, clai
 		if r.StatusCode >= 200 && r.StatusCode < 300 {
 			s.gap.CompareAndSwap(gap, nil)
 		}
+	}
+	if err != nil || r.StatusCode < 200 || r.StatusCode >= 300 {
+		recordObservationUploadFailure(requestCtx, claim.RunID, "gap", r, err)
 	}
 	cancel()
 }
@@ -226,6 +237,9 @@ func observeMessages(ctx context.Context, session string, messages []opencode.Me
 			}
 		}
 		s.baselines[session] = baseline
+		// The first poll of each session/generation cannot establish which
+		// assistant events were produced after the subscription began.
+		diagnostics.Record("runner", "poll_baseline_unknown", s.runID, "gap", 0)
 		s.gap.Store(lease)
 		return
 	}

@@ -4,13 +4,38 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/ronigooja/Zoe/contracts"
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/modelmonitor"
+	"github.com/ronigooja/Zoe/internal/modelmonitor/diagnostics"
 )
+
+func TestModelObservationBodyLimitDiagnostic(t *testing.T) {
+	diagnostics.Flush()
+	var output bytes.Buffer
+	old, level := log.Writer(), logging.CurrentLevel()
+	log.SetOutput(&output)
+	logging.SetLevel(logging.Info)
+	t.Cleanup(func() {
+		diagnostics.Flush()
+		log.SetOutput(old)
+		logging.SetLevel(level)
+	})
+	r := httptest.NewRequest("POST", "/", strings.NewReader(`{"text":"private-payload`+strings.Repeat(`\u003c`, 8000)+`"}`))
+	r.SetPathValue("run_id", "private-run")
+	r = r.WithContext(context.WithValue(r.Context(), runnerPrincipalKey{}, contracts.RunnerPrincipal{RunnerID: "runner", Scopes: []string{"runner:control:read"}}))
+	w := httptest.NewRecorder()
+	(&Server{}).handleModelObservation(w, r)
+	diagnostics.Flush()
+	if w.Code != 400 || !strings.Contains(output.String(), "reason=body_too_large") || strings.Contains(output.String(), "private-") {
+		t.Fatal("oversized ingress not diagnosed without leaking input")
+	}
+}
 
 func TestModelObservationAssignmentFence(t *testing.T) {
 	s, closeStore := taskEntriesTestServer(t)

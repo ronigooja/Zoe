@@ -24,7 +24,7 @@ func TestAggregateAndPrivacy(t *testing.T) {
 	Record("runner", "network", "private-run-id", "response", 0)
 	Record("runner", "http_rejected", "private-run-id", "response", 503)
 	Record("source", "queue_full", "private-call-id", "request", 0)
-	Record("writer", "queue_full", "private-subscription-id", "response", 0)
+	Record("writer", "admission_blocked", "private-subscription-id", "response", 0)
 	Flush()
 	got := output.String()
 	for _, secret := range []string{"private-run-id", "private-event-text", "private-call-id", "private-subscription-id"} {

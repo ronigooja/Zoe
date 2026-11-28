@@ -1,6 +1,7 @@
 package control
 
 import (
+	"errors"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -54,8 +55,13 @@ func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) 
 	} else {
 		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 20<<10))
 		d.DisallowUnknownFields()
-		if d.Decode(&in) != nil {
-			diagnostics.Record("ingress", "invalid_json", r.PathValue("run_id"), "", 400)
+		if err := d.Decode(&in); err != nil {
+			reason := "invalid_json"
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				reason = "body_too_large"
+			}
+			diagnostics.Record("ingress", reason, r.PathValue("run_id"), "", 400)
 			http.Error(w, "invalid request", 400)
 			return
 		}

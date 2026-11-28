@@ -1,7 +1,10 @@
 package runner
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,7 +13,40 @@ import (
 
 	"github.com/ronigooja/Zoe/contracts"
 	"github.com/ronigooja/Zoe/internal/agents/opencode"
+	"github.com/ronigooja/Zoe/internal/logging"
+	"github.com/ronigooja/Zoe/internal/modelmonitor/diagnostics"
 )
+
+func TestObservationLossDiagnostics(t *testing.T) {
+	diagnostics.Flush()
+	var output bytes.Buffer
+	old, level := log.Writer(), logging.CurrentLevel()
+	log.SetOutput(&output)
+	logging.SetLevel(logging.Info)
+	t.Cleanup(func() {
+		diagnostics.Flush()
+		log.SetOutput(old)
+		logging.SetLevel(level)
+	})
+	s := &observationSender{runID: "test-run-private", queue: make(chan observationItem, 1), seen: make(map[string]bool)}
+	s.lease.Store(&observationLease{Boot: "boot", Generation: 1})
+	ctx := context.WithValue(context.Background(), observationKey{}, s)
+	observeMessages(ctx, "private-session", nil)
+	observeModel(ctx, "private-session", "response", "a", "private-observation")
+	observeModel(ctx, "private-session", "response", "b", "private-observation")
+	recordObservationUploadFailure(ctx, s.runID, "request", &http.Response{StatusCode: 413}, nil)
+	recordObservationUploadFailure(ctx, s.runID, "response", nil, context.DeadlineExceeded)
+	recordObservationUploadFailure(ctx, s.runID, "gap", nil, errors.New("private-network-error"))
+	diagnostics.Flush()
+	for _, want := range []string{"reason=poll_baseline_unknown", "reason=queue_full", "reason=upload_timeout", "reason=http_rejected", "status=413", "reason=network"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(output.String(), "private-") {
+		t.Fatal("diagnostics exposed raw identifiers, errors, or payloads")
+	}
+}
 
 func TestModelObservationRedactionAndBound(t *testing.T) {
 	text, truncated := redactObservation("Bearer abc123 password=hunter2 known-secret "+strings.Repeat("x", 9000), []string{"known-secret"})
