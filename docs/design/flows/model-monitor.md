@@ -35,7 +35,7 @@ Opening the monitor subscribes; closing its window unsubscribes. Minimizing the 
 
 Overview is the first tab; component tabs follow in a stable order, in two rows, scrolling horizontally when the window is narrow. Selecting a tab does not change its contents.
 
-The OpenCode tab alone shows `opencode_context`, pairing `Request` and `Reply` by call ID. Its events do not appear in Overview or change the existing Worker view.
+The OpenCode tab alone shows `opencode_context`, pairing `Request` and `Reply` by call ID. Its events do not appear in Overview or the Worker tab.
 
 The live state (connecting, subscribing, live, idle) is shown in the native window title. The window body shows only states the user must act on or that explain missing data: reconnecting with a gap, ended with Retry, and rejected instance key. Gap markers, server-truncation markers, and the monitor-error and dropped-entry notices remain visible.
 
