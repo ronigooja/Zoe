@@ -321,7 +321,7 @@ final class ModelMonitorChannelTests: XCTestCase {
         XCTAssertEqual(feed.visibleEntries(component: "worker").map(\.id), [1, 2])
         XCTAssertEqual(feed.droppedCount(component: nil), 0)
         XCTAssertEqual(feed.droppedCount(component: "worker"), 0)
-        XCTAssertEqual(feed.callLabels(component: nil)["worker-call"], "worker-call")
+        XCTAssertEqual(feed.callLabels(component: nil)["worker-call"], "worker-c")
 
         // The OpenCode tab is bounded by its own buffer: its gap and oldest events are the ones trimmed.
         XCTAssertEqual(feed.visibleEntries(component: "opencode_context").map(\.id), [6, 7])
