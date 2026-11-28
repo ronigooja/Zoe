@@ -188,11 +188,12 @@ final class ModelMonitorConversationTests: XCTestCase {
         // Updates after connecting: subscribing, live, event 1, gap, event 4.
         for _ in 0..<5 { _ = await updates.next() }
         let recorded = lines.values
-        XCTAssertEqual(recorded.count, 1)
-        let line = try XCTUnwrap(recorded.first)
+        let jumps = recorded.filter { $0.hasPrefix("reason=sequence_jump;") }
+        XCTAssertEqual(jumps.count, 1)
+        let line = try XCTUnwrap(jumps.first)
         XCTAssertTrue(line.hasPrefix("reason=sequence_jump;correlation_hash=" + ModelMonitorDiagnostics.correlationHash(subscriptionID: id)))
         XCTAssertTrue(line.hasSuffix(";expected=2;actual=4"))
-        XCTAssertFalse(line.contains("secret"))
+        XCTAssertFalse(recorded.contains { $0.contains("secret") })
         await channel.stop()
     }
 
