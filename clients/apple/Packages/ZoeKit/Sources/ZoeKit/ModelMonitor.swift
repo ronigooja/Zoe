@@ -79,7 +79,7 @@ public struct ModelMonitorBuffer: Equatable, Sendable {
     /// `nil` selects Overview, which omits `ModelMonitorChannel.overviewExcludedComponents`. Gaps are kept in every view.
     public static func includes(_ entry: ModelMonitorEntry, component: String?) -> Bool {
         switch entry.kind {
-        case .gap: true
+        case .gap: return true
         case let .event(event):
             if let component { return event.component == component }
             return !ModelMonitorChannel.overviewExcludedComponents.contains(event.component)
