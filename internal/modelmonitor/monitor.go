@@ -147,6 +147,7 @@ func publish(generation uint64, fenced bool, e Event) {
 	registry.Lock()
 	defer registry.Unlock()
 	if fenced && generation != registry.generation {
+		diagnostics.Record("source", "stale_generation", e.CallID, e.Type, 0)
 		return
 	}
 	enqueue(Item{Event: e})
@@ -161,7 +162,8 @@ func enqueue(item Item) {
 		select {
 		case s.Events <- item:
 		default:
-			diagnostics.Record("source", "queue_full", item.Event.CallID, item.Event.Type, 0)
+			// Counts evictions, not an estimate of the queued events abandoned.
+			diagnostics.Record("source", "queue_overflow_eviction", item.Event.CallID, item.Event.Type, 0)
 			delete(registry.subs, s)
 			advanceGeneration()
 			count.Add(-1)

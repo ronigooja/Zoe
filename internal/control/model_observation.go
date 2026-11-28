@@ -1,6 +1,7 @@
 package control
 
 import (
+	"database/sql"
 	"errors"
 	"crypto/rand"
 	"encoding/hex"
@@ -44,7 +45,9 @@ var modelObservationCredential = regexp.MustCompile(`(?i)(bearer\s+|(?:api[_-]?k
 func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) {
 	p, ok := RunnerPrincipalFromContext(r.Context())
 	if !ok || !HasRunnerScope(p, "runner:control:read") {
-		diagnostics.Record("ingress", "forbidden", "", "", 403)
+		if r.Method == http.MethodPost {
+			diagnostics.Record("ingress", "forbidden", "", "", 403)
+		}
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -67,7 +70,9 @@ func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if in.Attempt == "" || in.Fence == 0 {
-		diagnostics.Record("ingress", "invalid_assignment", r.PathValue("run_id"), in.Type, 400)
+		if r.Method == http.MethodPost {
+			diagnostics.Record("ingress", "invalid_assignment", r.PathValue("run_id"), in.Type, 400)
+		}
 		http.Error(w, "invalid request", 400)
 		return
 	}
@@ -75,7 +80,13 @@ func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) 
 	var fence uint64
 	err := s.store.DB().QueryRowContext(r.Context(), `SELECT runner_id,attempt_id,fence FROM runs WHERE id=? AND status IN ('dispatching','active','uncertain')`, r.PathValue("run_id")).Scan(&runner, &attempt, &fence)
 	if err != nil || runner != p.RunnerID || attempt != in.Attempt || fence != in.Fence {
-		diagnostics.Record("ingress", "assignment_mismatch", r.PathValue("run_id"), in.Type, 409)
+		if r.Method == http.MethodPost {
+			reason := "assignment_mismatch"
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				reason = "assignment_lookup_failed"
+			}
+			diagnostics.Record("ingress", reason, r.PathValue("run_id"), in.Type, 409)
+		}
 		http.Error(w, "assignment mismatch", 409)
 		return
 	}

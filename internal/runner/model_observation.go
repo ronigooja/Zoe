@@ -116,6 +116,11 @@ func (s *observationSender) run(ctx context.Context, c *ControlClient, claim con
 		select {
 		case <-ctx.Done():
 			s.lease.Store(nil)
+			// Report only observations actually left queued; do not upload them.
+			for pending := len(s.queue); pending > 0; pending-- {
+				item := <-s.queue
+				diagnostics.Record("runner", "run_ended_queued", claim.RunID, item.typ, 0)
+			}
 			return
 		case <-ticker.C:
 			refresh()
@@ -146,6 +151,7 @@ func recordObservationUploadFailure(ctx context.Context, runID, typ string, resp
 	}
 	// Normal run shutdown is not a network failure.
 	if errors.Is(ctx.Err(), context.Canceled) {
+		diagnostics.Record("runner", "upload_canceled", runID, typ, 0)
 		return
 	}
 	reason := "network"
