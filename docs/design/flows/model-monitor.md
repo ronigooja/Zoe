@@ -45,7 +45,7 @@ Mark a known fresh request with a new-conversation separator; continuations stay
 
 Recall appears in Overview and its own tab. Its request and reply use the same call ID and show the actual [Recall](memory.md) query and the successful retrieval text prepared for voice, subject to the monitor's usual filtering and limits. A successful empty search has an empty reply. Fallback speech is not a retrieval result, and a monitor reply does not acknowledge playback.
 
-Payload display is readable text, not a copy format. Decoded strings keep their characters: quotes and newlines appear as written and literal backslashes are not unescaped. A string whose entire content is a JSON object or array is shown as structure, decoding at most two levels and only texts up to 64 KiB. Other strings are shown as written. Display previews are bounded; the copy action always uses the complete payload.
+Payload display is readable text, not a copy format. Quotes, newlines, and literal backslashes in prose are preserved. Show valid JSON objects and arrays as structure, including independently recognizable JSON within OpenCode message and tool text. Do not reinterpret malformed fragments or ordinary prose. Decoding is bounded to two nested string levels and 64 KiB of input per text. The expand control exposes the full observed display; the copy action always uses the complete original payload.
 
 ## Persistence and idempotency
 
