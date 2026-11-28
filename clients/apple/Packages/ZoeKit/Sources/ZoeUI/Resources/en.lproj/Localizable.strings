@@ -98,6 +98,9 @@
 "%d older entries were removed from this view." = "%d older entries were removed from this view.";
 "Events may be missing here." = "Events may be missing here.";
 "Truncated by Zoe" = "Truncated by Zoe";
+"Incomplete at source" = "Incomplete at source";
+"New conversation" = "New conversation";
+"New messages in this conversation" = "New messages in this conversation";
 "Not monitoring" = "Not monitoring";
 "Connecting…" = "Connecting…";
 "Subscribing…" = "Subscribing…";

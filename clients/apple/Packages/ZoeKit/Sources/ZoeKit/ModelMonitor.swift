@@ -1,4 +1,16 @@
+import CryptoKit
 import Foundation
+
+/// One message of a request snapshot as the source certified it.
+public struct ModelMonitorMessage: Equatable, Sendable {
+    public let role: String
+    public let text: String
+
+    public init(role: String, text: String) {
+        self.role = role
+        self.text = text
+    }
+}
 
 public enum ModelMonitorStatus: Equatable, Sendable {
     case idle, connecting, subscribing, live, reconnecting, ended, unauthorized
@@ -17,6 +29,31 @@ public struct ModelMonitorEvent: Equatable, Sendable {
     public let kind: ModelMonitorEventKind
     public let payload: JSONValue?
     public let truncated: Bool
+    /// Conversation stated by the source. Events are grouped only by component and this ID; without an ID nothing is grouped.
+    public let conversationID: String?
+    /// Affirmative fresh-context marker. `false` only means not known to be fresh, never that the context continued.
+    public let conversationStart: Bool
+    /// The source could not observe all content. Distinct from `truncated`, which means Zoe shortened the payload.
+    public let incomplete: Bool
+    /// Request input as the source certified it. Used only to derive `appendedMessages`; the payload stays the displayed original.
+    public let requestMessages: [ModelMonitorMessage]?
+    /// Messages added since the previous complete snapshot in the same conversation. Set by `ModelMonitorBuffer` only for an exact ordered prefix.
+    public internal(set) var appendedMessages: [ModelMonitorMessage]?
+
+    public init(component: String, callID: String, time: Date?, kind: ModelMonitorEventKind, payload: JSONValue?, truncated: Bool,
+                conversationID: String? = nil, conversationStart: Bool = false, incomplete: Bool = false,
+                requestMessages: [ModelMonitorMessage]? = nil) {
+        self.component = component
+        self.callID = callID
+        self.time = time
+        self.kind = kind
+        self.payload = payload
+        self.truncated = truncated
+        self.conversationID = conversationID
+        self.conversationStart = conversationStart
+        self.incomplete = incomplete
+        self.requestMessages = requestMessages
+    }
 
     /// Complete pretty-printed payload. Display code decides what to preview; this value is never clipped.
     public var formattedPayload: String? {
@@ -53,23 +90,64 @@ public struct ModelMonitorBuffer: Equatable, Sendable {
     public private(set) var entries: [ModelMonitorEntry] = []
     /// Number of oldest entries removed to keep the buffer within `capacity`.
     public private(set) var droppedCount = 0
+    /// Latest complete request snapshot per conversation group. Kept only while the entry that carried it is retained.
+    private var baselines: [String: ConversationBaseline] = [:]
+
+    private struct ConversationBaseline: Equatable, Sendable {
+        let entryID: Int
+        let messages: [ModelMonitorMessage]
+    }
 
     public init(capacity: Int = ModelMonitorBuffer.defaultCapacity) {
         self.capacity = max(1, capacity)
     }
 
     public mutating func append(_ entry: ModelMonitorEntry) {
-        entries.append(entry)
+        let annotated = annotate(entry)
+        entries.append(annotated)
         let excess = entries.count - capacity
         if excess > 0 {
             entries.removeFirst(excess)
             droppedCount += excess
+            // History never outlives the entry that carried it, so trimming ends the baseline.
+            let retained = Set(entries.map(\.id))
+            baselines = baselines.filter { retained.contains($0.value.entryID) }
         }
     }
 
     public mutating func clear() {
         entries.removeAll()
         droppedCount = 0
+        baselines.removeAll()
+    }
+
+    /// Derives `appendedMessages` from the group's baseline. Only an exact ordered prefix of a complete snapshot qualifies; otherwise nothing is shown as delta.
+    private mutating func annotate(_ entry: ModelMonitorEntry) -> ModelMonitorEntry {
+        guard case let .event(event) = entry.kind else {
+            // A gap may hide events in any conversation, so no history survives it.
+            baselines.removeAll()
+            return entry
+        }
+        guard let conversation = event.conversationID else { return entry }
+        // The component is part of the group, so the same ID in another component is never joined.
+        let key = event.component + "\u{1}" + conversation
+        if event.incomplete || event.kind == .error {
+            baselines[key] = nil
+            return entry
+        }
+        // Replies and tool activity do not change the request input baseline, so interleaved activity keeps the group.
+        guard event.kind == .request else { return entry }
+        guard let snapshot = event.requestMessages else {
+            baselines[key] = nil
+            return entry
+        }
+        var annotated = event
+        if !event.conversationStart, let base = baselines[key], snapshot.count >= base.messages.count,
+           Array(snapshot.prefix(base.messages.count)) == base.messages {
+            annotated.appendedMessages = Array(snapshot.dropFirst(base.messages.count))
+        }
+        baselines[key] = ConversationBaseline(entryID: entry.id, messages: snapshot)
+        return ModelMonitorEntry(id: entry.id, kind: .event(annotated))
     }
 
     public func visibleEntries(component: String?) -> [ModelMonitorEntry] {
@@ -209,6 +287,44 @@ public enum ModelMonitorCallID {
     }
 }
 
+/// Metadata-only client diagnostics for the monitor connection. Repeated reasons coalesce within a fixed interval, so the diagnostic queue stays bounded.
+/// Suppressed occurrences are reported as `coalesced=N` on the next summary for that reason.
+public struct ModelMonitorDiagnostics: Sendable {
+    public enum Reason: String, CaseIterable, Sendable {
+        case connected, disconnected
+        case sequenceJump = "sequence_jump"
+        case serverGap = "server_gap"
+    }
+
+    public static let coalescingInterval: TimeInterval = 10
+    private var reportedAt: [Reason: Date] = [:]
+    private var coalesced: [Reason: Int] = [:]
+
+    public init() {}
+
+    /// Returns one summary line to record, or nil when the reason was reported within the coalescing interval.
+    public mutating func note(_ reason: Reason, now: Date, correlationHash: String? = nil, expected: Int64? = nil, actual: Int64? = nil) -> String? {
+        if let last = reportedAt[reason], now.timeIntervalSince(last) < Self.coalescingInterval {
+            coalesced[reason, default: 0] += 1
+            return nil
+        }
+        let suppressed = coalesced[reason] ?? 0
+        coalesced[reason] = nil
+        reportedAt[reason] = now
+        var fields = ["reason=\(reason.rawValue)"]
+        if let correlationHash { fields.append("correlation_hash=\(correlationHash)") }
+        if let expected { fields.append("expected=\(expected)") }
+        if let actual { fields.append("actual=\(actual)") }
+        if suppressed > 0 { fields.append("coalesced=\(suppressed)") }
+        return fields.joined(separator: ";")
+    }
+
+    /// Same format as server logs: the first 8 bytes of SHA-256 over the subscription ID, as 16 lowercase hex characters.
+    public static func correlationHash(subscriptionID: String) -> String {
+        SHA256.hash(data: Data(subscriptionID.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 /// Readable display text for an event payload. Display only: copy keeps `ModelMonitorEvent.formattedPayload`.
 /// Strings keep their decoded characters, so quotes and newlines show as text and backslashes are not unescaped.
 /// A string that is entirely a JSON object or array is shown as structure, up to `maxNestedDepth` levels and `maxNestedBytes` each.
@@ -298,6 +414,9 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
     public static let overviewExcludedComponents: Set<String> = ["opencode_context"]
 
     private let transport: ClientWebSocketTransport
+    /// Receives one metadata-only summary line per emitted diagnostic. Callers route it to the existing diagnostics path.
+    private let diagnostic: @Sendable (String) -> Void
+    private var diagnostics = ModelMonitorDiagnostics()
     private var continuation: AsyncStream<ModelMonitorUpdate>.Continuation?
     private var wanted = false
     private var linkOpen = false
@@ -307,13 +426,14 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
     private(set) var status: ModelMonitorStatus = .idle
     private var lifecycle: Task<Void, Never>?
 
-    public init(transport: ClientWebSocketTransport) {
+    public init(transport: ClientWebSocketTransport, diagnostic: @escaping @Sendable (String) -> Void = { _ in }) {
         self.transport = transport
+        self.diagnostic = diagnostic
     }
 
     /// Registers the channel on the shared socket. Registration delivers the current open or rejected state.
-    public static func attach(to transport: ClientWebSocketTransport) async -> ModelMonitorChannel {
-        let channel = ModelMonitorChannel(transport: transport)
+    public static func attach(to transport: ClientWebSocketTransport, diagnostic: @escaping @Sendable (String) -> Void = { _ in }) async -> ModelMonitorChannel {
+        let channel = ModelMonitorChannel(transport: transport, diagnostic: diagnostic)
         await transport.register(channel: ModelMonitorChannel.channel, handler: channel)
         return channel
     }
@@ -384,6 +504,7 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
 
     private func performOpened() async {
         linkOpen = true
+        if wanted { diagnose(.connected, subscriptionID: nil) }
         // Credentials changed after a 401 stop; the transport reconnected, so the monitor may resubscribe.
         if status == .unauthorized, wanted { setStatus(.connecting) }
         await subscribe()
@@ -413,10 +534,11 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
 
     public func closed() async {
         linkOpen = false
-        let hadSubscription = subscriptionID != nil
+        let previousID = subscriptionID
         clearSubscription()
         guard wanted else { return }
-        if hadSubscription { emit(.gap) }
+        diagnose(.disconnected, subscriptionID: previousID)
+        if previousID != nil { emit(.gap) }
         if status != .ended { setStatus(.reconnecting) }
     }
 
@@ -435,11 +557,15 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
             setStatus(.live)
         case "event":
             guard let sequence = frame.sequence, sequence > lastSequence else { return }
-            if sequence > lastSequence + 1 { emit(.gap) }
+            if sequence > lastSequence + 1 {
+                diagnose(.sequenceJump, subscriptionID: id, expected: lastSequence + 1, actual: sequence)
+                emit(.gap)
+            }
             lastSequence = sequence
             if let wire = frame.event, let event = ModelMonitorEvent(wire: wire) { emit(.event(event)) }
             setStatus(.live)
         case "gap":
+            diagnose(.serverGap, subscriptionID: id, actual: frame.sequence)
             if let sequence = frame.sequence, sequence > lastSequence { lastSequence = sequence }
             emit(.gap)
         case "error":
@@ -478,6 +604,14 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
     private func clearSubscription() {
         subscriptionID = nil
         lastSequence = 0
+    }
+
+    /// Metadata only: reason, correlation hash of the subscription ID, and sequence numbers. Never payload or message text.
+    private func diagnose(_ reason: ModelMonitorDiagnostics.Reason, subscriptionID id: String?, expected: Int64? = nil, actual: Int64? = nil) {
+        let hash = id.map(ModelMonitorDiagnostics.correlationHash(subscriptionID:))
+        if let line = diagnostics.note(reason, now: Date(), correlationHash: hash, expected: expected, actual: actual) {
+            diagnostic(line)
+        }
     }
 
     private func emit(_ kind: ModelMonitorEntry.Kind) {
@@ -519,10 +653,32 @@ fileprivate struct WireEvent: Decodable {
     let type: String
     let payload: JSONValue?
     let truncated: Bool?
+    /// Optional fields from newer sources. Older frames omit them and decode unchanged.
+    let conversationID: String?
+    let conversationStart: Bool?
+    let incomplete: Bool?
+    let requestMessages: LossyMessages?
 
     enum CodingKeys: String, CodingKey {
-        case component, time, type, payload, truncated
+        case component, time, type, payload, truncated, incomplete
         case callID = "call_id"
+        case conversationID = "conversation_id"
+        case conversationStart = "conversation_start"
+        case requestMessages = "request_messages"
+    }
+}
+
+fileprivate struct WireMessage: Decodable {
+    let role: String
+    let text: String
+}
+
+/// A malformed snapshot is dropped, not the event: without a certain snapshot no delta is derived, and the payload still shows.
+fileprivate struct LossyMessages: Decodable {
+    let values: [WireMessage]?
+
+    init(from decoder: Decoder) throws {
+        values = try? decoder.singleValueContainer().decode([WireMessage].self)
     }
 }
 
@@ -553,6 +709,10 @@ fileprivate extension ModelMonitorEvent {
         self.kind = kind
         self.payload = wire.payload
         self.truncated = wire.truncated ?? false
+        self.conversationID = wire.conversationID
+        self.conversationStart = wire.conversationStart ?? false
+        self.incomplete = wire.incomplete ?? false
+        self.requestMessages = wire.requestMessages?.values?.map { ModelMonitorMessage(role: $0.role, text: $0.text) }
     }
 
     static func parseTime(_ text: String) -> Date? {

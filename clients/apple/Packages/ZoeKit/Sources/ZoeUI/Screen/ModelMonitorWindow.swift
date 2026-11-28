@@ -383,18 +383,28 @@ public struct ModelMonitorView: View {
     @ViewBuilder private func row(_ entry: ModelMonitorEntry) -> some View {
         switch entry.kind {
         case .gap:
+            // Gap marker: unchanged in limit, appearance and location.
             Label(uiText("Events may be missing here."), systemImage: "exclamationmark.triangle")
                 .font(.caption).foregroundStyle(.orange)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
         case let .event(event):
-            ModelMonitorEventRow(
-                event: event,
-                shortCallID: model.callLabels[event.callID] ?? event.callID,
-                placement: placement(event.kind),
-                componentLabel: componentLabel(event.component),
-                kindLabel: kindLabel(event.kind)
-            )
+            VStack(alignment: .leading, spacing: 8) {
+                // Explicit fresh-context marker: shown only when the source affirmed a new conversation, with or without an ID.
+                if event.conversationStart {
+                    Label(uiText("New conversation"), systemImage: "arrow.turn.down.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 2)
+                }
+                ModelMonitorEventRow(
+                    event: event,
+                    shortCallID: model.callLabels[event.callID] ?? event.callID,
+                    placement: placement(event.kind),
+                    componentLabel: componentLabel(event.component),
+                    kindLabel: kindLabel(event.kind)
+                )
+            }
         }
     }
 
@@ -519,14 +529,27 @@ private struct ModelMonitorEventRow: View {
     @ViewBuilder private var payload: some View {
         // Display shows readable text; Copy still copies the complete formatted JSON.
         if let payload = event.payload, let full = event.formattedPayload {
-            let shown = ModelMonitorPayloadText.render(payload)
-            let preview = ModelMonitorPreview(shown)
+            let whole = ModelMonitorPayloadText.render(payload)
+            // Exact appended messages are the default view of a request; expansion shows the original payload.
+            let delta = event.appendedMessages.map(Self.messagesText)
+            let collapsed = delta ?? whole
+            let preview = ModelMonitorPreview(collapsed)
+            let hasFullView = preview.isCut || delta != nil
             if event.truncated {
                 // Server truncation: Zoe shortened the payload before it reached the client.
                 Label(uiText("Truncated by Zoe"), systemImage: "scissors")
                     .font(.caption).foregroundStyle(.orange)
             }
-            Text(expanded || !preview.isCut ? shown : preview.text)
+            if event.incomplete {
+                // Source incompleteness: the source could not observe all of this content. Distinct from truncation.
+                Label(uiText("Incomplete at source"), systemImage: "questionmark.circle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if delta != nil && !expanded {
+                Label(uiText("New messages in this conversation"), systemImage: "plus.bubble")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text(expanded ? whole : (preview.isCut ? preview.text : collapsed))
                 .font(.caption.monospaced()).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if preview.isCut && !expanded {
@@ -535,8 +558,8 @@ private struct ModelMonitorEventRow: View {
                     .font(.caption2).foregroundStyle(.secondary)
             }
             HStack(spacing: 12) {
-                if preview.isCut {
-                    Button(expanded ? uiText("Show less") : uiFormat("Show full payload (%d characters)", preview.totalCount)) {
+                if hasFullView {
+                    Button(expanded ? uiText("Show less") : uiFormat("Show full payload (%d characters)", whole.count)) {
                         expanded.toggle()
                     }
                 }
@@ -545,6 +568,11 @@ private struct ModelMonitorEventRow: View {
             .buttonStyle(.link)
             .font(.caption)
         }
+    }
+
+    /// Readable "role: text" lines for appended messages. Display only; the copy action still uses the full payload.
+    private static func messagesText(_ messages: [ModelMonitorMessage]) -> String {
+        messages.map { "\($0.role):\n  \($0.text.replacingOccurrences(of: "\n", with: "\n  "))" }.joined(separator: "\n")
     }
 
     /// "Copied" shows only when the pasteboard accepted the write, and reverts after a short delay.

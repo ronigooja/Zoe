@@ -692,7 +692,10 @@ public final class ZoeAppModel: ObservableObject {
         if let clientSocket, clientSocketAPI === api, clientSocketIdentity == identity { return clientSocket }
         detachClientSocket()
         let transport = ClientWebSocketTransport(api: api)
-        let channel = await ModelMonitorChannel.attach(to: transport)
+        // Metadata-only monitor diagnostics use the existing diagnostics path; the line carries no payload or message text.
+        let channel = await ModelMonitorChannel.attach(to: transport, diagnostic: { line in
+            api.recordDiagnostic(phase: "model_monitor", requestPath: "client", errorSummary: line, level: .info)
+        })
         guard isCurrentConnection(generation, sourceAPI: api), instanceLineageID == identity else {
             await transport.shutdown()
             return nil
