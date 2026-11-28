@@ -4,9 +4,9 @@ import XCTest
 
 final class ModelMonitorConversationTests: XCTestCase {
     private func request(_ id: Int, component: String = "worker", conversation: String? = "conv-1", start: Bool = false,
-                         incomplete: Bool = false, messages: [ModelMonitorMessage]?, callID: String? = nil) -> ModelMonitorEntry {
+                         incomplete: Bool = false, truncated: Bool = false, messages: [ModelMonitorMessage]?, callID: String? = nil) -> ModelMonitorEntry {
         ModelMonitorEntry(id: id, kind: .event(ModelMonitorEvent(
-            component: component, callID: callID ?? "call-\(id)", time: nil, kind: .request, payload: .string("p\(id)"), truncated: false,
+            component: component, callID: callID ?? "call-\(id)", time: nil, kind: .request, payload: .string("p\(id)"), truncated: truncated,
             conversationID: conversation, conversationStart: start, incomplete: incomplete, requestMessages: messages)))
     }
 
@@ -100,10 +100,18 @@ final class ModelMonitorConversationTests: XCTestCase {
     func testTrimmedBaselineIsNotUsed() {
         var buffer = ModelMonitorBuffer(capacity: 2)
         buffer.append(request(1, messages: [msg("user", "a")]))
-        buffer.append(ModelMonitorEntry(id: 2, kind: .gap))
-        buffer.append(ModelMonitorEntry(id: 3, kind: .gap))
-        buffer.append(request(4, messages: [msg("user", "a"), msg("user", "b")]))
-        XCTAssertNil(appended(buffer, id: 4))
+        buffer.append(request(2, conversation: "other", messages: [msg("user", "unrelated")]))
+        buffer.append(request(3, messages: [msg("user", "a"), msg("user", "b")]))
+        XCTAssertNil(appended(buffer, id: 3))
+    }
+
+    func testTruncatedSnapshotIsNotUsedAndPrefixIsByteExact() {
+        var buffer = ModelMonitorBuffer(capacity: 10)
+        buffer.append(request(1, truncated: true, messages: [msg("user", "a")]))
+        buffer.append(request(2, messages: [msg("user", "a"), msg("user", "é")]))
+        buffer.append(request(3, messages: [msg("user", "a"), msg("user", "e\u{301}"), msg("user", "b")]))
+        XCTAssertNil(appended(buffer, id: 2))
+        XCTAssertNil(appended(buffer, id: 3))
     }
 
     func testOpenCodeFeedKeepsDeltaWithinItsOwnBuffer() {
@@ -153,6 +161,15 @@ final class ModelMonitorConversationTests: XCTestCase {
                        "reason=sequence_jump;correlation_hash=h;expected=2;actual=3")
         XCTAssertEqual(diagnostics.note(.serverGap, now: start.addingTimeInterval(11), correlationHash: "h", actual: 8),
                        "reason=server_gap;correlation_hash=h;actual=8;coalesced=2")
+    }
+
+    func testDiagnosticsFlushFinalOccurrencesWithTheirMetadata() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var diagnostics = ModelMonitorDiagnostics()
+        _ = diagnostics.note(.sequenceJump, now: start, correlationHash: "older", expected: 1, actual: 2)
+        XCTAssertNil(diagnostics.note(.sequenceJump, now: start, correlationHash: "newer", expected: 3, actual: 6))
+        XCTAssertEqual(diagnostics.flush(), ["reason=sequence_jump;correlation_hash=newer;expected=3;actual=6;coalesced=1"])
+        XCTAssertTrue(diagnostics.flush().isEmpty)
     }
 
     func testSequenceJumpDiagnosticCarriesExpectedAndActualMetadataOnly() async throws {

@@ -10,6 +10,10 @@ public struct ModelMonitorMessage: Equatable, Sendable {
         self.role = role
         self.text = text
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.role.utf8.elementsEqual(rhs.role.utf8) && lhs.text.utf8.elementsEqual(rhs.text.utf8)
+    }
 }
 
 public enum ModelMonitorStatus: Equatable, Sendable {
@@ -91,7 +95,12 @@ public struct ModelMonitorBuffer: Equatable, Sendable {
     /// Number of oldest entries removed to keep the buffer within `capacity`.
     public private(set) var droppedCount = 0
     /// Latest complete request snapshot per conversation group. Kept only while the entry that carried it is retained.
-    private var baselines: [String: ConversationBaseline] = [:]
+    private var baselines: [ConversationKey: ConversationBaseline] = [:]
+
+    private struct ConversationKey: Hashable, Sendable {
+        let component: String
+        let id: String
+    }
 
     private struct ConversationBaseline: Equatable, Sendable {
         let entryID: Int
@@ -103,9 +112,7 @@ public struct ModelMonitorBuffer: Equatable, Sendable {
     }
 
     public mutating func append(_ entry: ModelMonitorEntry) {
-        let annotated = annotate(entry)
-        entries.append(annotated)
-        let excess = entries.count - capacity
+        let excess = entries.count + 1 - capacity
         if excess > 0 {
             entries.removeFirst(excess)
             droppedCount += excess
@@ -113,6 +120,8 @@ public struct ModelMonitorBuffer: Equatable, Sendable {
             let retained = Set(entries.map(\.id))
             baselines = baselines.filter { retained.contains($0.value.entryID) }
         }
+        let annotated = annotate(entry)
+        entries.append(annotated)
     }
 
     public mutating func clear() {
@@ -128,10 +137,10 @@ public struct ModelMonitorBuffer: Equatable, Sendable {
             baselines.removeAll()
             return entry
         }
-        guard let conversation = event.conversationID else { return entry }
+        guard let conversation = event.conversationID, !conversation.isEmpty else { return entry }
         // The component is part of the group, so the same ID in another component is never joined.
-        let key = event.component + "\u{1}" + conversation
-        if event.incomplete || event.kind == .error {
+        let key = ConversationKey(component: event.component, id: conversation)
+        if event.incomplete || event.truncated || event.kind == .error {
             baselines[key] = nil
             return entry
         }
@@ -288,7 +297,7 @@ public enum ModelMonitorCallID {
 }
 
 /// Metadata-only client diagnostics for the monitor connection. Repeated reasons coalesce within a fixed interval, so the diagnostic queue stays bounded.
-/// Suppressed occurrences are reported as `coalesced=N` on the next summary for that reason.
+/// Suppressed occurrences are reported as `coalesced=N` on the next summary or at the end of a quiet interval.
 public struct ModelMonitorDiagnostics: Sendable {
     public enum Reason: String, CaseIterable, Sendable {
         case connected, disconnected
@@ -299,24 +308,37 @@ public struct ModelMonitorDiagnostics: Sendable {
     public static let coalescingInterval: TimeInterval = 10
     private var reportedAt: [Reason: Date] = [:]
     private var coalesced: [Reason: Int] = [:]
+    private var latestFields: [Reason: [String]] = [:]
 
     public init() {}
 
     /// Returns one summary line to record, or nil when the reason was reported within the coalescing interval.
     public mutating func note(_ reason: Reason, now: Date, correlationHash: String? = nil, expected: Int64? = nil, actual: Int64? = nil) -> String? {
-        if let last = reportedAt[reason], now.timeIntervalSince(last) < Self.coalescingInterval {
-            coalesced[reason, default: 0] += 1
-            return nil
-        }
-        let suppressed = coalesced[reason] ?? 0
-        coalesced[reason] = nil
-        reportedAt[reason] = now
         var fields = ["reason=\(reason.rawValue)"]
         if let correlationHash { fields.append("correlation_hash=\(correlationHash)") }
         if let expected { fields.append("expected=\(expected)") }
         if let actual { fields.append("actual=\(actual)") }
+        if let last = reportedAt[reason], now.timeIntervalSince(last) < Self.coalescingInterval {
+            coalesced[reason, default: 0] += 1
+            latestFields[reason] = fields
+            return nil
+        }
+        let suppressed = coalesced[reason] ?? 0
+        coalesced[reason] = nil
+        latestFields[reason] = nil
+        reportedAt[reason] = now
         if suppressed > 0 { fields.append("coalesced=\(suppressed)") }
         return fields.joined(separator: ";")
+    }
+
+    mutating func flush() -> [String] {
+        let lines = Reason.allCases.compactMap { reason -> String? in
+            guard let count = coalesced[reason], let fields = latestFields[reason] else { return nil }
+            return (fields + ["coalesced=\(count)"]).joined(separator: ";")
+        }
+        coalesced.removeAll()
+        latestFields.removeAll()
+        return lines
     }
 
     /// Same format as server logs: the first 8 bytes of SHA-256 over the subscription ID, as 16 lowercase hex characters.
@@ -417,6 +439,7 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
     /// Receives one metadata-only summary line per emitted diagnostic. Callers route it to the existing diagnostics path.
     private let diagnostic: @Sendable (String) -> Void
     private var diagnostics = ModelMonitorDiagnostics()
+    private var diagnosticFlush: Task<Void, Never>?
     private var continuation: AsyncStream<ModelMonitorUpdate>.Continuation?
     private var wanted = false
     private var linkOpen = false
@@ -485,6 +508,8 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
 
     private func performStop() async {
         wanted = false
+        diagnosticFlush?.cancel()
+        flushDiagnostics()
         let id = subscriptionID
         clearSubscription()
         setStatus(.idle)
@@ -611,7 +636,18 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
         let hash = id.map(ModelMonitorDiagnostics.correlationHash(subscriptionID:))
         if let line = diagnostics.note(reason, now: Date(), correlationHash: hash, expected: expected, actual: actual) {
             diagnostic(line)
+        } else if diagnosticFlush == nil {
+            diagnosticFlush = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(ModelMonitorDiagnostics.coalescingInterval)) }
+                catch { return }
+                await self?.flushDiagnostics()
+            }
         }
+    }
+
+    private func flushDiagnostics() {
+        diagnosticFlush = nil
+        for line in diagnostics.flush() { diagnostic(line) }
     }
 
     private func emit(_ kind: ModelMonitorEntry.Kind) {
@@ -710,7 +746,7 @@ fileprivate extension ModelMonitorEvent {
         self.payload = wire.payload
         self.truncated = wire.truncated ?? false
         self.conversationID = wire.conversationID
-        self.conversationStart = wire.conversationStart ?? false
+        self.conversationStart = kind == .request && wire.conversationStart == true
         self.incomplete = wire.incomplete ?? false
         self.requestMessages = wire.requestMessages?.values?.map { ModelMonitorMessage(role: $0.role, text: $0.text) }
     }

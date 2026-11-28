@@ -527,6 +527,14 @@ private struct ModelMonitorEventRow: View {
     }
 
     @ViewBuilder private var payload: some View {
+        if event.truncated {
+            Label(uiText("Truncated by Zoe"), systemImage: "scissors")
+                .font(.caption).foregroundStyle(.orange)
+        }
+        if event.incomplete {
+            Label(uiText("Incomplete at source"), systemImage: "questionmark.circle")
+                .font(.caption).foregroundStyle(.orange)
+        }
         // Display shows readable text; Copy still copies the complete formatted JSON.
         if let payload = event.payload, let full = event.formattedPayload {
             let whole = ModelMonitorPayloadText.render(payload)
@@ -535,18 +543,8 @@ private struct ModelMonitorEventRow: View {
             let collapsed = delta ?? whole
             let preview = ModelMonitorPreview(collapsed)
             let hasFullView = preview.isCut || delta != nil
-            if event.truncated {
-                // Server truncation: Zoe shortened the payload before it reached the client.
-                Label(uiText("Truncated by Zoe"), systemImage: "scissors")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-            if event.incomplete {
-                // Source incompleteness: the source could not observe all of this content. Distinct from truncation.
-                Label(uiText("Incomplete at source"), systemImage: "questionmark.circle")
-                    .font(.caption).foregroundStyle(.orange)
-            }
             if delta != nil && !expanded {
-                Label(uiText("New messages in this conversation"), systemImage: "plus.bubble")
+                Label(event.appendedMessages?.isEmpty == true ? uiText("No new request messages") : uiText("New messages in this conversation"), systemImage: "plus.bubble")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Text(expanded ? whole : (preview.isCut ? preview.text : collapsed))
