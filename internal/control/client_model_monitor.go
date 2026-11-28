@@ -171,7 +171,7 @@ func (c *clientSocket) runMonitor(ctx context.Context, m *monitorSubscription) {
 				continue
 			}
 			sequence++
-			admitted, err := c.tryMonitorWrite(map[string]any{"channel": "model_monitor", "type": "event", "subscription_id": m.id, "sequence": sequence, "event": item.Event})
+			admitted, err := c.tryMonitorWrite(m.eventFrame(sequence, c.maxBytes, item.Event))
 			if !admitted {
 				diagnostics.Record("writer", "admission_blocked", m.id, item.Event.Type, 0)
 				pendingGap = true
@@ -191,4 +191,24 @@ func (c *clientSocket) runMonitor(ctx context.Context, m *monitorSubscription) {
 			}
 		}
 	}
+}
+
+func (m *monitorSubscription) eventFrame(sequence uint64, maxBytes int64, event modelmonitor.Event) map[string]any {
+	frame := map[string]any{"channel": "model_monitor", "type": "event", "subscription_id": m.id, "sequence": sequence, "event": event}
+	if event.ConversationID == "" && !event.ConversationStart && !event.Incomplete && len(event.RequestMessages) == 0 {
+		return frame
+	}
+	// Marshal uses at least as many bytes as the writer (which doesn't escape
+	// HTML). Prefer the original payload over additive metadata on small frames.
+	if b, err := json.Marshal(frame); err == nil && int64(len(b)) > maxBytes {
+		event.RequestMessages = nil
+		frame["event"] = event
+		if b, err := json.Marshal(frame); err == nil && int64(len(b)) > maxBytes {
+			event.ConversationID = ""
+			event.ConversationStart = false
+			event.Incomplete = false
+			frame["event"] = event
+		}
+	}
+	return frame
 }

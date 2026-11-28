@@ -70,9 +70,16 @@ func ObservationText(text string) (string, bool) {
 type attemptObservation struct {
 	component, id, key string
 	generation         uint64
+	conversation       string
+	start              bool
 }
 
-func (c *Client) observeAttempt(ctx context.Context, style, instructions, input string, request map[string]any) *attemptObservation {
+type completionObservation struct {
+	component, id string
+	generation    uint64
+}
+
+func (c *Client) observeCompletion(ctx context.Context) *completionObservation {
 	component := c.component
 	if override, ok := ctx.Value(observationContextKey{}).(string); ok {
 		component = override
@@ -88,7 +95,22 @@ func (c *Client) observeAttempt(ctx context.Context, style, instructions, input 
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil
 	}
-	o := &attemptObservation{component: component, id: hex.EncodeToString(id[:]), key: c.key, generation: generation}
+	return &completionObservation{component: component, id: hex.EncodeToString(id[:]), generation: generation}
+}
+
+func (c *Client) observeAttempt(conversation *completionObservation, start bool, style, instructions, input string, request map[string]any) *attemptObservation {
+	if conversation == nil || modelmonitor.Generation() != conversation.generation {
+		return nil
+	}
+	call := conversation.id
+	if !start {
+		var id [16]byte
+		if _, err := rand.Read(id[:]); err != nil {
+			return nil
+		}
+		call = hex.EncodeToString(id[:])
+	}
+	o := &attemptObservation{component: conversation.component, id: call, key: c.key, generation: conversation.generation, conversation: conversation.id, start: start}
 	i, ti := observationText(instructions, c.key)
 	v, tv := observationText(input, c.key)
 	model, tm := observationText(c.model, c.key)
@@ -108,11 +130,14 @@ func (c *Client) observeAttempt(ctx context.Context, style, instructions, input 
 	if value, ok := request["reasoning"].(map[string]string); ok {
 		options["reasoning_effort"] = value["effort"]
 	}
-	o.publish("request", map[string]any{"style": style, "model": model, "options": options, "instructions": i, "input": v}, ti || tv || tm)
+	// Both request styles send only these two messages and never reference a
+	// prior provider response, even when their input text includes task context.
+	o.publish("request", map[string]any{"style": style, "model": model, "options": options, "instructions": i, "input": v}, ti || tv || tm, false,
+		modelmonitor.RequestMessage{Role: "system", Text: i}, modelmonitor.RequestMessage{Role: "user", Text: v})
 	return o
 }
 
-func (o *attemptObservation) publish(kind string, payload any, truncated bool) {
+func (o *attemptObservation) publish(kind string, payload any, truncated, incomplete bool, messages ...modelmonitor.RequestMessage) {
 	if o == nil || modelmonitor.Generation() != o.generation {
 		return
 	}
@@ -120,20 +145,24 @@ func (o *attemptObservation) publish(kind string, payload any, truncated bool) {
 	if err != nil {
 		return
 	}
-	modelmonitor.PublishFor(o.generation, modelmonitor.Event{Component: o.component, CallID: o.id, Time: time.Now(), Type: kind, Payload: b, Truncated: truncated})
+	if !modelmonitor.RequestMessagesWithinBudget(len(b), 2*observationTextLimit, messages) {
+		messages = nil
+	}
+	modelmonitor.PublishFor(o.generation, modelmonitor.Event{Component: o.component, CallID: o.id, Time: time.Now(), Type: kind, Payload: b, Truncated: truncated, Incomplete: incomplete,
+		ConversationID: o.conversation, ConversationStart: kind == "request" && o.start, RequestMessages: messages})
 }
 
 func (o *attemptObservation) endError(kind string, status int) {
 	if o == nil {
 		return
 	}
-	o.publish("error", map[string]any{"kind": kind, "status": status}, false)
+	o.publish("error", map[string]any{"kind": kind, "status": status}, false, kind == "incomplete_response" || kind == "invalid_response" || kind == "response_read" || kind == "response_limit")
 }
 
-func (o *attemptObservation) endResponse(status int, content string) {
+func (o *attemptObservation) endResponse(status int, content string, incomplete bool) {
 	if o == nil || modelmonitor.Generation() != o.generation {
 		return
 	}
 	content, truncated := observationText(content, o.key)
-	o.publish("response", map[string]any{"status": status, "content_available": true, "content": content}, truncated)
+	o.publish("response", map[string]any{"status": status, "content_available": true, "content": content}, truncated, incomplete)
 }

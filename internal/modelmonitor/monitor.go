@@ -11,12 +11,16 @@ import (
 )
 
 type Event struct {
-	Component string          `json:"component"`
-	CallID    string          `json:"call_id"`
-	Time      time.Time       `json:"time"`
-	Type      string          `json:"type"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
-	Truncated bool            `json:"truncated,omitempty"`
+	Component         string           `json:"component"`
+	CallID            string           `json:"call_id"`
+	Time              time.Time        `json:"time"`
+	Type              string           `json:"type"`
+	Payload           json.RawMessage  `json:"payload,omitempty"`
+	Truncated         bool             `json:"truncated,omitempty"`
+	ConversationID    string           `json:"conversation_id,omitempty"`
+	ConversationStart bool             `json:"conversation_start,omitempty"`
+	Incomplete        bool             `json:"incomplete,omitempty"`
+	RequestMessages   []RequestMessage `json:"request_messages,omitempty"`
 }
 
 // Bound memory even when callers supply an unexpectedly large payload.
@@ -138,12 +142,16 @@ func publish(generation uint64, fenced bool, e Event) {
 	default:
 		return
 	}
-	if len(e.Payload) > maxPayload || (len(e.Payload) > 0 && !json.Valid(e.Payload)) {
+	if len(e.Payload) > maxPayload {
 		e.Payload = nil
 		e.Truncated = true
+	} else if len(e.Payload) > 0 && !json.Valid(e.Payload) {
+		e.Payload = nil
+		e.Incomplete = true
 	} else {
 		e.Payload = append(json.RawMessage(nil), e.Payload...)
 	}
+	boundConversation(&e)
 	registry.Lock()
 	defer registry.Unlock()
 	if fenced && generation != registry.generation {

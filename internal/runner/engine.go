@@ -99,7 +99,16 @@ func (e *Engine) RunOnce(ctx context.Context) error {
 	return e.Process(ctx, *c)
 }
 
-func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err error) {
+func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) error {
+	return e.process(ctx, claim, false)
+}
+
+// Reconcile handles a previously issued claim without inferring a fresh prompt.
+func (e *Engine) Reconcile(ctx context.Context, claim contracts.JobClaim) error {
+	return e.process(ctx, claim, true)
+}
+
+func (e *Engine) process(ctx context.Context, claim contracts.JobClaim, recovered bool) (err error) {
 	if err := validateClaim(claim, e.Limits); err != nil {
 		return err
 	}
@@ -147,7 +156,7 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err err
 			if entry.Session == "" {
 				return fmt.Errorf("%w: bound runtime recovery identity incomplete", ErrOutcomePending)
 			}
-			return e.sendPrompt(ctx, claim, entry.Spec, RuntimeBinding{SessionID: entry.Session})
+			return e.sendPrompt(ctx, claim, entry.Spec, RuntimeBinding{SessionID: entry.Session}, false)
 		case "prompt_attempted":
 			return e.markUnknown(ctx, claim)
 		case "prompt_sent":
@@ -237,14 +246,19 @@ func (e *Engine) Process(ctx context.Context, claim contracts.JobClaim) (err err
 	if err = e.emit(ctx, claim, "dispatch_bound", "runtime", "runtime binding established", nil, []contracts.ExternalEffect{{ID: claim.RunID, Kind: "runtime_create", Status: "created", Reference: binding.SessionID}}); err != nil {
 		return err
 	}
-	return e.sendPrompt(ctx, claim, spec, binding)
+	return e.sendPrompt(ctx, claim, spec, binding, !recovered && !ok && freshWorkerPrompt(claim))
 }
 
-func (e *Engine) sendPrompt(ctx context.Context, claim contracts.JobClaim, spec RuntimeSpec, binding RuntimeBinding) error {
+func freshWorkerPrompt(claim contracts.JobClaim) bool {
+	return claim.RuntimeSessionID == "" && claim.ResumeQuestion == "" && claim.ResumeAnswer == "" &&
+		len(claim.Entries) == 0 && len(claim.PriorContexts) == 0
+}
+
+func (e *Engine) sendPrompt(ctx context.Context, claim contracts.JobClaim, spec RuntimeSpec, binding RuntimeBinding, fresh bool) error {
 	if err := e.Journal.SetPhase(ctx, claim.RunID, claim.AttemptID, claim.Fence, "prompt_attempted"); err != nil {
 		return err
 	}
-	observeModel(ctx, binding.SessionID, "request", "initial", spec.Prompt)
+	observeModelEvent(ctx, binding.SessionID, "request", "initial", spec.Prompt, fresh)
 	if err := e.Runtime.Prompt(ctx, binding, spec.Prompt); err != nil {
 		// The session exists, but a failed request does not prove whether the
 		// prompt reached it. Fence the run rather than risking a duplicate.

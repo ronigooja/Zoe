@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { readFile } from "node:fs/promises"
 
 const textLimit = 8192
@@ -65,12 +65,96 @@ function sections(items) {
 
 export function requestText(body) {
   if (!body || typeof body !== "object") return undefined
-  if (Array.isArray(body.messages)) return sections(body.messages)
+  const reference = referencesContext(body) ? "[This request references earlier context not sent in this call.]" : ""
+  if (Array.isArray(body.messages)) return [reference, sections(body.messages)].filter(Boolean).join("\n\n")
   if (typeof body.input !== "string" && !Array.isArray(body.input)) return undefined
   const instructions = typeof body.instructions === "string" && body.instructions !== "" ? `system:\n${body.instructions}` : ""
   const input = typeof body.input === "string" ? `user:\n${body.input}` : sections(body.input)
-  const reference = body.previous_response_id ? "[This request references earlier context not sent in this call.]" : ""
   return [reference, instructions, input].filter(Boolean).join("\n\n")
+}
+
+function referencesContext(body) {
+  return body.previous_response_id != null || body.conversation != null ||
+    (Array.isArray(body.input) && body.input.some(item => item?.type === "item_reference"))
+}
+
+function structuredText(value) {
+  if (typeof value === "string") return value
+  if (!Array.isArray(value)) return undefined
+  const parts = []
+  for (const part of value) {
+    if (!part || !["text", "input_text", "output_text", "refusal"].includes(part.type)) return undefined
+    const text = part.text ?? part.refusal
+    if (typeof text !== "string") return undefined
+    parts.push(text)
+  }
+  return parts.join("\n")
+}
+
+// Derive ordered role/text blocks only from the actual outbound JSON. A
+// reference-only delta, unsupported item, or attachment is not a full snapshot.
+export function requestCapture(body) {
+  const text = requestText(body)
+  if (text === undefined || referencesContext(body)) return { text, incomplete: true }
+  const blocks = []
+  const add = (role, text, label = role) => blocks.push({ role, text, label })
+  const partial = () => ({ text, incomplete: true })
+  function addCall(call, args) {
+    if (typeof call?.name !== "string" || typeof args !== "string") return false
+    add("tool_call", toolText(call.name, args), "Tool call")
+    return true
+  }
+  const chat = Array.isArray(body.messages)
+  if (chat && (body.input != null || body.instructions != null)) return partial()
+  if (!chat && body.instructions != null) {
+    if (typeof body.instructions !== "string") return partial()
+    if (body.instructions !== "") add("system", body.instructions)
+  }
+  const items = chat ? body.messages : body.input
+  if (typeof items === "string") {
+    add("user", items)
+  } else for (const item of items) {
+    if (!item || typeof item !== "object") return partial()
+    if (!chat && (item.type === "function_call" || item.type === "custom_tool_call")) {
+      if (!addCall(item, item.arguments ?? item.input)) return partial()
+    } else if (!chat && (item.type === "function_call_output" || item.type === "custom_tool_call_output")) {
+      const result = structuredText(item.output)
+      if (result === undefined) return partial()
+      add("tool_result", result, "Tool result")
+    } else {
+      if (!roles.has(item.role) || (item.type != null && item.type !== "message") || item.audio != null || item.refusal != null ||
+          item.reasoning_content != null || item.reasoning_details != null || item.reasoning_text != null || item.reasoning != null ||
+          (item.tool_calls != null && !Array.isArray(item.tool_calls))) return partial()
+      const hasCalls = item.tool_calls?.length || item.function_call != null
+      const content = item.content == null && hasCalls ? "" : structuredText(item.content)
+      if (content === undefined) return partial()
+      if (content || item.role === "tool" || item.role === "function") add(item.role, content)
+      else if (!hasCalls) return partial()
+      for (const call of item.tool_calls ?? []) {
+        if (call?.type != null && call.type !== "function") return partial()
+        if (!addCall(call?.function, call?.function?.arguments)) return partial()
+      }
+      if (item.function_call != null && !addCall(item.function_call, item.function_call.arguments)) return partial()
+    }
+  }
+  // The additional representation cannot reveal text missing from the
+  // established payload. Empty or ambiguously lowered requests stay unknown.
+  if (!blocks.length || flattenBlocks(blocks) !== text) return partial()
+  return { text, blocks, incomplete: false }
+}
+
+const flattenBlocks = blocks => blocks.map(({ label, text }) => `${label}:\n${text}`).join("\n\n")
+
+function safeRequestMessages(blocks, text, secrets) {
+  if (!blocks) return undefined
+  const cleaned = blocks.map(block => ({ ...block, text: clean(block.text, secrets) }))
+  // A credential matched across block boundaries must not reappear in the
+  // per-message version. Count both representations against the same budget.
+  if (flattenBlocks(cleaned) !== text) return undefined
+  const messages = cleaned.map(({ role, text }) => ({ role, text }))
+  const bytes = encoder.encode(JSON.stringify({ text })).length +
+    encoder.encode(JSON.stringify({ request_messages: messages })).length - 1
+  return bytes <= textLimit ? messages : undefined
 }
 
 function finalText(body) {
@@ -79,6 +163,13 @@ function finalText(body) {
     return sections(body.choices.flatMap(choice => choice?.message ? [choice.message] : []))
   }
   return undefined
+}
+
+function incompleteFinal(body) {
+  if (body?.status === "incomplete" || body?.status === "failed") return true
+  if (Array.isArray(body?.output) && body.output.length > 0) return requestCapture({ input: body.output }).incomplete
+  return Array.isArray(body?.choices) && body.choices.some(choice =>
+    ["length", "content_filter"].includes(choice?.finish_reason) || (choice?.message && requestCapture({ messages: [choice.message] }).incomplete))
 }
 
 export function responseText() {
@@ -96,13 +187,19 @@ export function responseText() {
       let body
       try { body = JSON.parse(payload) } catch { failed = true; return }
       const direct = finalText(body)
-      if (direct !== undefined) { terminal = supported = true; final = direct; return }
+      if (direct !== undefined) {
+        terminal = supported = true
+        final = direct
+        failed ||= incompleteFinal(body)
+        return
+      }
       if (Array.isArray(body?.choices)) {
         supported = true
         for (const choice of body.choices) {
           const delta = choice?.delta
           const id = choice?.index ?? 0
           if (choice?.finish_reason != null) terminal = true
+          if (["length", "content_filter"].includes(choice?.finish_reason)) failed = true
           add(`${id}:text`, "text", textOf(delta?.content) || delta?.refusal, "assistant")
           for (const call of Array.isArray(delta?.tool_calls) ? delta.tool_calls : []) {
             const key = `${id}:tool:${call.index ?? 0}`
@@ -132,9 +229,10 @@ export function responseText() {
           break
         case "response.completed":
         case "response.incomplete":
-          supported = terminal = true
-          if (body.type === "response.incomplete") failed = true
+          terminal = true
+          if (body.type === "response.incomplete" || incompleteFinal(body.response)) failed = true
           final = finalText(body.response)
+          if (final !== undefined) supported = true
           break
         case "response.failed":
         case "error":
@@ -152,12 +250,12 @@ export function responseText() {
 
 // Read an observer-only clone, with bounded work. Never await cancellation of
 // one tee branch: it can wait for the model consumer, which uses the other one.
-async function readBody(stream, signal, consume) {
+async function readBody(stream, signal, consume, fatal = false) {
   if (!stream) return true
   const reader = stream.getReader()
   const stop = () => { void reader.cancel().catch(() => {}) }
   signal.addEventListener("abort", stop, { once: true })
-  const decoder = new TextDecoder()
+  const decoder = new TextDecoder("utf-8", { fatal })
   let seen = 0
   try {
     if (signal.aborted) return false
@@ -165,7 +263,7 @@ async function readBody(stream, signal, consume) {
       const { value, done } = await reader.read()
       if (done) { consume(decoder.decode()); return !signal.aborted }
       seen += value.byteLength
-      if (seen > scanLimit) return false
+      if (seen > scanLimit) return "limit"
       consume(decoder.decode(value, { stream: true }))
     }
   } catch {
@@ -192,15 +290,19 @@ export async function readResponse(response, signal) {
       if (!line && data.length) { output.frame(data.join("\n")); data = [] }
     }
   }
-  const complete = await readBody(response.body, signal, consume)
-  if (!isSSE && complete) output.frame(buffer)
-  if (isSSE && complete) consume("\n\n")
+  const complete = await readBody(response.body, signal, consume, true)
+  if (!isSSE && complete === true) output.frame(buffer)
+  if (isSSE && complete === true) consume("\n\n")
   const result = output.result()
+  if (complete === "limit") return { ...result, incomplete: true, truncated: true }
   return { ...result, incomplete: !complete || result.incomplete }
 }
 
 const id = () => randomBytes(16).toString("hex")
 const socketKey = event => JSON.stringify([event.sessionID, event.kind, event.model.providerID, event.model.id])
+// The native hooks identify the primary conversation, but not its first send
+// or which auxiliary sends are retries of the same auxiliary request.
+const conversationID = (session, kind) => kind === "primary" ? createHash("sha256").update(session).digest("hex") : undefined
 
 export default {
   id: "zoe-opencode-context",
@@ -233,8 +335,8 @@ export default {
       const pending = fetch(endpoint(session), { headers: { Authorization: `Bearer ${token}` }, signal: signal(), redirect: "error" }).then(async response => {
         if (!response.ok) { void response.body?.cancel().catch(() => {}); return undefined }
         const value = await response.json()
-        const { generation, boot, run_id, attempt_id, fence } = value
-        return generation && boot && run_id && attempt_id && fence ? { generation, boot, run_id, attempt_id, fence } : undefined
+        const { generation, boot, run_id, attempt_id, fence, conversation_metadata } = value
+        return generation && boot && run_id && attempt_id && fence ? { fields: { generation, boot, run_id, attempt_id, fence }, conversationMetadata: conversation_metadata === true } : undefined
       }).catch(() => undefined)
       leases.set(session, { expires: now + 750, pending })
       return pending
@@ -253,11 +355,27 @@ export default {
         }
       } finally { sending = false }
     }
-    function publish(call, type, value, incomplete = false) {
+    function publish(call, type, value, incomplete = false, blocks, scanTruncated = false) {
       if (!call || queue.length >= queueLimit || stop.signal.aborted) return
       const payload = bounded(clean(value || (incomplete ? "[Model content unavailable]" : ""), secrets))
-      queue.push({ session: call.session, body: { ...call.lease, call_id: call.id, type, text: payload.text, truncated: payload.truncated || incomplete } })
+      const metadata = call.lease.conversationMetadata
+      const body = { ...call.lease.fields, call_id: call.id, type, text: payload.text, truncated: payload.truncated || scanTruncated || (!metadata && incomplete) }
+      if (metadata) {
+        if (call.conversation) body.conversation_id = call.conversation
+        if (incomplete) body.incomplete = true
+        if (type === "request" && !incomplete && !body.truncated) {
+          const messages = safeRequestMessages(blocks, payload.text, secrets)
+          if (messages) body.request_messages = messages
+        }
+      }
+      queue.push({ session: call.session, body })
       void drain()
+    }
+    function startCall(session, kind, lease) {
+      return { id: id(), lease, session, conversation: conversationID(session, kind) }
+    }
+    function publishRequest(call, captured) {
+      publish(call, "request", captured?.text, captured?.incomplete ?? true, captured?.blocks, captured?.truncated)
     }
     let readers = 0
     function observeRead(work) {
@@ -277,12 +395,14 @@ export default {
           try {
             const active = await lease(sessionID)
             if (!active) return
-            call = { id: id(), lease: active, session: sessionID }
+            call = startCall(sessionID, event.kind, active)
             let body = "", value
             try {
-              if (await readBody(request.clone().body, signal(), text => { body += text })) value = requestText(JSON.parse(body))
+              const complete = await readBody(request.clone().body, signal(), text => { body += text }, true)
+              if (complete === true) value = requestCapture(JSON.parse(body))
+              if (complete === "limit") value = { incomplete: true, truncated: true }
             } catch {}
-            publish(call, "request", value, value === undefined)
+            publishRequest(call, value)
           } finally { resolve(call) }
         })
       } catch {} // Observation must not alter dispatch.
@@ -301,13 +421,13 @@ export default {
           const call = await ready
           if (!call) { void response.body?.cancel().catch(() => {}); return }
           const result = await readResponse(response, signal(600_000))
-          publish(call, "response", result.text, result.incomplete)
+          publish(call, "response", result.text, result.incomplete, undefined, result.truncated)
         })
       } catch {}
     })
-    function finishSocket(call, incomplete) {
+    function finishSocket(call, incomplete, truncated = false) {
       const result = call.output.result()
-      void call.ready.then(active => publish(active, "response", result.text, incomplete || result.incomplete)).catch(() => {})
+      void call.ready.then(active => publish(active, "response", result.text, incomplete || result.incomplete, undefined, truncated)).catch(() => {})
     }
     await ctx.session.hook("experimental.ws.send", event => {
       try {
@@ -324,12 +444,12 @@ export default {
         const session = event.sessionID
         const ready = lease(session).then(active => {
           if (!active) return
-          const call = { id: id(), lease: active, session }
+          const call = startCall(session, event.kind, active)
           let value
           if (frame !== undefined && encoder.encode(frame).length <= scanLimit) {
-            try { value = requestText(JSON.parse(frame)) } catch {}
-          }
-          publish(call, "request", value, value === undefined)
+            try { value = requestCapture(JSON.parse(frame)) } catch {}
+          } else value = { incomplete: true, truncated: true }
+          publishRequest(call, value)
           return call
         }).catch(() => undefined)
         sockets.set(key, { ready, output: responseText(), bytes: 0 })
@@ -345,7 +465,7 @@ export default {
         if (!oversized) call.output.frame(event.frame)
         if (!oversized && !call.output.done()) return
         sockets.delete(key)
-        finishSocket(call, oversized)
+        finishSocket(call, oversized, oversized)
       } catch {}
     })
     return () => { stop.abort(); queue.length = 0; leases.clear(); sockets.clear() }

@@ -93,7 +93,7 @@ func TestModelObservationPostGenerationAndShape(t *testing.T) {
 	}
 	select {
 	case item := <-sub.Events:
-		if item.Event.Component != "worker_rotation" || bytes.Contains(item.Event.Payload, []byte("abc123")) {
+		if item.Event.Component != "worker_rotation" || bytes.Contains(item.Event.Payload, []byte("abc123")) || item.Event.ConversationID != in.CallID || item.Event.ConversationStart || !item.Event.Incomplete || item.Event.Truncated {
 			t.Fatal("incorrect source or redaction")
 		}
 	default:

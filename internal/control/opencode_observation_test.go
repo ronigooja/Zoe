@@ -57,6 +57,26 @@ func TestOpenCodeObservationBindingAndOutput(t *testing.T) {
 	default:
 		t.Fatal("missing output")
 	}
+	in.Type, in.Text, in.ConversationID = "request", "user:\nBearer fixture-credential", strings.Repeat("b", 64)
+	in.RequestMessages = []modelmonitor.RequestMessage{{Role: "user", Text: "Bearer fixture-credential"}}
+	for _, incomplete := range []bool{false, true} {
+		in.Incomplete = incomplete
+		if code := post().Code; code != 204 {
+			t.Fatalf("metadata POST: %d", code)
+		}
+		select {
+		case item := <-sub.Events:
+			e := item.Event
+			if e.ConversationID != in.ConversationID || e.ConversationStart || e.Truncated || e.Incomplete != incomplete {
+				t.Fatal("metadata lost or incomplete confused with truncation")
+			}
+			if incomplete && len(e.RequestMessages) != 0 || !incomplete && (len(e.RequestMessages) != 1 || e.RequestMessages[0].Text != "[redacted]") {
+				t.Fatal("messages not filtered or redacted")
+			}
+		default:
+			t.Fatal("missing metadata event")
+		}
+	}
 	if code := request("GET", "session", "other", nil).Code; code != 409 {
 		t.Fatalf("other runner: %d", code)
 	}

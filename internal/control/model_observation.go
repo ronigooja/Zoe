@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -27,15 +28,16 @@ var modelObservationBoot = func() string {
 }()
 
 type modelObservation struct {
-	Boot       string `json:"boot"`
-	Generation uint64 `json:"generation"`
-	Attempt    string `json:"attempt_id"`
-	Fence      uint64 `json:"fence"`
-	CallID     string `json:"call_id"`
-	Type       string `json:"type"`
-	Source     string `json:"source"`
-	Text       string `json:"text,omitempty"`
-	Truncated  bool   `json:"truncated,omitempty"`
+	Boot              string `json:"boot"`
+	Generation        uint64 `json:"generation"`
+	Attempt           string `json:"attempt_id"`
+	Fence             uint64 `json:"fence"`
+	CallID            string `json:"call_id"`
+	Type              string `json:"type"`
+	Source            string `json:"source"`
+	Text              string `json:"text,omitempty"`
+	Truncated         bool   `json:"truncated,omitempty"`
+	ConversationStart bool   `json:"conversation_start,omitempty"`
 }
 
 var modelObservationID = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -95,7 +97,7 @@ func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) 
 		if modelObservationBoot == "" {
 			generation = 0
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"boot": modelObservationBoot, "generation": generation})
+		writeJSON(w, http.StatusOK, map[string]any{"boot": modelObservationBoot, "generation": generation, "conversation_metadata": true})
 		return
 	}
 	if in.Boot == "" || in.Boot != modelObservationBoot || in.Generation == 0 || !modelObservationID.MatchString(in.CallID) || len(in.Text) > 16384 || (in.Source != "worker" && in.Source != "worker_rotation") || (in.Type != "request" && in.Type != "response" && in.Type != "tool_call" && in.Type != "gap") || (in.Source == "worker_rotation" && in.Type == "tool_call") || (in.Type == "tool_call" && !modelObservationTool.MatchString(in.Text)) || (in.Type == "gap" && (in.Text != "" || in.Truncated)) {
@@ -122,6 +124,15 @@ func (s *Server) handleModelObservation(w http.ResponseWriter, r *http.Request) 
 		in.Truncated = true
 	}
 	payload, _ := json.Marshal(map[string]any{"origin": "opencode_observed", "not_provider_request": true, "text": in.Text})
-	modelmonitor.PublishFor(in.Generation, modelmonitor.Event{Component: in.Source, CallID: in.CallID, Time: time.Now().UTC(), Type: in.Type, Payload: payload, Truncated: in.Truncated})
+	// Worker sessions can be replaced within the same run. A rotation-summary
+	// request, on the other hand, uses its own standalone runtime session.
+	conversationID := in.CallID
+	if in.Source == "worker" {
+		digest := sha256.Sum256([]byte(r.PathValue("run_id")))
+		conversationID = hex.EncodeToString(digest[:])
+	}
+	// Worker observes prompt delivery and polled output, not provider context.
+	modelmonitor.PublishFor(in.Generation, modelmonitor.Event{Component: in.Source, CallID: in.CallID, Time: time.Now().UTC(), Type: in.Type, Payload: payload, Truncated: in.Truncated,
+		ConversationID: conversationID, ConversationStart: in.ConversationStart, Incomplete: in.Type == "request" || in.Type == "response"})
 	w.WriteHeader(http.StatusNoContent)
 }

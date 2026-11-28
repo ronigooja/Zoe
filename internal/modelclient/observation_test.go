@@ -38,7 +38,7 @@ func TestObservedClientFallbackRouting(t *testing.T) {
 			http.Error(w, "unsupported", http.StatusNotFound)
 			return
 		}
-		fmt.Fprint(w, `{"choices":[{"finish_reason":"stop","message":{"content":"answer"}}]}`)
+		fmt.Fprint(w, `{"choices":[{"finish_reason":"length","message":{"content":"answer"}}]}`)
 	}))
 	defer server.Close()
 	values := map[string]string{"ZOE_REGISTER_BASE_URL": server.URL, "ZOE_REGISTER_MODEL": "fixture", "ZOE_REGISTER_API_KEY_FILE": "fixture"}
@@ -72,6 +72,17 @@ func TestObservedClientFallbackRouting(t *testing.T) {
 	}
 	if events[0].CallID == "" || events[0].CallID != events[1].CallID || events[2].CallID != events[3].CallID || events[0].CallID == events[2].CallID {
 		t.Fatal("incorrect attempt correlation")
+	}
+	for i, e := range events {
+		if e.ConversationID == "" || e.ConversationID != events[0].ConversationID || e.ConversationStart != (i == 0) {
+			t.Fatalf("incorrect conversation metadata on event %d", i)
+		}
+		if e.Type == "request" && (len(e.RequestMessages) != 2 || e.RequestMessages[1] != (modelmonitor.RequestMessage{Role: "user", Text: "input"})) {
+			t.Fatalf("incorrect ordered request messages on event %d", i)
+		}
+	}
+	if !events[3].Incomplete || events[3].Truncated || events[1].Incomplete {
+		t.Fatal("token-limit completion or HTTP rejection was misclassified")
 	}
 	var payload struct {
 		Model   string         `json:"model"`

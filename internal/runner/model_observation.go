@@ -24,14 +24,16 @@ import (
 type observationKey struct{}
 type rotationObservationKey struct{}
 type observationLease struct {
-	Boot       string `json:"boot"`
-	Generation uint64 `json:"generation"`
-	expires    time.Time
+	Boot                 string `json:"boot"`
+	Generation           uint64 `json:"generation"`
+	ConversationMetadata bool   `json:"conversation_metadata"`
+	expires              time.Time
 }
 type observationItem struct {
 	lease                   observationLease
 	source, typ, call, text string
 	truncated               bool
+	conversationStart       bool
 }
 type observationSender struct {
 	runID     string
@@ -126,7 +128,11 @@ func (s *observationSender) run(ctx context.Context, c *ControlClient, claim con
 			refresh()
 			s.flushGap(ctx, c, claim, path)
 		case item := <-s.queue:
-			body, err := json.Marshal(map[string]any{"boot": item.lease.Boot, "generation": item.lease.Generation, "attempt_id": claim.AttemptID, "fence": claim.Fence, "call_id": item.call, "source": item.source, "type": item.typ, "text": item.text, "truncated": item.truncated})
+			fields := map[string]any{"boot": item.lease.Boot, "generation": item.lease.Generation, "attempt_id": claim.AttemptID, "fence": claim.Fence, "call_id": item.call, "source": item.source, "type": item.typ, "text": item.text, "truncated": item.truncated}
+			if item.conversationStart && item.lease.ConversationMetadata {
+				fields["conversation_start"] = true
+			}
+			body, err := json.Marshal(fields)
 			if err != nil {
 				continue
 			}
@@ -189,6 +195,14 @@ func (s *observationSender) flushGap(ctx context.Context, c *ControlClient, clai
 }
 
 func observeModel(ctx context.Context, session, typ, key, text string) {
+	observeModelEvent(ctx, session, typ, key, text, false)
+}
+
+func observeNewSessionPrompt(ctx context.Context, session, key, text string) {
+	observeModelEvent(ctx, session, "request", key, text, true)
+}
+
+func observeModelEvent(ctx context.Context, session, typ, key, text string, conversationStart bool) {
 	source := "worker"
 	if ctx.Value(rotationObservationKey{}) != nil {
 		source = "worker_rotation"
@@ -210,7 +224,7 @@ func observeModel(ctx context.Context, session, typ, key, text string) {
 	text, truncated := redactObservation(text, s.secrets)
 	call := sha256.Sum256([]byte(session))
 	select {
-	case s.queue <- observationItem{lease: *lease, source: source, typ: typ, call: hex.EncodeToString(call[:]), text: text, truncated: truncated}:
+	case s.queue <- observationItem{lease: *lease, source: source, typ: typ, call: hex.EncodeToString(call[:]), text: text, truncated: truncated, conversationStart: conversationStart}:
 		s.seen[id] = true
 	default:
 		diagnostics.Record("runner", "queue_full", s.runID, typ, 0)

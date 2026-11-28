@@ -58,6 +58,22 @@ func TestModelMonitorOversizeEndsSubscription(t *testing.T) {
 	}
 }
 
+func TestModelMonitorOptionalMessagesDoNotExpandSmallFrames(t *testing.T) {
+	_, base, key := clientSocketFixture(t, nil)
+	c := dialClientSocket(t, base, key, "")
+	writeClientSocket(t, c, `{"channel":"model_monitor","type":"subscribe","subscription_id":"sub"}`)
+	_ = readClientSocket(t, c)
+	text := strings.Repeat("x", 3000)
+	payload, _ := json.Marshal(text)
+	modelmonitor.Publish(modelmonitor.Event{Component: "worker", CallID: "call", Time: time.Now().UTC(), Type: "request", Payload: payload,
+		ConversationID: "conversation", ConversationStart: true, RequestMessages: []modelmonitor.RequestMessage{{Role: "user", Text: text}}})
+	f := readClientSocket(t, c)
+	var event modelmonitor.Event
+	if json.Unmarshal(f["event"], &event) != nil || string(event.Payload) != string(payload) || event.ConversationID != "conversation" || !event.ConversationStart || len(event.RequestMessages) != 0 || event.Truncated {
+		t.Fatalf("unexpected small-frame result: type=%s", f["type"])
+	}
+}
+
 func TestModelMonitorContentionShedsWithoutClosingSocket(t *testing.T) {
 	diagnostics.Flush()
 	var output bytes.Buffer

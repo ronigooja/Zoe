@@ -139,7 +139,7 @@ func (r OpenCodeRuntime) Summarize(ctx context.Context, model, content string) (
 	defer r.Terminate(context.Background(), b)
 	instruction := fmt.Sprintf("Summarize only the following old session content in at most %d tokens. Do not use tools. Return plain text only.\n\n", r.Limits.Int("runner_rotation_summary_max_tokens"))
 	prompt := instruction + truncateRuntime(content, r.Limits.Int("runner_rotation_summary_input_bytes"))
-	observeModel(ctx, session.ID, "request", "rotation-summary", prompt)
+	observeNewSessionPrompt(ctx, session.ID, "rotation-summary", prompt)
 	if err := r.Client.Prompt(ctx, session.ID, prompt); err != nil {
 		return "", err
 	}

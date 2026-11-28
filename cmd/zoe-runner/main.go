@@ -211,7 +211,11 @@ func serve(ctx context.Context, engine *runner.Engine, deployments *runner.Deplo
 		go func() {
 			defer wg.Done()
 			defer func() { <-active }()
-			if err := engine.Process(ctx, claim); err != nil && !errors.Is(err, runner.ErrOutcomePending) {
+			process := engine.Process
+			if recovery {
+				process = engine.Reconcile
+			}
+			if err := process(ctx, claim); err != nil && !errors.Is(err, runner.ErrOutcomePending) {
 				label := "runner iteration failed"
 				if recovery {
 					label = "run reconciliation remains pending"

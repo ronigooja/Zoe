@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import plugin, { bounded, clean, readResponse, requestText, responseText } from "./opencode_context.mjs"
+import plugin, { bounded, clean, readResponse, requestCapture, requestText, responseText } from "./opencode_context.mjs"
 
 test("uses the actual request text in order without protocol fields", () => {
   const text = requestText({
@@ -36,6 +36,33 @@ test("decodes real SSE text and tool deltas without duplicating them", async () 
   })
 })
 
+test("only complete actual request snapshots have ordered message blocks", () => {
+  const capture = requestCapture({ input: [
+    { type: "message", role: "developer", content: "instructions" },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "question" }] },
+    { type: "function_call", name: "look", arguments: "{}", call_id: "opaque" },
+    { type: "function_call_output", call_id: "opaque", output: "result" },
+  ] })
+  assert.equal(capture.incomplete, false)
+  assert.deepEqual(capture.blocks.map(({ role, text }) => [role, text]), [
+    ["developer", "instructions"], ["user", "question"], ["tool_call", "look\n{}"], ["tool_result", "result"],
+  ])
+  assert.doesNotMatch(capture.text, /opaque/)
+  for (const body of [
+    { previous_response_id: "res_opaque", input: "more" },
+    { conversation: "conv_opaque", input: "more" },
+    { input: [{ type: "item_reference", id: "opaque" }, { role: "user", content: "more" }] },
+  ]) {
+    const delta = requestCapture(body)
+    assert.equal(delta.incomplete, true)
+    assert.equal(delta.blocks, undefined)
+    assert.match(delta.text, /references earlier context/)
+    assert.doesNotMatch(delta.text, /opaque/)
+  }
+  const image = requestCapture({ messages: [{ role: "user", content: [{ type: "image_url", image_url: "data:opaque" }] }] })
+  assert.deepEqual(image, { text: "user:\n[non-text attachment]", incomplete: true })
+})
+
 test("keeps final Responses output once and marks partial streams", () => {
   const capture = responseText()
   capture.frame(JSON.stringify({ type: "response.output_text.delta", delta: "one" }))
@@ -65,12 +92,12 @@ test("HTTP hooks leave the bodies readable and publish one paired call", async (
     process.env.ZOE_OPENCODE_OBSERVATION_URL = "https://example.invalid"
     process.env.ZOE_RUNNER_TOKEN_FILE = token
     const hooks = new Map(), sent = []
-    let deliver
+    let deliver, count = 2
     const result = new Promise(resolve => { deliver = resolve })
     globalThis.fetch = async (_url, options) => {
-      if (options.method !== "POST") return Response.json({ boot: "boot", generation: 1, run_id: "run", attempt_id: "attempt", fence: 1 })
+      if (options.method !== "POST") return Response.json({ boot: "boot", generation: 1, run_id: "run", attempt_id: "attempt", fence: 1, conversation_metadata: true })
       sent.push(JSON.parse(options.body))
-      if (sent.length === 2) deliver(sent)
+      if (sent.length === count) deliver([...sent])
       return new Response(null, { status: 204 })
     }
     cleanup = await plugin.setup({ session: { hook: (name, callback) => hooks.set(name, callback) } })
@@ -84,8 +111,30 @@ test("HTTP hooks leave the bodies readable and publish one paired call", async (
     const [input, reply] = await Promise.race([result, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("observation timed out")), 2000) })])
     assert.deepEqual([input.type, reply.type, input.text, reply.text], ["request", "response", "user:\nquestion", "assistant:\nanswer"])
     assert.equal(input.call_id, reply.call_id)
+    assert.match(input.conversation_id, /^[a-f0-9]{64}$/)
+    assert.equal(input.conversation_id, reply.conversation_id)
+    assert.equal(input.conversation_start, undefined)
+    assert.deepEqual(input.request_messages, [{ role: "user", text: "question" }])
     assert.equal(await request.text(), body)
     assert.equal(await response.text(), output)
+
+    count = 4
+    const continuation = new Promise(resolve => { deliver = resolve })
+    const frame = JSON.stringify({ type: "response.create", previous_response_id: "res_fixture", input: "follow-up" })
+    hooks.get("experimental.ws.send")({ ...event, frame })
+    hooks.get("experimental.ws.receive")({ ...event, frame: JSON.stringify({ type: "response.completed", response: { output: [] } }) })
+    const [, , delta, deltaReply] = await Promise.race([continuation, new Promise((_, reject) => {
+      clearTimeout(timer)
+      timer = setTimeout(() => reject(new Error("continuation timed out")), 2000)
+    })])
+    assert.equal(delta.conversation_id, input.conversation_id)
+    assert.equal(delta.call_id, deltaReply.call_id)
+    assert.notEqual(delta.call_id, input.call_id)
+    assert.equal(delta.incomplete, true)
+    assert.equal(delta.truncated, false)
+    assert.equal(delta.request_messages, undefined)
+    assert.match(delta.text, /references earlier context.*follow-up/s)
+    assert.doesNotMatch(delta.text, /res_fixture/)
   } finally {
     clearTimeout(timer)
     cleanup?.()

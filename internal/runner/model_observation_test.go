@@ -55,6 +55,21 @@ func TestModelObservationRedactionAndBound(t *testing.T) {
 	}
 }
 
+func TestFreshWorkerPromptExcludesInheritedContext(t *testing.T) {
+	if !freshWorkerPrompt(contracts.JobClaim{Goal: "goal", Instructions: []string{"instruction"}}) {
+		t.Fatal("fresh work with standing instructions was not recognized")
+	}
+	for _, claim := range []contracts.JobClaim{
+		{RuntimeSessionID: "previous"}, {ResumeQuestion: "question"}, {ResumeAnswer: "answer"},
+		{PriorContexts: []contracts.TaskPriorContext{{TaskID: "earlier"}}},
+		{Entries: []contracts.RunEntry{{ID: "entry"}}},
+	} {
+		if freshWorkerPrompt(claim) {
+			t.Fatal("classified inherited context as fresh")
+		}
+	}
+}
+
 func TestModelObservationDedupAndToolBoundary(t *testing.T) {
 	s := &observationSender{queue: make(chan observationItem, 8), seen: make(map[string]bool)}
 	s.lease.Store(&observationLease{Boot: "boot", Generation: 1})
@@ -82,14 +97,14 @@ func TestRotationObservationContextAndContentFallback(t *testing.T) {
 	s.lease.Store(&observationLease{Boot: "boot", Generation: 1})
 	ctx := context.WithValue(context.Background(), observationKey{}, s)
 	ctx = context.WithValue(ctx, rotationObservationKey{}, true)
-	observeModel(ctx, "rotation-session", "request", "prompt", "summary prompt")
+	observeNewSessionPrompt(ctx, "rotation-session", "prompt", "summary prompt")
 	observeMessages(ctx, "rotation-session", nil)
 	m := opencode.Message{ID: "reply", Type: "assistant", Content: []map[string]any{{"type": "text", "text": "summary reply"}}}
 	m.Time.Created = time.Now().Add(time.Second).UnixMilli()
 	observeMessages(ctx, "rotation-session", []opencode.Message{m})
 	for _, want := range []string{"request", "response"} {
 		item := <-s.queue
-		if item.source != "worker_rotation" || item.typ != want {
+		if item.source != "worker_rotation" || item.typ != want || item.conversationStart != (want == "request") {
 			t.Fatalf("unexpected event: %+v", item)
 		}
 	}

@@ -145,20 +145,22 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (resu
 	if style == "" {
 		style = "responses"
 	}
-	body, status, obs, err := c.call(ctx, style, instructions, input)
+	conversation := c.observeCompletion(ctx)
+	body, status, obs, err := c.call(ctx, style, instructions, input, conversation, true)
 	if err != nil && c.style == "" && (status == 404 || status == 405 || status == 501) {
 		style = "chat"
-		body, status, obs, err = c.call(ctx, style, instructions, input)
+		body, status, obs, err = c.call(ctx, style, instructions, input, conversation, false)
 	}
 	if err != nil {
 		return "", err
 	}
 	parseError := "invalid_response"
+	incomplete := false
 	defer func() {
 		if resultErr != nil {
 			obs.endError(parseError, status)
 		} else {
-			obs.endResponse(status, result)
+			obs.endResponse(status, result, incomplete)
 		}
 	}()
 	c.style = style
@@ -175,6 +177,7 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (resu
 			return "", errors.New("invalid model response")
 		}
 		choice := response.Choices[0]
+		incomplete = choice.FinishReason == "length"
 		if choice.FinishReason != "" && choice.FinishReason != "stop" && choice.FinishReason != "length" {
 			parseError = "incomplete_response"
 			return "", errors.New("model response was incomplete")
@@ -211,7 +214,7 @@ func (c *Client) Complete(ctx context.Context, instructions, input string) (resu
 	return response.OutputText, nil
 }
 
-func (c *Client) call(ctx context.Context, style, instructions, input string) ([]byte, int, *attemptObservation, error) {
+func (c *Client) call(ctx context.Context, style, instructions, input string, conversation *completionObservation, firstAttempt bool) ([]byte, int, *attemptObservation, error) {
 	request := map[string]any{"model": c.model}
 	path := "/responses"
 	if style == "chat" {
@@ -245,7 +248,7 @@ func (c *Client) call(ctx context.Context, style, instructions, input string) ([
 	} else {
 		request["temperature"] = 0
 	}
-	obs := c.observeAttempt(ctx, style, instructions, input, request)
+	obs := c.observeAttempt(conversation, firstAttempt, style, instructions, input, request)
 	b, err := json.Marshal(request)
 	if err != nil {
 		obs.endError("request_encoding", 0)
