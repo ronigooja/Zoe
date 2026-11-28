@@ -35,6 +35,8 @@ The live state (connecting, subscribing, live, idle) is shown in the native wind
 
 Each event card shows one metadata row: `Request` or `Reply` as words (replies left, requests right), the component name as a pill, the time, and a short call ID that is unique among the displayed call IDs; the full call ID is available on hover and to accessibility. Metadata text is selectable for standard copy; the metadata has no copy action. The payload has its own copy action, which copies the complete formatted JSON and shows a brief confirmation only after the copy succeeds.
 
+Recall appears in Overview and its own tab. Its request and reply use the same call ID and show the actual [Recall](memory.md) query and the resulting text prepared for voice, subject to the monitor's usual filtering and limits. The reply is a retrieval result, not generated model text or a playback acknowledgement.
+
 Payload display is readable text, not a copy format. Decoded strings keep their characters: quotes and newlines appear as written and literal backslashes are not unescaped. A string whose entire content is a JSON object or array is shown as structure, decoding at most two levels and only texts up to 64 KiB. Other strings are shown as written. Display previews are bounded; the copy action always uses the complete payload.
 
 ## Persistence and idempotency
