@@ -1,13 +1,17 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ronigooja/Zoe/internal/logging"
 	"github.com/ronigooja/Zoe/internal/modelmonitor"
+	"github.com/ronigooja/Zoe/internal/modelmonitor/diagnostics"
 )
 
 func TestModelMonitorSubscription(t *testing.T) {
@@ -55,6 +59,16 @@ func TestModelMonitorOversizeEndsSubscription(t *testing.T) {
 }
 
 func TestModelMonitorContentionShedsWithoutClosingSocket(t *testing.T) {
+	diagnostics.Flush()
+	var output bytes.Buffer
+	old, level := log.Writer(), logging.CurrentLevel()
+	log.SetOutput(&output)
+	logging.SetLevel(logging.Info)
+	t.Cleanup(func() {
+		diagnostics.Flush()
+		log.SetOutput(old)
+		logging.SetLevel(level)
+	})
 	s, base, key := clientSocketFixture(t, nil)
 	c := dialClientSocket(t, base, key, "")
 	writeClientSocket(t, c, `{"channel":"model_monitor","type":"subscribe","subscription_id":"sub"}`)
@@ -63,7 +77,7 @@ func TestModelMonitorContentionShedsWithoutClosingSocket(t *testing.T) {
 	socket := s.clientSockets.devices["instance"]
 	s.clientSockets.mu.Unlock()
 	socket.writeMu.Lock()
-	modelmonitor.Publish(modelmonitor.Event{Component: "worker", CallID: "call", Time: time.Now().UTC(), Type: "request"})
+	modelmonitor.Publish(modelmonitor.Event{Component: "worker", CallID: "call", Time: time.Now().UTC(), Type: "request", Payload: json.RawMessage(`"private-request"`)})
 	// Wait for the monitor to consume the queued event while the writer is busy.
 	time.Sleep(100 * time.Millisecond)
 	done := make(chan error, 1)
@@ -81,6 +95,10 @@ func TestModelMonitorContentionShedsWithoutClosingSocket(t *testing.T) {
 	}
 	if !seen[`"model_monitor":"gap"`] || !seen[`"mcp":"call"`] {
 		t.Fatalf("frames: %v", seen)
+	}
+	diagnostics.Flush()
+	if !strings.Contains(output.String(), "stage=writer reason=admission_blocked") || strings.Contains(output.String(), "private-request") {
+		t.Fatal("missing or unsafe monitor writer diagnostic")
 	}
 	modelmonitor.Publish(modelmonitor.Event{Component: "worker", CallID: "call", Time: time.Now().UTC(), Type: "response"})
 	if f := readClientSocket(t, c); string(f["type"]) != `"event"` || string(f["sequence"]) != "2" {

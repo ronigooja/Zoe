@@ -21,6 +21,8 @@ var counters = struct {
 	timer  *time.Timer
 }{values: make(map[key]uint64)}
 
+var flushMu sync.Mutex
+
 // Record accepts fixed stage/reason values from call sites, never error strings.
 // Identifiers are hashed and event types are allowlisted before logging.
 func Record(stage, reason, id, event string, status int) {
@@ -52,6 +54,8 @@ func Record(stage, reason, id, event string, status int) {
 
 // Flush emits counters even when a job or subscription ends before the timer.
 func Flush() {
+	flushMu.Lock()
+	defer flushMu.Unlock()
 	counters.Lock()
 	if counters.timer != nil {
 		counters.timer.Stop()
