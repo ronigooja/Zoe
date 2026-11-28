@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,9 @@ import (
 
 var regexpVersion = regexp.MustCompile(`^opencode v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
 var regexpUser = regexp.MustCompile(`^[a-z_][a-z0-9_-]*[$]?$`)
+
+//go:embed opencode_context.mjs
+var openCodeContextPlugin []byte
 
 func providerOpenCodeOptions(d Deployment) (LifecycleOptions, bool) {
 	v, _ := readEnv(d.RunnerEnv)
@@ -53,9 +57,17 @@ func openCodeConfigPath(o LifecycleOptions) string {
 	return filepath.Join(openCodeRoot(o), "xdg-config", "opencode", "opencode.json")
 }
 
+func openCodeContextPluginPath(o LifecycleOptions) string {
+	// OpenCode v2.4.1 discovers .js, but not .mjs, in this directory.
+	return filepath.Join(openCodeRoot(o), "xdg-config", "opencode", "plugins", "zoe-context.js")
+}
+
 func renderOpenCodeConfig(o LifecycleOptions) error {
 	v, err := readEnv(filepath.Join(o.Root, "zoe-runner.env"))
 	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(openCodeContextPluginPath(o), openCodeContextPlugin, 0600); err != nil {
 		return err
 	}
 	model := v["ZOE_OPENCODE_MODEL"]
@@ -118,7 +130,7 @@ func renderOpenCodeConfig(o LifecycleOptions) error {
 }
 
 func snapshotOpenCode(o LifecycleOptions) ([]fileSnapshot, error) {
-	paths := []string{openCodeConfigPath(o), modelMetadataPath(o), filepath.Join(openCodeRoot(o), "applied-fingerprint"), filepath.Join(openCodeRoot(o), "binary-version"), filepath.Join(o.Root, "zoe-opencode.env")}
+	paths := []string{openCodeConfigPath(o), openCodeContextPluginPath(o), modelMetadataPath(o), filepath.Join(openCodeRoot(o), "applied-fingerprint"), filepath.Join(openCodeRoot(o), "binary-version"), filepath.Join(o.Root, "zoe-opencode.env")}
 	for _, n := range []string{"zoe-opencode.service", "zoe-compose.service", "zoe-runner.service"} {
 		paths = append(paths, filepath.Join(openCodeUnitDir(o), n))
 	}
@@ -195,7 +207,11 @@ func (m Manager) renderOpenCodeUnit(ctx context.Context, o LifecycleOptions, tem
 			return nil, errors.New("unsupported OpenCode secret reference")
 		}
 	}
-	env := "ZOE_SECRET_FILE_MAP=" + mapping + "\n"
+	controlURL := v["ZOE_CONTROL_URL"]
+	if strings.ContainsAny(controlURL, "\r\n\x00") {
+		return nil, errors.New("unsupported control URL")
+	}
+	env := "ZOE_SECRET_FILE_MAP=" + mapping + "\nZOE_OPENCODE_OBSERVATION_URL=" + controlURL + "\n"
 	if err := writeFileAtomic(filepath.Join(o.Root, "zoe-opencode.env"), []byte(env), 0600); err != nil {
 		return nil, err
 	}
@@ -212,6 +228,7 @@ func (m Manager) renderOpenCodeUnit(ctx context.Context, o LifecycleOptions, tem
 	h := sha256.New()
 	h.Write([]byte(s))
 	h.Write(config)
+	h.Write(openCodeContextPlugin)
 	h.Write([]byte(env))
 	if values, e := readEnv(filepath.Join(o.Root, "zoe-runner.env")); e == nil {
 		if s, e := ParseScraplingSettings(values); e == nil {

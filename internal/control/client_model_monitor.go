@@ -42,8 +42,9 @@ func (c *clientSocket) handleMonitorFrame(data []byte) {
 		}
 	}
 	var f struct {
-		Type string `json:"type"`
-		ID   string `json:"subscription_id"`
+		Type                   string `json:"type"`
+		ID                     string `json:"subscription_id"`
+		IncludeOpenCodeContext bool   `json:"include_opencode_context"`
 	}
 	if json.Unmarshal(data, &f) != nil {
 		return
@@ -67,7 +68,12 @@ func (c *clientSocket) handleMonitorFrame(data []byte) {
 			errorFrame("already_subscribed")
 			return
 		}
-		source := modelmonitor.Subscribe()
+		var source *modelmonitor.Subscription
+		if f.IncludeOpenCodeContext {
+			source = modelmonitor.SubscribeWithOpenCodeContext()
+		} else {
+			source = modelmonitor.Subscribe()
+		}
 		ctx, cancel := context.WithCancel(c.ctx)
 		m := &monitorSubscription{id: f.ID, source: source, cancel: cancel, done: make(chan struct{})}
 		c.monitor = m

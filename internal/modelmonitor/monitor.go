@@ -22,8 +22,9 @@ const maxPayload = 32 * 1024
 const queueSize = 32
 
 type Subscription struct {
-	Events chan Item
-	Gap    chan struct{}
+	Events                 chan Item
+	Gap                    chan struct{}
+	includeOpenCodeContext bool
 }
 
 // Item is either an event or an in-band source-loss notice.
@@ -59,7 +60,15 @@ func advanceGeneration() {
 }
 
 func Subscribe() *Subscription {
-	s := &Subscription{Events: make(chan Item, queueSize), Gap: make(chan struct{})}
+	return subscribe(false)
+}
+
+func SubscribeWithOpenCodeContext() *Subscription {
+	return subscribe(true)
+}
+
+func subscribe(include bool) *Subscription {
+	s := &Subscription{Events: make(chan Item, queueSize), Gap: make(chan struct{}), includeOpenCodeContext: include}
 	registry.Lock()
 	registry.subs[s] = struct{}{}
 	advanceGeneration()
@@ -132,6 +141,9 @@ func publish(generation uint64, fenced bool, e Event) {
 // enqueue runs under registry's lock, preserving event and gap ordering.
 func enqueue(item Item) {
 	for s := range registry.subs {
+		if !item.Gap && item.Event.Component == "opencode_context" && !s.includeOpenCodeContext {
+			continue
+		}
 		select {
 		case s.Events <- item:
 		default:
