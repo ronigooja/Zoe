@@ -26,6 +26,13 @@ type Item struct {
 }
 type Error struct{ Kind string }
 
+type searchObserverKey struct{}
+
+// WithSearchObserver observes only a search about to be sent to the worker.
+func WithSearchObserver(ctx context.Context, observe func(string)) context.Context {
+	return context.WithValue(ctx, searchObserverKey{}, observe)
+}
+
 func (e *Error) Error() string { return "memory API: " + e.Kind }
 
 var ErrUpstreamUnauthorized = &Error{Kind: "upstream_unauthorized"}
@@ -71,6 +78,13 @@ func (c *Client) call(ctx context.Context, kind string, input, output any) error
 	}
 	req.Header.Set("Authorization", "Bearer "+secret)
 	req.Header.Set("Content-Type", "application/json")
+	if kind == "search" {
+		if observe, ok := ctx.Value(searchObserverKey{}).(func(string)); ok && observe != nil {
+			if fields, ok := input.(map[string]string); ok {
+				observe(fields["request"])
+			}
+		}
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {

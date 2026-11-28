@@ -62,6 +62,11 @@ func observationText(text, key string) (string, bool) {
 	return text, false
 }
 
+// ObservationText applies the monitor's bounded, best-effort text redaction.
+func ObservationText(text string) (string, bool) {
+	return observationText(text, "")
+}
+
 type attemptObservation struct {
 	component, id, key string
 	generation         uint64

@@ -205,6 +205,7 @@ func (s *Service) runRecall(id string) {
 	started := time.Now()
 	var text, status string
 	var count int
+	var observation *recallObservation
 	if kind == memoryWriteHolding {
 		// A crash after saving a terminal receiver outcome must not dispatch again.
 		var prior string
@@ -276,7 +277,10 @@ func (s *Service) runRecall(id string) {
 			_ = (backoff.Store{DB: s.db}).Clear(outcomeCtx, "memory_write", user)
 		}
 	} else {
-		text, count, status = s.recallAnswer(ctx, user, question)
+		searchCtx := memoryapi.WithSearchObserver(ctx, func(input string) {
+			observation = startRecallObservation(owner, input)
+		})
+		text, count, status = s.recallAnswer(searchCtx, user, question)
 	}
 	elapsedMS := time.Since(started).Milliseconds()
 	// Model deadlines get a fallback, but shutdown leaves the lease for recovery.
@@ -294,6 +298,19 @@ func (s *Service) runRecall(id string) {
 			return
 		}
 		status = "persist_fallback"
+	}
+	if observation != nil && status == "ok" && text == "" {
+		var jobStatus string
+		if err := s.db.QueryRowContext(persist, `SELECT status FROM voice_recall_jobs WHERE id=? AND NOT EXISTS (SELECT 1 FROM voice_fast_replies WHERE id=? AND intent_kind='recall_answer')`, id, id).Scan(&jobStatus); err == nil && jobStatus == "done" {
+			observation.response("")
+		}
+	} else if observation != nil && status == "ok" {
+		// INSERT OR IGNORE and a recovered lease can leave a different reply in
+		// place. Observe only the text actually retained for voice delivery.
+		var retained string
+		if err := s.db.QueryRowContext(persist, `SELECT text FROM voice_fast_replies WHERE id=? AND intent_kind='recall_answer'`, id).Scan(&retained); err == nil && retained == text {
+			observation.response(text)
+		}
 	}
 	logging.Infof("voice recall id=%s candidates=%d status=%s elapsed_ms=%d", id, count, status, elapsedMS)
 	s.dispatchFastReplies(persist)
