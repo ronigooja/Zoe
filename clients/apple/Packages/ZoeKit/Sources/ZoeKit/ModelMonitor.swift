@@ -234,7 +234,7 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
     public static let channel = "model_monitor"
     public static let components = [
         "register", "compact", "steward", "ui_controller", "task_summary",
-        "worker", "worker_rotation", "memory_write", "memory_ingestion",
+        "worker", "worker_rotation", "memory_write", "memory_ingestion", "recall",
     ]
 
     private let transport: ClientWebSocketTransport

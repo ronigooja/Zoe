@@ -444,6 +444,7 @@ public struct ModelMonitorView: View {
         case "worker_rotation": uiText("Worker rotation")
         case "memory_write": uiText("Memory write")
         case "memory_ingestion": uiText("Memory ingestion")
+        case "recall": uiText("Recall")
         default: component
         }
     }
