@@ -26,8 +26,11 @@ func TestRecallObservationPrivacyAndMembership(t *testing.T) {
 	}
 	o.response(strings.Repeat("x", 8193))
 	response := recallEvent(t, sub)
-	if response.Component != "recall" || response.Type != "response" || response.CallID != request.CallID || !response.Truncated {
+	if response.Component != "recall" || response.Type != "response" || response.CallID != request.CallID || !response.Truncated || response.Incomplete {
 		t.Fatal("response identity or bound incorrect")
+	}
+	if !request.ConversationStart || request.ConversationID == "" || response.ConversationStart || response.ConversationID != request.ConversationID {
+		t.Fatal("recall query and reply must form one independent exchange")
 	}
 	newSub := modelmonitor.Subscribe()
 	defer newSub.Close()

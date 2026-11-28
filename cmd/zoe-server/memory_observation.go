@@ -70,7 +70,11 @@ func runMemoryObservation(stop <-chan struct{}, client *memoryapi.Client) {
 			if (e.Component != "memory_write" && e.Component != "memory_ingestion") || (e.Type != "request" && e.Type != "response") || len(e.Payload) > 16384 {
 				continue
 			}
-			modelmonitor.PublishFor(generation, modelmonitor.Event{Component: e.Component, CallID: e.CallID, Time: e.Time, Type: e.Type, Payload: e.Payload, Truncated: e.Truncated})
+			modelmonitor.PublishFor(generation, modelmonitor.Event{
+				Component: e.Component, CallID: e.CallID, Time: e.Time, Type: e.Type,
+				Payload: e.Payload, Truncated: e.Truncated, Incomplete: e.Incomplete,
+				ConversationStart: e.Type == "request" && e.ConversationStart,
+			})
 		}
 	}
 }

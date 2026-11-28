@@ -13,12 +13,14 @@ import (
 
 // Observation is a worker-produced, allowlisted model event.
 type Observation struct {
-	Component string          `json:"component"`
-	CallID    string          `json:"call_id"`
-	Time      time.Time       `json:"time"`
-	Type      string          `json:"type"`
-	Payload   json.RawMessage `json:"payload"`
-	Truncated bool            `json:"truncated"`
+	Component         string          `json:"component"`
+	CallID            string          `json:"call_id"`
+	Time              time.Time       `json:"time"`
+	Type              string          `json:"type"`
+	Payload           json.RawMessage `json:"payload"`
+	Truncated         bool            `json:"truncated"`
+	Incomplete        bool            `json:"incomplete"`
+	ConversationStart bool            `json:"conversation_start"`
 }
 
 // DrainObservations renews a short-lived worker lease. The lease must be a

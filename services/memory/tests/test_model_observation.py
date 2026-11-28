@@ -18,6 +18,8 @@ class ObservationTest(unittest.TestCase):
             events, overflow = obs.drain(a)
             self.assertFalse(overflow)
             self.assertEqual([e["type"] for e in events], ["request", "response"])
+            self.assertTrue(events[0]["conversation_start"])
+            self.assertNotIn("conversation_start", events[1])
             self.assertNotIn("secret-value", str(events))
             self.assertNotIn("private-bearer-value", str(events))
             self.assertNotIn("abcdefghijklmnop", str(events))
@@ -33,6 +35,23 @@ class ObservationTest(unittest.TestCase):
             self.assertEqual(len(events), obs.MAX_EVENTS)
             self.assertTrue(overflow)
             self.assertEqual(obs.drain(b), ([], False))
+        finally:
+            obs.reset_component(token)
+
+    def test_only_initial_turn_is_known_fresh(self):
+        lease = "d" * 32
+        obs.drain(lease)
+        token = obs.set_component("memory_ingestion")
+        try:
+            obs.begin([{"role": "system", "content": "instructions"}, {"role": "user", "content": "x"}], "model")
+            obs.begin([{"role": "assistant", "content": "earlier"}, {"role": "user", "content": "x"}], "model")
+            obs.begin([{"role": "tool", "content": "earlier"}, {"role": "user", "content": "x"}], "model")
+            fresh, continuation, unsupported = obs.drain(lease)[0]
+            self.assertTrue(fresh["conversation_start"])
+            self.assertNotIn("conversation_start", continuation)
+            self.assertNotIn("conversation_start", unsupported)
+            self.assertTrue(unsupported["incomplete"])
+            self.assertFalse(unsupported["truncated"])
         finally:
             obs.reset_component(token)
 

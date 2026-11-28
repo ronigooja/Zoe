@@ -46,5 +46,8 @@ func (o *recallObservation) publish(kind, field, text string) {
 	if err != nil {
 		return
 	}
-	modelmonitor.PublishFor(o.generation, modelmonitor.Event{Component: "recall", CallID: o.id, Time: time.Now(), Type: kind, Payload: payload, Truncated: truncated})
+	modelmonitor.PublishFor(o.generation, modelmonitor.Event{
+		Component: "recall", CallID: o.id, Time: time.Now(), Type: kind,
+		Payload: payload, Truncated: truncated, ConversationID: o.id, ConversationStart: kind == "request",
+	})
 }

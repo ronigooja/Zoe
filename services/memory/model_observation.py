@@ -90,16 +90,25 @@ def begin(messages, model):
         if not lease:
             return None
         call = (lease, component, uuid.uuid4().hex)
-        if not isinstance(messages, list) or len(messages) > 32:
+        if not isinstance(messages, list):
+            _publish(call, "request", {"omitted": "unsupported_input"}, incomplete=True)
+            return call
+        if len(messages) > 32:
             _publish(call, "request", {"omitted": "input_limit"}, True)
             return call
         safe_messages = [{"role": m.get("role"), "content": m.get("content")}
                          for m in messages if isinstance(m, dict) and m.get("role") in ("system", "user", "assistant")
                          and isinstance(m.get("content"), str)]
+        incomplete = len(safe_messages) != len(messages)
+        # The Responses adapter sends explicit input and no previous-state reference.
+        # Only an initial turn (optional instructions, then one user message) is known fresh.
+        roles = [m["role"] for m in safe_messages]
+        fresh = not incomplete and roles[-1:] == ["user"] and all(role == "system" for role in roles[:-1])
         if sum(len(m["content"]) for m in safe_messages) > MAX_PAYLOAD_BYTES:
-            _publish(call, "request", {"omitted": "input_limit"}, True)
+            _publish(call, "request", {"omitted": "input_limit"}, True, incomplete=incomplete, fresh=fresh)
             return call
-        _publish(call, "request", {"model": model if isinstance(model, str) else "", "messages": safe_messages})
+        _publish(call, "request", {"model": model if isinstance(model, str) else "", "messages": safe_messages},
+                 incomplete=incomplete, fresh=fresh)
         return call
     except Exception:
         return None
@@ -113,7 +122,7 @@ def finish(call, text):
             _publish(call, "response", {"text": text})
 
 
-def _publish(call, kind, payload, truncated=False):
+def _publish(call, kind, payload, truncated=False, *, incomplete=False, fresh=False):
     global _overflow
     try:
         def clean(value):
@@ -130,6 +139,10 @@ def _publish(call, kind, payload, truncated=False):
             encoded = '{"omitted":"payload_limit"}'
         event = {"component": call[1], "call_id": call[2], "time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                  "type": kind, "payload": json.loads(encoded), "truncated": truncated}
+        if incomplete:
+            event["incomplete"] = True
+        if fresh:
+            event["conversation_start"] = True
         with _lock:
             if call[0] == (_lease, _epoch) and time.monotonic() < _expiry:
                 if len(_events) < MAX_EVENTS:
