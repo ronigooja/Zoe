@@ -263,6 +263,22 @@ final class ModelMonitorChannelTests: XCTestCase {
         XCTAssertEqual(buffer.droppedCount, 0)
     }
 
+    func testOpenCodeContextIsOnlyInItsOwnTabAndNotOverview() {
+        XCTAssertTrue(ModelMonitorChannel.components.contains("opencode_context"))
+        var buffer = ModelMonitorBuffer(capacity: 10)
+        let opencode = ModelMonitorEvent(component: "opencode_context", callID: "oc", time: nil, kind: .request, payload: .string("x"), truncated: false)
+        let worker = ModelMonitorEvent(component: "worker", callID: "w", time: nil, kind: .request, payload: nil, truncated: false)
+        let unknown = ModelMonitorEvent(component: "future_component", callID: "u", time: nil, kind: .request, payload: nil, truncated: false)
+        buffer.append(ModelMonitorEntry(id: 1, kind: .event(opencode)))
+        buffer.append(ModelMonitorEntry(id: 2, kind: .gap))
+        buffer.append(ModelMonitorEntry(id: 3, kind: .event(worker)))
+        buffer.append(ModelMonitorEntry(id: 4, kind: .event(unknown)))
+        // Overview omits OpenCode events but keeps gaps and unknown components, whose unchanged fallback is Overview-only.
+        XCTAssertEqual(buffer.visibleEntries(component: nil).map(\.id), [2, 3, 4])
+        XCTAssertEqual(buffer.visibleEntries(component: "opencode_context").map(\.id), [1, 2])
+        XCTAssertEqual(buffer.visibleEntries(component: "worker").map(\.id), [2, 3])
+    }
+
     func testShortCallLabelsAreUniqueAndKeepFullIDForShortInputs() {
         let ids = ["abcdef12-0000", "abcdef12-0001", "fedcba98-0000"]
         let labels = ModelMonitorCallID.shortLabels(for: ids)

@@ -134,20 +134,21 @@ public enum ModelMonitorTab: Hashable, Sendable {
     }
 
     private func isVisible(_ entry: ModelMonitorEntry) -> Bool {
-        switch entry.kind {
-        case .gap: true
-        case let .event(event): selectedComponent == nil || event.component == selectedComponent
-        }
+        ModelMonitorBuffer.includes(entry, component: selectedComponent)
     }
 
     /// Bounded: only known tabs are counted. Unknown components stay visible in Overview but get no tab count.
+    /// Overview-excluded components count only in their own tab.
     private func countUnseen(_ entry: ModelMonitorEntry) {
         let tabs: [ModelMonitorTab]
         switch entry.kind {
         case .gap:
             tabs = Self.knownTabs
         case let .event(event):
-            var known: [ModelMonitorTab] = [ModelMonitorTab.overview]
+            var known: [ModelMonitorTab] = []
+            if !ModelMonitorChannel.overviewExcludedComponents.contains(event.component) {
+                known.append(ModelMonitorTab.overview)
+            }
             if ModelMonitorChannel.components.contains(event.component) {
                 known.append(ModelMonitorTab.component(event.component))
             }
@@ -250,12 +251,14 @@ public struct ModelMonitorView: View {
     static var tabStripHeight: CGFloat { tabRowHeight * 2 + tabRowSpacing }
     /// Overview is a square as tall as the two-row strip, so it sits beside both rows.
     static var overviewSide: CGFloat { tabStripHeight }
+    static let firstRowTabCount = 5
 
     /// Overview is pinned and top-aligned with the first row; component tabs fill two rows in stable order and scroll horizontally on narrow windows.
     /// The strip has an explicit height (two rows), so the timeline keeps the remaining height and no child's ideal size drives the layout.
+    /// The first row is fixed at five tabs, so tabs appended to the list do not move existing tabs between rows.
     private var tabBar: some View {
         let components = ModelMonitorChannel.components
-        let split = (components.count + 1) / 2
+        let split = Self.firstRowTabCount
         return HStack(alignment: .top, spacing: 0) {
             overviewButton
                 .padding(.trailing, 8)
@@ -445,6 +448,7 @@ public struct ModelMonitorView: View {
         case "memory_write": uiText("Memory write")
         case "memory_ingestion": uiText("Memory ingestion")
         case "recall": uiText("Recall")
+        case "opencode_context": uiText("OpenCode")
         default: component
         }
     }

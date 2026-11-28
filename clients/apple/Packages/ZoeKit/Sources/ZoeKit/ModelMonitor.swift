@@ -72,13 +72,17 @@ public struct ModelMonitorBuffer: Equatable, Sendable {
         droppedCount = 0
     }
 
-    /// `nil` selects every event (Overview). Gaps are kept in every view.
     public func visibleEntries(component: String?) -> [ModelMonitorEntry] {
-        entries.filter { entry in
-            switch entry.kind {
-            case .gap: true
-            case let .event(event): component == nil || event.component == component
-            }
+        entries.filter { Self.includes($0, component: component) }
+    }
+
+    /// `nil` selects Overview, which omits `ModelMonitorChannel.overviewExcludedComponents`. Gaps are kept in every view.
+    public static func includes(_ entry: ModelMonitorEntry, component: String?) -> Bool {
+        switch entry.kind {
+        case .gap: true
+        case let .event(event):
+            if let component { return event.component == component }
+            return !ModelMonitorChannel.overviewExcludedComponents.contains(event.component)
         }
     }
 }
@@ -235,7 +239,10 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
     public static let components = [
         "register", "compact", "steward", "ui_controller", "task_summary",
         "worker", "worker_rotation", "memory_write", "memory_ingestion", "recall",
+        "opencode_context",
     ]
+    /// Components shown only in their own tab: excluded from Overview, its unseen counts, and its follow behavior.
+    public static let overviewExcludedComponents: Set<String> = ["opencode_context"]
 
     private let transport: ClientWebSocketTransport
     private var continuation: AsyncStream<ModelMonitorUpdate>.Continuation?
