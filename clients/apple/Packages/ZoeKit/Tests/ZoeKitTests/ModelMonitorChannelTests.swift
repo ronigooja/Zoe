@@ -263,6 +263,31 @@ final class ModelMonitorChannelTests: XCTestCase {
         XCTAssertEqual(buffer.droppedCount, 0)
     }
 
+    /// Exact wire shape: subscribe requests OpenCode context; unsubscribe stays the bare frame old servers already accept.
+    func testSubscribeAndUnsubscribeWireFramesAreExact() async throws {
+        let socket = FixtureMCPSocket(), plan = SocketPlan([socket]), clock = ManualMCPClock()
+        let transport = ClientWebSocketTransport(api: try mcpTestAPI(), clock: clock, factory: { plan.make($0) })
+        let channel = await ModelMonitorChannel.attach(to: transport)
+        _ = await channel.begin()
+        try await awaitFixture(socket, .sent(1))
+        let subscribe = try JSONDecoder().decode(JSONValue.self, from: await socket.sent[0])
+        let id = try subscriptionID(in: await socket.sent[0], type: "subscribe")
+        XCTAssertEqual(subscribe, .object([
+            "channel": .string("model_monitor"),
+            "type": .string("subscribe"),
+            "subscription_id": .string(id),
+            "include_opencode_context": .bool(true),
+        ]))
+        await channel.stop()
+        try await awaitFixture(socket, .closed)
+        let unsubscribe = try JSONDecoder().decode(JSONValue.self, from: await socket.sent[1])
+        XCTAssertEqual(unsubscribe, .object([
+            "channel": .string("model_monitor"),
+            "type": .string("unsubscribe"),
+            "subscription_id": .string(id),
+        ]))
+    }
+
     func testOpenCodeContextIsOnlyInItsOwnTabAndNotOverview() {
         XCTAssertTrue(ModelMonitorChannel.components.contains("opencode_context"))
         var buffer = ModelMonitorBuffer(capacity: 10)

@@ -439,7 +439,9 @@ public actor ModelMonitorChannel: ClientWebSocketChannel {
     }
 
     private func frame(_ type: String, _ id: String) throws -> Data {
-        try JSONEncoder().encode(OutboundFrame(channel: Self.channel, type: type, subscriptionID: id))
+        // Only subscribe carries the capability flag; unsubscribe stays the bare frame.
+        let includesOpenCode = type == "subscribe" ? true : nil
+        return try JSONEncoder().encode(OutboundFrame(channel: Self.channel, type: type, subscriptionID: id, includeOpenCodeContext: includesOpenCode))
     }
 }
 
@@ -479,10 +481,13 @@ fileprivate struct OutboundFrame: Encodable {
     let channel: String
     let type: String
     let subscriptionID: String
+    /// Set only on subscribe. Servers that predate OpenCode context omit it, and old clients never request it.
+    let includeOpenCodeContext: Bool?
 
     enum CodingKeys: String, CodingKey {
         case channel, type
         case subscriptionID = "subscription_id"
+        case includeOpenCodeContext = "include_opencode_context"
     }
 }
 
